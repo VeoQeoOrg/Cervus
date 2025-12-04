@@ -92,5 +92,5 @@ void kernel_main(void) {
         fb_ptr[i * (framebuffer->pitch / 4) + i] = 0xffffff;
     }
 
-    hcf(); //test commit
+    hcf(); 
 }
