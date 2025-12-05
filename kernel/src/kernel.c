@@ -1,7 +1,11 @@
 #include <stdint.h>
+#include <string.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <limine.h>
+#include "../include/graphics/fb/fb.h"
+#include "../include/io/serial.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -18,56 +22,7 @@ static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
-void *memcpy(void *restrict dest, const void *restrict src, size_t n) {
-    uint8_t *restrict pdest = (uint8_t *restrict)dest;
-    const uint8_t *restrict psrc = (const uint8_t *restrict)src;
-
-    for (size_t i = 0; i < n; i++) {
-        pdest[i] = psrc[i];
-    }
-
-    return dest;
-}
-
-void *memset(void *s, int c, size_t n) {
-    uint8_t *p = (uint8_t *)s;
-
-    for (size_t i = 0; i < n; i++) {
-        p[i] = (uint8_t)c;
-    }
-
-    return s;
-}
-
-void *memmove(void *dest, const void *src, size_t n) {
-    uint8_t *pdest = (uint8_t *)dest;
-    const uint8_t *psrc = (const uint8_t *)src;
-
-    if (src > dest) {
-        for (size_t i = 0; i < n; i++) {
-            pdest[i] = psrc[i];
-        }
-    } else if (src < dest) {
-        for (size_t i = n; i > 0; i--) {
-            pdest[i-1] = psrc[i-1];
-        }
-    }
-
-    return dest;
-}
-
-int memcmp(const void *s1, const void *s2, size_t n) {
-    const uint8_t *p1 = (const uint8_t *)s1;
-    const uint8_t *p2 = (const uint8_t *)s2;
-
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return p1[i] < p2[i] ? -1 : 1;
-        }
-    }
-
-    return 0;
-}
+struct limine_framebuffer *global_framebuffer = NULL;
 
 static void hcf(void) {
     for (;;) {
@@ -76,21 +31,79 @@ static void hcf(void) {
 }
 
 void kernel_main(void) {
+    serial_initialize(COM1, 115200);
+    serial_writestring(COM1, "\n=== SERIAL PORT INITIALIZED ===\n");
+    
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
+        serial_writestring(COM1, "ERROR: Unsupported Limine base revision\n");
         hcf();
     }
 
     if (framebuffer_request.response == NULL
      || framebuffer_request.response->framebuffer_count < 1) {
+        serial_writestring(COM1, "ERROR: No framebuffer available\n");
         hcf();
     }
 
-    struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
-
-    for (size_t i = 0; i < 100; i++) {
-        volatile uint32_t *fb_ptr = framebuffer->address;
-        fb_ptr[i * (framebuffer->pitch / 4) + i] = 0xffffff;
-    }
-
+    global_framebuffer = framebuffer_request.response->framebuffers[0];
+    
+    serial_printf(COM1, "Framebuffer: %dx%d, %d bpp\n", 
+                  global_framebuffer->width, 
+                  global_framebuffer->height,
+                  global_framebuffer->bpp);
+    
+    clear_screen();
+    
+    serial_writestring(COM1, "\n=== CERVUS OS v0.0.1 ===\n");
+    serial_writestring(COM1, "Testing serial output:\n");
+    serial_printf(COM1, "Decimal (42): %d\n", 42);
+    serial_printf(COM1, "Decimal negative (-42): %d\n", -42);
+    serial_printf(COM1, "Decimal large (1000): %d\n", 1000);
+    serial_printf(COM1, "Hex lowercase (0xDEADBEEF): 0x%x\n", 0xDEADBEEF);
+    serial_printf(COM1, "Hex uppercase (0xCAFEBABE): 0x%X\n", 0xCAFEBABE);
+    serial_printf(COM1, "Hex zero: 0x%x\n", 0x0);
+    serial_printf(COM1, "Hex small (0x1A3): 0x%x\n", 0x1A3);
+    serial_printf(COM1, "String: %s\n", "Hello from serial!");
+    serial_printf(COM1, "Characters: %c%c%c\n", 'A', 'B', 'C');
+    serial_printf(COM1, "Unsigned: %u\n", 1234567890U);
+    serial_printf(COM1, "Unsigned max (0xFFFFFFFF): %u\n", 0xFFFFFFFFU);
+    serial_printf(COM1, "Unsigned zero: %u\n", 0U);
+    serial_printf(COM1, "Pointer (0x12345678): %p\n", (void*)0x12345678);
+    serial_printf(COM1, "Pointer (NULL): %p\n", NULL);
+    serial_printf(COM1, "Pointer (this function): %p\n", (void*)kernel_main);
+    serial_printf(COM1, "Mix: %s %d 0x%x %c\n", "Test", 100, 255, '!');
+    serial_printf(COM1, "Long decimal (1234567890123): %ld\n", 1234567890123UL);
+    serial_printf(COM1, "Long hex (0xDEADBEEFCAFEBABE): 0x%lx\n", 0xDEADBEEFCAFEBABEUL);
+    serial_printf(COM1, "Long negative: %ld\n", -1234567890123L);
+    serial_printf(COM1, "\nBoundary values:\n");
+    serial_printf(COM1, "INT_MAX: %d\n", 2147483647);
+    serial_printf(COM1, "INT_MIN: %d\n", -2147483648);
+    serial_printf(COM1, "UINT_MAX: %u\n", 4294967295U);
+    
+    printf("=== CERVUS OS v0.0.1 ===\n");
+    printf("Testing printf function:\n");
+    printf("Decimal: %d\n", 42);
+    printf("Hex (lower): 0x%x\n", 0xDEADBEEF);
+    printf("Hex (upper): 0x%X\n", 0xCAFEBABE);
+    printf("String: %s\n", "Hello from printf!");
+    printf("Character: %c%c%c\n", 'A', 'B', 'C');
+    printf("Unsigned: %u\n", 1234567890U);
+    printf("Pointer: %p\n", (void*)0x12345678);
+    printf("Mix: %s %d 0x%X\n", "Test", 100, 255);
+    
+    putchar('\n');
+    puts("Testing puts function:");
+    puts("This is line 1");
+    puts("This is line 2");
+    set_text_color(COLOR_CYAN);
+    puts("Cyan text");
+    set_text_color(COLOR_GREEN);
+    printf("Green text: %d\n", 999);
+    set_text_color(COLOR_YELLOW);
+    puts("Yellow text at the bottom");
+    
+    serial_writestring(COM1, "\nAll tests completed successfully!\n");
+    serial_writestring(COM1, "Kernel initialized successfully!\n");
+    
     hcf(); 
 }
