@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <limine.h>
 #include "../include/graphics/fb/fb.h"
 #include "../include/io/serial.h"
@@ -91,6 +92,17 @@ void kernel_main(void) {
     printf("Pointer: %p\n", (void*)0x12345678);
     printf("Mix: %s %d 0x%X\n", "Test", 100, 255);
     
+    printf("itoa() test\n");
+    int input_number = 1245;
+    printf("Input number: %d\n", input_number);
+    char buffer[16];
+    printf("itoa() result [10]: %s\n", itoa(input_number, buffer, 10));
+    printf("itoa() result [16]: %s\n", itoa(input_number, buffer, 16));
+    printf("itoa() result [2]: %s\n", itoa(input_number, buffer, 2));
+
+    const char *string = "Hello, World! 343434";
+    printf("strlen() result: %d\n", (int)strlen(string));
+
     putchar('\n');
     puts("Testing puts function:");
     puts("This is line 1");
