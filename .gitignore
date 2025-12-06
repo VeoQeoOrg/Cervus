@@ -1,1 +1,9 @@
 demo_iso/
+limine/
+limine-tools/
+limine.conf
+.vscode/
+linker-scripts/
+bin/
+obj/
+iso_root/
