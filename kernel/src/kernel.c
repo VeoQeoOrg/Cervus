@@ -97,11 +97,59 @@ void kernel_main(void) {
     printf("Input number: %d\n", input_number);
     char buffer[16];
     printf("itoa() result [10]: %s\n", itoa(input_number, buffer, 10));
-    printf("itoa() result [16]: %s\n", itoa(input_number, buffer, 16));
+    printf("itoa() result [16]: %x\n", itoa(input_number, buffer, 16));
     printf("itoa() result [2]: %s\n", itoa(input_number, buffer, 2));
 
     const char *string = "Hello, World! 343434";
     printf("strlen() result: %d\n", (int)strlen(string));
+
+    char buf[100];
+
+    // strlen
+    printf("strlen(\"hello\") = %d\n", strlen("hello"));
+
+    // strcpy
+    strcpy(buf, "world");
+    printf("strcpy -> buf = \"%s\"\n", buf);
+
+    // strncpy
+    strncpy(buf, "hello", 3);
+    buf[3] = '\0'; // null-terminera manuellt
+    printf("strncpy 3 chars -> buf = \"%s\"\n", buf);
+
+    // strcmp
+    printf("strcmp(\"abc\", \"abc\") = %d\n", strcmp("abc", "abc"));
+    printf("strcmp(\"abc\", \"abd\") = %d\n", strcmp("abc", "abd"));
+
+    // strncmp
+    printf("strncmp(\"abc\", \"abd\", 2) = %d\n", strncmp("abc", "abd", 2));
+    printf("strncmp(\"abc\", \"abd\", 3) = %d\n", strncmp("abc", "abd", 3));
+
+    // strchr
+    char *p = strchr("hello", 'l');
+    if (p) printf("strchr 'l' -> \"%s\"\n", p);
+    else printf("strchr 'l' -> NULL\n");
+
+    // strstr
+    p = strstr("hello world", "wor");
+    if (p) printf("strstr \"wor\" -> \"%s\"\n", p);
+    else printf("strstr \"wor\" -> NULL\n");
+
+    // strspn
+    printf("strspn(\"abcde\", \"abc\") = %d\n", strspn("abcde", "abc"));
+
+    // strpbrk
+    p = strpbrk("hello world", "aeiou");
+    if (p) printf("strpbrk vowels -> \"%s\"\n", p);
+    else printf("strpbrk vowels -> NULL\n");
+
+    // strtok
+    char str[] = "one,two,three";
+    char *token = strtok(str, ",");
+    while (token) {
+        printf("strtok token: \"%s\"\n", token);
+        token = strtok(NULL, ",");
+    }
 
     putchar('\n');
     puts("Testing puts function:");
