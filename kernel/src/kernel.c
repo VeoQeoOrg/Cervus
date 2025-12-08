@@ -8,6 +8,7 @@
 #include "../include/graphics/fb/fb.h"
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
+#include "../include/interrupts/idt.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -36,7 +37,12 @@ void kernel_main(void) {
     serial_initialize(COM1, 115200);
     serial_writestring(COM1, "\n=== SERIAL PORT INITIALIZED ===\n");
     serial_writestring(COM1, "Kernel initialized successfully!\n");
+    
     gdt_init();
+    idt_init();
+    
+    asm volatile ("sti");
+    serial_writestring(COM1, "GDT&IDT [OK]\n");
     
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
         serial_writestring(COM1, "ERROR: Unsupported Limine base revision\n");
@@ -59,6 +65,10 @@ void kernel_main(void) {
     clear_screen();
     
     printf("=== CERVUS OS v0.0.1 ===\n");
+
+    while (1)
+    {
+        /* code */
+    }
     
-    hcf(); 
 }

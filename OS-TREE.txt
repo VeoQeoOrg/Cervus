@@ -1,5 +1,5 @@
 OS Tree Structure - Cervus v0.0.1
-Generated: 2025-12-08 22:09:48
+Generated: 2025-12-08 22:26:38
 ================================================================================
 
 Project Information:
@@ -11,6 +11,13 @@ Project Information:
 
 Directory Structure:
 .
+├── .vscode/
+│   ├── settings.json (42 bytes)
+
+│   │   Contents:
+│   │     1: {
+│   │     2:     "C_Cpp.errorSquiggles": "disabled"
+│   │     3: }
 ├── kernel/
 │   ├── include/
 │   │   ├── gdt/
@@ -263,91 +270,82 @@ Directory Structure:
 │   │   │    55: 
 │   ├── src/
 │   │   ├── gdt/
-│   │   │   ├── gdt.c (2.5 KB)
+│   │   │   ├── gdt.c (2.0 KB)
 
 │   │   │   │   Contents:
 │   │   │   │     1: #include "../../include/gdt/gdt.h"
 │   │   │   │     2: #include "../../include/io/serial.h"
 │   │   │   │     3: #include <stddef.h>
 │   │   │   │     4: 
-│   │   │   │     5: // Делаем переменные глобальными
-│   │   │   │     6: struct gdt_entry gdt[5];
-│   │   │   │     7: struct gdt_ptr gdt_ptr;
-│   │   │   │     8: void gdt_load(void);
-│   │   │   │     9: 
-│   │   │   │    10: static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t granularity) {
-│   │   │   │    11:     gdt[index].base_low = base & 0xFFFF;
-│   │   │   │    12:     gdt[index].base_middle = (base >> 16) & 0xFF;
-│   │   │   │    13:     gdt[index].base_high = (base >> 24) & 0xFF;
-│   │   │   │    14:     
-│   │   │   │    15:     gdt[index].limit_low = limit & 0xFFFF;
-│   │   │   │    16:     gdt[index].granularity = (limit >> 16) & 0x0F;
-│   │   │   │    17:     
-│   │   │   │    18:     gdt[index].granularity |= granularity & 0xF0;
-│   │   │   │    19:     gdt[index].access = access;
-│   │   │   │    20: }
-│   │   │   │    21: 
-│   │   │   │    22: void gdt_init(void) {
-│   │   │   │    23:     serial_writestring(COM1, "[GDT] Initializing GDT...\n");
-│   │   │   │    24:     
-│   │   │   │    25:     // Нулевой дескриптор (обязателен)
-│   │   │   │    26:     gdt_set_entry(0, 0, 0, 0, 0);
-│   │   │   │    27:     
-│   │   │   │    28:     // Код сегмент ядра
-│   │   │   │    29:     gdt_set_entry(1, 0, 0xFFFFF, 
-│   │   │   │    30:                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_EXECUTABLE | GDT_ACCESS_READ_WRITE,
-│   │   │   │    31:                   GDT_GRANULARITY_4K | GDT_GRANULARITY_LONG);
-│   │   │   │    32:     
-│   │   │   │    33:     // Данные сегмент ядра
-│   │   │   │    34:     gdt_set_entry(2, 0, 0xFFFFF,
-│   │   │   │    35:                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_READ_WRITE,
-│   │   │   │    36:                   GDT_GRANULARITY_4K);
+│   │   │   │     5: struct gdt_entry gdt[5];
+│   │   │   │     6: struct gdt_ptr gdt_ptr;
+│   │   │   │     7: void gdt_load(void);
+│   │   │   │     8: 
+│   │   │   │     9: static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t granularity) {
+│   │   │   │    10:     gdt[index].base_low = base & 0xFFFF;
+│   │   │   │    11:     gdt[index].base_middle = (base >> 16) & 0xFF;
+│   │   │   │    12:     gdt[index].base_high = (base >> 24) & 0xFF;
+│   │   │   │    13:     
+│   │   │   │    14:     gdt[index].limit_low = limit & 0xFFFF;
+│   │   │   │    15:     gdt[index].granularity = (limit >> 16) & 0x0F;
+│   │   │   │    16:     
+│   │   │   │    17:     gdt[index].granularity |= granularity & 0xF0;
+│   │   │   │    18:     gdt[index].access = access;
+│   │   │   │    19: }
+│   │   │   │    20: 
+│   │   │   │    21: void gdt_init(void) {
+│   │   │   │    22:     serial_writestring(COM1, "[GDT] Initializing GDT...\n");
+│   │   │   │    23:     
+│   │   │   │    24:     gdt_set_entry(0, 0, 0, 0, 0);
+│   │   │   │    25:     
+│   │   │   │    26:     gdt_set_entry(1, 0, 0xFFFFF, 
+│   │   │   │    27:                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_EXECUTABLE | GDT_ACCESS_READ_WRITE,
+│   │   │   │    28:                   GDT_GRANULARITY_4K | GDT_GRANULARITY_LONG);
+│   │   │   │    29:     
+│   │   │   │    30:     gdt_set_entry(2, 0, 0xFFFFF,
+│   │   │   │    31:                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_READ_WRITE,
+│   │   │   │    32:                   GDT_GRANULARITY_4K);
+│   │   │   │    33:     
+│   │   │   │    34:     gdt_set_entry(3, 0, 0, 0, 0);
+│   │   │   │    35:     
+│   │   │   │    36:     gdt_set_entry(4, 0, 0, 0, 0);
 │   │   │   │    37:     
-│   │   │   │    38:     // Код сегмент пользователя (заглушка)
-│   │   │   │    39:     gdt_set_entry(3, 0, 0, 0, 0);
+│   │   │   │    38:     gdt_ptr.limit = sizeof(gdt) - 1;
+│   │   │   │    39:     gdt_ptr.base = (uint64_t)&gdt;
 │   │   │   │    40:     
-│   │   │   │    41:     // Данные сегмент пользователя (заглушка)
-│   │   │   │    42:     gdt_set_entry(4, 0, 0, 0, 0);
-│   │   │   │    43:     
-│   │   │   │    44:     // Настраиваем указатель GDT
-│   │   │   │    45:     gdt_ptr.limit = sizeof(gdt) - 1;
-│   │   │   │    46:     gdt_ptr.base = (uint64_t)&gdt;
+│   │   │   │    41:     serial_writestring(COM1, "[GDT] GDT entries set up\n");
+│   │   │   │    42:     gdt_load();
+│   │   │   │    43: }
+│   │   │   │    44: 
+│   │   │   │    45: void gdt_load(void) {
+│   │   │   │    46:     serial_writestring(COM1, "[GDT] Loading GDT...\n");
 │   │   │   │    47:     
-│   │   │   │    48:     serial_writestring(COM1, "[GDT] GDT entries set up\n");
-│   │   │   │    49:     gdt_load();
-│   │   │   │    50: }
-│   │   │   │    51: 
-│   │   │   │    52: void gdt_load(void) {
-│   │   │   │    53:     serial_writestring(COM1, "[GDT] Loading GDT...\n");
-│   │   │   │    54:     
-│   │   │   │    55:     // Загружаем GDT
-│   │   │   │    56:     asm volatile("lgdt %0" : : "m"(gdt_ptr));
-│   │   │   │    57:     
-│   │   │   │    58:     // Перезагружаем сегменты
-│   │   │   │    59:     asm volatile(
-│   │   │   │    60:         "mov $0x10, %%ax\n"
-│   │   │   │    61:         "mov %%ax, %%ds\n"
-│   │   │   │    62:         "mov %%ax, %%es\n"
-│   │   │   │    63:         "mov %%ax, %%fs\n"
-│   │   │   │    64:         "mov %%ax, %%gs\n"
-│   │   │   │    65:         "mov %%ax, %%ss\n"
-│   │   │   │    66:         "pushq $0x08\n"
-│   │   │   │    67:         "leaq 1f(%%rip), %%rax\n"
-│   │   │   │    68:         "pushq %%rax\n"
-│   │   │   │    69:         "lretq\n"
-│   │   │   │    70:         "1:\n"
-│   │   │   │    71:         : : : "rax", "memory"
-│   │   │   │    72:     );
-│   │   │   │    73:     
-│   │   │   │    74:     serial_writestring(COM1, "[GDT] GDT loaded successfully\n");
-│   │   │   │    75: }
-│   │   │   │    76: 
-│   │   │   │    77: const struct gdt_entry* gdt_get_descriptor(int index) {
-│   │   │   │    78:     if (index >= 0 && index < 5) {
-│   │   │   │    79:         return &gdt[index];
-│   │   │   │    80:     }
-│   │   │   │    81:     return NULL;
-│   │   │   │    82: }
+│   │   │   │    48:     asm volatile("lgdt %0" : : "m"(gdt_ptr));
+│   │   │   │    49:     
+│   │   │   │    50:     asm volatile(
+│   │   │   │    51:         "mov $0x10, %%ax\n"
+│   │   │   │    52:         "mov %%ax, %%ds\n"
+│   │   │   │    53:         "mov %%ax, %%es\n"
+│   │   │   │    54:         "mov %%ax, %%fs\n"
+│   │   │   │    55:         "mov %%ax, %%gs\n"
+│   │   │   │    56:         "mov %%ax, %%ss\n"
+│   │   │   │    57:         "pushq $0x08\n"
+│   │   │   │    58:         "leaq 1f(%%rip), %%rax\n"
+│   │   │   │    59:         "pushq %%rax\n"
+│   │   │   │    60:         "lretq\n"
+│   │   │   │    61:         "1:\n"
+│   │   │   │    62:         : : : "rax", "memory"
+│   │   │   │    63:     );
+│   │   │   │    64:     
+│   │   │   │    65:     serial_writestring(COM1, "[GDT] GDT loaded successfully\n");
+│   │   │   │    66: }
+│   │   │   │    67: 
+│   │   │   │    68: const struct gdt_entry* gdt_get_descriptor(int index) {
+│   │   │   │    69:     if (index >= 0 && index < 5) {
+│   │   │   │    70:         return &gdt[index];
+│   │   │   │    71:     }
+│   │   │   │    72:     return NULL;
+│   │   │   │    73: }
 │   │   │   ├── gdt_asm.asm (237 bytes)
 
 │   │   │   │   Contents:
@@ -475,110 +473,110 @@ Directory Structure:
 │   │   │   │   │    97: }
 │   │   │   ├── geometry/
 │   │   ├── io/
-│   │   │   ├── serial.c (6.1 KB)
+│   │   │   ├── serial.c (4.9 KB)
 
 │   │   │   │   Contents:
 │   │   │   │     1: #include <stdarg.h>
 │   │   │   │     2: #include <stdint.h>
 │   │   │   │     3: #include <stddef.h>
 │   │   │   │     4: #include <stdbool.h>
-│   │   │   │     5: #include "../../include/io/ports.h"
-│   │   │   │     6: #include "../../include/io/serial.h"
-│   │   │   │     7: 
-│   │   │   │     8: static void itoa_signed(int64_t value, char* str, int base) {
-│   │   │   │     9:     char* ptr = str;
-│   │   │   │    10:     char* ptr1 = str;
-│   │   │   │    11:     char tmp_char;
-│   │   │   │    12:     
-│   │   │   │    13:     if (base < 2 || base > 36) {
-│   │   │   │    14:         *ptr = '\0';
-│   │   │   │    15:         return;
-│   │   │   │    16:     }
-│   │   │   │    17:     
-│   │   │   │    18:     int is_negative = 0;
-│   │   │   │    19:     if (value < 0) {
-│   │   │   │    20:         is_negative = 1;
-│   │   │   │    21:         value = -value;
-│   │   │   │    22:     }
-│   │   │   │    23:     
-│   │   │   │    24:     do {
-│   │   │   │    25:         int digit = value % base;
-│   │   │   │    26:         *ptr++ = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-│   │   │   │    27:         value /= base;
-│   │   │   │    28:     } while (value > 0);
-│   │   │   │    29:     
-│   │   │   │    30:     if (is_negative) {
-│   │   │   │    31:         *ptr++ = '-';
-│   │   │   │    32:     }
-│   │   │   │    33:     
-│   │   │   │    34:     *ptr-- = '\0';
-│   │   │   │    35:     
-│   │   │   │    36:     while (ptr1 < ptr) {
-│   │   │   │    37:         tmp_char = *ptr;
-│   │   │   │    38:         *ptr-- = *ptr1;
-│   │   │   │    39:         *ptr1++ = tmp_char;
-│   │   │   │    40:     }
-│   │   │   │    41: }
-│   │   │   │    42: 
-│   │   │   │    43: static void itoa_unsigned(uint64_t value, char* str, int base, bool uppercase) {
-│   │   │   │    44:     char* ptr = str;
-│   │   │   │    45:     char* ptr1 = str;
-│   │   │   │    46:     char tmp_char;
-│   │   │   │    47:     
-│   │   │   │    48:     if (base < 2 || base > 36) {
-│   │   │   │    49:         *ptr = '\0';
-│   │   │   │    50:         return;
-│   │   │   │    51:     }
-│   │   │   │    52:     
-│   │   │   │    53:     const char* digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-│   │   │   │    54:     
-│   │   │   │    55:     do {
-│   │   │   │    56:         int digit = value % base;
-│   │   │   │    57:         *ptr++ = digits[digit];
-│   │   │   │    58:         value /= base;
-│   │   │   │    59:     } while (value > 0);
-│   │   │   │    60:     
-│   │   │   │    61:     *ptr-- = '\0';
-│   │   │   │    62:     
-│   │   │   │    63:     while (ptr1 < ptr) {
-│   │   │   │    64:         tmp_char = *ptr;
-│   │   │   │    65:         *ptr-- = *ptr1;
-│   │   │   │    66:         *ptr1++ = tmp_char;
+│   │   │   │     5: #include <stdio.h>
+│   │   │   │     6: #include <stdlib.h>
+│   │   │   │     7: #include <string.h>
+│   │   │   │     8: #include "../../include/io/ports.h"
+│   │   │   │     9: #include "../../include/io/serial.h"
+│   │   │   │    10: 
+│   │   │   │    11: void serial_initialize(uint16_t port, uint32_t baud_rate) {
+│   │   │   │    12:     outb(port + 1, 0x00);
+│   │   │   │    13:     
+│   │   │   │    14:     uint16_t divisor = 115200 / baud_rate;
+│   │   │   │    15:     outb(port + 3, 0x80);
+│   │   │   │    16:     outb(port + 0, divisor & 0xFF);
+│   │   │   │    17:     outb(port + 1, (divisor >> 8) & 0xFF);
+│   │   │   │    18:     
+│   │   │   │    19:     outb(port + 3, 0x03);
+│   │   │   │    20:     
+│   │   │   │    21:     outb(port + 2, 0xC7);
+│   │   │   │    22:     
+│   │   │   │    23:     outb(port + 4, 0x0B);
+│   │   │   │    24:     
+│   │   │   │    25:     outb(port + 4, 0x1E);
+│   │   │   │    26:     outb(port + 0, 0xAE);
+│   │   │   │    27:     
+│   │   │   │    28:     if (inb(port + 0) != 0xAE) {
+│   │   │   │    29:         return;  
+│   │   │   │    30:     }
+│   │   │   │    31:     
+│   │   │   │    32:     outb(port + 4, 0x0F);
+│   │   │   │    33: }
+│   │   │   │    34: 
+│   │   │   │    35: int serial_received(uint16_t port) {
+│   │   │   │    36:     return inb(port + 5) & 1;
+│   │   │   │    37: }
+│   │   │   │    38: 
+│   │   │   │    39: char serial_read(uint16_t port) {
+│   │   │   │    40:     while (serial_received(port) == 0);
+│   │   │   │    41:     return inb(port);
+│   │   │   │    42: }
+│   │   │   │    43: 
+│   │   │   │    44: int serial_is_transmit_empty(uint16_t port) {
+│   │   │   │    45:     return inb(port + 5) & 0x20;
+│   │   │   │    46: }
+│   │   │   │    47: 
+│   │   │   │    48: void serial_write(uint16_t port, char c) {
+│   │   │   │    49:     while (serial_is_transmit_empty(port) == 0);
+│   │   │   │    50:     outb(port, c);
+│   │   │   │    51: }
+│   │   │   │    52: 
+│   │   │   │    53: void serial_writestring(uint16_t port, const char* str) {
+│   │   │   │    54:     while (*str) {
+│   │   │   │    55:         serial_write(port, *str++);
+│   │   │   │    56:     }
+│   │   │   │    57: }
+│   │   │   │    58: 
+│   │   │   │    59: static void uint_to_str(uint64_t value, char* buffer, int base, bool uppercase) {
+│   │   │   │    60:     char* ptr = buffer;
+│   │   │   │    61:     char* ptr1 = buffer;
+│   │   │   │    62:     char tmp_char;
+│   │   │   │    63:     
+│   │   │   │    64:     if (base < 2 || base > 36) {
+│   │   │   │    65:         *ptr = '\0';
+│   │   │   │    66:         return;
 │   │   │   │    67:     }
-│   │   │   │    68: }
-│   │   │   │    69: 
-│   │   │   │    70: void serial_initialize(uint16_t port, uint32_t baud_rate) {
-│   │   │   │    71:     outb(port + 1, 0x00);
-│   │   │   │    72:     
-│   │   │   │    73:     uint16_t divisor = 115200 / baud_rate;
-│   │   │   │    74:     outb(port + 3, 0x80);
-│   │   │   │    75:     outb(port + 0, divisor & 0xFF);
-│   │   │   │    76:     outb(port + 1, (divisor >> 8) & 0xFF);
-│   │   │   │    77:     
-│   │   │   │    78:     outb(port + 3, 0x03);
-│   │   │   │    79:     
-│   │   │   │    80:     outb(port + 2, 0xC7);
-│   │   │   │    81:     
-│   │   │   │    82:     outb(port + 4, 0x0B);
-│   │   │   │    83:     
-│   │   │   │    84:     outb(port + 4, 0x1E);
-│   │   │   │    85:     outb(port + 0, 0xAE);
-│   │   │   │    86:     
-│   │   │   │    87:     if (inb(port + 0) != 0xAE) {
-│   │   │   │    88:         return;  
-│   │   │   │    89:     }
-│   │   │   │    90:     
-│   │   │   │    91:     outb(port + 4, 0x0F);
-│   │   │   │    92: }
-│   │   │   │    93: 
-│   │   │   │    94: int serial_received(uint16_t port) {
-│   │   │   │    95:     return inb(port + 5) & 1;
-│   │   │   │    96: }
-│   │   │   │    97: 
-│   │   │   │    98: char serial_read(uint16_t port) {
-│   │   │   │    99:     while (serial_received(port) == 0);
-│   │   │   │   100:     return inb(port);
-│   │   │   │   101: ... [truncated, total 252 lines]
+│   │   │   │    68:     
+│   │   │   │    69:     const char* digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
+│   │   │   │    70:     
+│   │   │   │    71:     do {
+│   │   │   │    72:         int digit = value % base;
+│   │   │   │    73:         *ptr++ = digits[digit];
+│   │   │   │    74:         value /= base;
+│   │   │   │    75:     } while (value > 0);
+│   │   │   │    76:     
+│   │   │   │    77:     *ptr-- = '\0';
+│   │   │   │    78:     
+│   │   │   │    79:     while (ptr1 < ptr) {
+│   │   │   │    80:         tmp_char = *ptr;
+│   │   │   │    81:         *ptr-- = *ptr1;
+│   │   │   │    82:         *ptr1++ = tmp_char;
+│   │   │   │    83:     }
+│   │   │   │    84: }
+│   │   │   │    85: 
+│   │   │   │    86: void serial_printf(uint16_t port, const char* format, ...) {
+│   │   │   │    87:     va_list args;
+│   │   │   │    88:     va_start(args, format);
+│   │   │   │    89:     
+│   │   │   │    90:     char buffer[65]; 
+│   │   │   │    91:     const char* ptr = format;
+│   │   │   │    92:     
+│   │   │   │    93:     while (*ptr) {
+│   │   │   │    94:         if (*ptr != '%') {
+│   │   │   │    95:             serial_write(port, *ptr);
+│   │   │   │    96:             ptr++;
+│   │   │   │    97:             continue;
+│   │   │   │    98:         }
+│   │   │   │    99:         
+│   │   │   │   100:         ptr++; 
+│   │   │   │   101: ... [truncated, total 205 lines]
 │   │   ├── memory/
 │   │   ├── font.psf (9.7 KB)
 │   │   ├── kernel.c (1.9 KB)
@@ -2592,7 +2590,7 @@ Directory Structure:
 │   │   │     3: This repository contains the primary documentation and C/C++ header for the
 │   │   │     4: Limine Boot Protocol.
 │   │   │     5: 
-├── .gitignore (88 bytes)
+├── .gitignore (100 bytes)
 ├── build.py (36.9 KB)
 
 │   Contents:
@@ -2766,8 +2764,8 @@ Directory Structure:
 
 ================================================================================
 Statistics:
-- Total files: 90
-- Total size: 2064.7 KB
+- Total files: 91
+- Total size: 2062.5 KB
 - Files by type:
   [no extension]: 11
   .EFI: 5
@@ -2777,6 +2775,7 @@ Statistics:
   .conf: 1
   .exe: 1
   .h: 20
+  .json: 1
   .lds: 1
   .md: 3
   .psf: 1

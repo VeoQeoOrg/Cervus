@@ -12,7 +12,7 @@ gdt_flush:
     mov ss, ax
 
     push 0x08
-    lea rax, [.flush_here]
+    lea rax, [rel .flush_here]
     push rax
     retfq
 

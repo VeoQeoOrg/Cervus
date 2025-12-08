@@ -2,7 +2,6 @@
 #include "../../include/io/serial.h"
 #include <stddef.h>
 
-// Делаем переменные глобальными
 struct gdt_entry gdt[5];
 struct gdt_ptr gdt_ptr;
 void gdt_load(void);
@@ -22,26 +21,20 @@ static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t acce
 void gdt_init(void) {
     serial_writestring(COM1, "[GDT] Initializing GDT...\n");
     
-    // Нулевой дескриптор (обязателен)
     gdt_set_entry(0, 0, 0, 0, 0);
     
-    // Код сегмент ядра
     gdt_set_entry(1, 0, 0xFFFFF, 
                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_EXECUTABLE | GDT_ACCESS_READ_WRITE,
                   GDT_GRANULARITY_4K | GDT_GRANULARITY_LONG);
     
-    // Данные сегмент ядра
     gdt_set_entry(2, 0, 0xFFFFF,
                   GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_READ_WRITE,
                   GDT_GRANULARITY_4K);
     
-    // Код сегмент пользователя (заглушка)
     gdt_set_entry(3, 0, 0, 0, 0);
     
-    // Данные сегмент пользователя (заглушка)
     gdt_set_entry(4, 0, 0, 0, 0);
     
-    // Настраиваем указатель GDT
     gdt_ptr.limit = sizeof(gdt) - 1;
     gdt_ptr.base = (uint64_t)&gdt;
     
@@ -52,10 +45,8 @@ void gdt_init(void) {
 void gdt_load(void) {
     serial_writestring(COM1, "[GDT] Loading GDT...\n");
     
-    // Загружаем GDT
     asm volatile("lgdt %0" : : "m"(gdt_ptr));
     
-    // Перезагружаем сегменты
     asm volatile(
         "mov $0x10, %%ax\n"
         "mov %%ax, %%ds\n"
