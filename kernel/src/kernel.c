@@ -9,6 +9,8 @@
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
 #include "../include/interrupts/idt.h"
+#include "../include/sse/fpu.h"
+#include "../include/sse/sse.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -40,9 +42,13 @@ void kernel_main(void) {
     
     gdt_init();
     idt_init();
-    
+     
     asm volatile ("sti");
     serial_writestring(COM1, "GDT&IDT [OK]\n");
+
+    fpu_init();
+    sse_init();
+    serial_writestring(COM1, "FPU/SSE [OK]\n");
     
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
         serial_writestring(COM1, "ERROR: Unsupported Limine base revision\n");
@@ -65,6 +71,20 @@ void kernel_main(void) {
     clear_screen();
     
     printf("=== CERVUS OS v0.0.1 ===\n");
+    printf("Kernel initialized successfully!\n");
+    printf("Framebuffer: %dx%d, %d bpp\n", 
+           global_framebuffer->width, 
+           global_framebuffer->height,
+           global_framebuffer->bpp);
+    
+    printf("\nRunning system tests...\n");
+    
+    serial_writestring(COM1, "Testing FPU/SSE via serial...\n");
+    
+    test_simd_cpuid_printf();
+    
+    printf("\nSystem ready. Entering idle loop...\n");
+    serial_writestring(COM1, "System ready. Entering idle loop...\n");
 
     while (1)
     {

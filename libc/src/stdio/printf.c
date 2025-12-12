@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <math.h>
 
 static void print_string(const char *str) {
     while (*str) {
@@ -151,6 +152,59 @@ int printf(const char *format, ...) {
                     count++;
                 }
                 chars_written += count;
+                break;
+            }
+
+            case 'f':
+            case 'F': {
+                double num = va_arg(args, double);
+                
+                if (isinf(num)) {
+                    const char *str = num < 0 ? "-inf" : "inf";
+                    while (*str) {
+                        putchar(*str++);
+                        chars_written++;
+                    }
+                    break;
+                }
+                
+                if (num < 0) {
+                    putchar('-');
+                    chars_written++;
+                    num = -num;
+                }
+                
+                int int_part = (int)num;
+                char int_buffer[32];
+                char *int_ptr = int_buffer + sizeof(int_buffer) - 1;
+                *int_ptr = '\0';
+                
+                if (int_part == 0) {
+                    *--int_ptr = '0';
+                } else {
+                    while (int_part > 0) {
+                        *--int_ptr = '0' + (int_part % 10);
+                        int_part /= 10;
+                    }
+                }
+                
+                while (*int_ptr) {
+                    putchar(*int_ptr++);
+                    chars_written++;
+                }
+                
+                putchar('.');
+                chars_written++;
+                double frac = num - (int)num;
+                
+                for (int i = 0; i < 6; i++) {
+                    frac *= 10;
+                    int digit = (int)frac;
+                    putchar('0' + digit);
+                    chars_written++;
+                    frac -= digit;
+                }
+                
                 break;
             }
             

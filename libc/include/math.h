@@ -2,5 +2,6 @@
 #define _MATH_H
 
 int abs(int n);
+int isinf(double x);
 
 #endif

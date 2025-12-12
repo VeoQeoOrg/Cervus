@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "../../include/io/ports.h"
 #include "../../include/io/serial.h"
 
@@ -179,6 +180,49 @@ void serial_printf(uint16_t port, const char* format, ...) {
                 serial_writestring(port, "0x");
                 uint_to_str((uintptr_t)ptr_val, buffer, 16, false);
                 serial_writestring(port, buffer);
+                break;
+            }
+
+            case 'f':
+            case 'F': {
+                double num = va_arg(args, double);
+                
+                if (isinf(num)) {
+                    serial_writestring(port, num < 0 ? "-inf" : "inf");
+                    break;
+                }
+                
+                if (num < 0) {
+                    serial_write(port, '-');
+                    num = -num;
+                }
+                
+                int int_part = (int)num;
+                char int_buffer[32];
+                char *int_ptr = int_buffer + sizeof(int_buffer) - 1;
+                *int_ptr = '\0';
+                
+                if (int_part == 0) {
+                    *--int_ptr = '0';
+                } else {
+                    while (int_part > 0) {
+                        *--int_ptr = '0' + (int_part % 10);
+                        int_part /= 10;
+                    }
+                }
+                
+                serial_writestring(port, int_ptr);
+                
+                serial_write(port, '.');
+                double frac = num - (int)num;
+                
+                for (int i = 0; i < 6; i++) {
+                    frac *= 10;
+                    int digit = (int)frac;
+                    serial_write(port, '0' + digit);
+                    frac -= digit;
+                }
+                
                 break;
             }
             

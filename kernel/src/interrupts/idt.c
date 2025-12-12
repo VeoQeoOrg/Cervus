@@ -90,13 +90,13 @@ void idt_set_entry(uint8_t index, uint64_t offset, uint16_t selector, uint8_t ty
     idt[index].zero = 0;
 }
 
-void register_interrupt_handler(uint8_t interrupt, interrupt_handler_t handler) {
+void register_interrupt_handler(uint16_t interrupt, interrupt_handler_t handler) {
     if (interrupt < 256) {
         interrupt_handlers[interrupt] = handler;
     }
 }
 
-interrupt_handler_t get_interrupt_handler(uint8_t interrupt) {
+interrupt_handler_t get_interrupt_handler(uint16_t interrupt) {
     if (interrupt < 256) {
         return interrupt_handlers[interrupt];
     }

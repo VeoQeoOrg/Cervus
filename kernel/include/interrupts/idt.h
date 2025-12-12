@@ -122,7 +122,8 @@ typedef void (*interrupt_handler_t)(struct interrupt_frame* frame);
 void idt_init(void);
 void idt_set_entry(uint8_t index, uint64_t offset, uint16_t selector, uint8_t type_attr, uint8_t ist);
 void idt_load(void);
-void register_interrupt_handler(uint8_t interrupt, interrupt_handler_t handler);
+void register_interrupt_handler(uint16_t interrupt, interrupt_handler_t handler);
+interrupt_handler_t get_interrupt_handler(uint16_t interrupt);
 void exception_handler(struct interrupt_frame* frame);
 void irq_handler(struct interrupt_frame* frame);
 

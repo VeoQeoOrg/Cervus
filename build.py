@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Set
 import argparse
 
 IMAGE_NAME = "Cervus"
@@ -28,6 +28,22 @@ LIBC_DIR = BASE_DIR / "libc"
 LIBC_INCLUDE_DIR = LIBC_DIR / "include"
 LIBC_SRC_DIR = LIBC_DIR / "src"
 
+# Список файлов, которые должны компилироваться с SSE флагами
+SSE_FILES = {
+    # SSE файлы
+    "sse.c",
+    "fpu.c",
+    
+    # Файлы с плавающей точкой
+    "printf.c",
+    "serial.c",
+    
+    # Имена файлов, которые могут использовать float/double
+    "math.c",  # если будет в будущем
+    "float.c",  # если будет в будущем
+}
+
+# Зависимости для limine-tools
 DEPENDENCIES = {
     "freestnd-c-hdrs": {
         "url": "https://codeberg.org/OSDev/freestnd-c-hdrs-0bsd.git",
@@ -51,6 +67,7 @@ class Colors:
     END = '\033[0m'
     BOLD = '\033[1m'
     CYAN = '\033[96m'
+    MAGENTA = '\033[95m'
 
 def print_color(color: str, message: str):
     print(f"{color}{message}{Colors.END}")
@@ -527,6 +544,22 @@ def find_all_source_files() -> List[Path]:
     
     return source_files
 
+def is_sse_file(file_path: Path) -> bool:
+    """Проверяет, является ли файл SSE файлом (по имени файла)"""
+    # Проверяем по имени файла в глобальном списке
+    filename = file_path.name.lower()
+    
+    # Проверяем по точному имени файла
+    if filename in SSE_FILES:
+        return True
+    
+    # Проверяем по части имени (например, printf.c, serial.c и т.д.)
+    for sse_file in SSE_FILES:
+        if sse_file in filename:
+            return True
+    
+    return False
+
 def get_source_file_info(src_file: Path) -> Tuple[str, str, Path]:
     """Возвращает информацию об исходном файле для генерации имени объектного файла"""
     if src_file.is_relative_to(LIBC_SRC_DIR):
@@ -539,18 +572,17 @@ def get_source_file_info(src_file: Path) -> Tuple[str, str, Path]:
         rel_path = src_file.relative_to(BASE_DIR)
         category = "other"
     
+    # Создаем уникальное имя с учетом пути и расширения
     if src_file.suffix == '.psf':
         obj_name = f"{category}_{src_file.stem}"
     else:
-        obj_name = f"{category}_{str(rel_path).replace(os.sep, '_').replace('/', '_').replace('.', '_')}"
+        # Используем полный путь для уникальности
+        # Заменяем слеши и точки на подчеркивания
+        path_str = str(rel_path).replace('/', '_').replace('.', '_').replace('-', '_')
+        obj_name = f"{category}_{path_str}"
     
-    if category == "libc":
-        obj_dir = OBJ_DIR / "libc"
-    elif category == "kernel":
-        obj_dir = OBJ_DIR / "kernel"
-    else:
-        obj_dir = OBJ_DIR / "other"
-    
+    # Все объектные файлы в одной директории для простоты
+    obj_dir = OBJ_DIR / category
     obj_file = obj_dir / f"{obj_name}.o"
     
     return obj_name, category, obj_file
@@ -657,15 +689,30 @@ def compile_binary_file(src_file: Path, obj_file: Path) -> bool:
         if temp_path.exists():
             temp_path.unlink()
 
-def compile_source_file(src_file: Path, obj_file: Path, cflags: str, cppflags: str) -> bool:
+def compile_source_file(src_file: Path, obj_file: Path, cflags: str, cppflags: str, use_sse: bool = False) -> bool:
     """Компилирует исходный файл (C или ассемблер)"""
     obj_file.parent.mkdir(parents=True, exist_ok=True)
     
+    # Удаляем старый объектный файл, если он существует
+    if obj_file.exists():
+        obj_file.unlink()
+    
+    if use_sse:
+        print_color(Colors.MAGENTA, f"Compiling with SSE flags: {src_file.name}")
+        # SSE флаги (без -mgeneral-regs-only, с -msse и -mfpmath=sse)
+        sse_cflags = cflags.replace("-mgeneral-regs-only", "").replace("-mno-sse", "-msse").replace("-mno-sse2", "-msse2")
+        if "-mfpmath=sse" not in sse_cflags:
+            sse_cflags += " -mfpmath=sse"
+        compile_flags = sse_cflags
+    else:
+        print_color(Colors.BLUE, f"Compiling: {src_file.name}")
+        compile_flags = cflags
+    
     if src_file.suffix == '.c':
-        cmd = ["gcc"] + cflags.split() + cppflags.split() + \
+        cmd = ["gcc"] + compile_flags.split() + cppflags.split() + \
               ["-c", str(src_file), "-o", str(obj_file)]
     elif src_file.suffix == '.S':
-        cmd = ["gcc"] + cflags.split() + cppflags.split() + \
+        cmd = ["gcc"] + compile_flags.split() + cppflags.split() + \
               ["-c", str(src_file), "-o", str(obj_file)]
     elif src_file.suffix == '.asm':
         cmd = ["nasm", "-g", "-F", "dwarf", "-f", "elf64", str(src_file), 
@@ -673,14 +720,15 @@ def compile_source_file(src_file: Path, obj_file: Path, cflags: str, cppflags: s
     else:
         return False
     
-    print_color(Colors.BLUE, f"Compiling: {src_file.name}")
-    
     success, error_output = run_command(cmd, capture=False)
     
     if success:
-        print_color(Colors.GREEN, f"  ✓ Successfully compiled: {src_file.name}")
+        color = Colors.GREEN if not use_sse else Colors.MAGENTA
+        print_color(color, f"  ✓ Successfully compiled: {src_file.name}")
     else:
         print_color(Colors.RED, f"  ✗ Failed to compile: {src_file.name}")
+        if error_output:
+            print_color(Colors.RED, f"    Error: {error_output[:200]}...")
     
     return success
 
@@ -703,11 +751,20 @@ def compile_kernel():
         print_color(Colors.YELLOW, f"libc source directory not found: {LIBC_SRC_DIR}")
         LIBC_SRC_DIR.mkdir(parents=True, exist_ok=True)
     
-    cflags = "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding " \
-             "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC " \
-             "-ffunction-sections -fdata-sections -m64 -march=x86-64 " \
-             "-mabi=sysv -mno-80387 -mno-mmx -mno-sse -mno-sse2 " \
-             "-mno-red-zone -mcmodel=kernel"
+    # Базовые флаги для ядра (БЕЗ SSE)
+    core_cflags = "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding " \
+                 "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC " \
+                 "-ffunction-sections -fdata-sections " \
+                 "-m64 -march=x86-64 -mabi=sysv -mcmodel=kernel " \
+                 "-mno-red-zone -mgeneral-regs-only " \
+                 "-mno-sse -mno-sse2 -mno-mmx -mno-3dnow"
+    
+    # Флаги для SSE файлов (включая плавающую точку)
+    sse_cflags = "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding " \
+                "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC " \
+                "-ffunction-sections -fdata-sections " \
+                "-m64 -march=x86-64 -mabi=sysv -mcmodel=kernel " \
+                "-mno-red-zone -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
     
     cppflags = f"-I {KERNEL_DIR / 'src'} " \
                f"-I {LIBC_INCLUDE_DIR} " \
@@ -717,6 +774,10 @@ def compile_kernel():
     
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     OBJ_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Создаем простые директории для объектных файлов
+    (OBJ_DIR / "kernel").mkdir(parents=True, exist_ok=True)
+    (OBJ_DIR / "libc").mkdir(parents=True, exist_ok=True)
     
     source_files = find_all_source_files()
     object_files = []
@@ -728,21 +789,42 @@ def compile_kernel():
     print_color(Colors.BLUE, f"Found {len(source_files)} source files")
     
     compilation_success = True
+    sse_files_count = 0
+    core_files_count = 0
+    sse_files_list = []
     
     for src_file in source_files:
         obj_name, category, obj_file = get_source_file_info(src_file)
         
         needs_compile = True
+        use_sse = is_sse_file(src_file)
+        
         if obj_file.exists():
             src_mtime = src_file.stat().st_mtime
             obj_mtime = obj_file.stat().st_mtime
             if src_mtime <= obj_mtime:
                 needs_compile = False
-                print_color(Colors.BLUE, f"Using cached: {category}/{src_file.name}")
+                color = Colors.MAGENTA if use_sse else Colors.BLUE
+                print_color(color, f"Using cached: {category}/{src_file.name}")
                 object_files.append(obj_file)
+                if use_sse:
+                    sse_files_count += 1
+                    sse_files_list.append(src_file.name)
+                else:
+                    core_files_count += 1
         
         if needs_compile:
-            print_color(Colors.CYAN, f"\n[{category}] {src_file.name}")
+            if use_sse:
+                sse_files_count += 1
+                sse_files_list.append(src_file.name)
+                color = Colors.MAGENTA
+                cflags_to_use = sse_cflags
+            else:
+                core_files_count += 1
+                color = Colors.CYAN
+                cflags_to_use = core_cflags
+            
+            print_color(color, f"\n[{category}] {src_file.name}")
             
             if src_file.suffix == '.psf':
                 if obj_file.exists():
@@ -753,13 +835,24 @@ def compile_kernel():
                 else:
                     object_files.append(obj_file)
             elif src_file.suffix in ('.c', '.S', '.asm'):
-                if not compile_source_file(src_file, obj_file, cflags, cppflags):
+                if not compile_source_file(src_file, obj_file, cflags_to_use, cppflags, use_sse=use_sse):
                     compilation_success = False
                 else:
                     object_files.append(obj_file)
             else:
                 print_color(Colors.YELLOW, f"Skipping unknown file type: {src_file}")
                 continue
+    
+    print_color(Colors.GREEN, f"\nCompilation summary:")
+    print_color(Colors.BLUE, f"  Core files: {core_files_count}")
+    print_color(Colors.MAGENTA, f"  SSE files: {sse_files_count}")
+    
+    if sse_files_list:
+        print_color(Colors.MAGENTA, f"  SSE files list:")
+        for sse_file in sse_files_list:
+            print_color(Colors.MAGENTA, f"    - {sse_file}")
+    
+    print_color(Colors.GREEN, f"  Total object files: {len(object_files)}")
     
     if not compilation_success:
         print_color(Colors.RED, "\nCompilation failed! Check errors above.")
@@ -794,6 +887,31 @@ def compile_kernel():
             return False
         
         print_color(Colors.GREEN, f"Kernel linked: {kernel_output}")
+        
+        # Проверяем символы в ядре
+        print_color(Colors.BLUE, "\nChecking kernel symbols...")
+        check_cmd = ["nm", "--defined-only", str(kernel_output)]
+        success, symbols = run_command(check_cmd, capture=True)
+        if success and symbols:
+            sse_symbols = [line for line in symbols.strip().split('\n') if 'sse' in line.lower() or 'fpu' in line.lower()]
+            if sse_symbols:
+                print_color(Colors.MAGENTA, f"Found {len(sse_symbols)} SSE/FPU symbols in kernel")
+                
+            # Проверяем наличие символов printf и serial
+            printf_symbols = [line for line in symbols.strip().split('\n') if 'printf' in line.lower()]
+            if printf_symbols:
+                print_color(Colors.GREEN, f"Found {len(printf_symbols)} printf symbols")
+            
+            serial_symbols = [line for line in symbols.strip().split('\n') if 'serial' in line.lower()]
+            if serial_symbols:
+                print_color(Colors.GREEN, f"Found {len(serial_symbols)} serial symbols")
+            
+            # Выводим несколько примеров символов
+            print_color(Colors.CYAN, "Sample symbols:")
+            sample_symbols = [line for line in symbols.strip().split('\n') if 
+                            'kernel' in line or 'main' in line or '_start' in line]
+            for sym in sample_symbols[:5]:
+                print_color(Colors.CYAN, f"  {sym}")
     else:
         print_color(Colors.GREEN, "Kernel is up to date")
     
