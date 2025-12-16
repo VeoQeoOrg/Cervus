@@ -2,6 +2,7 @@
 #include "../../include/io/serial.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #define COM1 0x3F8
 
@@ -319,6 +320,21 @@ void test_simd_cpuid_printf(void) {
         printf("[%.2f, %.2f, %.2f, %.2f]\n",
                vec_result[0], vec_result[1], 
                vec_result[2], vec_result[3]);
+
+        double pi = 3.141592653589793;
+        double large = 123456.789;
+        double small = 0.0000123456;
+
+        printf("pi = %f\n", pi);           // 3.141593
+        printf("pi = %.10f\n", pi);        // 3.1415926536
+        printf("large = %e\n", large);     // 1.234568e+05
+        printf("small = %e\n", small);     // 1.234560e-05
+        printf("auto = %g\n", pi);         // 3.14159
+        printf("auto = %g\n", small);      // 1.23456e-05
+
+        printf("inf = %f\n", INFINITY);    // inf
+        printf("nan = %f\n", NAN);         // nan
+        
     }
     
     printf("=== END OF CPUID/SIMD INFO ===\n\n");

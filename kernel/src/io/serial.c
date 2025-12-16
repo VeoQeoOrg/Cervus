@@ -100,14 +100,17 @@ void serial_printf(uint16_t port, const char* format, ...) {
         
         ptr++; 
         
+        // Пропускаем флаги
         while (*ptr == '0' || *ptr == '-' || *ptr == '+' || *ptr == ' ' || *ptr == '#') {
             ptr++;
         }
         
+        // Пропускаем ширину
         while (*ptr >= '0' && *ptr <= '9') {
             ptr++;
         }
         
+        // Пропускаем точность
         if (*ptr == '.') {
             ptr++;
             while (*ptr >= '0' && *ptr <= '9') {
@@ -115,9 +118,18 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
         }
         
+        // Обработка модификаторов длины
+        int is_long_long = 0;
+        int is_long = 0;
+        
         if (*ptr == 'l') {
             ptr++;
-            if (*ptr == 'l') ptr++;
+            is_long = 1;
+            if (*ptr == 'l') {
+                ptr++;
+                is_long_long = 1;
+                is_long = 0;
+            }
         } else if (*ptr == 'h') {
             ptr++;
             if (*ptr == 'h') ptr++;
@@ -141,36 +153,86 @@ void serial_printf(uint16_t port, const char* format, ...) {
             
             case 'd':
             case 'i': {
-                int num = va_arg(args, int);
-                itoa(num, buffer, 10); 
+                if (is_long_long) {
+                    int64_t num = va_arg(args, int64_t);
+                    // Для отрицательных чисел
+                    if (num < 0) {
+                        serial_write(port, '-');
+                        num = -num;
+                    }
+                    uint_to_str((uint64_t)num, buffer, 10, false);
+                } else if (is_long) {
+                    long num = va_arg(args, long);
+                    // Для отрицательных чисел
+                    if (num < 0) {
+                        serial_write(port, '-');
+                        num = -num;
+                    }
+                    uint_to_str((uint64_t)num, buffer, 10, false);
+                } else {
+                    int num = va_arg(args, int);
+                    itoa(num, buffer, 10);
+                }
                 serial_writestring(port, buffer);
                 break;
             }
             
             case 'u': {
-                unsigned int num = va_arg(args, unsigned int);
-                uint_to_str(num, buffer, 10, false);
+                if (is_long_long) {
+                    uint64_t num = va_arg(args, uint64_t);
+                    uint_to_str(num, buffer, 10, false);
+                } else if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    uint_to_str(num, buffer, 10, false);
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    uint_to_str(num, buffer, 10, false);
+                }
                 serial_writestring(port, buffer);
                 break;
             }
             
             case 'x': {
-                unsigned int num = va_arg(args, unsigned int);
-                uint_to_str(num, buffer, 16, false);
+                if (is_long_long) {
+                    uint64_t num = va_arg(args, uint64_t);
+                    uint_to_str(num, buffer, 16, false);
+                } else if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    uint_to_str(num, buffer, 16, false);
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    uint_to_str(num, buffer, 16, false);
+                }
                 serial_writestring(port, buffer);
                 break;
             }
             
             case 'X': {
-                unsigned int num = va_arg(args, unsigned int);
-                uint_to_str(num, buffer, 16, true);
+                if (is_long_long) {
+                    uint64_t num = va_arg(args, uint64_t);
+                    uint_to_str(num, buffer, 16, true);
+                } else if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    uint_to_str(num, buffer, 16, true);
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    uint_to_str(num, buffer, 16, true);
+                }
                 serial_writestring(port, buffer);
                 break;
             }
             
             case 'o': {
-                unsigned int num = va_arg(args, unsigned int);
-                uint_to_str(num, buffer, 8, false);
+                if (is_long_long) {
+                    uint64_t num = va_arg(args, uint64_t);
+                    uint_to_str(num, buffer, 8, false);
+                } else if (is_long) {
+                    unsigned long num = va_arg(args, unsigned long);
+                    uint_to_str(num, buffer, 8, false);
+                } else {
+                    unsigned int num = va_arg(args, unsigned int);
+                    uint_to_str(num, buffer, 8, false);
+                }
                 serial_writestring(port, buffer);
                 break;
             }

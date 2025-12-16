@@ -1,7 +1,7 @@
 #include <math.h>
 #include <stdint.h>
 
-int isinf(double x) {
+int isnan(double x) {
     union {
         double d;
         struct {
@@ -11,5 +11,5 @@ int isinf(double x) {
         } bits;
     } u = { .d = x };
     
-    return (u.bits.exponent == 0x7FF) && (u.bits.mantissa == 0);
+    return (u.bits.exponent == 0x7FF) && (u.bits.mantissa != 0);
 }

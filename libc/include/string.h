@@ -21,5 +21,6 @@ char *strstr(const char *haystack, const char *needle);
 size_t strspn(const char *str1, const char *str2);
 char *strpbrk(const char *str1, const char *str2);
 char *strtok(char *str, const char *delim);
+char *strcat(char *dest, const char *src);
 
 #endif

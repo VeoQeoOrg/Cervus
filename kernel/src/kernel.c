@@ -82,7 +82,7 @@ void kernel_main(void) {
     serial_writestring(COM1, "Testing FPU/SSE via serial...\n");
     
     test_simd_cpuid_printf();
-    
+
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "System ready. Entering idle loop...\n");
 
