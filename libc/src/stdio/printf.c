@@ -359,11 +359,15 @@ int printf(const char *format, ...) {
         }
         
         bool has_ll = false;
+        bool is_size_t = false;
         
-        if (ptr[0] == 'l' && ptr[1] == 'l') {
+        if (*ptr == 'z') {
+            ptr++;
+            is_size_t = true;
+        } else if (ptr[0] == 'l' && ptr[1] == 'l') {
             has_ll = true;
             ptr += 2;
-        } else if (*ptr == 'L' || *ptr == 'l' || *ptr == 'h' || *ptr == 'z' || *ptr == 'j' || *ptr == 't') {
+        } else if (*ptr == 'L' || *ptr == 'l' || *ptr == 'h' || *ptr == 'j' || *ptr == 't') {
             ptr++;
         }
         
@@ -392,7 +396,17 @@ int printf(const char *format, ...) {
             
             case 'd': 
             case 'i': {
-                if (has_ll) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    print_llu_number(num, 10, false);
+                    size_t temp = num == 0 ? 1 : 0;
+                    size_t n = num;
+                    while (n != 0) {
+                        n /= 10;
+                        temp++;
+                    }
+                    chars_written += temp;
+                } else if (has_ll) {
                     int64_t num = va_arg(args, int64_t);
                     print_signed_ll_number(num, 10, false);
                     int64_t temp = num == 0 ? 1 : 0;
@@ -419,7 +433,17 @@ int printf(const char *format, ...) {
             }
             
             case 'u': {
-                if (has_ll) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    print_llu_number(num, 10, false);
+                    size_t temp = num == 0 ? 1 : 0;
+                    size_t n = num;
+                    while (n != 0) {
+                        n /= 10;
+                        temp++;
+                    }
+                    chars_written += temp;
+                } else if (has_ll) {
                     uint64_t num = va_arg(args, uint64_t);
                     print_llu_number(num, 10, false);
                     uint64_t temp = num == 0 ? 1 : 0;
@@ -446,7 +470,17 @@ int printf(const char *format, ...) {
             case 'x': 
             case 'X': {
                 bool uppercase_hex = (*ptr == 'X');
-                if (has_ll) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    print_llu_number(num, 16, uppercase_hex);
+                    size_t temp = num == 0 ? 1 : 0;
+                    size_t n = num;
+                    while (n != 0) {
+                        n >>= 4;
+                        temp++;
+                    }
+                    chars_written += temp;
+                } else if (has_ll) {
                     uint64_t num = va_arg(args, uint64_t);
                     print_llu_number(num, 16, uppercase_hex);
                     uint64_t temp = num == 0 ? 1 : 0;
@@ -471,7 +505,17 @@ int printf(const char *format, ...) {
             }
             
             case 'o': {
-                if (has_ll) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    print_llu_number(num, 8, false);
+                    size_t temp = num == 0 ? 1 : 0;
+                    size_t n = num;
+                    while (n != 0) {
+                        n >>= 3;
+                        temp++;
+                    }
+                    chars_written += temp;
+                } else if (has_ll) {
                     uint64_t num = va_arg(args, uint64_t);
                     print_llu_number(num, 8, false);
                     uint64_t temp = num == 0 ? 1 : 0;

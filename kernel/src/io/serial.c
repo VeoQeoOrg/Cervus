@@ -117,8 +117,12 @@ void serial_printf(uint16_t port, const char* format, ...) {
         
         int is_long_long = 0;
         int is_long = 0;
+        int is_size_t = 0;
         
-        if (*ptr == 'l') {
+        if (*ptr == 'z') {
+            ptr++;
+            is_size_t = 1;
+        } else if (*ptr == 'l') {
             ptr++;
             is_long = 1;
             if (*ptr == 'l') {
@@ -149,7 +153,10 @@ void serial_printf(uint16_t port, const char* format, ...) {
             
             case 'd':
             case 'i': {
-                if (is_long_long) {
+                if (is_size_t) {
+                    uint64_t num = va_arg(args, uint64_t);
+                    uint_to_str(num, buffer, 10, false);
+                } else if (is_long_long) {
                     int64_t num = va_arg(args, int64_t);
                     if (num < 0) {
                         serial_write(port, '-');
@@ -165,14 +172,21 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     uint_to_str((uint64_t)num, buffer, 10, false);
                 } else {
                     int num = va_arg(args, int);
-                    itoa(num, buffer, 10);
+                    if (num < 0) {
+                        serial_write(port, '-');
+                        num = -num;
+                    }
+                    uint_to_str((uint64_t)num, buffer, 10, false);
                 }
                 serial_writestring(port, buffer);
                 break;
             }
             
             case 'u': {
-                if (is_long_long) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    uint_to_str(num, buffer, 10, false);
+                } else if (is_long_long) {
                     uint64_t num = va_arg(args, uint64_t);
                     uint_to_str(num, buffer, 10, false);
                 } else if (is_long) {
@@ -187,7 +201,10 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
             
             case 'x': {
-                if (is_long_long) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    uint_to_str(num, buffer, 16, false);
+                } else if (is_long_long) {
                     uint64_t num = va_arg(args, uint64_t);
                     uint_to_str(num, buffer, 16, false);
                 } else if (is_long) {
@@ -202,7 +219,10 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
             
             case 'X': {
-                if (is_long_long) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    uint_to_str(num, buffer, 16, true);
+                } else if (is_long_long) {
                     uint64_t num = va_arg(args, uint64_t);
                     uint_to_str(num, buffer, 16, true);
                 } else if (is_long) {
@@ -217,7 +237,10 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
             
             case 'o': {
-                if (is_long_long) {
+                if (is_size_t) {
+                    size_t num = va_arg(args, size_t);
+                    uint_to_str(num, buffer, 8, false);
+                } else if (is_long_long) {
                     uint64_t num = va_arg(args, uint64_t);
                     uint_to_str(num, buffer, 8, false);
                 } else if (is_long) {
