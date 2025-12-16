@@ -100,17 +100,14 @@ void serial_printf(uint16_t port, const char* format, ...) {
         
         ptr++; 
         
-        // Пропускаем флаги
         while (*ptr == '0' || *ptr == '-' || *ptr == '+' || *ptr == ' ' || *ptr == '#') {
             ptr++;
         }
         
-        // Пропускаем ширину
         while (*ptr >= '0' && *ptr <= '9') {
             ptr++;
         }
         
-        // Пропускаем точность
         if (*ptr == '.') {
             ptr++;
             while (*ptr >= '0' && *ptr <= '9') {
@@ -118,7 +115,6 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
         }
         
-        // Обработка модификаторов длины
         int is_long_long = 0;
         int is_long = 0;
         
@@ -155,7 +151,6 @@ void serial_printf(uint16_t port, const char* format, ...) {
             case 'i': {
                 if (is_long_long) {
                     int64_t num = va_arg(args, int64_t);
-                    // Для отрицательных чисел
                     if (num < 0) {
                         serial_write(port, '-');
                         num = -num;
@@ -163,7 +158,6 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     uint_to_str((uint64_t)num, buffer, 10, false);
                 } else if (is_long) {
                     long num = va_arg(args, long);
-                    // Для отрицательных чисел
                     if (num < 0) {
                         serial_write(port, '-');
                         num = -num;
