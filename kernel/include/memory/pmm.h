@@ -10,6 +10,7 @@ typedef struct {
     uintptr_t mem_start;
     uintptr_t mem_end;
     size_t total_pages;
+    size_t usable_pages;
     size_t free_pages;
     size_t bitmap_size;
     uint8_t* bitmap;

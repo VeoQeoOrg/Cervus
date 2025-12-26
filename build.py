@@ -29,13 +29,10 @@ LIBC_DIR = BASE_DIR / "libc"
 LIBC_INCLUDE_DIR = LIBC_DIR / "include"
 LIBC_SRC_DIR = LIBC_DIR / "src"
 
-# Список файлов, которые должны компилироваться с SSE флагами
 SSE_FILES = {
-    # SSE файлы
     "sse.c",
     "fpu.c",
     
-    # Файлы с плавающей точкой
     "printf.c",
     "fabs.c",
     "pow.c",
@@ -44,7 +41,6 @@ SSE_FILES = {
     "pmm.c"
 }
 
-# Зависимости для limine-tools
 DEPENDENCIES = {
     "freestnd-c-hdrs": {
         "url": "https://codeberg.org/OSDev/freestnd-c-hdrs-0bsd.git",
@@ -70,7 +66,6 @@ class Colors:
     CYAN = '\033[96m'
     MAGENTA = '\033[95m'
 
-# Глобальная система сбора ошибок
 class ErrorCollector:
     def __init__(self):
         self.errors = []
@@ -132,7 +127,6 @@ class ErrorCollector:
         else:
             return True
 
-# Глобальный экземпляр сборщика ошибок
 error_collector = ErrorCollector()
 
 def print_color(color: str, message: str):
@@ -188,15 +182,11 @@ def find_directories(dir_paths: List[str]) -> List[Path]:
     found_dirs = []
     
     for dir_path in dir_paths:
-        # Пробуем несколько способов поиска
-        
-        # 1. Прямой путь относительно текущей директории
         direct_path = BASE_DIR / dir_path
         if direct_path.exists() and direct_path.is_dir():
             found_dirs.append(direct_path)
             continue
         
-        # 2. Относительно базовой директории
         if dir_path.startswith('./'):
             dir_path = dir_path[2:]
         
@@ -205,14 +195,11 @@ def find_directories(dir_paths: List[str]) -> List[Path]:
             found_dirs.append(path_from_base)
             continue
         
-        # 3. Ищем в проекте рекурсивно
         found = False
         for root, dirs, _ in os.walk(BASE_DIR):
-            # Пропускаем игнорируемые директории
             ignore_dirs = {'.git', '__pycache__', 'obj', 'bin', 'iso_root', 'demo_iso'}
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
             
-            # Проверяем, соответствует ли последняя часть пути
             if os.path.basename(dir_path) in dirs:
                 full_path = Path(root) / os.path.basename(dir_path)
                 if full_path not in found_dirs:
@@ -221,7 +208,6 @@ def find_directories(dir_paths: List[str]) -> List[Path]:
                     break
         
         if not found:
-            # 4. Проверяем, не является ли это полным путем
             if os.path.isabs(dir_path):
                 abs_path = Path(dir_path)
                 if abs_path.exists() and abs_path.is_dir():
@@ -245,7 +231,6 @@ def find_files_by_name(file_names: List[str]) -> List[Path]:
     """
     found_files = []
     
-    # Игнорируемые директории
     ignore_dirs = {'.git', '__pycache__', 'obj', 'bin', 'iso_root', 'demo_iso'}
     
     def search_in_directory(directory: Path):
@@ -257,22 +242,17 @@ def find_files_by_name(file_names: List[str]) -> List[Path]:
                         continue
                     search_in_directory(item)
                 else:
-                    # Проверяем, совпадает ли имя файла с искомым
                     if item.name in file_names:
                         found_files.append(item)
-                    # Также проверяем полные пути, если пользователь указал путь
                     elif any(fname in str(item) for fname in file_names):
                         found_files.append(item)
         except PermissionError:
             pass
     
-    # Ищем в основном каталоге проекта
     search_in_directory(BASE_DIR)
     
-    # Если не нашли все файлы, попробуем более широкий поиск
     if len(found_files) < len(file_names):
         for root, dirs, files in os.walk(BASE_DIR):
-            # Пропускаем игнорируемые директории
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
             
             for file in files:
@@ -281,7 +261,6 @@ def find_files_by_name(file_names: List[str]) -> List[Path]:
                     if file_path not in found_files:
                         found_files.append(file_path)
     
-    # Выводим информацию о найденных файлах
     if found_files:
         print_color(Colors.GREEN, f"Found {len(found_files)} file(s) by name:")
         for file_path in found_files:
@@ -291,7 +270,6 @@ def find_files_by_name(file_names: List[str]) -> List[Path]:
             except ValueError:
                 print_color(Colors.BLUE, f"  {file_path.name} -> {file_path}")
     
-    # Проверяем, не найдены ли некоторые файлы
     found_names = {f.name for f in found_files}
     missing_files = [f for f in file_names if f not in found_names]
     
@@ -303,7 +281,6 @@ def find_files_by_name(file_names: List[str]) -> List[Path]:
         for missing in missing_files:
             print_color(Colors.YELLOW, f"  {missing}")
         
-        # Попробуем найти похожие файлы
         print_color(Colors.CYAN, "Searching for similar files...")
         all_files = []
         for root, dirs, files in os.walk(BASE_DIR):
@@ -338,7 +315,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
     
     specific_paths = None
     if specific_files:
-        # Ищем файлы по именам
         specific_paths = find_files_by_name(specific_files)
         
         if not specific_paths:
@@ -348,7 +324,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
     
     specific_dir_paths = None
     if specific_dirs:
-        # Ищем директории по путям
         specific_dir_paths = find_directories(specific_dirs)
         
         if not specific_dir_paths:
@@ -371,7 +346,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
                 return False
             
             if specific_dir_paths:
-                # Проверяем, находится ли директория в одной из указанных
                 for dir_path in specific_dir_paths:
                     if path == dir_path or dir_path in path.parents:
                         return True
@@ -386,7 +360,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
                 return path in specific_paths
             
             if specific_dir_paths:
-                # Проверяем, находится ли файл в одной из указанных директорий
                 for dir_path in specific_dir_paths:
                     if dir_path in path.parents:
                         return True
@@ -497,7 +470,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
             f.write("\n")
             
             if specific_dirs and specific_dir_paths:
-                # Если указаны конкретные директории, показываем каждую отдельно
                 for dir_path in specific_dir_paths:
                     try:
                         rel_path = dir_path.relative_to(BASE_DIR)
@@ -512,7 +484,6 @@ def generate_tree_structure(output_file: str = "OS-TREE.txt",
                     f.write(structure)
                     f.write("\n")
             else:
-                # Иначе показываем всю структуру
                 f.write("Directory Structure:\n")
                 f.write(".\n")
                 structure = traverse_directory(BASE_DIR)
@@ -590,7 +561,6 @@ def run_command(cmd: List[str], cwd: Path = None, check: bool = True, capture: b
         if result.stderr:
             if result.returncode != 0:
                 print_color(Colors.RED, result.stderr.strip())
-                # Добавляем ошибку в сборщик
                 error_collector.add_error(
                     error_category, 
                     f"Command failed with exit code {result.returncode}", 
@@ -902,14 +872,11 @@ def find_all_source_files() -> List[Path]:
 
 def is_sse_file(file_path: Path) -> bool:
     """Проверяет, является ли файл SSE файлом (по имени файла)"""
-    # Проверяем по имени файла в глобальном списке
     filename = file_path.name.lower()
     
-    # Проверяем по точному имени файла
     if filename in SSE_FILES:
         return True
     
-    # Проверяем по части имени (например, printf.c, serial.c и т.д.)
     for sse_file in SSE_FILES:
         if sse_file in filename:
             return True
@@ -928,16 +895,12 @@ def get_source_file_info(src_file: Path) -> Tuple[str, str, Path]:
         rel_path = src_file.relative_to(BASE_DIR)
         category = "other"
     
-    # Создаем уникальное имя с учетом пути и расширения
     if src_file.suffix == '.psf':
         obj_name = f"{category}_{src_file.stem}"
     else:
-        # Используем полный путь для уникальности
-        # Заменяем слеши и точки на подчеркивания
         path_str = str(rel_path).replace('/', '_').replace('.', '_').replace('-', '_')
         obj_name = f"{category}_{path_str}"
     
-    # Все объектные файлы в одной директории для простоты
     obj_dir = OBJ_DIR / category
     obj_file = obj_dir / f"{obj_name}.o"
     
@@ -971,14 +934,12 @@ def compile_binary_file(src_file: Path, obj_file: Path) -> bool:
             if success:
                 print_color(Colors.GREEN, f"  Binary converted to {obj_file.name}")
                 
-                # Проверяем символы
                 check_cmd = ["nm", "--defined-only", str(obj_file)]
                 success2, symbols = run_command(check_cmd, capture=True, error_category="Symbol Check")
                 
                 if success2 and symbols:
                     symbol_base = src_file.stem  
                     
-                    # Переименовываем символы
                     for line in symbols.strip().split('\n'):
                         if line and 'binary' in line:
                             parts = line.split()
@@ -1027,13 +988,11 @@ def compile_source_file(src_file: Path, obj_file: Path, cflags: str, cppflags: s
     try:
         obj_file.parent.mkdir(parents=True, exist_ok=True)
         
-        # Удаляем старый объектный файл, если он существует
         if obj_file.exists():
             obj_file.unlink()
         
         if use_sse:
             print_color(Colors.MAGENTA, f"Compiling with SSE flags: {src_file.name}")
-            # SSE флаги (без -mgeneral-regs-only, с -msse и -mfpmath=sse)
             sse_cflags = cflags.replace("-mgeneral-regs-only", "").replace("-mno-sse", "-msse").replace("-mno-sse2", "-msse2")
             if "-mfpmath=sse" not in sse_cflags:
                 sse_cflags += " -mfpmath=sse"
@@ -1091,7 +1050,6 @@ def compile_kernel():
         print_color(Colors.YELLOW, f"libc source directory not found: {LIBC_SRC_DIR}")
         LIBC_SRC_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Базовые флаги для ядра (БЕЗ SSE)
     core_cflags = "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding " \
                  "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC " \
                  "-ffunction-sections -fdata-sections " \
@@ -1099,7 +1057,6 @@ def compile_kernel():
                  "-mno-red-zone -mgeneral-regs-only " \
                  "-mno-sse -mno-sse2 -mno-mmx -mno-3dnow"
     
-    # Флаги для SSE файлов (включая плавающую точку)
     sse_cflags = "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding " \
                 "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC " \
                 "-ffunction-sections -fdata-sections " \
@@ -1116,7 +1073,6 @@ def compile_kernel():
         BIN_DIR.mkdir(parents=True, exist_ok=True)
         OBJ_DIR.mkdir(parents=True, exist_ok=True)
         
-        # Создаем простые директории для объектных файлов
         (OBJ_DIR / "kernel").mkdir(parents=True, exist_ok=True)
         (OBJ_DIR / "libc").mkdir(parents=True, exist_ok=True)
         
@@ -1232,7 +1188,6 @@ def compile_kernel():
             
             print_color(Colors.GREEN, f"Kernel linked: {kernel_output}")
             
-            # Проверяем символы в ядре
             print_color(Colors.BLUE, "\nChecking kernel symbols...")
             check_cmd = ["nm", "--defined-only", str(kernel_output)]
             success, symbols = run_command(check_cmd, capture=True, error_category="Symbol Check")
@@ -1241,7 +1196,6 @@ def compile_kernel():
                 if sse_symbols:
                     print_color(Colors.MAGENTA, f"Found {len(sse_symbols)} SSE/FPU symbols in kernel")
                     
-                # Проверяем наличие символов printf и serial
                 printf_symbols = [line for line in symbols.strip().split('\n') if 'printf' in line.lower()]
                 if printf_symbols:
                     print_color(Colors.GREEN, f"Found {len(printf_symbols)} printf symbols")
@@ -1559,7 +1513,6 @@ def main():
             specific_dirs=args.dirs, 
             structure_only=args.structure_only
         )
-        # Показываем сводку ошибок после генерации дерева
         error_collector.print_summary()
         return 0 if success else 1
     
@@ -1570,7 +1523,6 @@ def main():
             if should_rebuild():
                 print_color(Colors.YELLOW, "Incremental rebuild...")
                 if not incremental_build():
-                    # Показываем сводку ошибок при неудачной сборке
                     error_collector.print_summary()
                     return 1
             else:
@@ -1583,7 +1535,6 @@ def main():
                     structure_only=args.structure_only
                 )
             
-            # Показываем сводку ошибок перед запуском QEMU
             if error_collector.has_errors():
                 error_collector.print_summary()
                 return 1
@@ -1591,25 +1542,21 @@ def main():
             clean_after = not args.no_clean
             qemu_success = run_qemu_and_clean(clean_after=clean_after)
             
-            # Показываем сводку ошибок после QEMU
             error_collector.print_summary()
             return 0 if qemu_success else 1
         
         elif command == "clean":
             success = clean()
-            # Показываем сводку ошибок после очистки
             error_collector.print_summary()
             return 0 if success else 1
         
         elif command == "cleaniso":
             success = cleaniso()
-            # Показываем сводку ошибок после очистки
             error_collector.print_summary()
             return 0 if success else 1
         
         elif command == "gitclean":
             success = gitclean()
-            # Показываем сводку ошибок после очистки
             error_collector.print_summary()
             return 0 if success else 1
         
