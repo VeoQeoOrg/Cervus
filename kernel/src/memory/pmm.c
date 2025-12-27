@@ -134,6 +134,66 @@ void* pmm_alloc_zero(size_t pages) {
     return p;
 }
 
+void* pmm_alloc_aligned(size_t pages, size_t alignment) {
+    if (pages == 0) return NULL;
+    
+    if (alignment < PAGE_SIZE) {
+        alignment = PAGE_SIZE;
+    }
+    if ((alignment & (alignment - 1)) != 0) {
+        alignment--;
+        alignment |= alignment >> 1;
+        alignment |= alignment >> 2;
+        alignment |= alignment >> 4;
+        alignment |= alignment >> 8;
+        alignment |= alignment >> 16;
+        alignment |= alignment >> 32;
+        alignment++;
+    }
+    
+    size_t extra_pages = (alignment / PAGE_SIZE) - 1;
+    size_t total_alloc = pages + extra_pages;
+    
+    void* block = pmm_alloc(total_alloc);
+    if (!block) {
+        return NULL;
+    }
+    
+    uintptr_t phys_addr = pmm_virt_to_phys(block);
+    
+    uintptr_t aligned_phys = PMM_PAGE_ALIGN(phys_addr);
+    uintptr_t offset = aligned_phys & (alignment - 1);
+    
+    if (offset != 0) {
+        aligned_phys = (phys_addr + alignment) & ~(alignment - 1);
+    }
+    
+    uintptr_t block_end = phys_addr + total_alloc * PAGE_SIZE;
+    uintptr_t aligned_end = aligned_phys + pages * PAGE_SIZE;
+    
+    if (aligned_end > block_end) {
+        pmm_free(block, total_alloc);
+        return NULL;
+    }
+    
+    if (aligned_phys > phys_addr) {
+        size_t pages_before = (aligned_phys - phys_addr) / PAGE_SIZE;
+        if (pages_before > 0) {
+            pmm_free(block, pages_before);
+        }
+    }
+    
+    if (block_end > aligned_end) {
+        size_t pages_after = (block_end - aligned_end) / PAGE_SIZE;
+        if (pages_after > 0) {
+            void* after_block = pmm_phys_to_virt(aligned_end);
+            pmm_free(after_block, pages_after);
+        }
+    }
+    
+    return pmm_phys_to_virt(aligned_phys);
+}
+
 void pmm_free(void* addr, size_t pages) {
     uintptr_t phys = pmm_virt_to_phys(addr);
     size_t page = phys / PAGE_SIZE;
@@ -154,6 +214,21 @@ void* pmm_phys_to_virt(uintptr_t addr) {
     return (void*)(addr + pmm.hhdm_offset);
 }
 
+uint64_t pmm_get_hhdm_offset(void) {
+    return pmm.hhdm_offset;
+}
+
+size_t pmm_get_total_pages(void) {
+    return pmm.total_pages;
+}
+
+size_t pmm_get_free_pages(void) {
+    return pmm.free_pages;
+}
+
+size_t pmm_get_used_pages(void) {
+    return pmm.usable_pages - pmm.free_pages;
+}
 
 static void print_size(size_t bytes, const char* label) {
     double value = (double)bytes;

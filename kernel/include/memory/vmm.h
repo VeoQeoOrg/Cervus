@@ -31,4 +31,10 @@ bool vmm_map_page(
 void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt);
 void vmm_test(void);
 
+bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out);
+bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out);
+vmm_pagemap_t* vmm_get_current_pagemap(void);
+vmm_pagemap_t* vmm_get_kernel_pagemap(void);
+
+
 #endif

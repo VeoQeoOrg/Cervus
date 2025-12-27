@@ -29,6 +29,7 @@ void  pmm_free(void* addr, size_t pages);
 
 uintptr_t pmm_virt_to_phys(void* addr);
 void*     pmm_phys_to_virt(uintptr_t addr);
+uint64_t  pmm_get_hhdm_offset(void);
 
 size_t pmm_get_total_pages(void);
 size_t pmm_get_free_pages(void);

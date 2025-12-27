@@ -13,6 +13,7 @@
 #include "../include/sse/sse.h"
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
+#include "../include/memory/paging.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -89,7 +90,7 @@ void kernel_main(void) {
     pmm_init(memmap_request.response, hhdm_request.response);
     vmm_init();
     serial_writestring(COM1, "PMM/VMM [OK]\n");
-    
+
     clear_screen();
     
     printf("=== CERVUS OS v0.0.1 ===\n");
