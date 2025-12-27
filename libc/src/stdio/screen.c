@@ -12,10 +12,27 @@ void set_text_color(uint32_t color) {
     text_color = color;
 }
 
+void set_background_color(uint32_t color) {
+    bg_color = color;
+}
+
 void clear_screen(void) {
     if (global_framebuffer) {
-        fb_clear(global_framebuffer, COLOR_BLACK);
+        fb_clear(global_framebuffer, bg_color);
         cursor_x = 0;
+        cursor_y = 0;
+    }
+}
+
+void scroll_up(int lines) {
+    if (lines <= 0) return;
+    
+    scroll_screen(lines);
+    
+    uint32_t scroll_pixels = (uint32_t)(lines * 16);
+    if (cursor_y >= scroll_pixels) {
+        cursor_y -= scroll_pixels;
+    } else {
         cursor_y = 0;
     }
 }

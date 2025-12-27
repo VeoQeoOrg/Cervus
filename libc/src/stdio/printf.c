@@ -185,8 +185,8 @@ int printf(const char *format, ...) {
         int precision = -1;
         if (*ptr == '.') { ptr++; precision = 0; while (*ptr >= '0' && *ptr <= '9') { precision = precision*10 + (*ptr-'0'); ptr++; } }
 
-        bool has_ll = false, is_size_t = false;
-        if (*ptr == 'z') { is_size_t = true; ptr++; }
+        bool has_ll = false;
+        if (*ptr == 'z') { ptr++; }
         else if (*ptr == 'l' && ptr[1]=='l') { has_ll = true; ptr+=2; }
         else if (*ptr=='L'||*ptr=='l'||*ptr=='h'||*ptr=='j'||*ptr=='t') ptr++;
 

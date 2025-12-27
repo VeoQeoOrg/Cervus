@@ -116,14 +116,26 @@ void sse_init(void) {
     cr4 |= (1 << 10);
     
     if (avx_supported()) {
-        serial_writestring(COM1, "[SSE] AVX supported, enabling...\n");
+        uint32_t ecx;
+        asm volatile(
+            "mov $1, %%eax\n"
+            "cpuid\n"
+            "mov %%ecx, %0\n"
+            : "=r"(ecx)
+            :
+            : "eax", "ebx", "edx"
+        );
         
-        cr4 |= (1 << 18);  
-        
-        uint64_t xcr0;
-        asm volatile("xgetbv" : "=a"(xcr0) : "c"(0) : "edx");
-        xcr0 |= (1 << 1) | (1 << 2);
-        asm volatile("xsetbv" : : "c"(0), "a"(xcr0), "d"(xcr0 >> 32));
+        if (ecx & (1 << 27)) { // OSXSAVE bit
+            serial_writestring(COM1, "[SSE] AVX supported, enabling...\n");
+            
+            cr4 |= (1 << 18);
+            
+            uint64_t xcr0;
+            asm volatile("xgetbv" : "=a"(xcr0) : "c"(0) : "edx");
+            xcr0 |= (1 << 1) | (1 << 2);
+            asm volatile("xsetbv" : : "c"(0), "a"(xcr0), "d"(xcr0 >> 32));
+        }
     }
     
     asm volatile("mov %0, %%cr4" : : "r"(cr4));
@@ -153,7 +165,6 @@ uint32_t sse_get_mxcsr(void) {
 
 void mmx_enter(void) {
     if (!mmx_supported()) return;
-    // Ничего не нужно делать для входа в MMX
 }
 
 void mmx_exit(void) {
@@ -251,7 +262,7 @@ void sse_memset_fast(void* dest, int value, size_t n) {
     }
 }
 
-void test_simd_cpuid_printf(void) {
+void print_simd_cpuid(void) {
     printf("\n=== CPUID/SIMD INFORMATION ===\n");
     
     uint32_t eax, ebx, ecx, edx;

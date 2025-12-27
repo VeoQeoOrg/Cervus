@@ -103,7 +103,7 @@ void kernel_main(void) {
     printf("\nMemory Information:\n");
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
-    
+    print_simd_cpuid();
     pmm_print_stats();
 
     vmm_test();
