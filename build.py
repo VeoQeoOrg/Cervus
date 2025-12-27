@@ -808,7 +808,7 @@ def build_limine():
         print_color(Colors.GREEN, "Building Limine...")
         
         success, output = run_command(["git", "clone", "https://codeberg.org/Limine/Limine.git", 
-                               "limine", "--branch=v10.x-binary", "--depth=1"], 
+                               "limine", "--branch=v10.5.0-binary", "--depth=1"], 
                                capture=True, error_category="Limine Build")
         if not success:
             error_collector.add_error("Limine", "Failed to clone Limine", output)
