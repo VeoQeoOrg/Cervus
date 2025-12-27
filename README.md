@@ -41,5 +41,5 @@
 
 ```bash
 
-python3 build.py run
+build run
 ```

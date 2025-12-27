@@ -27,7 +27,7 @@ struct gdt_ptr {
 #define GDT_ACCESS_READ_WRITE  (1 << 1)
 
 #define GDT_GRANULARITY_4K     (1 << 7)
-#define GDT_GRANULARITY_LONG   (1 << 5)  // 64-bit mode
+#define GDT_GRANULARITY_LONG   (1 << 5)
 
 extern struct gdt_entry gdt[5];
 extern struct gdt_ptr gdt_ptr;

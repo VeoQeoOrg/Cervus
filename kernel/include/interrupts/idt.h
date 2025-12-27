@@ -3,38 +3,32 @@
 
 #include <stdint.h>
 
-// Структура дескриптора IDT (16 байт)
 struct idt_entry {
-    uint16_t offset_low;    // Младшие 16 бит смещения
-    uint16_t selector;      // Селектор сегмента кода (0x08 для kernel code)
-    uint8_t ist;           // Номер стека IST (0 если не используется)
-    uint8_t type_attr;     // Тип и атрибуты
-    uint16_t offset_mid;   // Средние 16 бит смещения
-    uint32_t offset_high;  // Старшие 32 бита смещения
-    uint32_t zero;         // Зарезервировано
+    uint16_t offset_low;
+    uint16_t selector;
+    uint8_t ist;
+    uint8_t type_attr;
+    uint16_t offset_mid;
+    uint32_t offset_high;
+    uint32_t zero;
 } __attribute__((packed));
 
-// Структура указателя на IDT
 struct idt_ptr {
     uint16_t limit;
     uint64_t base;
 } __attribute__((packed));
 
-// Типы шлюзов (Gate Types)
-#define IDT_TYPE_TASK       0x5  // Task gate (32-bit)
-#define IDT_TYPE_INTERRUPT  0xE  // 64-bit Interrupt gate
-#define IDT_TYPE_TRAP       0xF  // 64-bit Trap gate
+#define IDT_TYPE_TASK       0x5
+#define IDT_TYPE_INTERRUPT  0xE
+#define IDT_TYPE_TRAP       0xF
 
-// Атрибуты дескриптора
 #define IDT_PRESENT         (1 << 7)
 #define IDT_RING0           (0 << 5)
 #define IDT_RING3           (3 << 5)
 #define IDT_STORAGE_SEGMENT (1 << 4)
 
-// Макрос для создания атрибутов
 #define IDT_ATTR(type, dpl) (IDT_PRESENT | ((dpl) << 5) | IDT_STORAGE_SEGMENT | (type))
 
-// Номера прерываний
 #define IRQ_BASE 0x20
 #define IRQ0_TIMER 0x20
 #define IRQ1_KEYBOARD 0x21
@@ -53,7 +47,6 @@ struct idt_ptr {
 #define IRQ14_ATA1 0x2E
 #define IRQ15_ATA2 0x2F
 
-// Исключения (0-31)
 enum {
     EXCEPTION_DIVIDE_ERROR = 0,
     EXCEPTION_DEBUG,
@@ -89,7 +82,6 @@ enum {
     EXCEPTION_RESERVED31
 };
 
-// Структура для сохранения регистров
 struct interrupt_frame {
     uint64_t r15;
     uint64_t r14;
@@ -115,10 +107,8 @@ struct interrupt_frame {
     uint64_t ss;
 } __attribute__((packed));
 
-// Тип обработчика прерываний
 typedef void (*interrupt_handler_t)(struct interrupt_frame* frame);
 
-// Прототипы функций
 void idt_init(void);
 void idt_set_entry(uint8_t index, uint64_t offset, uint16_t selector, uint8_t type_attr, uint8_t ist);
 void idt_load(void);
@@ -127,7 +117,6 @@ interrupt_handler_t get_interrupt_handler(uint16_t interrupt);
 void exception_handler(struct interrupt_frame* frame);
 void irq_handler(struct interrupt_frame* frame);
 
-// Внешние функции из ассемблера
 extern void isr0(void);
 extern void isr1(void);
 extern void isr2(void);
@@ -161,7 +150,6 @@ extern void isr29(void);
 extern void isr30(void);
 extern void isr31(void);
 
-// IRQ handlers (0x20-0x2F)
 extern void irq0(void);
 extern void irq1(void);
 extern void irq2(void);
