@@ -96,6 +96,12 @@ void vmm_switch_pagemap(vmm_pagemap_t* map) {
 }
 
 bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
+    if (!map || !phys_out) {
+        serial_printf(COM1, "VMM_VIRT_TO_PHYS ERROR: null parameters\n");
+        return false;
+    }
+    
+    serial_printf(COM1, "VMM_VIRT_TO_PHYS DEBUG: trying virt=0x%llx\n", virt);
     if (!map || !phys_out) return false;
     
     size_t pml4_i = (virt >> 39) & MASK;
@@ -119,12 +125,13 @@ bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
 }
 
 bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out) {
+    serial_printf(COM1, "VMM_GET_FLAGS DEBUG: called with virt=0x%llx\n", virt);
     if (!map || !flags_out) return false;
     
-    size_t pml4_i = (virt >> 39) & MASK;
-    size_t pdpt_i = (virt >> 30) & MASK;
-    size_t pd_i   = (virt >> 21) & MASK;
-    size_t pt_i   = (virt >> 12) & MASK;
+    size_t pml4_i = (virt >> 39) & 0x1FF;
+    size_t pdpt_i = (virt >> 30) & 0x1FF;
+    size_t pd_i   = (virt >> 21) & 0x1FF;
+    size_t pt_i   = (virt >> 12) & 0x1FF;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
@@ -137,7 +144,8 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
     
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
     
-    *flags_out = pt[pt_i] & 0xFFF;
+    // ВАЖНО: Возвращаем ВСЕ биты флагов, включая NX (бит 63)
+    *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));  // 0xFFF = 12 бит + NX
     return true;
 }
 

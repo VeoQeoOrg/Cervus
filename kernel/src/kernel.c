@@ -90,6 +90,8 @@ void kernel_main(void) {
     pmm_init(memmap_request.response, hhdm_request.response);
     vmm_init();
     serial_writestring(COM1, "PMM/VMM [OK]\n");
+    paging_init();
+    serial_writestring(COM1, "Paging [OK]\n");
 
     clear_screen();
     

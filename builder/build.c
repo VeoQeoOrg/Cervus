@@ -16,7 +16,7 @@
 
 #define IMAGE_NAME "Cervus"
 #define VERSION "v0.0.1"
-#define QEMUFLAGS "-m 2G"
+#define QEMUFLAGS "-m 12G"
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
@@ -31,7 +31,7 @@ const char *DIRS_TO_CLEAN[] = { "bin", "obj", "iso_root", "limine", "kernel/link
 const char *FILES_TO_CLEAN[] = { "Cervus.iso", "Cervus.hdd", "kernel/.deps-obtained", "limine.conf", "OS-TREE.txt", NULL };
 
 const char *SSE_FILES[] = {
-    "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c", "serial.c", "pmm.c", NULL
+    "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c", "serial.c", "pmm.c", "paging.c", NULL
 };
 
 struct Dependency {
