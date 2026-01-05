@@ -14,6 +14,7 @@
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
 #include "../include/memory/paging.h"
+#include "../include/acpi/acpi.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -34,6 +35,13 @@ __attribute__((used, section(".limine_requests")))
 static volatile struct limine_hhdm_request hhdm_request = {
     .id = LIMINE_HHDM_REQUEST_ID,
     .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+volatile struct limine_rsdp_request rsdp_request = {
+    .id = LIMINE_RSDP_REQUEST_ID,
+    .revision = 0,
+    .response = NULL
 };
 
 __attribute__((used, section(".limine_requests_start")))
@@ -92,6 +100,14 @@ void kernel_main(void) {
     serial_writestring(COM1, "PMM/VMM [OK]\n");
     paging_init();
     serial_writestring(COM1, "Paging [OK]\n");
+    acpi_init();
+    if (acpi_is_available()) {
+        serial_writestring(COM1, "ACPI [OK]\n");
+        
+        acpi_print_tables();
+    } else {
+        serial_writestring(COM1, "ACPI [FAILED]\n");
+    }
 
     clear_screen();
     
@@ -107,9 +123,9 @@ void kernel_main(void) {
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
     print_simd_cpuid();
-    pmm_print_stats();
+    //pmm_print_stats();
 
-    vmm_test();
+    //vmm_test();
     
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
