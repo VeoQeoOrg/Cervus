@@ -25,14 +25,7 @@ Cervus is currently in the active development phase. The kernel implements core 
 - *CPU Initialization:* Custom GDT (Global Descriptor Table) and IDT (Interrupt Descriptor Table) implementation.
 - *Acceleration:* Native support for *SIMD* instructions (SSE/AVX) with proper state saving.
 
-### Hardware Interfacing
-- *Graphics:* Linear Framebuffer (LFB) support via Limine with PSF font rendering.
-- *Diagnostics:* Kernel logging through Serial COM1 port and basic I/O abstractions.
-- *ACPI:* Advanced Configuration and Power Interface table parsing for hardware discovery.
-
----
-
-## 🛠 Roadmap & Progress
+## Roadmap & Progress
 
 | Component | Status | Description |
 | :--- | :---: | :--- |
