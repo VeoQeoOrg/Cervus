@@ -18,7 +18,7 @@
 Cervus is currently in the active development phase. The kernel implements core low-level primitives required for a stable execution environment:
 
 ### Core Architecture
-- *Boot Protocol:* Utilizes the [Limine](https://limine-bootloader.org/) bootloader (Barebone profile).
+- *Boot Protocol:* Utilizes the [Limine](https://github.com/limine-bootloader/limine) bootloader (Barebone profile).
 - *Memory Management:* 
     - *PMM:* Bitmap-based Physical Memory Manager.
     - *VMM:* Virtual Memory Management with 4-level paging support.
