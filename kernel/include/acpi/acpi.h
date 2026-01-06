@@ -176,4 +176,6 @@ void acpi_print_tables(void);
 
 extern volatile struct limine_rsdp_request rsdp_request;
 
+void acpi_shutdown(void);
+
 #endif

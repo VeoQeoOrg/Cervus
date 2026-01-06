@@ -4,10 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 
-#define PAGE_SIZE 0x1000
-#define MASK 0x1FF
-
 #define KERNEL_TEST_BASE 0xFFFF800000100000ULL 
+#define MASK 0x1FF
 
 static vmm_pagemap_t kernel_pagemap;
 
@@ -32,11 +30,7 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index) {
     return (vmm_pte_t*)pmm_phys_to_virt(parent[index] & ~0xFFF);
 }
 
-bool vmm_map_page(vmm_pagemap_t* map,
-                  uintptr_t virt,
-                  uintptr_t phys,
-                  uint64_t flags) {
-
+bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
     size_t pml4_i = (virt >> 39) & MASK;
     size_t pdpt_i = (virt >> 30) & MASK;
     size_t pd_i   = (virt >> 21) & MASK;
@@ -57,20 +51,13 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     size_t pd_i   = (virt >> 21) & MASK;
     size_t pt_i   = (virt >> 12) & MASK;
 
-    if (!(map->pml4[pml4_i] & VMM_PRESENT))
-        return;
-
+    if (!(map->pml4[pml4_i] & VMM_PRESENT)) return;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
-    if (!(pdpt[pdpt_i] & VMM_PRESENT))
-        return;
-
+    if (!(pdpt[pdpt_i] & VMM_PRESENT)) return;
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
-    if (!(pd[pd_i] & VMM_PRESENT))
-        return;
-
+    if (!(pd[pd_i] & VMM_PRESENT)) return;
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
     pt[pt_i] = 0;
-
     invlpg((void*)virt);
 }
 
@@ -83,10 +70,11 @@ vmm_pagemap_t* vmm_create_pagemap(void) {
 
     map->pml4 = alloc_table();
 
-    for (size_t i = 256; i < 512; i++)
+    for (size_t i = 256; i < 512; i++) {
         map->pml4[i] = kernel_pagemap.pml4[i];
+    }
 
-    serial_printf(0x3F8, "VMM: new pagemap created\n");
+    serial_printf(COM1, "VMM: new pagemap created\n");
     return map;
 }
 
@@ -100,10 +88,7 @@ bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
         serial_printf(COM1, "VMM_VIRT_TO_PHYS ERROR: null parameters\n");
         return false;
     }
-    
-    serial_printf(COM1, "VMM_VIRT_TO_PHYS DEBUG: trying virt=0x%llx\n", virt);
-    if (!map || !phys_out) return false;
-    
+
     size_t pml4_i = (virt >> 39) & MASK;
     size_t pdpt_i = (virt >> 30) & MASK;
     size_t pd_i   = (virt >> 21) & MASK;
@@ -111,61 +96,45 @@ bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
-    
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
-    
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
-    
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
-    
+
     *phys_out = (pt[pt_i] & ~0xFFF) | (virt & 0xFFF);
     return true;
 }
 
 bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out) {
-    serial_printf(COM1, "VMM_GET_FLAGS DEBUG: called with virt=0x%llx\n", virt);
     if (!map || !flags_out) return false;
-    
-    size_t pml4_i = (virt >> 39) & 0x1FF;
-    size_t pdpt_i = (virt >> 30) & 0x1FF;
-    size_t pd_i   = (virt >> 21) & 0x1FF;
-    size_t pt_i   = (virt >> 12) & 0x1FF;
+
+    size_t pml4_i = (virt >> 39) & MASK;
+    size_t pdpt_i = (virt >> 30) & MASK;
+    size_t pd_i   = (virt >> 21) & MASK;
+    size_t pt_i   = (virt >> 12) & MASK;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
-    
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
-    
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
-    
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
-    
-    // ВАЖНО: Возвращаем ВСЕ биты флагов, включая NX (бит 63)
-    *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));  // 0xFFF = 12 бит + NX
+
+    *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));
     return true;
-}
-
-vmm_pagemap_t* vmm_get_current_pagemap(void) {
-    uintptr_t cr3;
-    asm volatile ("mov %%cr3, %0" : "=r"(cr3));
-    
-    return &kernel_pagemap;
-}
-
-vmm_pagemap_t* vmm_get_kernel_pagemap(void) {
-    return &kernel_pagemap;
 }
 
 void vmm_init(void) {
     uintptr_t cr3;
     asm volatile ("mov %%cr3, %0" : "=r"(cr3));
     kernel_pagemap.pml4 = (vmm_pte_t*)pmm_phys_to_virt(cr3);
+    serial_printf(COM1, "VMM: kernel pagemap initialized\n");
+}
 
-    serial_printf(0x3F8, "VMM: kernel pagemap initialized\n");
+vmm_pagemap_t* vmm_get_kernel_pagemap(void) {
+    return &kernel_pagemap;
 }
 
 void vmm_test(void) {

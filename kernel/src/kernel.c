@@ -96,10 +96,11 @@ void kernel_main(void) {
     global_framebuffer = framebuffer_request.response->framebuffers[0];
     
     pmm_init(memmap_request.response, hhdm_request.response);
-    vmm_init();
-    serial_writestring(COM1, "PMM/VMM [OK]\n");
+    serial_writestring(COM1, "PMM [OK]\n");
     paging_init();
     serial_writestring(COM1, "Paging [OK]\n");
+    vmm_init();
+    serial_writestring(COM1, "VMM [OK]\n");
     acpi_init();
     if (acpi_is_available()) {
         serial_writestring(COM1, "ACPI [OK]\n");
@@ -123,13 +124,13 @@ void kernel_main(void) {
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
     print_simd_cpuid();
-    //pmm_print_stats();
+    pmm_print_stats();
 
-    //vmm_test();
+    vmm_test();
     
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
-
+    //acpi_shutdown(); //works on real hardware & VM
     while (1) {
         asm volatile ("hlt");
     }

@@ -1,216 +1,156 @@
 #include "../../include/acpi/acpi.h"
 #include "../../include/io/serial.h"
-#include "../../include/memory/pmm.h"
 #include "../../include/io/ports.h"
+#include "../../include/memory/pmm.h"
 #include <string.h>
-#include <stdio.h>
 
-static acpi_rsdp2_t* rsdp = NULL;
-static acpi_xsdt_t* xsdt = NULL;
-static acpi_rsdt_t* rsdt = NULL;
-static bool acpi_available = false;
+static acpi_rsdp2_t *rsdp;
+static acpi_xsdt_t *xsdt;
+static acpi_rsdt_t *rsdt;
+static bool available = false;
 
-static inline void* phys_to_virt(uintptr_t phys_addr) {
-    return (void*)(phys_addr + pmm_get_hhdm_offset());
+static inline void *phys_to_virt(uintptr_t phys) {
+    return (void *)(phys + pmm_get_hhdm_offset());
 }
 
-static bool validate_table_checksum(acpi_sdt_header_t* header) {
-    if (!header) return false;
-    
+static bool checksum(void *base, size_t len) {
     uint8_t sum = 0;
-    uint8_t* bytes = (uint8_t*)header;
-    
-    for (size_t i = 0; i < header->length; i++) {
-        sum += bytes[i];
-    }
-    
-    return (sum == 0);
+    uint8_t *b = base;
+    for (size_t i = 0; i < len; i++)
+        sum += b[i];
+    return sum == 0;
 }
 
 void acpi_init(void) {
-    serial_writestring(COM1, "\n[ACPI] Initializing ACPI...\n");
-    
-    if (!rsdp_request.response || !rsdp_request.response->address) {
-        serial_writestring(COM1, "ERROR: RSDP not found via Limine\n");
+    if (!rsdp_request.response) {
+        serial_writestring(COM1, "ACPI: no RSDP\n");
         return;
     }
-    
-    rsdp = (acpi_rsdp2_t*)rsdp_request.response->address;
-    
-    char sig[9] = {0};
-    memcpy(sig, rsdp->rsdp_v1.signature, 8);
-    
-    serial_printf(COM1, "RSDP found at: 0x%llx\n", (uint64_t)rsdp);
-    serial_printf(COM1, "Signature: %s\n", sig);
-    serial_printf(COM1, "Revision: %u\n", rsdp->rsdp_v1.revision);
-    
-    uint8_t sum = 0;
-    uint8_t* bytes = (uint8_t*)&rsdp->rsdp_v1;
-    for (size_t i = 0; i < sizeof(acpi_rsdp_t); i++) {
-        sum += bytes[i];
+
+    rsdp = (acpi_rsdp2_t *)rsdp_request.response->address;
+
+    if (!checksum(&rsdp->rsdp_v1, sizeof(acpi_rsdp_t))) {
+        serial_writestring(COM1, "ACPI: bad RSDP checksum\n");
+        return;
     }
-    
-    if (sum != 0) {
-        serial_writestring(COM1, "WARNING: RSDP v1 checksum invalid\n");
-    } else {
-        serial_writestring(COM1, "RSDP v1 checksum: OK\n");
-    }
-    
-    uint64_t hhdm_offset = pmm_get_hhdm_offset();
-    serial_printf(COM1, "HHDM offset: 0x%llx\n", hhdm_offset);
-    
-    if (rsdp->rsdp_v1.revision >= 2 && rsdp->xsdt_address != 0) {
-        xsdt = (acpi_xsdt_t*)phys_to_virt(rsdp->xsdt_address);
-        serial_printf(COM1, "XSDT physical: 0x%llx, virtual: 0x%llx\n", 
-                     rsdp->xsdt_address, (uint64_t)xsdt);
-        
-        if (!validate_table_checksum(&xsdt->header)) {
-            serial_writestring(COM1, "WARNING: XSDT checksum invalid\n");
+
+    if (rsdp->rsdp_v1.revision >= 2 && rsdp->xsdt_address) {
+        xsdt = phys_to_virt(rsdp->xsdt_address);
+        if (!checksum(xsdt, xsdt->header.length))
             xsdt = NULL;
-        } else {
-            serial_writestring(COM1, "XSDT checksum: OK\n");
-        }
     }
-    
-    if (!xsdt && rsdp->rsdp_v1.rsdt_address != 0) {
-        rsdt = (acpi_rsdt_t*)phys_to_virt(rsdp->rsdp_v1.rsdt_address);
-        serial_printf(COM1, "RSDT physical: 0x%x, virtual: 0x%llx\n", 
-                     rsdp->rsdp_v1.rsdt_address, (uint64_t)rsdt);
-        
-        if (!validate_table_checksum(&rsdt->header)) {
-            serial_writestring(COM1, "WARNING: RSDT checksum invalid\n");
+
+    if (!xsdt && rsdp->rsdp_v1.rsdt_address) {
+        rsdt = phys_to_virt(rsdp->rsdp_v1.rsdt_address);
+        if (!checksum(rsdt, rsdt->header.length))
             rsdt = NULL;
-        } else {
-            serial_writestring(COM1, "RSDT checksum: OK\n");
-        }
     }
-    
-    if (!xsdt && !rsdt) {
-        serial_writestring(COM1, "ERROR: No valid RSDT/XSDT found\n");
+
+    if (!xsdt && !rsdt)
         return;
-    }
-    
-    acpi_available = true;
-    serial_writestring(COM1, "[ACPI] ACPI initialized successfully\n");
+
+    available = true;
 }
 
 bool acpi_is_available(void) {
-    return acpi_available;
+    return available;
 }
 
-void* acpi_find_table(const char* signature, uint64_t index) {
-    if (!acpi_available) {
+void *acpi_find_table(const char *sig, uint64_t index) {
+    if (!available)
         return NULL;
-    }
-    
+
     uint64_t count = 0;
-    
+
     if (xsdt) {
-        size_t num_tables = (xsdt->header.length - sizeof(acpi_sdt_header_t)) / 8;
-        
-        for (size_t i = 0; i < num_tables; i++) {
-            uint64_t table_phys = xsdt->sdt_pointers[i];
-            acpi_sdt_header_t* header = (acpi_sdt_header_t*)phys_to_virt(table_phys);
-            
-            if (!header) continue;
-            
-            bool match = true;
-            for (int j = 0; j < 4; j++) {
-                if (header->signature[j] != signature[j]) {
-                    match = false;
-                    break;
-                }
-            }
-            
-            if (match) {
-                if (count == index) {
-                    if (validate_table_checksum(header)) {
-                        return header;
-                    } else {
-                        serial_printf(COM1, "Table %.4s has invalid checksum\n", signature);
-                        return NULL;
-                    }
-                }
-                count++;
+        size_t n = (xsdt->header.length - sizeof(acpi_sdt_header_t)) / 8;
+        for (size_t i = 0; i < n; i++) {
+            acpi_sdt_header_t *h = phys_to_virt(xsdt->sdt_pointers[i]);
+            if (!memcmp(h->signature, sig, 4)) {
+                if (count++ == index)
+                    return h;
             }
         }
-    } else if (rsdt) {
-        size_t num_tables = (rsdt->header.length - sizeof(acpi_sdt_header_t)) / 4;
-        
-        for (size_t i = 0; i < num_tables; i++) {
-            uint32_t table_phys = rsdt->sdt_pointers[i];
-            acpi_sdt_header_t* header = (acpi_sdt_header_t*)phys_to_virt(table_phys);
-            
-            if (!header) continue;
-            
-            bool match = true;
-            for (int j = 0; j < 4; j++) {
-                if (header->signature[j] != signature[j]) {
-                    match = false;
-                    break;
-                }
-            }
-            
-            if (match) {
-                if (count == index) {
-                    if (validate_table_checksum(header)) {
-                        return header;
-                    } else {
-                        serial_printf(COM1, "Table %.4s has invalid checksum\n", signature);
-                        return NULL;
-                    }
-                }
-                count++;
+    } else {
+        size_t n = (rsdt->header.length - sizeof(acpi_sdt_header_t)) / 4;
+        for (size_t i = 0; i < n; i++) {
+            acpi_sdt_header_t *h = phys_to_virt(rsdt->sdt_pointers[i]);
+            if (!memcmp(h->signature, sig, 4)) {
+                if (count++ == index)
+                    return h;
             }
         }
     }
-    
+
     return NULL;
 }
 
 void acpi_print_tables(void) {
-    if (!acpi_available) {
-        serial_writestring(COM1, "ACPI not available\n");
+    if (!acpi_is_available()) {
+        serial_writestring(COM1, "ACPI: not available\n");
         return;
     }
-    
-    serial_writestring(COM1, "\nACPI TABLES:\n");
-    
-    if (xsdt) {
-        size_t num_tables = (xsdt->header.length - sizeof(acpi_sdt_header_t)) / 8;
-        serial_printf(COM1, "XSDT contains %zu tables:\n", num_tables);
-        
-        for (size_t i = 0; i < num_tables; i++) {
-            uint64_t table_phys = xsdt->sdt_pointers[i];
-            acpi_sdt_header_t* header = (acpi_sdt_header_t*)phys_to_virt(table_phys);
-            
-            if (header) {
-                bool checksum_ok = validate_table_checksum(header);
-                serial_printf(COM1, "  [%zu] %.4s (phys: 0x%llx, virt: 0x%llx) Rev: %u Len: %u %s\n",
-                             i, header->signature, table_phys, (uint64_t)header,
-                             header->revision, header->length,
-                             checksum_ok ? "" : "[BAD CHECKSUM]");
-            } else {
-                serial_printf(COM1, "  [%zu] INVALID (phys: 0x%llx)\n", i, table_phys);
-            }
-        }
-    } else if (rsdt) {
-        size_t num_tables = (rsdt->header.length - sizeof(acpi_sdt_header_t)) / 4;
-        serial_printf(COM1, "RSDT contains %zu tables:\n", num_tables);
-        
-        for (size_t i = 0; i < num_tables; i++) {
-            uint32_t table_phys = rsdt->sdt_pointers[i];
-            acpi_sdt_header_t* header = (acpi_sdt_header_t*)phys_to_virt(table_phys);
-            
-            if (header) {
-                bool checksum_ok = validate_table_checksum(header);
-                serial_printf(COM1, "  [%zu] %.4s (phys: 0x%x, virt: 0x%llx) Rev: %u Len: %u %s\n",
-                             i, header->signature, table_phys, (uint64_t)header,
-                             header->revision, header->length,
-                             checksum_ok ? "" : "[BAD CHECKSUM]");
-            } else {
-                serial_printf(COM1, "  [%zu] INVALID (phys: 0x%x)\n", i, table_phys);
-            }
-        }
+
+    serial_writestring(COM1, "ACPI tables:\n");
+
+    for (uint64_t i = 0;; i++) {
+        acpi_sdt_header_t *h = acpi_find_table("APIC", i);
+        if (!h) break;
+        serial_writestring(COM1, "  - APIC (MADT)\n");
+    }
+
+    for (uint64_t i = 0;; i++) {
+        acpi_sdt_header_t *h = acpi_find_table("HPET", i);
+        if (!h) break;
+        serial_writestring(COM1, "  - HPET\n");
+    }
+
+    for (uint64_t i = 0;; i++) {
+        acpi_sdt_header_t *h = acpi_find_table("MCFG", i);
+        if (!h) break;
+        serial_writestring(COM1, "  - MCFG (PCIe)\n");
+    }
+}
+
+/*static void acpi_write_gas(const uint8_t *gas, uint8_t value) {
+    uint8_t space_id = gas[0];
+    uint64_t address = *(uint64_t*)(gas + 4);
+
+    if (space_id == 0x01) {
+        volatile uint8_t *mmio = phys_to_virt(address);
+        *mmio = value;
+    } else if (space_id == 0x00) {
+        outb((uint16_t)address, value);
+    }
+}*/
+
+static void acpi_send_pm1_command(acpi_fadt_t *fadt, uint8_t slp_typ, uint8_t slp_bit) {
+    uint16_t cmd = (1 << 13) | (slp_typ << slp_bit);
+    outw(fadt->pm1a_control_block, cmd);
+    if (fadt->pm1b_control_block) {
+        outw(fadt->pm1b_control_block, cmd);
+    }
+}
+
+void acpi_shutdown(void) {
+    if (!acpi_is_available()) {
+        serial_writestring(COM1, "ACPI shutdown: ACPI not available\n");
+        return;
+    }
+
+    acpi_fadt_t *fadt = (acpi_fadt_t *)acpi_find_table("FACP", 0);
+    if (!fadt) {
+        serial_writestring(COM1, "ACPI shutdown: FADT not found\n");
+        return;
+    }
+
+    const uint8_t candidates[] = {5, 0, 7, 1, 2, 3, 4, 6};
+    size_t n = sizeof(candidates) / sizeof(candidates[0]);
+
+    serial_writestring(COM1, "ACPI shutdown: trying S5 candidates...\n");
+
+    for (size_t i = 0; i < n; i++) {
+        serial_printf(COM1, "  Trying SLP_TYP=%d for S5...\n", candidates[i]);
+        acpi_send_pm1_command(fadt, candidates[i], 10);
     }
 }
