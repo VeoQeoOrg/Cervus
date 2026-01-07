@@ -1,9 +1,7 @@
 section .text
+extern isr_handler
 
-extern exception_handler
-extern irq_handler
-
-%macro PUSH_ALL 0
+isr_common:
     push rax
     push rbx
     push rcx
@@ -19,9 +17,27 @@ extern irq_handler
     push r13
     push r14
     push r15
-%endmacro
 
-%macro POP_ALL 0
+    mov rax, ds
+    push rax
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    mov rdi, rsp
+    call isr_handler
+
+    pop rax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
     pop r15
     pop r14
     pop r13
@@ -37,121 +53,43 @@ extern irq_handler
     pop rcx
     pop rbx
     pop rax
-%endmacro
 
-%macro ISR_NOERRCODE 1
-global isr%1
-isr%1:
-    push 0                     ; Код ошибки (0)
-    push %1                    ; Номер прерывания
-    jmp isr_common_stub
-%endmacro
-
-%macro ISR_ERRCODE 1
-global isr%1
-isr%1:
-    push %1                    ; Номер прерывания
-    jmp isr_common_stub
-%endmacro
-
-%macro IRQ 2
-global irq%1
-irq%1:
-    push 0                     ; Код ошибки (0)
-    push %2                    ; Номер прерывания (0x20 + номер IRQ)
-    jmp irq_common_stub
-%endmacro
-
-; Обработчики исключений (0-31)
-ISR_NOERRCODE 0   ; Divide Error
-ISR_NOERRCODE 1   ; Debug
-ISR_NOERRCODE 2   ; Non-Maskable Interrupt
-ISR_NOERRCODE 3   ; Breakpoint
-ISR_NOERRCODE 4   ; Overflow
-ISR_NOERRCODE 5   ; Bound Range Exceeded
-ISR_NOERRCODE 6   ; Invalid Opcode
-ISR_NOERRCODE 7   ; Device Not Available
-ISR_ERRCODE   8   ; Double Fault
-ISR_NOERRCODE 9   ; Coprocessor Segment Overrun
-ISR_ERRCODE   10  ; Invalid TSS
-ISR_ERRCODE   11  ; Segment Not Present
-ISR_ERRCODE   12  ; Stack Segment Fault
-ISR_ERRCODE   13  ; General Protection Fault
-ISR_ERRCODE   14  ; Page Fault
-ISR_NOERRCODE 15  ; Reserved
-ISR_NOERRCODE 16  ; x87 Floating-Point Exception
-ISR_ERRCODE   17  ; Alignment Check
-ISR_NOERRCODE 18  ; Machine Check
-ISR_NOERRCODE 19  ; SIMD Floating-Point Exception
-ISR_NOERRCODE 20  ; Virtualization Exception
-ISR_NOERRCODE 21  ; Reserved
-ISR_NOERRCODE 22  ; Reserved
-ISR_NOERRCODE 23  ; Reserved
-ISR_NOERRCODE 24  ; Reserved
-ISR_NOERRCODE 25  ; Reserved
-ISR_NOERRCODE 26  ; Reserved
-ISR_NOERRCODE 27  ; Reserved
-ISR_NOERRCODE 28  ; Reserved
-ISR_NOERRCODE 29  ; Reserved
-ISR_NOERRCODE 30  ; Security Exception
-ISR_NOERRCODE 31  ; Reserved
-
-; Обработчики IRQ (0x20-0x2F)
-IRQ 0, 32   ; Timer
-IRQ 1, 33   ; Keyboard
-IRQ 2, 34   ; Cascade
-IRQ 3, 35   ; COM2
-IRQ 4, 36   ; COM1
-IRQ 5, 37   ; LPT2
-IRQ 6, 38   ; Floppy
-IRQ 7, 39   ; LPT1
-IRQ 8, 40   ; RTC
-IRQ 9, 41   ; ACPI
-IRQ 10, 42  ; Reserved
-IRQ 11, 43  ; Reserved
-IRQ 12, 44  ; Mouse
-IRQ 13, 45  ; FPU
-IRQ 14, 46  ; ATA1
-IRQ 15, 47  ; ATA2
-
-isr_common_stub:
-    PUSH_ALL
-    
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    
-    mov rdi, rsp
-    call exception_handler
-    
-    POP_ALL
-    
     add rsp, 16
-    
     iretq
 
-irq_common_stub:
-    PUSH_ALL
-    
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    
-    mov rdi, rsp
-    call irq_handler
-    
-    POP_ALL
-    
-    add rsp, 16
-    
-    iretq
+%macro ISR_ERR_STUB 1
+isr_stub_%1:
+    push qword %1
+    jmp isr_common
+%endmacro
 
-global idt_load
-idt_load:
-    mov rax, rdi
-    lidt [rax]
-    ret
+%macro ISR_NO_ERR_STUB 1
+isr_stub_%1:
+    push qword 0
+    push qword %1
+    jmp isr_common
+%endmacro
+
+%assign i 0
+%rep 32
+    %if i = 8 || i = 10 || i = 11 || i = 12 || i = 13 || i = 14 || i = 17 || i = 21 || i = 29 || i = 30
+        ISR_ERR_STUB i
+    %else
+        ISR_NO_ERR_STUB i
+    %endif
+    %assign i i+1
+%endrep
+
+%rep 224
+    ISR_NO_ERR_STUB i
+    %assign i i+1
+%endrep
+
+section .data
+global isr_stub_table
+isr_stub_table:
+%assign i 0
+%rep 256
+    dq isr_stub_%+i
+    %assign i i+1
+%endrep

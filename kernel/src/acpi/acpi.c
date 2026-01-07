@@ -7,7 +7,6 @@
 static acpi_rsdp2_t *rsdp;
 static acpi_xsdt_t *xsdt;
 static acpi_rsdt_t *rsdt;
-static bool available = false;
 
 static inline void *phys_to_virt(uintptr_t phys) {
     return (void *)(phys + pmm_get_hhdm_offset());
@@ -48,18 +47,9 @@ void acpi_init(void) {
 
     if (!xsdt && !rsdt)
         return;
-
-    available = true;
-}
-
-bool acpi_is_available(void) {
-    return available;
 }
 
 void *acpi_find_table(const char *sig, uint64_t index) {
-    if (!available)
-        return NULL;
-
     uint64_t count = 0;
 
     if (xsdt) {
@@ -86,11 +76,6 @@ void *acpi_find_table(const char *sig, uint64_t index) {
 }
 
 void acpi_print_tables(void) {
-    if (!acpi_is_available()) {
-        serial_writestring(COM1, "ACPI: not available\n");
-        return;
-    }
-
     serial_writestring(COM1, "ACPI tables:\n");
 
     for (uint64_t i = 0;; i++) {
@@ -133,11 +118,6 @@ static void acpi_send_pm1_command(acpi_fadt_t *fadt, uint8_t slp_typ, uint8_t sl
 }
 
 void acpi_shutdown(void) {
-    if (!acpi_is_available()) {
-        serial_writestring(COM1, "ACPI shutdown: ACPI not available\n");
-        return;
-    }
-
     acpi_fadt_t *fadt = (acpi_fadt_t *)acpi_find_table("FACP", 0);
     if (!fadt) {
         serial_writestring(COM1, "ACPI shutdown: FADT not found\n");

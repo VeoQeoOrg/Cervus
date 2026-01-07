@@ -318,3 +318,64 @@ void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t v
     }
     serial_printf(COM1, "Mapped: %zu/%zu pages (%.1f%%)\n", mapped, total, (float)mapped / total * 100);
 }
+
+void page_fault_handler(struct interrupt_frame* frame) {
+    uint64_t fault_address;
+    asm volatile("mov %%cr2, %0" : "=r" (fault_address));
+    
+    serial_printf(COM1, "\n[PAGE FAULT] Exception 0x%02x\n", frame->interrupt_number);
+    serial_printf(COM1, "  Fault Address: 0x%016llx\n", fault_address);
+    serial_printf(COM1, "  Error Code: 0x%016llx\n", frame->error_code);
+    
+    print_page_fault_info(frame->error_code, fault_address);
+    
+    uint64_t error = frame->error_code;
+    const char* present = (error & 0x01) ? "protection violation" : "page not present";
+    const char* write = (error & 0x02) ? "write" : "read";
+    const char* user = (error & 0x04) ? "user-mode" : "supervisor-mode";
+    const char* rsv = (error & 0x08) ? "reserved bit set" : "";
+    const char* instr = (error & 0x10) ? "instruction fetch" : "";
+    
+    serial_printf(COM1, "  Details: %s, %s, %s, %s, %s\n", 
+                  present, write, user, rsv, instr);
+    
+    dump_registers(frame);
+    
+    serial_writestring(COM1, "\n[PAGE FAULT] System halted\n");
+    
+    for(;;) {
+        asm volatile("hlt");
+    }
+}
+
+void print_page_fault_info(uint64_t error_code, uint64_t fault_address) {
+    serial_writestring(COM1, "  Page Fault Analysis:\n");
+    
+    if (!(error_code & 0x1)) {
+        serial_writestring(COM1, "    - Page not present\n");
+    } else {
+        serial_writestring(COM1, "    - Page protection violation\n");
+    }
+    
+    if (error_code & 0x2) {
+        serial_writestring(COM1, "    - Write access\n");
+    } else {
+        serial_writestring(COM1, "    - Read access\n");
+    }
+    
+    if (error_code & 0x4) {
+        serial_writestring(COM1, "    - User-mode access\n");
+    } else {
+        serial_writestring(COM1, "    - Supervisor-mode access\n");
+    }
+    
+    if (error_code & 0x8) {
+        serial_writestring(COM1, "    - Reserved bit violation\n");
+    }
+    
+    if (error_code & 0x10) {
+        serial_writestring(COM1, "    - Instruction fetch\n");
+    }
+    
+    serial_printf(COM1, "    - Faulting address: 0x%016llx\n", fault_address);
+}

@@ -9,6 +9,7 @@
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
 #include "../include/interrupts/idt.h"
+#include "../include/interrupts/irq.h"
 #include "../include/sse/fpu.h"
 #include "../include/sse/sse.h"
 #include "../include/memory/pmm.h"
@@ -70,8 +71,11 @@ void kernel_main(void) {
     
     gdt_init();
     idt_init();
+    irq_init();
     asm volatile ("sti");
     serial_writestring(COM1, "GDT&IDT [OK]\n");
+
+    //asm volatile("int $3");
 
     fpu_init();
     sse_init();
@@ -102,13 +106,9 @@ void kernel_main(void) {
     vmm_init();
     serial_writestring(COM1, "VMM [OK]\n");
     acpi_init();
-    if (acpi_is_available()) {
-        serial_writestring(COM1, "ACPI [OK]\n");
+    serial_writestring(COM1, "ACPI [OK]\n");
         
-        acpi_print_tables();
-    } else {
-        serial_writestring(COM1, "ACPI [FAILED]\n");
-    }
+    acpi_print_tables();
 
     clear_screen();
     
@@ -131,7 +131,9 @@ void kernel_main(void) {
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
     //acpi_shutdown(); //works on real hardware & VM
+    volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
+    uint64_t value = *ptr;  // Page Fault
     while (1) {
-        asm volatile ("hlt");
+        hcf();
     }
 }

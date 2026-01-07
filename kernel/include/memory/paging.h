@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "vmm.h"
+#include "../interrupts/isr.h"
 
 #define PAGING_PRESENT    VMM_PRESENT
 #define PAGING_WRITE      VMM_WRITE
@@ -60,5 +61,8 @@ bool paging_is_range_free(vmm_pagemap_t* pagemap, uintptr_t virt_start,
 void paging_print_stats(vmm_pagemap_t* pagemap);
 void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
                       uintptr_t virt_end);
+
+void page_fault_handler(struct interrupt_frame* frame);
+void print_page_fault_info(uint64_t error_code, uint64_t fault_address);
 
 #endif

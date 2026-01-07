@@ -418,28 +418,81 @@ void flash_iso() {
     print_color(COLOR_GREEN, "Done!");
 }
 
+bool is_unreadable_file(const char *filename) {
+    const char *no_ext_files[] = {"TODO", "LICENSE", "build", NULL};
+    for (int i = 0; no_ext_files[i] != NULL; i++) {
+        if (strcmp(filename, no_ext_files[i]) == 0) {
+            return true;
+        }
+    }
+
+    const char *ext = strrchr(filename, '.');
+    if (!ext) return false;
+
+    const char *binary_exts[] = {
+        ".psf", ".jpg", ".png", ".jpeg", ".iso",
+        ".hdd", ".img", ".bin", ".elf", ".o", 
+        ".txt", ".md", ".gitignore", ".json", NULL
+    };
+
+    for (int i = 0; binary_exts[i] != NULL; i++) {
+        if (strcasecmp(ext, binary_exts[i]) == 0) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
 void generate_tree_recursive(const char *base_dir, FILE *out, int level) {
     struct dirent **namelist;
     int n = scandir(base_dir, &namelist, NULL, alphasort);
     if (n < 0) return;
 
+    const char *skip_dirs[] = {"wallpapers", "demo_iso", ".vscode", "builder", NULL};
+    
     for (int i = 0; i < n; i++) {
-        if (strcmp(namelist[i]->d_name, ".") == 0 || strcmp(namelist[i]->d_name, "..") == 0 || 
-            strcmp(namelist[i]->d_name, ".git") == 0 || strcmp(namelist[i]->d_name, "obj") == 0 ||
-            strcmp(namelist[i]->d_name, "bin") == 0 || strcmp(namelist[i]->d_name, "limine") == 0) {
-            free(namelist[i]); continue;
+        const char *name = namelist[i]->d_name;
+
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0 || 
+            strcmp(name, ".git") == 0 || strcmp(name, "obj") == 0 ||
+            strcmp(name, "bin") == 0 || strcmp(name, "limine") == 0) {
+            free(namelist[i]); 
+            continue;
+        }
+
+        char path[PATH_MAX]; 
+        snprintf(path, sizeof(path), "%s/%s", base_dir, name);
+        struct stat st; 
+        stat(path, &st);
+
+        if (S_ISDIR(st.st_mode)) {
+            bool skip = false;
+            for (int j = 0; skip_dirs[j] != NULL; j++) {
+                if (strcmp(name, skip_dirs[j]) == 0) {
+                    skip = true;
+                    break;
+                }
+            }
+            if (skip) {
+                free(namelist[i]);
+                continue;
+            }
+        }
+        
+        if (!S_ISDIR(st.st_mode) && is_unreadable_file(name)) {
+            free(namelist[i]);
+            continue;
         }
 
         for (int j = 0; j < level; j++) fprintf(out, "│   ");
-        char path[PATH_MAX]; snprintf(path, sizeof(path), "%s/%s", base_dir, namelist[i]->d_name);
-        struct stat st; stat(path, &st);
-
+        
         if (S_ISDIR(st.st_mode)) {
-            fprintf(out, "├── %s/\n", namelist[i]->d_name);
+            fprintf(out, "├── %s/\n", name);
             generate_tree_recursive(path, out, level + 1);
         } else {
-            fprintf(out, "├── %s (%ld bytes)\n", namelist[i]->d_name, st.st_size);
-            if (!ARG_STRUCTURE_ONLY && should_print_content(namelist[i]->d_name)) {
+            fprintf(out, "├── %s (%ld bytes)\n", name, st.st_size);
+            if (!ARG_STRUCTURE_ONLY && should_print_content(name)) {
                 FILE *src = fopen(path, "r");
                 if (src) {
                     char line[4096]; int ln = 1;

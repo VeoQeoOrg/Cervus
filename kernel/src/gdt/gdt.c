@@ -1,73 +1,81 @@
 #include "../../include/gdt/gdt.h"
 #include "../../include/io/serial.h"
-#include <stddef.h>
+#include <string.h>
 
-struct gdt_entry gdt[5];
-struct gdt_ptr gdt_ptr;
-void gdt_load(void);
+#define KERNEL_STACK_SIZE 0x4000
+#define IST_STACK_SIZE    0x4000
 
-static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t granularity) {
-    gdt[index].base_low = base & 0xFFFF;
-    gdt[index].base_middle = (base >> 16) & 0xFF;
-    gdt[index].base_high = (base >> 24) & 0xFF;
-    
-    gdt[index].limit_low = limit & 0xFFFF;
-    gdt[index].granularity = (limit >> 16) & 0x0F;
-    
-    gdt[index].granularity |= granularity & 0xF0;
-    gdt[index].access = access;
+static struct gdt_entry gdt_entries[7] __attribute__((aligned(8)));
+static struct gdt_ptr gdt_ptr;
+
+static struct tss kernel_tss;
+
+static uint64_t kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
+static uint64_t ist1_stack[IST_STACK_SIZE] __attribute__((aligned(16)));
+
+extern void gdt_flush(struct gdt_ptr*);
+
+static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
+    gdt_entries[index].base_low     = base & 0xFFFF;
+    gdt_entries[index].base_middle  = (base >> 16) & 0xFF;
+    gdt_entries[index].base_high    = (base >> 24) & 0xFF;
+
+    gdt_entries[index].limit_low    = limit & 0xFFFF;
+    gdt_entries[index].granularity  = (limit >> 16) & 0x0F;
+    gdt_entries[index].granularity |= gran & 0xF0;
+    gdt_entries[index].access       = access;
+}
+
+static void tss_init(void) {
+    memset(&kernel_tss, 0, sizeof(kernel_tss));
+    kernel_tss.rsp0    = (uint64_t)kernel_stack + sizeof(kernel_stack);
+    kernel_tss.ist[0]  = (uint64_t)ist1_stack + sizeof(ist1_stack);
+    kernel_tss.iomap_base = sizeof(kernel_tss);
+}
+
+static void gdt_set_tss(void) {
+    uint64_t base  = (uint64_t)&kernel_tss;
+    uint32_t limit = sizeof(kernel_tss) - 1;
+
+    struct tss_descriptor* tss_desc = (struct tss_descriptor*)&gdt_entries[5];
+
+    memset(tss_desc, 0, sizeof(*tss_desc));
+
+    tss_desc->limit_low   = limit & 0xFFFF;
+    tss_desc->base_low    = base & 0xFFFF;
+    tss_desc->base_middle    = (base >> 16) & 0xFF;
+    tss_desc->access      = 0x89; 
+    tss_desc->granularity = 0;
+    tss_desc->base_high   = (base >> 24) & 0xFF;
+    tss_desc->base_upper  = (base >> 32) & 0xFFFFFFFF;
+    tss_desc->reserved    = 0;
+}
+
+static void tss_load(void) {
+    asm volatile ("ltr %0" : : "r" ((uint16_t)GDT_TSS));
+}
+
+void tss_set_kernel_stack(uint64_t stack_top) {
+    kernel_tss.rsp0 = stack_top;
 }
 
 void gdt_init(void) {
-    serial_writestring(COM1, "[GDT] Initializing GDT...\n");
-    
+    serial_writestring(COM1, "[GDT] Initializing GDT + TSS...\n");
+
     gdt_set_entry(0, 0, 0, 0, 0);
-    
-    gdt_set_entry(1, 0, 0xFFFFF, 
-                  GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_EXECUTABLE | GDT_ACCESS_READ_WRITE,
-                  GDT_GRANULARITY_4K | GDT_GRANULARITY_LONG);
-    
-    gdt_set_entry(2, 0, 0xFFFFF,
-                  GDT_ACCESS_PRESENT | GDT_ACCESS_RING0 | GDT_ACCESS_SEGMENT | GDT_ACCESS_READ_WRITE,
-                  GDT_GRANULARITY_4K);
-    
+    gdt_set_entry(1, 0, 0, 0x9A, 0x20);
+    gdt_set_entry(2, 0, 0, 0x92, 0x00);
     gdt_set_entry(3, 0, 0, 0, 0);
-    
     gdt_set_entry(4, 0, 0, 0, 0);
-    
-    gdt_ptr.limit = sizeof(gdt) - 1;
-    gdt_ptr.base = (uint64_t)&gdt;
-    
-    serial_writestring(COM1, "[GDT] GDT entries set up\n");
-    gdt_load();
-}
 
-void gdt_load(void) {
-    serial_writestring(COM1, "[GDT] Loading GDT...\n");
-    
-    asm volatile("lgdt %0" : : "m"(gdt_ptr));
-    
-    asm volatile(
-        "mov $0x10, %%ax\n"
-        "mov %%ax, %%ds\n"
-        "mov %%ax, %%es\n"
-        "mov %%ax, %%fs\n"
-        "mov %%ax, %%gs\n"
-        "mov %%ax, %%ss\n"
-        "pushq $0x08\n"
-        "leaq 1f(%%rip), %%rax\n"
-        "pushq %%rax\n"
-        "lretq\n"
-        "1:\n"
-        : : : "rax", "memory"
-    );
-    
-    serial_writestring(COM1, "[GDT] GDT loaded successfully\n");
-}
+    tss_init();
+    gdt_set_tss();
 
-const struct gdt_entry* gdt_get_descriptor(int index) {
-    if (index >= 0 && index < 5) {
-        return &gdt[index];
-    }
-    return NULL;
+    gdt_ptr.base  = (uint64_t)&gdt_entries;
+    gdt_ptr.limit = sizeof(gdt_entries) - 1;
+
+    gdt_flush(&gdt_ptr);
+    tss_load();
+
+    serial_writestring(COM1, "[GDT] GDT and TSS loaded successfully\n");
 }

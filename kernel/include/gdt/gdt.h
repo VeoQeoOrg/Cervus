@@ -6,10 +6,10 @@
 struct gdt_entry {
     uint16_t limit_low;
     uint16_t base_low;
-    uint8_t base_middle;
-    uint8_t access;
-    uint8_t granularity;
-    uint8_t base_high;
+    uint8_t  base_middle;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
 } __attribute__((packed));
 
 struct gdt_ptr {
@@ -17,23 +17,35 @@ struct gdt_ptr {
     uint64_t base;
 } __attribute__((packed));
 
-#define GDT_KERNEL_CS 0x08  
-#define GDT_KERNEL_DS 0x10  
+struct tss {
+    uint32_t reserved0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist[7];
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iomap_base;
+} __attribute__((packed));
 
-#define GDT_ACCESS_PRESENT     (1 << 7)
-#define GDT_ACCESS_RING0       (0 << 5)
-#define GDT_ACCESS_SEGMENT     (1 << 4)
-#define GDT_ACCESS_EXECUTABLE  (1 << 3)
-#define GDT_ACCESS_READ_WRITE  (1 << 1)
+struct tss_descriptor {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t  base_middle;
+    uint8_t  access;
+    uint8_t  granularity;
+    uint8_t  base_high;
+    uint32_t base_upper;
+    uint32_t reserved;
+} __attribute__((packed));
 
-#define GDT_GRANULARITY_4K     (1 << 7)
-#define GDT_GRANULARITY_LONG   (1 << 5)
-
-extern struct gdt_entry gdt[5];
-extern struct gdt_ptr gdt_ptr;
+#define GDT_NULL        0x00
+#define GDT_KERNEL_CODE 0x08
+#define GDT_KERNEL_DATA 0x10
+#define GDT_TSS         0x28
 
 void gdt_init(void);
-void gdt_load(void);
-const struct gdt_entry* gdt_get_descriptor(int index);
+void tss_set_kernel_stack(uint64_t stack_top);
 
-#endif 
+#endif

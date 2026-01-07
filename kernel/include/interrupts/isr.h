@@ -13,5 +13,6 @@ void isr_exception_handler(struct interrupt_frame* frame);
 void isr_irq_handler(struct interrupt_frame* frame);
 void print_exception_info(const char* name, struct interrupt_frame* frame);
 void dump_registers(struct interrupt_frame* frame);
+void isr_handler(struct interrupt_frame* frame);
 
-#endif // ISR_H
+#endif
