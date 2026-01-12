@@ -15,6 +15,8 @@
 #include "../include/memory/vmm.h"
 #include "../include/memory/paging.h"
 #include "../include/acpi/acpi.h"
+#include "../include/apic/apic.h"
+#include "../include/io/ports.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -57,6 +59,31 @@ static void hcf(void) {
         asm ("hlt");
     }
 }
+static volatile uint64_t timer_ticks = 0;
+static volatile bool test_active = true;
+static volatile uint64_t messages_sent = 0;
+
+DEFINE_IRQ(0x20, apic_timer_handler) {
+    timer_ticks++;
+    
+    if (test_active && messages_sent < 10) {
+        if (timer_ticks % 300 == 0) {
+            serial_writestring(COM1, "Hello from APIC HPET Timer!\n");
+            printf("Hello from APIC HPET Timer!\n");
+            messages_sent++;
+            
+            if (messages_sent == 10) {
+                test_active = false;
+                serial_writestring(COM1, "Test completed: 10 messages sent in 30 seconds\n");
+                printf("Test completed: 10 messages sent in 30 seconds\n");
+            }
+        }
+    }
+    
+    lapic_eoi();
+
+    (void)frame;
+}
 
 void kernel_main(void) {
     serial_initialize(COM1, 115200);
@@ -71,9 +98,6 @@ void kernel_main(void) {
     gdt_init();
     init_interrupt_system();
     serial_writestring(COM1, "GDT&IDT [OK]\n");
-
-    //asm volatile("int $3");
-
     fpu_init();
     sse_init();
     serial_writestring(COM1, "FPU/SSE [OK]\n");
@@ -103,9 +127,42 @@ void kernel_main(void) {
     vmm_init();
     serial_writestring(COM1, "VMM [OK]\n");
     acpi_init();
-    serial_writestring(COM1, "ACPI [OK]\n");
-        
     acpi_print_tables();
+    serial_writestring(COM1, "ACPI [OK]\n");
+    apic_init();
+    serial_writestring(COM1, "APIC initialized successfully\n");
+        
+    apic_timer_calibrate();
+        
+    apic_setup_irq(0, 0x20, false, 0);
+
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+
+    serial_writestring(COM1, "Legacy PIC disabled\n");
+    serial_writestring(COM1, "APIC/HPET system ready\n");
+
+    serial_writestring(COM1, "Checking APIC Timer Status\n");
+    
+    uint32_t timer_config = lapic_read(LAPIC_TIMER);
+    uint32_t initial_count = lapic_read(LAPIC_TIMER_ICR);
+    uint32_t current_count = lapic_read(LAPIC_TIMER_CCR);
+    
+    serial_printf(COM1, "APIC Timer Config: 0x%x\n", timer_config);
+    serial_printf(COM1, "  Vector: 0x%x\n", timer_config & 0xFF);
+    serial_printf(COM1, "  Masked: %s\n", (timer_config & LAPIC_TIMER_MASKED) ? "YES" : "NO");
+    serial_printf(COM1, "  Periodic: %s\n", (timer_config & LAPIC_TIMER_PERIODIC) ? "YES" : "NO");
+    serial_printf(COM1, "Initial Count: %u\n", initial_count);
+    serial_printf(COM1, "Current Count: %u\n", current_count);
+    serial_printf(COM1, "Ticks remaining until interrupt: %u\n", current_count);
+    
+    if (timer_config & LAPIC_TIMER_MASKED) {
+        serial_writestring(COM1, "WARNING: APIC timer is masked! Unmasking...\n");
+        lapic_write(LAPIC_TIMER, (timer_config & ~LAPIC_TIMER_MASKED));
+    }
+    
+    serial_printf(COM1, "APIC timer should fire in approximately %u ms\n", 
+                      (current_count * 10) / 63347);
 
     clear_screen();
     
@@ -128,9 +185,6 @@ void kernel_main(void) {
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
     //acpi_shutdown(); //works on real hardware & VM
-    volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
-    uint64_t value = *ptr;  // Page Fault
-    (void)value;
     while (1) {
         hcf();
     }

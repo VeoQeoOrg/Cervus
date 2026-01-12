@@ -33,9 +33,9 @@ Cervus is currently in the active development phase. The kernel implements core 
 | *Graphics/PSF* | Done | Framebuffer & Text Rendering |
 | *Memory (PMM/VMM)* | Done | Physical & Virtual Memory Management |
 | *Interrupts (IDT)* | Done | Handling exceptions and IRQs |
-| *ACPI* | Under development | Table parsing & SDT discovery |
-| *APIC / IOAPIC* | Under development | Advanced Interrupt Controllers |
-| *Timers (HPET/APIC)* | Under development | High Precision Event Timers |
+| *ACPI* | Done(without rebooting) | Table parsing & SDT discovery |
+| *APIC / IOAPIC* | Done | Advanced Interrupt Controllers |
+| *Timers (HPET/APIC)* | Done | High Precision Event Timers |
 | *SMP* | TODO | Multicore Initialization |
 | *Scheduler* | TODO | Preemptive Multitasking |
 | *Userspace* | TODO | Syscalls & Ring 3 execution |
