@@ -1,81 +1,65 @@
 #include "../../include/gdt/gdt.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+#include <stddef.h>
 
-#define KERNEL_STACK_SIZE 0x4000
-#define IST_STACK_SIZE    0x4000
+gdt_pointer_t gdtr;
+struct {
+    gdt_entry_t gdt_entries[5];
+    tss_entry_t tss_entry;
+}__attribute__((packed)) gdt;
+tss_t tss = {0};
 
-static struct gdt_entry gdt_entries[7] __attribute__((aligned(8)));
-static struct gdt_ptr gdt_ptr;
+#define KERNEL_STACK_SIZE 4096 * 8
 
-static struct tss kernel_tss;
+__attribute__((aligned(16)))
+char kernel_stack[KERNEL_STACK_SIZE];
 
-static uint64_t kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
-static uint64_t ist1_stack[IST_STACK_SIZE] __attribute__((aligned(16)));
+__attribute__((aligned(16)))
+char def_ist_stack[KERNEL_STACK_SIZE];
 
-extern void gdt_flush(struct gdt_ptr*);
+__attribute__((aligned(16)))
+char df_stack[KERNEL_STACK_SIZE];
 
-static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran) {
-    gdt_entries[index].base_low     = base & 0xFFFF;
-    gdt_entries[index].base_middle  = (base >> 16) & 0xFF;
-    gdt_entries[index].base_high    = (base >> 24) & 0xFF;
+__attribute__((aligned(16)))
+char nmi_stack[KERNEL_STACK_SIZE];
 
-    gdt_entries[index].limit_low    = limit & 0xFFFF;
-    gdt_entries[index].granularity  = (limit >> 16) & 0x0F;
-    gdt_entries[index].granularity |= gran & 0xF0;
-    gdt_entries[index].access       = access;
-}
+__attribute__((aligned(16)))
+char pf_stack[KERNEL_STACK_SIZE];
 
-static void tss_init(void) {
-    memset(&kernel_tss, 0, sizeof(kernel_tss));
-    kernel_tss.rsp0    = (uint64_t)kernel_stack + sizeof(kernel_stack);
-    kernel_tss.ist[0]  = (uint64_t)ist1_stack + sizeof(ist1_stack);
-    kernel_tss.iomap_base = sizeof(kernel_tss);
-}
+extern void _load_gdt(gdt_pointer_t *descriptor);
+extern void _reload_segments(uint64_t cs, uint64_t ds);
 
-static void gdt_set_tss(void) {
-    uint64_t base  = (uint64_t)&kernel_tss;
-    uint32_t limit = sizeof(kernel_tss) - 1;
+void gdt_init() {
+    gdt.gdt_entries[0] = (gdt_entry_t)GDT_ENTRY(0, 0, 0, 0);
+    gdt.gdt_entries[1] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0x9A, 0xA);
+    gdt.gdt_entries[2] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0x92, 0xC);
+    gdt.gdt_entries[3] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0xFA, 0xA);
+    gdt.gdt_entries[4] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0xF2, 0xC);
 
-    struct tss_descriptor* tss_desc = (struct tss_descriptor*)&gdt_entries[5];
+    gdtr.size = (uint16_t)(sizeof(gdt) - 1);
+    gdtr.pointer = (gdt_entry_t *)&gdt;
 
-    memset(tss_desc, 0, sizeof(*tss_desc));
+    tss.rsp0 = (uint64_t)(kernel_stack + KERNEL_STACK_SIZE);
+    tss.ist[0] = (uint64_t)(def_ist_stack + KERNEL_STACK_SIZE);
+    tss.ist[1] = (uint64_t)(df_stack + KERNEL_STACK_SIZE);
+    tss.ist[2] = (uint64_t)(nmi_stack + KERNEL_STACK_SIZE);
+    tss.ist[3] = (uint64_t)(pf_stack + KERNEL_STACK_SIZE);
 
-    tss_desc->limit_low   = limit & 0xFFFF;
-    tss_desc->base_low    = base & 0xFFFF;
-    tss_desc->base_middle    = (base >> 16) & 0xFF;
-    tss_desc->access      = 0x89; 
-    tss_desc->granularity = 0;
-    tss_desc->base_high   = (base >> 24) & 0xFF;
-    tss_desc->base_upper  = (base >> 32) & 0xFFFFFFFF;
-    tss_desc->reserved    = 0;
-}
+    gdt.tss_entry.limit_low   = sizeof(tss_t) - 1;
+    gdt.tss_entry.base_low    = (uint16_t)((uint64_t)&tss & 0xffff);
+    gdt.tss_entry.base_middle = (uint8_t)(((uint64_t)&tss >> 16) & 0xff);
+    gdt.tss_entry.access      = 0x89;
+    gdt.tss_entry.limit_high_and_flags = 0;
+    gdt.tss_entry.base_high   = (uint8_t)(((uint64_t)&tss >> 24) & 0xff);
+    gdt.tss_entry.base_higher = (uint32_t)((uint64_t)&tss >> 32);
+    gdt.tss_entry.zero        = 0;
 
-static void tss_load(void) {
-    asm volatile ("ltr %0" : : "r" ((uint16_t)GDT_TSS));
-}
+    serial_printf(COM1, "Installing GDT...\n");
 
-void tss_set_kernel_stack(uint64_t stack_top) {
-    kernel_tss.rsp0 = stack_top;
-}
+    _load_gdt(&gdtr);
 
-void gdt_init(void) {
-    serial_writestring(COM1, "[GDT] Initializing GDT + TSS...\n");
+    _reload_segments(GDT_CODE_SEGMENT, GDT_DATA_SEGMENT);
 
-    gdt_set_entry(0, 0, 0, 0, 0);
-    gdt_set_entry(1, 0, 0, 0x9A, 0x20);
-    gdt_set_entry(2, 0, 0, 0x92, 0x00);
-    gdt_set_entry(3, 0, 0, 0, 0);
-    gdt_set_entry(4, 0, 0, 0, 0);
-
-    tss_init();
-    gdt_set_tss();
-
-    gdt_ptr.base  = (uint64_t)&gdt_entries;
-    gdt_ptr.limit = sizeof(gdt_entries) - 1;
-
-    gdt_flush(&gdt_ptr);
-    tss_load();
-
-    serial_writestring(COM1, "[GDT] GDT and TSS loaded successfully\n");
+    serial_printf(COM1, "GDT installed successfully\n");
 }

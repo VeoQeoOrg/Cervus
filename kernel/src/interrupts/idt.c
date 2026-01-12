@@ -1,86 +1,70 @@
 #include "../../include/interrupts/idt.h"
 #include "../../include/interrupts/isr.h"
 #include "../../include/interrupts/irq.h"
-#include "../../include/memory/paging.h"
 #include "../../include/io/serial.h"
 #include <stddef.h>
 #include <string.h>
 
-#define IDT_MAX_DESCRIPTORS 256
-#define GDT_CODE_SEGMENT 0x08
+extern void *interrupts_stub_table[];
 
-extern void *isr_stub_table[];
+__attribute__((
+    aligned(0x10))) static idt_entry_t idt_entries[IDT_MAX_DESCRIPTORS];
 
-static struct idt_entry idt[IDT_MAX_DESCRIPTORS];
-static struct idt_ptr idt_ptr;
+static idtr_t idtr;
 
-static interrupt_handler_t interrupt_handlers[IDT_MAX_DESCRIPTORS] = {0};
-
-void idt_set_entry(uint8_t index, void *base, uint16_t selector, uint8_t flags, uint8_t ist) {
-    idt[index].base_low   = (uint64_t)base & 0xFFFF;
-    idt[index].kernel_cs  = selector;
-    idt[index].ist        = ist;
-    idt[index].attributes = flags;
-    idt[index].base_mid   = ((uint64_t)base >> 16) & 0xFFFF;
-    idt[index].base_high  = ((uint64_t)base >> 32) & 0xFFFFFFFF;
-    idt[index].reserved   = 0;
+void idt_set_gate(uint8_t index, void *base, uint16_t selector, uint8_t flags, uint8_t ist) {
+    idt_entries[index].base_low   = (uint64_t)base & 0xFFFF;
+    idt_entries[index].kernel_cs  = selector;
+    idt_entries[index].ist        = ist;
+    idt_entries[index].attributes = flags;
+    idt_entries[index].base_mid   = ((uint64_t)base >> 16) & 0xFFFF;
+    idt_entries[index].base_high  = ((uint64_t)base >> 32) & 0xFFFFFFFF;
+    idt_entries[index].reserved   = 0;
 }
 
-void idt_init(void) {
-    serial_writestring(COM1, "[IDT] Initializing IDT with IST...\n");
-    
-    memset(idt, 0, sizeof(idt));
-    
-    idt_ptr.limit = sizeof(idt) - 1;
-    idt_ptr.base = (uint64_t)&idt;
-    
-    for (uint16_t vector = 0; vector < IDT_MAX_DESCRIPTORS; vector++) {
-        uint8_t ist = 0;
+void idt_gate_enable(int interrupt) {
+    FLAG_SET(idt_entries[interrupt].attributes, IDT_FLAG_PRESENT);
+}
 
-        switch (vector) {
-            case EXCEPTION_DOUBLE_FAULT:
-                ist = 1;
-                break;
-            case EXCEPTION_PAGE_FAULT:
-                ist = 2;
-                break;
+void idt_gate_disable(int interrupt) {
+    FLAG_UNSET(idt_entries[interrupt].attributes, IDT_FLAG_PRESENT);
+}
+
+bool setup_specific_vectors(uint64_t kernel_code_segment, uint64_t vector) {
+    if(vector == EXCEPTION_DOUBLE_FAULT) {
+        idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0x8E, 1);
+        return true;
+    }
+
+    if(vector == EXCEPTION_NMI) {
+        idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0x8E, 2);
+        return true;
+    }
+
+    if(vector == EXCEPTION_PAGE_FAULT) {
+        idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0x8E, 3);
+        return true;
+    }
+
+    return false;
+}
+
+void setup_interrupt_descriptor_table(uint64_t kernel_code_segment) {
+    serial_printf(COM1, "[IDT] Initializing IDT...\n");
+    
+    idtr.base  = (idt_entry_t *)&idt_entries[0];
+    idtr.limit = (uint16_t)sizeof(idt_entry_t) * IDT_MAX_DESCRIPTORS - 1;
+
+    for (uint16_t vector = 0; vector < IDT_MAX_DESCRIPTORS; vector++) {
+
+        if(setup_specific_vectors(kernel_code_segment, vector)) {
+            continue;
         }
 
-        idt_set_entry(vector, isr_stub_table[vector],
-                    GDT_CODE_SEGMENT, 0x8E, ist);
+        idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0x8E, 0);
     }
 
-    __asm__ volatile("lidt %0" : : "m"(idt_ptr)); 
+    __asm__ volatile("lidt %0" : : "m"(idtr));
     
-    isr_init();
-    register_interrupt_handler(14, page_fault_handler);
-    
-    serial_writestring(COM1, "[IDT] IDT initialized with IST support\n");
-}
-
-void register_interrupt_handler(uint16_t interrupt, interrupt_handler_t handler) {
-    if (interrupt < IDT_MAX_DESCRIPTORS) {
-        interrupt_handlers[interrupt] = handler;
-        serial_printf(COM1, "[IDT] Registered handler for interrupt %d at %p\n", 
-                     interrupt, handler);
-    }
-}
-
-interrupt_handler_t get_interrupt_handler(uint16_t interrupt) {
-    if (interrupt < IDT_MAX_DESCRIPTORS) {
-        return interrupt_handlers[interrupt];
-    }
-    return NULL;
-}
-
-void irq_handler(struct interrupt_frame* frame) {
-    interrupt_handler_t handler = get_interrupt_handler(frame->interrupt_number);
-    
-    if (handler != NULL) {
-        handler(frame);
-    } else {
-        serial_printf(COM1, "[IRQ] Unhandled IRQ %d\n", frame->interrupt_number - IRQ_BASE);
-    }
-    
-    irq_send_eoi(frame->interrupt_number - IRQ_BASE);
+    serial_printf(COM1, "[IDT] IDT initialized successfully\n");
 }

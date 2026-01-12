@@ -3,21 +3,26 @@
 
 #include <stdint.h>
 
-struct gdt_entry {
-    uint16_t limit_low;
-    uint16_t base_low;
-    uint8_t  base_middle;
-    uint8_t  access;
-    uint8_t  granularity;
-    uint8_t  base_high;
-} __attribute__((packed));
+#define GDT_CODE_SEGMENT      0x08
+#define GDT_DATA_SEGMENT      0x10
+#define GDT_USER_CODE_SEGMENT 0x18
+#define GDT_USER_DATA_SEGMENT 0x20
+#define GDT_LIMIT_LOW(limit)  (limit & 0xFFFF)
+#define GDT_BASE_LOW(base)    (base & 0xFFFF)
+#define GDT_BASE_MIDDLE(base) ((base >> 16) & 0xFF)
+#define GDT_FLAGS_HI_LIMIT(limit, flags)                                       \
+    (((limit >> 16) & 0xF) | ((flags << 4) & 0xF0))
+#define GDT_BASE_HIGH(base) ((base >> 24) & 0xFF)
 
-struct gdt_ptr {
-    uint16_t limit;
-    uint64_t base;
-} __attribute__((packed));
+#define GDT_ENTRY(base, limit, access, flags)                                  \
+    {GDT_LIMIT_LOW(limit),                                                     \
+     GDT_BASE_LOW(base),                                                       \
+     GDT_BASE_MIDDLE(base),                                                    \
+     access,                                                                   \
+     GDT_FLAGS_HI_LIMIT(limit, flags),                                         \
+     GDT_BASE_HIGH(base)}
 
-struct tss {
+typedef struct {
     uint32_t reserved0;
     uint64_t rsp0;
     uint64_t rsp1;
@@ -25,27 +30,34 @@ struct tss {
     uint64_t reserved1;
     uint64_t ist[7];
     uint64_t reserved2;
-    uint16_t reserved3;
-    uint16_t iomap_base;
-} __attribute__((packed));
+    uint32_t iobase;
+}__attribute__((packed)) tss_t;
 
-struct tss_descriptor {
+typedef struct {
     uint16_t limit_low;
     uint16_t base_low;
-    uint8_t  base_middle;
-    uint8_t  access;
-    uint8_t  granularity;
-    uint8_t  base_high;
-    uint32_t base_upper;
-    uint32_t reserved;
-} __attribute__((packed));
+    uint8_t base_middle;
+    uint8_t access;
+    uint8_t limit_high_and_flags;
+    uint8_t base_high;
+}__attribute__((packed)) gdt_entry_t;
 
-#define GDT_NULL        0x00
-#define GDT_KERNEL_CODE 0x08
-#define GDT_KERNEL_DATA 0x10
-#define GDT_TSS         0x28
+typedef struct {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t base_middle;
+    uint8_t access;
+    uint8_t limit_high_and_flags;
+    uint8_t base_high;
+    uint32_t base_higher;
+    uint32_t zero;
+}__attribute__((packed)) tss_entry_t;
 
-void gdt_init(void);
-void tss_set_kernel_stack(uint64_t stack_top);
+typedef struct {
+    uint16_t size;
+    gdt_entry_t *pointer;
+}__attribute__((packed)) gdt_pointer_t;
 
-#endif
+void gdt_init();
+
+#endif 

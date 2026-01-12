@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "vmm.h"
-#include "../interrupts/isr.h"
+#include "../include/interrupts/interrupts.h"
 
 #define PAGING_PRESENT    VMM_PRESENT
 #define PAGING_WRITE      VMM_WRITE
@@ -30,39 +30,15 @@ typedef struct {
 } paging_region_t;
 
 void paging_init(void);
-
-bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, 
-                     uintptr_t phys_start, size_t page_count, uint64_t flags);
-
-bool paging_unmap_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, 
-                       size_t page_count);
-
-bool paging_change_flags(vmm_pagemap_t* pagemap, uintptr_t virt_start,
-                        size_t page_count, uint64_t new_flags);
-
-paging_region_t* paging_create_region(vmm_pagemap_t* pagemap,
-                                     uintptr_t virt_start, size_t size,
-                                     uint64_t flags);
-
+bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t phys_start, size_t page_count, uint64_t flags);
+bool paging_unmap_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, size_t page_count);
+bool paging_change_flags(vmm_pagemap_t* pagemap, uintptr_t virt_start, size_t page_count, uint64_t new_flags);
+paging_region_t* paging_create_region(vmm_pagemap_t* pagemap, uintptr_t virt_start, size_t size, uint64_t flags);
 bool paging_destroy_region(vmm_pagemap_t* pagemap, paging_region_t* region);
-
-void* paging_alloc_pages(vmm_pagemap_t* pagemap, size_t page_count,
-                        uint64_t flags, uintptr_t preferred_virt);
-
-void paging_free_pages(vmm_pagemap_t* pagemap, void* virt_addr,
-                      size_t page_count);
-
-bool paging_reserve_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
-                         uintptr_t virt_end);
-
-bool paging_is_range_free(vmm_pagemap_t* pagemap, uintptr_t virt_start,
-                         uintptr_t virt_end);
-
+void* paging_alloc_pages(vmm_pagemap_t* pagemap, size_t page_count, uint64_t flags, uintptr_t preferred_virt);
+void paging_free_pages(vmm_pagemap_t* pagemap, void* virt_addr, size_t page_count);
+bool paging_reserve_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t virt_end);
+bool paging_is_range_free(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t virt_end);
 void paging_print_stats(vmm_pagemap_t* pagemap);
-void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
-                      uintptr_t virt_end);
-
-void page_fault_handler(struct interrupt_frame* frame);
-void print_page_fault_info(uint64_t error_code, uint64_t fault_address);
-
+void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t virt_end);
 #endif

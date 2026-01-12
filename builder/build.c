@@ -150,7 +150,7 @@ bool build_limine() {
     print_color(COLOR_GREEN, "Building Limine...");
     if (file_exists("limine")) rm_rf("limine");
     
-    if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.5.0-binary --depth=1") != 0) return false;
+    if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.6.2-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
     
     return true;
@@ -168,9 +168,76 @@ void ensure_linker_script() {
     const char *lds_path = "kernel/linker-scripts/x86_64.lds";
     if (file_exists(lds_path)) return;
 
+    const char *linker_script = R"(
+OUTPUT_FORMAT(elf64-x86-64)
+
+ENTRY(kernel_main)
+
+PHDRS
+{
+    limine_requests PT_LOAD;
+    text PT_LOAD;
+    rodata PT_LOAD;
+    data PT_LOAD;
+}
+
+SECTIONS
+{
+    . = 0xffffffff80000000;
+
+    .limine_requests : {
+        KEEP(*(.limine_requests_start))
+        KEEP(*(.limine_requests))
+        KEEP(*(.limine_requests_end))
+    } :limine_requests
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .text : {
+        __start_isr_handlers = .;
+        KEEP(*(.isr_handlers))
+        __stop_isr_handlers = .;
+
+        __start_irq_handlers = .;
+        KEEP(*(.irq_handlers))
+        __stop_irq_handlers = .;
+
+        *(.text .text.*)
+    } :text
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .rodata : {
+        *(.rodata .rodata.*)
+    } :rodata
+
+    .note.gnu.build-id : {
+        *(.note.gnu.build-id)
+    } :rodata
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .data : {
+        *(.data .data.*)
+    } :data
+
+    .bss : {
+        *(.bss .bss.*)
+        *(COMMON)
+    } :data
+
+    /DISCARD/ : {
+        *(.eh_frame*)
+        *(.note .note.*)
+    }
+}
+)";
+
     FILE *f = fopen(lds_path, "w");
     if (!f) return;
-    fprintf(f, "OUTPUT_FORMAT(elf64-x86-64)\nENTRY(kernel_main)\nPHDRS\n{\n    limine_requests PT_LOAD;\n    text PT_LOAD;\n    rodata PT_LOAD;\n    data PT_LOAD;\n}\nSECTIONS\n{\n    . = 0xffffffff80000000;\n    .limine_requests : {\n        KEEP(*(.limine_requests_start))\n        KEEP(*(.limine_requests))\n        KEEP(*(.limine_requests_end))\n    } :limine_requests\n    . = ALIGN(CONSTANT(MAXPAGESIZE));\n    .text : { *(.text .text.*) } :text\n    . = ALIGN(CONSTANT(MAXPAGESIZE));\n    .rodata : { *(.rodata .rodata.*) } :rodata\n    .note.gnu.build-id : { *(.note.gnu.build-id) } :rodata\n    . = ALIGN(CONSTANT(MAXPAGESIZE));\n    .data : { *(.data .data.*) } :data\n    .bss : { *(.bss .bss.*) *(COMMON) } :data\n    /DISCARD/ : { *(.eh_frame*) *(.note .note.*) }\n}\n");
+    
+    fprintf(f, "%s", linker_script);
+    
     fclose(f);
     print_color(COLOR_GREEN, "x86_64.lds created");
 }

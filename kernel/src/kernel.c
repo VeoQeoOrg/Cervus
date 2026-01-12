@@ -8,8 +8,7 @@
 #include "../include/graphics/fb/fb.h"
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
-#include "../include/interrupts/idt.h"
-#include "../include/interrupts/irq.h"
+#include "../include/interrupts/interrupts.h"
 #include "../include/sse/fpu.h"
 #include "../include/sse/sse.h"
 #include "../include/memory/pmm.h"
@@ -70,9 +69,7 @@ void kernel_main(void) {
     }
     
     gdt_init();
-    idt_init();
-    irq_init();
-    asm volatile ("sti");
+    init_interrupt_system();
     serial_writestring(COM1, "GDT&IDT [OK]\n");
 
     //asm volatile("int $3");
@@ -112,7 +109,7 @@ void kernel_main(void) {
 
     clear_screen();
     
-    printf("=== CERVUS OS v0.0.1 ===\n");
+    printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
     
     printf("Framebuffer: %dx%d, %d bpp\n", 
@@ -133,6 +130,7 @@ void kernel_main(void) {
     //acpi_shutdown(); //works on real hardware & VM
     volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
     uint64_t value = *ptr;  // Page Fault
+    (void)value;
     while (1) {
         hcf();
     }

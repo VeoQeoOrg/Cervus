@@ -1,7 +1,7 @@
 section .text
-extern isr_handler
+extern base_trap
 
-isr_common:
+common_stub:
     push rax
     push rbx
     push rcx
@@ -29,7 +29,7 @@ isr_common:
     mov ss, ax
 
     mov rdi, rsp
-    call isr_handler
+    call base_trap
 
     pop rax
     mov ds, ax
@@ -57,39 +57,39 @@ isr_common:
     add rsp, 16
     iretq
 
-%macro ISR_ERR_STUB 1
-isr_stub_%1:
+%macro INTERRUPT_ERR_STUB 1
+interrupt_stub_%1:
     push qword %1
-    jmp isr_common
+    jmp common_stub
 %endmacro
 
-%macro ISR_NO_ERR_STUB 1
-isr_stub_%1:
+%macro INTERRUPT_NO_ERR_STUB 1
+interrupt_stub_%1:
     push qword 0
     push qword %1
-    jmp isr_common
+    jmp common_stub
 %endmacro
 
 %assign i 0
 %rep 32
     %if i = 8 || i = 10 || i = 11 || i = 12 || i = 13 || i = 14 || i = 17 || i = 21 || i = 29 || i = 30
-        ISR_ERR_STUB i
+        INTERRUPT_ERR_STUB i
     %else
-        ISR_NO_ERR_STUB i
+        INTERRUPT_NO_ERR_STUB i
     %endif
     %assign i i+1
 %endrep
 
 %rep 224
-    ISR_NO_ERR_STUB i
+    INTERRUPT_NO_ERR_STUB i
     %assign i i+1
 %endrep
 
 section .data
-global isr_stub_table
-isr_stub_table:
+global interrupts_stub_table
+interrupts_stub_table:
 %assign i 0
 %rep 256
-    dq isr_stub_%+i
+    dq interrupt_stub_%+i
     %assign i i+1
 %endrep
