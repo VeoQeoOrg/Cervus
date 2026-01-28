@@ -40,7 +40,8 @@ typedef struct {
     uint16_t limit;
     idt_entry_t *base;
 }__attribute__((packed)) idtr_t;
-
+extern idtr_t idtr;
 void setup_interrupt_descriptor_table(uint64_t kernel_code_segment);
+void idt_load(void);
 
 #endif

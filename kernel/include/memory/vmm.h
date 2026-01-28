@@ -16,6 +16,8 @@ typedef struct {
     vmm_pte_t* pml4;
 } vmm_pagemap_t;
 
+extern uintptr_t kernel_pml4_phys;
+
 void vmm_init(void);
 vmm_pagemap_t* vmm_create_pagemap(void);
 void vmm_switch_pagemap(vmm_pagemap_t* map);

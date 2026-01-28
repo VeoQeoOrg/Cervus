@@ -10,7 +10,7 @@ extern void *interrupts_stub_table[];
 __attribute__((
     aligned(0x10))) static idt_entry_t idt_entries[IDT_MAX_DESCRIPTORS];
 
-static idtr_t idtr;
+idtr_t idtr;
 
 void idt_set_gate(uint8_t index, void *base, uint16_t selector, uint8_t flags, uint8_t ist) {
     idt_entries[index].base_low   = (uint64_t)base & 0xFFFF;
@@ -49,9 +49,13 @@ bool setup_specific_vectors(uint64_t kernel_code_segment, uint64_t vector) {
     return false;
 }
 
+void idt_load(void) {
+    __asm__ volatile("lidt %0" : : "m"(idtr));
+}
+
 void setup_interrupt_descriptor_table(uint64_t kernel_code_segment) {
     serial_printf(COM1, "[IDT] Initializing IDT...\n");
-    
+
     idtr.base  = (idt_entry_t *)&idt_entries[0];
     idtr.limit = (uint16_t)sizeof(idt_entry_t) * IDT_MAX_DESCRIPTORS - 1;
 
@@ -64,7 +68,7 @@ void setup_interrupt_descriptor_table(uint64_t kernel_code_segment) {
         idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0x8E, 0);
     }
 
-    __asm__ volatile("lidt %0" : : "m"(idtr));
-    
+    idt_load();
+
     serial_printf(COM1, "[IDT] IDT initialized successfully\n");
 }

@@ -9,6 +9,7 @@
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
 #include "../include/interrupts/interrupts.h"
+#include "../include/interrupts/idt.h"
 #include "../include/sse/fpu.h"
 #include "../include/sse/sse.h"
 #include "../include/memory/pmm.h"
@@ -18,6 +19,7 @@
 #include "../include/apic/apic.h"
 #include "../include/io/ports.h"
 #include "../include/drivers/timer.h"
+#include "../include/smp/smp.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -32,6 +34,13 @@ __attribute__((used, section(".limine_requests")))
 static volatile struct limine_memmap_request memmap_request = {
     .id = LIMINE_MEMMAP_REQUEST_ID,
     .revision = 0
+};
+
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_mp_request mp_request = {
+    .id = LIMINE_MP_REQUEST_ID,
+    .revision = 0,
+    .flags = 0   // или LIMINE_MP_REQUEST_X86_64_X2APIC если хочешь
 };
 
 __attribute__((used, section(".limine_requests")))
@@ -110,6 +119,7 @@ void kernel_main(void) {
 
     timer_init();
     clear_screen();
+    smp_init(mp_request.response);
 
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
@@ -126,13 +136,17 @@ void kernel_main(void) {
     pmm_print_stats();
 
     vmm_test();
-    timer_sleep_ms(2000);
-    printf("2 seconds\n");
-    timer_sleep_us(10000000);
-    printf("10 seconds\n");
+    //timer_sleep_ms(2000);
+    //printf("2 seconds\n");
+    //timer_sleep_us(10000000);
+    //printf("10 seconds\n");
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
     //acpi_shutdown(); //works on real hardware & VM
+    smp_print_info_fb();
+    // Или просто краткая информация
+    printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
+
     while (1) {
         hcf();
     }

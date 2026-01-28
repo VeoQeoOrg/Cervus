@@ -16,7 +16,7 @@
 
 #define IMAGE_NAME "Cervus"
 #define VERSION "v0.0.1"
-#define QEMUFLAGS "-m 12G"
+#define QEMUFLAGS "-m 12G -smp 8"
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
@@ -90,10 +90,10 @@ int cmd_run(bool capture, const char *fmt, ...) {
     if (capture) {
         print_color(COLOR_BLUE, "Running: %s", cmd);
     }
-    
+
     int ret = system(cmd);
     if (ret != 0) {
-        return WEXITSTATUS(ret); 
+        return WEXITSTATUS(ret);
     }
     return 0;
 }
@@ -128,11 +128,11 @@ bool setup_dependencies() {
     for (int i = 0; DEPENDENCIES[i].name != NULL; i++) {
         char path[PATH_MAX];
         snprintf(path, sizeof(path), "limine-tools/%s", DEPENDENCIES[i].name);
-        
+
         if (!file_exists(path)) {
             print_color(COLOR_YELLOW, "Missing %s, setting up...", DEPENDENCIES[i].name);
             if (cmd_run(true, "git clone %s %s", DEPENDENCIES[i].url, path) != 0) return false;
-            
+
             char git_cmd[PATH_MAX + 128];
             snprintf(git_cmd, sizeof(git_cmd), "git -C %s -c advice.detachedHead=false checkout %s", path, DEPENDENCIES[i].commit);
             if (system(git_cmd) != 0) return false;
@@ -146,13 +146,13 @@ bool build_limine() {
         print_color(COLOR_GREEN, "Limine already built");
         return true;
     }
-    
+
     print_color(COLOR_GREEN, "Building Limine...");
     if (file_exists("limine")) rm_rf("limine");
-    
+
     if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.6.2-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
-    
+
     return true;
 }
 
@@ -235,9 +235,9 @@ SECTIONS
 
     FILE *f = fopen(lds_path, "w");
     if (!f) return;
-    
+
     fprintf(f, "%s", linker_script);
-    
+
     fclose(f);
     print_color(COLOR_GREEN, "x86_64.lds created");
 }
@@ -263,14 +263,14 @@ void find_src_files(const char *root_dir, FileList *list) {
 
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_type == DT_DIR) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 || 
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0 ||
                 strcmp(entry->d_name, ".git") == 0) continue;
             char path[PATH_MAX];
             snprintf(path, sizeof(path), "%s/%s", root_dir, entry->d_name);
             find_src_files(path, list);
         } else {
             const char *ext = strrchr(entry->d_name, '.');
-            if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".asm") == 0 || 
+            if (ext && (strcmp(ext, ".c") == 0 || strcmp(ext, ".asm") == 0 ||
                         strcmp(ext, ".S") == 0 || strcmp(ext, ".psf") == 0)) {
                 char path[PATH_MAX];
                 snprintf(path, sizeof(path), "%s/%s", root_dir, entry->d_name);
@@ -285,7 +285,7 @@ bool compile_kernel() {
     print_color(COLOR_GREEN, "Compiling kernel...");
     ensure_linker_script();
     if (!setup_dependencies()) return false;
-    
+
     ensure_dir("bin");
     ensure_dir("obj/kernel");
     ensure_dir("obj/libc");
@@ -295,12 +295,12 @@ bool compile_kernel() {
                               "-ffunction-sections -fdata-sections "
                               "-m64 -march=x86-64 -mabi=sysv -mcmodel=kernel "
                               "-mno-red-zone -mgeneral-regs-only";
-    
+
     const char *core_cflags = "-mno-sse -mno-sse2 -mno-mmx -mno-3dnow";
     const char *sse_cflags_suffix = "-msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow";
 
     char cppflags[2048];
-    snprintf(cppflags, sizeof(cppflags), 
+    snprintf(cppflags, sizeof(cppflags),
              "-I kernel/src -I libc/include -I limine-tools/limine-protocol/include -isystem limine-tools/freestnd-c-hdrs/include -MMD -MP");
 
     FileList sources = {0};
@@ -312,7 +312,7 @@ bool compile_kernel() {
 
     for (int i = 0; i < sources.count; i++) {
         char *src = sources.paths[i];
-        
+
         char category[16] = "other";
         if (strncmp(src, "kernel/", 7) == 0) strcpy(category, "kernel");
         else if (strncmp(src, "libc/", 5) == 0) strcpy(category, "libc");
@@ -321,7 +321,7 @@ bool compile_kernel() {
         char flat_name[PATH_MAX];
         strcpy(flat_name, src);
         for(int j=0; flat_name[j]; j++) if(flat_name[j] == '/' || flat_name[j] == '.') flat_name[j] = '_';
-        
+
         snprintf(obj_path, sizeof(obj_path), "obj/%s/%s.o", category, flat_name);
         file_list_add(&objects, obj_path);
 
@@ -337,7 +337,7 @@ bool compile_kernel() {
             remove(temp_path);
             char stem[256]; strcpy(stem, strrchr(src, '/') + 1); *strrchr(stem, '.') = '\0';
             char redefine_args[1024] = "";
-            snprintf(redefine_args, sizeof(redefine_args), 
+            snprintf(redefine_args, sizeof(redefine_args),
                 "--redefine-sym _binary_temp_%s_psf_start=_binary_%s_psf_start "
                 "--redefine-sym _binary_temp_%s_psf_end=_binary_%s_psf_end "
                 "--redefine-sym _binary_temp_%s_psf_size=_binary_%s_psf_size",
@@ -393,16 +393,16 @@ bool create_iso() {
     char iso_name[PATH_MAX]; snprintf(iso_name, sizeof(iso_name), "demo_iso/%s.%s.%s.iso", IMAGE_NAME, VERSION, timestamp);
 
     char xorriso_cmd[PATH_MAX + 1024];
-    snprintf(xorriso_cmd, sizeof(xorriso_cmd), 
+    snprintf(xorriso_cmd, sizeof(xorriso_cmd),
         "xorriso -as mkisofs -R -r -J -b boot/limine/limine-bios-cd.bin "
         "-no-emul-boot -boot-load-size 4 -boot-info-table -hfsplus "
         "-apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin "
         "-efi-boot-part --efi-boot-image --protective-msdos-label "
         "iso_root -o %s", iso_name);
-    
+
     if (cmd_run(true, xorriso_cmd) != 0) return false;
     cmd_run(true, "./limine/limine bios-install %s", iso_name);
-    
+
     char link_name[PATH_MAX]; snprintf(link_name, sizeof(link_name), "demo_iso/%s.latest.iso", IMAGE_NAME);
     unlink(link_name); symlink(strrchr(iso_name, '/') + 1, link_name);
     rm_rf("iso_root");
@@ -498,7 +498,7 @@ bool is_unreadable_file(const char *filename) {
 
     const char *binary_exts[] = {
         ".psf", ".jpg", ".png", ".jpeg", ".iso",
-        ".hdd", ".img", ".bin", ".elf", ".o", 
+        ".hdd", ".img", ".bin", ".elf", ".o",
         ".txt", ".md", ".gitignore", ".json", NULL
     };
 
@@ -507,7 +507,7 @@ bool is_unreadable_file(const char *filename) {
             return true;
         }
     }
-    
+
     return false;
 }
 
@@ -517,20 +517,20 @@ void generate_tree_recursive(const char *base_dir, FILE *out, int level) {
     if (n < 0) return;
 
     const char *skip_dirs[] = {"wallpapers", "demo_iso", ".vscode", "builder", NULL};
-    
+
     for (int i = 0; i < n; i++) {
         const char *name = namelist[i]->d_name;
 
-        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0 || 
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
             strcmp(name, ".git") == 0 || strcmp(name, "obj") == 0 ||
             strcmp(name, "bin") == 0 || strcmp(name, "limine") == 0) {
-            free(namelist[i]); 
+            free(namelist[i]);
             continue;
         }
 
-        char path[PATH_MAX]; 
+        char path[PATH_MAX];
         snprintf(path, sizeof(path), "%s/%s", base_dir, name);
-        struct stat st; 
+        struct stat st;
         stat(path, &st);
 
         if (S_ISDIR(st.st_mode)) {
@@ -546,14 +546,14 @@ void generate_tree_recursive(const char *base_dir, FILE *out, int level) {
                 continue;
             }
         }
-        
+
         if (!S_ISDIR(st.st_mode) && is_unreadable_file(name)) {
             free(namelist[i]);
             continue;
         }
 
         for (int j = 0; j < level; j++) fprintf(out, "│   ");
-        
+
         if (S_ISDIR(st.st_mode)) {
             fprintf(out, "├── %s/\n", name);
             generate_tree_recursive(path, out, level + 1);
@@ -621,7 +621,7 @@ int main(int argc, char **argv) {
         ensure_dir("demo_iso");
         return 0;
     }
-    
+
     if (strcmp(command, "gitclean") == 0) {
         for (int i = 0; DIRS_TO_CLEAN[i]; i++) rm_rf(DIRS_TO_CLEAN[i]);
         for (int i = 0; FILES_TO_CLEAN[i]; i++) if(file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);

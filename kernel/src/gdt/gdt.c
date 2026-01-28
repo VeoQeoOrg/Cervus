@@ -63,3 +63,8 @@ void gdt_init() {
 
     serial_printf(COM1, "GDT installed successfully\n");
 }
+
+void gdt_load(void) {
+    _load_gdt(&gdtr);
+    _reload_segments(GDT_CODE_SEGMENT, GDT_DATA_SEGMENT);
+}

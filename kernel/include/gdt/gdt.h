@@ -57,7 +57,9 @@ typedef struct {
     uint16_t size;
     gdt_entry_t *pointer;
 }__attribute__((packed)) gdt_pointer_t;
+extern gdt_pointer_t gdtr;
 
 void gdt_init();
+void gdt_load(void);
 
-#endif 
+#endif

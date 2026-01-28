@@ -4,11 +4,10 @@
 #include <string.h>
 #include <stdio.h>
 
-#define KERNEL_TEST_BASE 0xFFFF800000100000ULL 
+#define KERNEL_TEST_BASE 0xFFFF800000100000ULL
 #define MASK 0x1FF
 
 static vmm_pagemap_t kernel_pagemap;
-
 static inline void invlpg(void* addr) {
     asm volatile ("invlpg (%0)" :: "r"(addr) : "memory");
 }
@@ -125,12 +124,14 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
     *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));
     return true;
 }
-
+uintptr_t kernel_pml4_phys;
 void vmm_init(void) {
     uintptr_t cr3;
     asm volatile ("mov %%cr3, %0" : "=r"(cr3));
     kernel_pagemap.pml4 = (vmm_pte_t*)pmm_phys_to_virt(cr3);
+    kernel_pml4_phys = cr3;
     serial_printf(COM1, "VMM: kernel pagemap initialized\n");
+    serial_printf(COM1, "VMM: kernel PML4 phys = 0x%llx\n", kernel_pml4_phys);
 }
 
 vmm_pagemap_t* vmm_get_kernel_pagemap(void) {
@@ -180,13 +181,13 @@ void vmm_test(void) {
     serial_printf(port, "--- VMM TEST DONE ---\n");
 
     serial_printf(port, "\n--- VMM TRANSLATION TEST ---\n");
-    
+
     void* phys_page = pmm_alloc_zero(1);
     uintptr_t paddr = pmm_virt_to_phys(phys_page);
     uintptr_t vaddr = KERNEL_TEST_BASE + 0x3000;
-    
+
     vmm_map_page(&kernel_pagemap, vaddr, paddr, VMM_WRITE);
-    
+
     uintptr_t translated_phys;
     if (vmm_virt_to_phys(&kernel_pagemap, vaddr, &translated_phys)) {
         serial_printf(port, "Virt 0x%llx -> Phys 0x%llx\n", vaddr, translated_phys);
@@ -195,38 +196,38 @@ void vmm_test(void) {
     } else {
         serial_printf(port, "Translation failed!\n");
     }
-    
+
     uint64_t flags;
     if (vmm_get_page_flags(&kernel_pagemap, vaddr, &flags)) {
         serial_printf(port, "Page flags: 0x%llx\n", flags);
         serial_printf(port, "Present: %s\n", (flags & VMM_PRESENT) ? "YES" : "NO");
         serial_printf(port, "Writable: %s\n", (flags & VMM_WRITE) ? "YES" : "NO");
     }
-    
+
     uint64_t hhdm = pmm_get_hhdm_offset();
     serial_printf(port, "HHDM offset: 0x%llx\n", hhdm);
-    
+
     serial_printf(port, "\n--- Memory statistics after tests ---\n");
     size_t free_before = pmm_get_free_pages();
-    
+
     serial_printf(port, "\n--- Memory free test ---\n");
     void* test_alloc = pmm_alloc_aligned(2, 4096);
     if (test_alloc) {
         size_t free_after_alloc = pmm_get_free_pages();
-        serial_printf(port, "Allocated 2 pages. Free pages: %zu -> %zu\n", 
+        serial_printf(port, "Allocated 2 pages. Free pages: %zu -> %zu\n",
                      free_before, free_after_alloc);
-        
+
         pmm_free(test_alloc, 2);
         size_t free_after_free = pmm_get_free_pages();
         serial_printf(port, "Freed 2 pages. Free pages: %zu -> %zu\n",
                      free_after_alloc, free_after_free);
-        
+
         if (free_after_free == free_before) {
             serial_printf(port, "Memory free test PASSED\n");
         } else {
             serial_printf(port, "Memory free test FAILED (possible leak)\n");
         }
     }
-    
+
     serial_printf(port, "--- VMM TRANSLATION TEST DONE ---\n");
 }
