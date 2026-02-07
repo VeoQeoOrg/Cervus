@@ -1,13 +1,21 @@
 #include "../../include/smp/smp.h"
+#include "../../include/smp/percpu.h"
 #include "../../include/acpi/acpi.h"
 #include "../../include/apic/apic.h"
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/gdt/gdt.h"
 #include "../../include/interrupts/idt.h"
+#include "../../include/sse/fpu.h"
+#include "../../include/sse/sse.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+
+extern tss_t *tss[MAX_CPUS];  // Теперь pointer'ы, аллоцируем динамически
+extern struct {
+    gdt_entry_t gdt_entries[5 + (MAX_CPUS * 2)];
+} __attribute__((packed)) gdt;
 
 static smp_info_t smp_info = {0};
 static volatile uint32_t ap_online_count = 0;
@@ -15,34 +23,45 @@ static volatile uint32_t ap_online_count = 0;
 __attribute__((used))
 void ap_entry_init(struct limine_mp_info* cpu_info) {
     (void)cpu_info;
-
     asm volatile ("cli");
-    serial_printf(COM1, "GDT Loading\n");
 
+    // Маскируйте spurious interrupts в LAPIC рано
+    lapic_write(0xF0, 0);
+
+    serial_printf(COM1, "GDT Loading\n");
     gdt_load();
     serial_printf(COM1, "GDT Loaded\n");
-    serial_printf(COM1, "IDT Loading\n");
 
+    // IDT перед TSS
+    serial_printf(COM1, "IDT Loading\n");
     idt_load();
     serial_printf(COM1, "IDT Loaded\n");
-    lapic_enable();
 
+    serial_printf(COM1, "TSS Loading\n");
     uint32_t lapic_id = lapic_get_id();
     smp_info_t* info = smp_get_info();
-
+    uint32_t my_index = 0;
     for (uint32_t i = 0; i < info->cpu_count; i++) {
         if (info->cpus[i].lapic_id == lapic_id && !info->cpus[i].is_bsp) {
+            my_index = i;
             info->cpus[i].state = CPU_ONLINE;
             break;
         }
     }
+    load_tss(info->cpus[my_index].tss_selector);
+    serial_printf(COM1, "TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
+    fpu_init();
+    sse_init();
+    enable_fsgsbase();
+    lapic_enable();
+    cpu_info_t* cpu = smp_get_current_cpu();
+    percpu_t* region = percpu_regions[cpu->cpu_index];
+    set_percpu_base(region);
+    serial_printf(COM1, "PerCPU base set for AP %u: 0x%llx\n", lapic_get_id(), (uint64_t)region);
 
     __sync_fetch_and_add(&ap_online_count, 1);
-
     lapic_eoi();
-
     asm volatile ("sti");
-
     serial_printf(COM1, "SMP: AP (LAPIC ID %u) initialized and online!\n", lapic_id);
 
     while (1) {
@@ -68,19 +87,16 @@ void ap_entry_point(struct limine_mp_info* cpu_info) {
     );
 }
 
-static uint64_t smp_allocate_stack(uint32_t cpu_index) {
-    #define AP_STACK_SIZE 16384
-
-    void* stack_pages = pmm_alloc(AP_STACK_SIZE / PAGE_SIZE);
+static uint64_t smp_allocate_stack(uint32_t cpu_index, size_t stack_size) {
+    size_t pages = (stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    void* stack_pages = pmm_alloc(pages);
     if (!stack_pages) {
         serial_printf(COM1, "SMP: WARNING - Failed to allocate stack for CPU %u\n", cpu_index);
         return 0;
     }
-
-    uint64_t stack_virt = (uint64_t)stack_pages + AP_STACK_SIZE;
-    serial_printf(COM1, "SMP: Allocated stack for CPU %u at 0x%llx\n",
-                  cpu_index, stack_virt);
-
+    uint64_t stack_virt = (uint64_t)stack_pages + stack_size;
+    serial_printf(COM1, "SMP: Allocated stack for CPU %u at 0x%llx (size %zu)\n",
+                  cpu_index, stack_virt, stack_size);
     return stack_virt;
 }
 
@@ -103,7 +119,7 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
             continue;
         }
 
-        uint64_t stack_top = smp_allocate_stack(i);
+        uint64_t stack_top = smp_allocate_stack(i, AP_STACK_SIZE);
         if (stack_top == 0) {
             serial_printf(COM1, "SMP: Skipping CPU %u (stack alloc failed)\n", i);
             info->cpus[i].state = CPU_FAULTED;
@@ -175,6 +191,7 @@ static void smp_init_limine(struct limine_mp_response* response) {
         smp_info.cpus[i].acpi_id = 0;
         smp_info.cpus[i].state = CPU_UNINITIALIZED;
         smp_info.cpus[i].is_bsp = (cpu->lapic_id == response->bsp_lapic_id);
+        smp_info.cpus[i].cpu_index = i;
 
         if (smp_info.cpus[i].is_bsp) {
             smp_info.bsp_lapic_id = cpu->lapic_id;
@@ -194,6 +211,56 @@ void smp_init(struct limine_mp_response* mp_response) {
 
     smp_init_limine(mp_response);
 
+    uint32_t bsp_index = 0;
+    for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
+        if (smp_info.cpus[i].is_bsp) {
+            bsp_index = i;
+            break;
+        }
+    }
+
+    for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
+        // Аллоцируйте TSS динамически (1 page, >sizeof(tss_t))
+        tss[i] = (tss_t *)pmm_alloc(1);
+        if (!tss[i]) {
+            serial_printf(COM1, "SMP: FAILED to allocate TSS for CPU %u\n", i);
+            continue;
+        }
+        memset(tss[i], 0, sizeof(tss_t));
+
+        tss[i]->rsp0 = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[0] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[1] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[2] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+
+        tss[i]->iobase = sizeof(tss_t);  // Отключите IO-bitmap
+
+        // Debug print адреса TSS
+        serial_printf(COM1, "TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
+
+        tss_entry_t *entry = (tss_entry_t *)&gdt.gdt_entries[5 + (i * 2)];
+        entry->limit_low = sizeof(tss_t) - 1;
+        uint64_t addr = (uint64_t)tss[i];
+        entry->base_low = addr & 0xffff;
+        entry->base_middle = (addr >> 16) & 0xff;
+        entry->access = 0x89;
+        entry->limit_high_and_flags = 0;
+        entry->base_high = (addr >> 24) & 0xff;
+        entry->base_higher = addr >> 32;
+        entry->zero = 0;
+
+        smp_info.cpus[i].tss_selector = TSS_SELECTOR_BASE + (i * 0x10);  // Изменено на 0x10
+    }
+
+    gdtr.size = (5 + (smp_info.cpu_count * 2)) * sizeof(gdt_entry_t) - 1;
+
+    serial_printf(COM1, "Reloading extended GDT on BSP...\n");
+    gdt_load();
+
+    load_tss(smp_info.cpus[bsp_index].tss_selector);
+    serial_printf(COM1, "BSP TSS loaded (selector 0x%x)\n", smp_info.cpus[bsp_index].tss_selector);
+
     uint32_t current_lapic_id = lapic_get_id();
     serial_printf(COM1, "SMP: Current LAPIC ID: %u\n", current_lapic_id);
 
@@ -207,7 +274,9 @@ void smp_init(struct limine_mp_response* mp_response) {
     }
 
     smp_print_info();
-
+    init_percpu_regions();
+    set_percpu_base(percpu_regions[bsp_index]);
+    serial_printf(COM1, "PerCPU base set for BSP %u: 0x%llx\n", smp_info.bsp_lapic_id, (uint64_t)percpu_regions[bsp_index]);
     smp_boot_aps(mp_response);
 
     serial_writestring(COM1, "=== SMP Initialization Complete ===\n\n");

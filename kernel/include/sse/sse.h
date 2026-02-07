@@ -26,5 +26,6 @@ bool mmx_supported(void);
 void mmx_enter(void);
 void mmx_exit(void);
 void print_simd_cpuid(void);
+void enable_fsgsbase(void);
 
 #endif // SSE_H

@@ -22,6 +22,9 @@
      GDT_FLAGS_HI_LIMIT(limit, flags),                                         \
      GDT_BASE_HIGH(base)}
 
+#define TSS_SELECTOR_BASE 0x28
+#define KERNEL_STACK_SIZE (4096 * 8)
+
 typedef struct {
     uint32_t reserved0;
     uint64_t rsp0;
@@ -58,7 +61,7 @@ typedef struct {
     gdt_entry_t *pointer;
 }__attribute__((packed)) gdt_pointer_t;
 extern gdt_pointer_t gdtr;
-
+extern void load_tss(uint16_t sel);
 void gdt_init();
 void gdt_load(void);
 

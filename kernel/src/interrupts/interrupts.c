@@ -26,7 +26,7 @@ void base_trap(void *ctx) {
 
     if(regs->interrupt < ISR_EXCEPTION_COUNT) {
         return isr_common_handler(regs);
-    } 
+    }
 
     return irq_common_handler(regs);
 }

@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <limine.h>
 
+#define AP_STACK_SIZE 16384
+#define MAX_CPUS 256
 typedef enum {
     CPU_UNINITIALIZED = 0,
     CPU_BOOTED,
@@ -20,6 +22,8 @@ typedef struct {
     cpu_state_t state;
     bool is_bsp;
     uint64_t stack_top;
+    uint32_t cpu_index;
+    uint16_t tss_selector;
 } cpu_info_t;
 
 typedef struct {
@@ -40,7 +44,5 @@ bool smp_is_bsp(void);
 void smp_print_info(void);
 void smp_print_info_fb(void);
 void smp_wait_for_ready(void);
-
 void ap_entry_point(struct limine_mp_info* cpu_info);
-void ap_init_after_stack(uint64_t stack_top);
 #endif

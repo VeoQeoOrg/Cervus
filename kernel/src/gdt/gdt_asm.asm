@@ -1,14 +1,14 @@
 section .text
 global _reload_segments
 global _load_gdt
-
+global load_tss
 
 _load_gdt:
     lgdt [rdi]
-    push ax
-    mov ax, 0x28
-    ltr ax
-    pop ax
+    ret
+
+load_tss:
+    ltr di
     ret
 
 _reload_segments:

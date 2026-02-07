@@ -20,6 +20,7 @@
 #include "../include/io/ports.h"
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
+#include "../include/smp/percpu.h"  // Добавлено для current_cpu_id()
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -85,6 +86,8 @@ void kernel_main(void) {
     serial_writestring(COM1, "GDT&IDT [OK]\n");
     fpu_init();
     sse_init();
+    enable_fsgsbase();
+    serial_writestring(COM1, "FSGSBASE [OK]\n");
     serial_writestring(COM1, "FPU/SSE [OK]\n");
 
     if (!framebuffer_request.response ||
@@ -121,6 +124,7 @@ void kernel_main(void) {
     clear_screen();
     smp_init(mp_request.response);
 
+    serial_printf(COM1, "BSP PerCPU test: CPU ID = %u\n", current_cpu_id());  // Должен быть 0
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 
@@ -136,17 +140,18 @@ void kernel_main(void) {
     pmm_print_stats();
 
     vmm_test();
-    //timer_sleep_ms(2000);
-    //printf("2 seconds\n");
-    //timer_sleep_us(10000000);
-    //printf("10 seconds\n");
+    timer_sleep_ms(2000);
+    printf("2 seconds\n");
+    timer_sleep_us(10000000);
+    printf("10 seconds\n");
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
     //acpi_shutdown(); //works on real hardware & VM
     smp_print_info_fb();
     // Или просто краткая информация
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
-
+            //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
+    //*ptr = 0;  // Page Fault, без unused value
     while (1) {
         hcf();
     }

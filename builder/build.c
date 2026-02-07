@@ -16,7 +16,7 @@
 
 #define IMAGE_NAME "Cervus"
 #define VERSION "v0.0.1"
-#define QEMUFLAGS "-m 12G -smp 8"
+#define QEMUFLAGS "-m 12G -smp 8 -cpu qemu64,+fsgsbase"
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
@@ -150,7 +150,7 @@ bool build_limine() {
     print_color(COLOR_GREEN, "Building Limine...");
     if (file_exists("limine")) rm_rf("limine");
 
-    if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.6.2-binary --depth=1") != 0) return false;
+    if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.6.3-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
 
     return true;
