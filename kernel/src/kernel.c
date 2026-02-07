@@ -20,7 +20,7 @@
 #include "../include/io/ports.h"
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
-#include "../include/smp/percpu.h"  // Добавлено для current_cpu_id()
+#include "../include/smp/percpu.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -41,7 +41,7 @@ __attribute__((used, section(".limine_requests")))
 static volatile struct limine_mp_request mp_request = {
     .id = LIMINE_MP_REQUEST_ID,
     .revision = 0,
-    .flags = 0   // или LIMINE_MP_REQUEST_X86_64_X2APIC если хочешь
+    .flags = 0
 };
 
 __attribute__((used, section(".limine_requests")))
@@ -124,7 +124,7 @@ void kernel_main(void) {
     clear_screen();
     smp_init(mp_request.response);
 
-    serial_printf(COM1, "BSP PerCPU test: CPU ID = %u\n", current_cpu_id());  // Должен быть 0
+    serial_printf(COM1, "BSP PerCPU test: CPU ID = %u\n", current_cpu_id());
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 
@@ -148,10 +148,9 @@ void kernel_main(void) {
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
     //acpi_shutdown(); //works on real hardware & VM
     smp_print_info_fb();
-    // Или просто краткая информация
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
             //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
-    //*ptr = 0;  // Page Fault, без unused value
+    //*ptr = 0;
     while (1) {
         hcf();
     }

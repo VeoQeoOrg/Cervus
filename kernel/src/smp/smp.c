@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
-extern tss_t *tss[MAX_CPUS];  // Теперь pointer'ы, аллоцируем динамически
+extern tss_t *tss[MAX_CPUS];
 extern struct {
     gdt_entry_t gdt_entries[5 + (MAX_CPUS * 2)];
 } __attribute__((packed)) gdt;
@@ -25,14 +25,12 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     (void)cpu_info;
     asm volatile ("cli");
 
-    // Маскируйте spurious interrupts в LAPIC рано
     lapic_write(0xF0, 0);
 
     serial_printf(COM1, "GDT Loading\n");
     gdt_load();
     serial_printf(COM1, "GDT Loaded\n");
 
-    // IDT перед TSS
     serial_printf(COM1, "IDT Loading\n");
     idt_load();
     serial_printf(COM1, "IDT Loaded\n");
@@ -220,7 +218,6 @@ void smp_init(struct limine_mp_response* mp_response) {
     }
 
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
-        // Аллоцируйте TSS динамически (1 page, >sizeof(tss_t))
         tss[i] = (tss_t *)pmm_alloc(1);
         if (!tss[i]) {
             serial_printf(COM1, "SMP: FAILED to allocate TSS for CPU %u\n", i);
@@ -234,9 +231,8 @@ void smp_init(struct limine_mp_response* mp_response) {
         tss[i]->ist[2] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
 
-        tss[i]->iobase = sizeof(tss_t);  // Отключите IO-bitmap
+        tss[i]->iobase = sizeof(tss_t);
 
-        // Debug print адреса TSS
         serial_printf(COM1, "TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
 
         tss_entry_t *entry = (tss_entry_t *)&gdt.gdt_entries[5 + (i * 2)];
@@ -250,7 +246,7 @@ void smp_init(struct limine_mp_response* mp_response) {
         entry->base_higher = addr >> 32;
         entry->zero = 0;
 
-        smp_info.cpus[i].tss_selector = TSS_SELECTOR_BASE + (i * 0x10);  // Изменено на 0x10
+        smp_info.cpus[i].tss_selector = TSS_SELECTOR_BASE + (i * 0x10);
     }
 
     gdtr.size = (5 + (smp_info.cpu_count * 2)) * sizeof(gdt_entry_t) - 1;
