@@ -123,8 +123,6 @@ void kernel_main(void) {
     timer_init();
     clear_screen();
     smp_init(mp_request.response);
-
-    serial_printf(COM1, "BSP PerCPU test: CPU ID = %u\n", current_cpu_id());
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 
@@ -149,7 +147,7 @@ void kernel_main(void) {
     //acpi_shutdown(); //works on real hardware & VM
     smp_print_info_fb();
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
-            //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
+    //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
     //*ptr = 0;
     while (1) {
         hcf();

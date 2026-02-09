@@ -8,7 +8,7 @@ extern uintptr_t __percpu_start;
 extern uintptr_t __percpu_end;
 
 PERCPU_SECTION percpu_t percpu = {0};
-PERCPU_SECTION int dummy_percpu = 0xDEADBEEF;  // Dummy для nonempty section
+PERCPU_SECTION int dummy_percpu = 0xDEADBEEF;
 
 percpu_t* percpu_regions[MAX_CPUS] = {0};
 
@@ -36,6 +36,9 @@ void init_percpu_regions(void) {
 percpu_t* get_percpu(void) {
     uint64_t gs_base;
     asm volatile ("rdgsbase %0" : "=r"(gs_base));
+    if (gs_base == 0) {
+        return NULL;
+    }
     return (percpu_t*)gs_base;
 }
 

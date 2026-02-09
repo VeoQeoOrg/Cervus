@@ -271,10 +271,9 @@ void smp_init(struct limine_mp_response* mp_response) {
 
     smp_print_info();
     init_percpu_regions();
+    smp_boot_aps(mp_response);
     set_percpu_base(percpu_regions[bsp_index]);
     serial_printf(COM1, "PerCPU base set for BSP %u: 0x%llx\n", smp_info.bsp_lapic_id, (uint64_t)percpu_regions[bsp_index]);
-    smp_boot_aps(mp_response);
-
     serial_writestring(COM1, "=== SMP Initialization Complete ===\n\n");
 }
 
