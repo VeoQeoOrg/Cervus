@@ -2,6 +2,9 @@
 #include "../../../include/io/serial.h"
 #include "../../../include/interrupts/irq.h"
 #include "../../../include/interrupts/idt.h"
+#include "../../../include/io/ports.h"
+#include "../../../include/smp/percpu.h"
+#include "../../../include/apic/apic.h"
 
 extern const int_desc_t __start_irq_handlers[];
 extern const int_desc_t __stop_irq_handlers[];
@@ -40,4 +43,18 @@ void setup_defined_irq_handlers(void) {
         registered_irq_interrupts[desc->vector] = desc->handler;
         serial_printf(COM1, "Registered IRQ vector 0x%d\n", desc->vector);
     }
+}
+
+extern percpu_t* percpu_regions[MAX_CPUS];
+
+DEFINE_IRQ(IPI_RESCHEDULE_VECTOR, ipi_reschedule_handler)
+{
+    (void)frame;
+
+    uint32_t id = lapic_get_id();
+    if (id < MAX_CPUS && percpu_regions[id] != NULL) {
+        percpu_regions[id]->need_resched = true;
+    }
+
+    lapic_eoi();
 }

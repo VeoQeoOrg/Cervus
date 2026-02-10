@@ -77,6 +77,8 @@ uint32_t lapic_get_id(void);
 void lapic_timer_init(uint32_t vector, uint32_t count, bool periodic, uint8_t divisor);
 void lapic_timer_stop(void);
 uint32_t lapic_timer_get_current(void);
+void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector);
+void lapic_send_ipi_to_all_but_self(uint8_t vector);
 
 void ioapic_write(uintptr_t base, uint32_t reg, uint32_t value);
 uint32_t ioapic_read(uintptr_t base, uint32_t reg);
@@ -94,13 +96,12 @@ void hpet_sleep_ns(uint64_t nanoseconds);
 void hpet_sleep_us(uint64_t microseconds);
 void hpet_sleep_ms(uint64_t milliseconds);
 
-void apic_send_ipi(uint32_t lapic_id, uint8_t vector, uint32_t delivery_mode);
-void apic_send_init(uint32_t lapic_id);
-void apic_send_startup(uint32_t lapic_id, uint32_t vector);
-
 extern uintptr_t lapic_base;
 extern uintptr_t ioapic_base;
 extern uintptr_t hpet_base;
 extern uint32_t hpet_period;
+
+void ipi_reschedule_all(void);
+void ipi_reschedule_cpu(uint32_t lapic_id);
 
 #endif

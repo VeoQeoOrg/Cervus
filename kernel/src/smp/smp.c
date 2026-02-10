@@ -4,6 +4,7 @@
 #include "../../include/apic/apic.h"
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
+#include "../../include/memory/vmm.h"
 #include "../../include/gdt/gdt.h"
 #include "../../include/interrupts/idt.h"
 #include "../../include/sse/fpu.h"
@@ -48,10 +49,12 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     }
     load_tss(info->cpus[my_index].tss_selector);
     serial_printf(COM1, "TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
+
     fpu_init();
     sse_init();
     enable_fsgsbase();
     lapic_enable();
+
     cpu_info_t* cpu = smp_get_current_cpu();
     percpu_t* region = percpu_regions[cpu->cpu_index];
     set_percpu_base(region);
@@ -60,9 +63,15 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     __sync_fetch_and_add(&ap_online_count, 1);
     lapic_eoi();
     asm volatile ("sti");
+
     serial_printf(COM1, "SMP: AP (LAPIC ID %u) initialized and online!\n", lapic_id);
 
     while (1) {
+        uint32_t id = lapic_get_id();
+        if (id < MAX_CPUS && percpu_regions[id] != NULL && percpu_regions[id]->need_resched) {
+            serial_printf(COM1, "AP %u: need_resched from IPI!\n", id);
+            percpu_regions[id]->need_resched = false;
+        }
         asm volatile ("hlt");
     }
 }

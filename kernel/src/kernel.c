@@ -123,6 +123,17 @@ void kernel_main(void) {
     timer_init();
     clear_screen();
     smp_init(mp_request.response);
+    serial_writestring(COM1, "=== SMP Initialization Complete ===\n\n");
+
+    serial_writestring(COM1, "Waiting until all APs are fully ready...\n");
+    while (smp_get_online_count() < (smp_get_cpu_count() - 1)) {
+        timer_sleep_ms(100);
+    }
+    timer_sleep_ms(500);
+    serial_writestring(COM1, "All APs ready. Sending test reschedule IPI...\n");
+    lapic_send_ipi_to_all_but_self(IPI_RESCHEDULE_VECTOR);
+    timer_sleep_ms(1500);
+    serial_writestring(COM1, "Test IPI finished\n");
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 

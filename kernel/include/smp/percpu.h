@@ -12,7 +12,7 @@ typedef struct {
     uint32_t cpu_id;
     void* current_task;
     uint64_t some_counter;
-    //...
+    bool need_resched;      // ← добавь это
 } __attribute__((aligned(64))) percpu_t;
 
 extern percpu_t percpu;

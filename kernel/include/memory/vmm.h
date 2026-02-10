@@ -8,6 +8,12 @@
 #define VMM_PRESENT    (1ULL << 0)
 #define VMM_WRITE      (1ULL << 1)
 #define VMM_USER       (1ULL << 2)
+#define VMM_PWT        (1ULL << 3)   // Page Write-Through (опционально)
+#define VMM_PCD        (1ULL << 4)   // Page Cache Disable (опционально)
+#define VMM_ACCESSED   (1ULL << 5)
+#define VMM_DIRTY      (1ULL << 6)
+#define VMM_PSE        (1ULL << 7)   // Page Size Extension (2MB/1GB)
+#define VMM_GLOBAL     (1ULL << 8)   // ← вот это и не хватало!
 #define VMM_NOEXEC     (1ULL << 63)
 
 typedef uint64_t vmm_pte_t;
