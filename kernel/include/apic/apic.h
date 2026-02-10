@@ -103,5 +103,7 @@ extern uint32_t hpet_period;
 
 void ipi_reschedule_all(void);
 void ipi_reschedule_cpu(uint32_t lapic_id);
+void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count);
+void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr);
 
 #endif

@@ -2,6 +2,7 @@
 #include "../../include/io/serial.h"
 #include "../../include/io/ports.h"
 #include "../../include/memory/pmm.h"
+#include "../../include/smp/smp.h"
 #include "../../include/interrupts/interrupts.h"
 #include <stddef.h>
 
@@ -121,4 +122,47 @@ void ipi_reschedule_all(void) {
 
 void ipi_reschedule_cpu(uint32_t lapic_id) {
     lapic_send_ipi(lapic_id, IPI_RESCHEDULE_VECTOR);
+}
+
+void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count)
+{
+    if (count > MAX_TLB_ADDRESSES) count = MAX_TLB_ADDRESSES;
+
+    uint32_t id = lapic_get_id();
+    tlb_shootdown_t* q = &tlb_shootdown_queue[id];
+
+    q->count = count;
+    for (size_t i = 0; i < count; i++) {
+        q->addresses[i] = addrs[i];
+    }
+    q->pending = true;
+
+    uint32_t icr_low = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14) | (3 << 18);
+    lapic_write(0x310, 0);
+    lapic_write(0x300, icr_low);
+
+    while (lapic_read(0x300) & (1 << 12))
+        asm volatile ("pause");
+
+    serial_printf(COM1, "TLB shootdown broadcast sent for %zu addresses\n", count);
+}
+
+void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr)
+{
+    tlb_shootdown_t* q = &tlb_shootdown_queue[target_lapic_id];
+
+    q->addresses[0] = addr;
+    q->count = 1;
+    q->pending = true;
+
+    uint32_t icr_high = target_lapic_id << 24;
+    uint32_t icr_low = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14);
+
+    lapic_write(0x310, icr_high);
+    lapic_write(0x300, icr_low);
+
+    while (lapic_read(0x300) & (1 << 12))
+        asm volatile ("pause");
+
+    serial_printf(COM1, "TLB shootdown sent to LAPIC %u for virt 0x%llx\n", target_lapic_id, addr);
 }

@@ -129,11 +129,23 @@ void kernel_main(void) {
     while (smp_get_online_count() < (smp_get_cpu_count() - 1)) {
         timer_sleep_ms(100);
     }
-    timer_sleep_ms(500);
+
     serial_writestring(COM1, "All APs ready. Sending test reschedule IPI...\n");
     lapic_send_ipi_to_all_but_self(IPI_RESCHEDULE_VECTOR);
-    timer_sleep_ms(1500);
-    serial_writestring(COM1, "Test IPI finished\n");
+    serial_writestring(COM1, "Test reschedule IPI finished\n");
+
+    serial_writestring(COM1, "\nSending test TLB shootdown with specific addresses...\n");
+
+    uintptr_t test_addrs[] = {
+        0xffff800000100000,
+        0xffff800000200000,
+        0xffff800000300000
+    };
+    size_t addr_count = sizeof(test_addrs) / sizeof(test_addrs[0]);
+
+    ipi_tlb_shootdown_broadcast(test_addrs, addr_count);
+
+    serial_writestring(COM1, "Test TLB shootdown finished\n");
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 

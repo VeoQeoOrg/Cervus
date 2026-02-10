@@ -3,10 +3,21 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <limine.h>
 
 #define AP_STACK_SIZE 16384
 #define MAX_CPUS 256
+
+#define MAX_TLB_ADDRESSES 32
+
+typedef struct {
+    volatile bool pending;
+    uintptr_t addresses[MAX_TLB_ADDRESSES];
+    size_t count;
+} tlb_shootdown_t;
+
+extern tlb_shootdown_t tlb_shootdown_queue[MAX_CPUS];
 typedef enum {
     CPU_UNINITIALIZED = 0,
     CPU_BOOTED,

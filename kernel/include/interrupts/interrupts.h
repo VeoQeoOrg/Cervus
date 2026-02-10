@@ -69,8 +69,9 @@ typedef struct {
         .handler = _name,                                          \
     };                                                             \
     static void _name(struct int_frame_t *frame)
-// IPI векторы (выбираем выше обычных IRQ и исключений)
+
 #define IPI_RESCHEDULE_VECTOR   0x40
+#define IPI_TLB_SHOOTDOWN   0x41
 void init_interrupt_system();
 
 #endif

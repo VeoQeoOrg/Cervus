@@ -20,6 +20,7 @@ extern struct {
 
 static smp_info_t smp_info = {0};
 static volatile uint32_t ap_online_count = 0;
+tlb_shootdown_t tlb_shootdown_queue[MAX_CPUS] = {0};
 
 __attribute__((used))
 void ap_entry_init(struct limine_mp_info* cpu_info) {

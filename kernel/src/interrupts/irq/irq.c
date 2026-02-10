@@ -58,3 +58,25 @@ DEFINE_IRQ(IPI_RESCHEDULE_VECTOR, ipi_reschedule_handler)
 
     lapic_eoi();
 }
+
+DEFINE_IRQ(IPI_TLB_SHOOTDOWN, ipi_tlb_shootdown_handler)
+{
+    (void)frame;
+
+    uint32_t id = lapic_get_id();
+    tlb_shootdown_t* q = &tlb_shootdown_queue[id];
+
+    if (q->pending) {
+        for (size_t i = 0; i < q->count; i++) {
+            uintptr_t addr = q->addresses[i];
+            if (addr != 0) {
+                asm volatile ("invlpg (%0)" :: "r"(addr) : "memory");
+            }
+        }
+
+        q->pending = false;
+        q->count = 0;
+    }
+
+    lapic_eoi();
+}
