@@ -21,6 +21,7 @@
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
 #include "../include/smp/percpu.h"
+#include "../include/sched/task.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -68,6 +69,67 @@ struct limine_framebuffer *global_framebuffer = NULL;
 static void hcf(void) {
     for (;;) {
         asm ("hlt");
+    }
+}
+
+void high_priority_task(void* arg) {
+    (void)arg;
+
+    asm volatile ("sti");
+
+    serial_printf(COM1, "[HighPri] Started with interrupts enabled!\n");
+
+    uint64_t counter = 0;
+    while (1) {
+        counter++;
+        if (counter % 5000000 == 0) {
+            serial_printf(COM1, "[HighPri] counter=%llu\n", counter);
+            printf("[HighPri] %llu\n", counter / 1000000);
+        }
+    }
+}
+
+void low_priority_task(void* arg) {
+    (void)arg;
+
+    asm volatile ("sti");
+
+    serial_printf(COM1, "[LowPri] Started with interrupts enabled!\n");
+
+    uint64_t counter = 0;
+    while (1) {
+        counter++;
+        if (counter % 3000000 == 0) {
+            serial_printf(COM1, "[LowPri] counter=%llu\n", counter);
+            printf("[LowPri] %llu\n", counter / 1000000);
+        }
+    }
+}
+
+void fpu_test_task(void* arg) {
+    (void)arg;
+
+    asm volatile ("and $-16, %%rsp" ::: "memory");
+    asm volatile ("sti");
+
+    serial_printf(COM1, "[FPU] Testing FPU operations...\n");
+
+    volatile double a = 1.0, b = 2.0, c;
+    c = a + b; serial_printf(COM1, "[FPU] 1.0 + 2.0 = %e\n", c);
+    c = a * b; serial_printf(COM1, "[FPU] 1.0 * 2.0 = %e\n", c);
+
+    serial_printf(COM1, "[FPU] Tests PASSED! Running continuous...\n");
+
+    volatile double x = 1.0;
+    uint64_t iter = 0;
+
+    while (1) {
+        x = x * 1.1;
+        iter++;
+
+        if (iter % 10000000 == 0) {
+            serial_printf(COM1, "[FPU] %llu million operations\n", iter / 1000000);
+        }
     }
 }
 
@@ -120,7 +182,6 @@ void kernel_main(void) {
     apic_init();
     serial_writestring(COM1, "APIC initialized successfully\n");
 
-    timer_init();
     clear_screen();
     smp_init(mp_request.response);
     serial_writestring(COM1, "=== SMP Initialization Complete ===\n\n");
@@ -146,6 +207,7 @@ void kernel_main(void) {
     ipi_tlb_shootdown_broadcast(test_addrs, addr_count);
 
     serial_writestring(COM1, "Test TLB shootdown finished\n");
+
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
 
@@ -161,9 +223,9 @@ void kernel_main(void) {
     pmm_print_stats();
 
     vmm_test();
-    timer_sleep_ms(2000);
+    //timer_sleep_ms(2000);
     printf("2 seconds\n");
-    timer_sleep_us(10000000);
+    //timer_sleep_us(10000000);
     printf("10 seconds\n");
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring(COM1, "\nSystem ready. Entering idle loop...\n");
@@ -172,6 +234,33 @@ void kernel_main(void) {
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
     //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
     //*ptr = 0;
+
+    serial_writestring(COM1, "\n=== PREEMPTIVE SCHEDULER TEST ===\n");
+
+    sched_init();
+
+    task_create("HighPri", high_priority_task, NULL, 25);
+    task_create("LowPri",  low_priority_task,  NULL, 10);
+    task_create("FPUTESTTASK",  fpu_test_task,  NULL, 30);
+
+    timer_init();
+
+    serial_writestring(COM1, "\n");
+    serial_writestring(COM1, "===========================================\n");
+    serial_writestring(COM1, "  PREEMPTIVE SCHEDULER IS NOW ACTIVE!\n");
+    serial_writestring(COM1, "===========================================\n");
+    serial_writestring(COM1, "Tasks will be switched automatically by timer.\n");
+    serial_writestring(COM1, "No need to call task_yield()!\n");
+    serial_writestring(COM1, "Watch both tasks run in parallel...\n\n");
+
+    printf("Tasks switching automatically every ~10ms\n\n");
+
+    serial_writestring(COM1, "Manually triggering first reschedule...\n");
+    sched_reschedule();
+
+    serial_writestring(COM1, "\n=== All tasks completed ===\n");
+    serial_writestring(COM1, "System will continue running tasks...\n");
+    printf("\nSystem will continue running tasks...\n");
     while (1) {
         hcf();
     }

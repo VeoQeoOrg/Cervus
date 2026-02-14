@@ -30,6 +30,7 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index) {
 }
 
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
+    serial_printf(COM1, "Mapping virt 0x%llx -> phys 0x%llx with flags 0x%llx\n", virt, phys, flags);
     size_t pml4_i = (virt >> 39) & MASK;
     size_t pdpt_i = (virt >> 30) & MASK;
     size_t pd_i   = (virt >> 21) & MASK;
@@ -39,8 +40,14 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     vmm_pte_t* pd   = get_table(pdpt, pdpt_i);
     vmm_pte_t* pt   = get_table(pd, pd_i);
 
-    pt[pt_i] = (phys & ~0xFFF) | flags | VMM_PRESENT;
+    pt[pt_i] = (phys & ~0xFFF) | flags | VMM_PRESENT | VMM_WRITE;
     invlpg((void*)virt);
+
+    asm volatile ("mfence" ::: "memory");
+    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    asm volatile ("mfence" ::: "memory");
+    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+
     return true;
 }
 

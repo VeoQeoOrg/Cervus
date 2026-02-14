@@ -31,7 +31,7 @@ const char *DIRS_TO_CLEAN[] = { "bin", "obj", "iso_root", "limine", "kernel/link
 const char *FILES_TO_CLEAN[] = { "Cervus.iso", "Cervus.hdd", "kernel/.deps-obtained", "limine.conf", "OS-TREE.txt", NULL };
 
 const char *SSE_FILES[] = {
-    "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c", "serial.c", "pmm.c", "paging.c", "apic.c", NULL
+    "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c", "serial.c", "pmm.c", "paging.c", "apic.c", "kernel.c", NULL
 };
 
 struct Dependency {

@@ -19,7 +19,7 @@ Cervus is currently in the active development phase. The kernel implements core 
 
 ### Core Architecture
 - *Boot Protocol:* Utilizes the [Limine](https://github.com/limine-bootloader/limine) bootloader (Barebone profile).
-- *Memory Management:* 
+- *Memory Management:*
     - *PMM:* Bitmap-based Physical Memory Manager.
     - *VMM:* Virtual Memory Management with 4-level paging support.
 - *CPU Initialization:* Custom GDT (Global Descriptor Table) and IDT (Interrupt Descriptor Table) implementation.
@@ -36,8 +36,8 @@ Cervus is currently in the active development phase. The kernel implements core 
 | *ACPI* | Done(without rebooting) | Table parsing & SDT discovery |
 | *APIC / IOAPIC* | Done | Advanced Interrupt Controllers |
 | *Timers (HPET/APIC)* | Done | High Precision Event Timers |
-| *SMP* | TODO | Multicore Initialization |
-| *Scheduler* | TODO | Preemptive Multitasking |
+| *SMP* | Done | Multicore Initialization |
+| *Scheduler* | Done | Preemptive Multitasking |
 | *Userspace* | TODO | Syscalls & Ring 3 execution |
 
 ---

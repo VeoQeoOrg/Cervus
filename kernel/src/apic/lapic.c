@@ -65,20 +65,21 @@ void lapic_timer_init(uint32_t vector, uint32_t count, bool periodic, uint8_t di
         serial_writestring(COM1, "Warning: APIC timer count is 0, timer will not generate interrupts\n");
     }
 
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED);
+
     lapic_write(LAPIC_TIMER_DCR, divisor & 0x7);
+
+    lapic_write(LAPIC_TIMER_ICR, count);
 
     uint32_t timer_config = vector & 0xFF;
     if (periodic) {
         timer_config |= LAPIC_TIMER_PERIODIC;
     }
 
-    lapic_write(LAPIC_TIMER_ICR, count);
-
-    lapic_write(LAPIC_TIMER, timer_config | LAPIC_TIMER_MASKED);
     lapic_write(LAPIC_TIMER, timer_config);
 
     uint32_t current = lapic_read(LAPIC_TIMER_CCR);
-    serial_printf(COM1, "LAPIC timer current count: %u\n", current);
+    serial_printf(COM1, "LAPIC timer started: current count: %u\n", current);
 }
 
 void lapic_timer_stop(void) {
@@ -124,8 +125,20 @@ void ipi_reschedule_cpu(uint32_t lapic_id) {
     lapic_send_ipi(lapic_id, IPI_RESCHEDULE_VECTOR);
 }
 
-void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count)
-{
+void ipi_reschedule_single(uint32_t target_lapic_id) {
+    uint32_t icr_high = target_lapic_id << 24;
+    uint32_t icr_low = IPI_RESCHEDULE_VECTOR | (0 << 8) | (1 << 14);
+
+    lapic_write(0x310, icr_high);
+    lapic_write(0x300, icr_low);
+
+    while (lapic_read(0x300) & (1 << 12))
+        asm volatile ("pause");
+
+    serial_printf(COM1, "Reschedule IPI sent to LAPIC %u\n", target_lapic_id);
+}
+
+void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
     if (count > MAX_TLB_ADDRESSES) count = MAX_TLB_ADDRESSES;
 
     uint32_t id = lapic_get_id();
@@ -147,8 +160,7 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count)
     serial_printf(COM1, "TLB shootdown broadcast sent for %zu addresses\n", count);
 }
 
-void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr)
-{
+void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
     tlb_shootdown_t* q = &tlb_shootdown_queue[target_lapic_id];
 
     q->addresses[0] = addr;
