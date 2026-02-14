@@ -241,17 +241,9 @@ void kernel_main(void) {
 
     task_create("HighPri", high_priority_task, NULL, 25);
     task_create("LowPri",  low_priority_task,  NULL, 10);
-    task_create("FPUTESTTASK",  fpu_test_task,  NULL, 30);
+    task_create("FPUTESTTASK",  fpu_test_task,  NULL, 1);
 
     timer_init();
-
-    serial_writestring(COM1, "\n");
-    serial_writestring(COM1, "===========================================\n");
-    serial_writestring(COM1, "  PREEMPTIVE SCHEDULER IS NOW ACTIVE!\n");
-    serial_writestring(COM1, "===========================================\n");
-    serial_writestring(COM1, "Tasks will be switched automatically by timer.\n");
-    serial_writestring(COM1, "No need to call task_yield()!\n");
-    serial_writestring(COM1, "Watch both tasks run in parallel...\n\n");
 
     printf("Tasks switching automatically every ~10ms\n\n");
 
