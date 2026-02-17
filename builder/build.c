@@ -18,6 +18,9 @@
 #define VERSION "v0.0.1"
 #define QEMUFLAGS "-m 12G -smp 8 -cpu qemu64,+fsgsbase"
 
+#define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
+#define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
+
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
 #define COLOR_GREEN   "\033[92m"
@@ -381,12 +384,33 @@ bool create_iso() {
 
     rm_rf("iso_root");
     ensure_dir("iso_root/boot/limine");
+    ensure_dir("iso_root/boot/wallpapers");
     ensure_dir("iso_root/EFI/BOOT");
     ensure_dir("demo_iso");
 
+    if (file_exists(WALLPAPER_SRC)) {
+        cmd_run(false, "cp %s iso_root/boot/wallpapers/cervus.png", WALLPAPER_SRC);
+        print_color(COLOR_GREEN, "Wallpaper copied: %s", WALLPAPER_SRC);
+    } else {
+        print_color(COLOR_YELLOW, "Warning: Wallpaper not found at %s", WALLPAPER_SRC);
+    }
+
     FILE *f = fopen("limine.conf", "w");
+    if (file_exists(WALLPAPER_SRC)) {
+        fprintf(f,
+            "wallpaper: %s\n",
+            WALLPAPER_DST
+        );
+    }
     if (f) {
-        fprintf(f, "timeout: 3\n/%s %s\n    protocol: limine\n    path: boot():/boot/kernel\n", IMAGE_NAME, VERSION);
+        fprintf(f,
+            "timeout: 3\n"
+            "/%s %s\n"
+            "    protocol: limine\n"
+            "    path: boot():/boot/kernel\n",
+            IMAGE_NAME, VERSION
+        );
+
         fclose(f);
     }
 
