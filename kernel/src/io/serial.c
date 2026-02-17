@@ -8,6 +8,7 @@
 #include "../../include/io/serial.h"
 
 static volatile uint8_t serial_lock = 0;
+static uint16_t default_serial_port = 0;
 
 void serial_initialize(uint16_t port, uint32_t baud_rate) {
     outb(port + 1, 0x00);
@@ -18,11 +19,8 @@ void serial_initialize(uint16_t port, uint32_t baud_rate) {
     outb(port + 1, (divisor >> 8) & 0xFF);
 
     outb(port + 3, 0x03);
-
     outb(port + 2, 0xC7);
-
     outb(port + 4, 0x0B);
-
     outb(port + 4, 0x1E);
     outb(port + 0, 0xAE);
 
@@ -31,30 +29,65 @@ void serial_initialize(uint16_t port, uint32_t baud_rate) {
     }
 
     outb(port + 4, 0x0F);
+
+    default_serial_port = port;
 }
 
-int serial_received(uint16_t port) {
+uint16_t serial_get_default_port(void) {
+    return default_serial_port;
+}
+
+void serial_set_default_port(uint16_t port) {
+    default_serial_port = port;
+}
+
+int serial_received_port(uint16_t port) {
     return inb(port + 5) & 1;
 }
 
-char serial_read(uint16_t port) {
-    while (serial_received(port) == 0);
+int serial_received(void) {
+    if (default_serial_port == 0) return 0;
+    return serial_received_port(default_serial_port);
+}
+
+char serial_read_port(uint16_t port) {
+    while (serial_received_port(port) == 0);
     return inb(port);
 }
 
-int serial_is_transmit_empty(uint16_t port) {
+char serial_read(void) {
+    if (default_serial_port == 0) return 0;
+    return serial_read_port(default_serial_port);
+}
+
+int serial_is_transmit_empty_port(uint16_t port) {
     return inb(port + 5) & 0x20;
 }
 
-void serial_write(uint16_t port, char c) {
-    while (serial_is_transmit_empty(port) == 0);
+int serial_is_transmit_empty(void) {
+    if (default_serial_port == 0) return 1;
+    return serial_is_transmit_empty_port(default_serial_port);
+}
+
+void serial_write_port(uint16_t port, char c) {
+    while (serial_is_transmit_empty_port(port) == 0);
     outb(port, c);
 }
 
-void serial_writestring(uint16_t port, const char* str) {
+void serial_write(char c) {
+    if (default_serial_port == 0) return;
+    serial_write_port(default_serial_port, c);
+}
+
+void serial_writestring_port(uint16_t port, const char* str) {
     while (*str) {
-        serial_write(port, *str++);
+        serial_write_port(port, *str++);
     }
+}
+
+void serial_writestring(const char* str) {
+    if (default_serial_port == 0) return;
+    serial_writestring_port(default_serial_port, str);
 }
 
 static void reverse_string(char* str, int length) {
@@ -301,7 +334,7 @@ static int double_to_general(double value, char* buffer, int precision, bool upp
     return double_to_string(value, buffer, decimal_places);
 }
 
-void serial_printf(uint16_t port, const char* format, ...) {
+void serial_printf_port(uint16_t port, const char* format, ...) {
     while (__sync_lock_test_and_set(&serial_lock, 1)) {
         __asm__ volatile("pause" ::: "memory");
     }
@@ -314,7 +347,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
 
     while (*ptr) {
         if (*ptr != '%') {
-            serial_write(port, *ptr);
+            serial_write_port(port, *ptr);
             ptr++;
             continue;
         }
@@ -366,7 +399,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
         switch (*ptr) {
             case 'c': {
                 char c = (char)va_arg(args, int);
-                serial_write(port, c);
+                serial_write_port(port, c);
                 break;
             }
 
@@ -375,7 +408,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                 if (!str) {
                     str = "(null)";
                 }
-                serial_writestring(port, str);
+                serial_writestring_port(port, str);
                 break;
             }
 
@@ -392,7 +425,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     num = (int64_t)va_arg(args, int);
                 }
                 int_to_str(num, buffer, 10, false);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -408,7 +441,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     num = (uint64_t)va_arg(args, unsigned int);
                 }
                 uint_to_str(num, buffer, 10, false);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -424,7 +457,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     num = (uint64_t)va_arg(args, unsigned int);
                 }
                 uint_to_str(num, buffer, 16, false);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -440,7 +473,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     num = (uint64_t)va_arg(args, unsigned int);
                 }
                 uint_to_str(num, buffer, 16, true);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -456,15 +489,15 @@ void serial_printf(uint16_t port, const char* format, ...) {
                     num = (uint64_t)va_arg(args, unsigned int);
                 }
                 uint_to_str(num, buffer, 8, false);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
             case 'p': {
                 void* ptr_val = va_arg(args, void*);
-                serial_writestring(port, "0x");
+                serial_writestring_port(port, "0x");
                 uint_to_str((uintptr_t)ptr_val, buffer, 16, false);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -472,7 +505,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
             case 'F': {
                 double num = va_arg(args, double);
                 double_to_string(num, buffer, precision);
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -480,7 +513,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
             case 'E': {
                 double num = va_arg(args, double);
                 double_to_scientific(num, buffer, precision, (*ptr == 'E'));
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -488,7 +521,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
             case 'G': {
                 double num = va_arg(args, double);
                 double_to_general(num, buffer, precision, (*ptr == 'G'));
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -498,7 +531,7 @@ void serial_printf(uint16_t port, const char* format, ...) {
                 double_to_scientific(num, buffer, precision, (*ptr == 'A'));
                 buffer[0] = '0';
                 buffer[1] = 'x';
-                serial_writestring(port, buffer);
+                serial_writestring_port(port, buffer);
                 break;
             }
 
@@ -509,13 +542,244 @@ void serial_printf(uint16_t port, const char* format, ...) {
             }
 
             case '%': {
-                serial_write(port, '%');
+                serial_write_port(port, '%');
                 break;
             }
 
             default: {
                 for (const char* p = percent_start; p <= ptr; p++) {
-                    serial_write(port, *p);
+                    serial_write_port(port, *p);
+                }
+                break;
+            }
+        }
+
+        if (*ptr != '\0') {
+            ptr++;
+        }
+    }
+
+    va_end(args);
+    __sync_lock_release(&serial_lock);
+}
+
+void serial_printf(const char* format, ...) {
+    if (default_serial_port == 0) return;
+
+    while (__sync_lock_test_and_set(&serial_lock, 1)) {
+        __asm__ volatile("pause" ::: "memory");
+    }
+
+    va_list args;
+    va_start(args, format);
+
+    char buffer[256];
+    const char* ptr = format;
+
+    while (*ptr) {
+        if (*ptr != '%') {
+            serial_write_port(default_serial_port, *ptr);
+            ptr++;
+            continue;
+        }
+
+        const char* percent_start = ptr++;
+
+        while (*ptr == '0' || *ptr == '-' || *ptr == '+' || *ptr == ' ' || *ptr == '#') {
+            ptr++;
+        }
+
+        int width = 0;
+        while (*ptr >= '0' && *ptr <= '9') {
+            width = width * 10 + (*ptr - '0');
+            ptr++;
+        }
+
+        int precision = -1;
+        if (*ptr == '.') {
+            ptr++;
+            precision = 0;
+            while (*ptr >= '0' && *ptr <= '9') {
+                precision = precision * 10 + (*ptr - '0');
+                ptr++;
+            }
+        }
+
+        bool has_ll = false;
+        bool has_l = false;
+        bool has_size_t = false;
+
+        if (*ptr == 'z') {
+            ptr++;
+            has_size_t = true;
+        } else if (*ptr == 'l') {
+            ptr++;
+            if (*ptr == 'l') {
+                ptr++;
+                has_ll = true;
+            } else {
+                has_l = true;
+            }
+        } else if (*ptr == 'h') {
+            ptr++;
+            if (*ptr == 'h') ptr++;
+        } else if (*ptr == 'L' || *ptr == 'j' || *ptr == 't') {
+            ptr++;
+        }
+
+        switch (*ptr) {
+            case 'c': {
+                char c = (char)va_arg(args, int);
+                serial_write_port(default_serial_port, c);
+                break;
+            }
+
+            case 's': {
+                const char* str = va_arg(args, const char*);
+                if (!str) {
+                    str = "(null)";
+                }
+                serial_writestring_port(default_serial_port, str);
+                break;
+            }
+
+            case 'd':
+            case 'i': {
+                int64_t num;
+                if (has_size_t) {
+                    num = (int64_t)va_arg(args, size_t);
+                } else if (has_ll) {
+                    num = va_arg(args, int64_t);
+                } else if (has_l) {
+                    num = (int64_t)va_arg(args, long);
+                } else {
+                    num = (int64_t)va_arg(args, int);
+                }
+                int_to_str(num, buffer, 10, false);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'u': {
+                uint64_t num;
+                if (has_size_t) {
+                    num = (uint64_t)va_arg(args, size_t);
+                } else if (has_ll) {
+                    num = va_arg(args, uint64_t);
+                } else if (has_l) {
+                    num = (uint64_t)va_arg(args, unsigned long);
+                } else {
+                    num = (uint64_t)va_arg(args, unsigned int);
+                }
+                uint_to_str(num, buffer, 10, false);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'x': {
+                uint64_t num;
+                if (has_size_t) {
+                    num = (uint64_t)va_arg(args, size_t);
+                } else if (has_ll) {
+                    num = va_arg(args, uint64_t);
+                } else if (has_l) {
+                    num = (uint64_t)va_arg(args, unsigned long);
+                } else {
+                    num = (uint64_t)va_arg(args, unsigned int);
+                }
+                uint_to_str(num, buffer, 16, false);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'X': {
+                uint64_t num;
+                if (has_size_t) {
+                    num = (uint64_t)va_arg(args, size_t);
+                } else if (has_ll) {
+                    num = va_arg(args, uint64_t);
+                } else if (has_l) {
+                    num = (uint64_t)va_arg(args, unsigned long);
+                } else {
+                    num = (uint64_t)va_arg(args, unsigned int);
+                }
+                uint_to_str(num, buffer, 16, true);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'o': {
+                uint64_t num;
+                if (has_size_t) {
+                    num = (uint64_t)va_arg(args, size_t);
+                } else if (has_ll) {
+                    num = va_arg(args, uint64_t);
+                } else if (has_l) {
+                    num = (uint64_t)va_arg(args, unsigned long);
+                } else {
+                    num = (uint64_t)va_arg(args, unsigned int);
+                }
+                uint_to_str(num, buffer, 8, false);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'p': {
+                void* ptr_val = va_arg(args, void*);
+                serial_writestring_port(default_serial_port, "0x");
+                uint_to_str((uintptr_t)ptr_val, buffer, 16, false);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'f':
+            case 'F': {
+                double num = va_arg(args, double);
+                double_to_string(num, buffer, precision);
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'e':
+            case 'E': {
+                double num = va_arg(args, double);
+                double_to_scientific(num, buffer, precision, (*ptr == 'E'));
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'g':
+            case 'G': {
+                double num = va_arg(args, double);
+                double_to_general(num, buffer, precision, (*ptr == 'G'));
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'a':
+            case 'A': {
+                double num = va_arg(args, double);
+                double_to_scientific(num, buffer, precision, (*ptr == 'A'));
+                buffer[0] = '0';
+                buffer[1] = 'x';
+                serial_writestring_port(default_serial_port, buffer);
+                break;
+            }
+
+            case 'n': {
+                int* count_ptr = va_arg(args, int*);
+                *count_ptr = 0;
+                break;
+            }
+
+            case '%': {
+                serial_write_port(default_serial_port, '%');
+                break;
+            }
+
+            default: {
+                for (const char* p = percent_start; p <= ptr; p++) {
+                    serial_write_port(default_serial_port, *p);
                 }
                 break;
             }

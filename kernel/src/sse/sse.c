@@ -101,12 +101,12 @@ bool mmx_supported(void) {
 }
 
 void sse_init(void) {
-    serial_writestring(COM1, "[SSE] Initializing SSE/AVX...\n");
+    serial_writestring("[SSE] Initializing SSE/AVX...\n");
 
     cpuid_cache_features();
 
     if (!sse_supported()) {
-        serial_writestring(COM1, "[SSE] SSE not supported!\n");
+        serial_writestring("[SSE] SSE not supported!\n");
         return;
     }
 
@@ -128,7 +128,7 @@ void sse_init(void) {
         );
 
         if (ecx & (1 << 27)) { // OSXSAVE bit
-            serial_writestring(COM1, "[SSE] AVX supported, enabling...\n");
+            serial_writestring("[SSE] AVX supported, enabling...\n");
 
             cr4 |= (1 << 18);
 
@@ -143,15 +143,15 @@ void sse_init(void) {
 
     sse_set_mxcsr(MXCSR_DEFAULT);
 
-    serial_writestring(COM1, "[SSE] SSE initialized successfully\n");
+    serial_writestring("[SSE] SSE initialized successfully\n");
 
-    if (sse_supported()) serial_writestring(COM1, "[SSE] SSE: YES\n");
-    if (sse2_supported()) serial_writestring(COM1, "[SSE] SSE2: YES\n");
-    if (sse3_supported()) serial_writestring(COM1, "[SSE] SSE3: YES\n");
-    if (sse4_1_supported()) serial_writestring(COM1, "[SSE] SSE4.1: YES\n");
-    if (sse4_2_supported()) serial_writestring(COM1, "[SSE] SSE4.2: YES\n");
-    if (avx_supported()) serial_writestring(COM1, "[SSE] AVX: YES\n");
-    if (mmx_supported()) serial_writestring(COM1, "[SSE] MMX: YES\n");
+    if (sse_supported()) serial_writestring("[SSE] SSE: YES\n");
+    if (sse2_supported()) serial_writestring("[SSE] SSE2: YES\n");
+    if (sse3_supported()) serial_writestring("[SSE] SSE3: YES\n");
+    if (sse4_1_supported()) serial_writestring("[SSE] SSE4.1: YES\n");
+    if (sse4_2_supported()) serial_writestring("[SSE] SSE4.2: YES\n");
+    if (avx_supported()) serial_writestring("[SSE] AVX: YES\n");
+    if (mmx_supported()) serial_writestring("[SSE] MMX: YES\n");
 }
 
 void sse_set_mxcsr(uint32_t mxcsr) {
@@ -364,9 +364,9 @@ void enable_fsgsbase(void) {
         asm volatile ("mov %%cr4, %0" : "=r"(cr4));
         cr4 |= (1ULL << 16);
         asm volatile ("mov %0, %%cr4" :: "r"(cr4));
-        serial_printf(COM1, "[FSGSBASE] Enabled on CPU %u\n", lapic_get_id());
+        serial_printf("[FSGSBASE] Enabled on CPU %u\n", lapic_get_id());
     } else {
-        serial_writestring(COM1, "ERROR: FSGSBASE not supported by CPU!\n");
+        serial_writestring("ERROR: FSGSBASE not supported by CPU!\n");
         // Здесь можно hcf() или fallback на MSR (см. ниже), но для простоты assume supported
     }
 }

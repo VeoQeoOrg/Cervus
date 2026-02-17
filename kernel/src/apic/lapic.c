@@ -12,12 +12,12 @@ static inline uintptr_t phys_to_virt(uintptr_t phys) {
 
 void lapic_write(uint32_t reg, uint32_t value) {
     if (!lapic_base) {
-        serial_printf(COM1, "LAPIC: Attempt to write to unmapped LAPIC (reg: 0x%x)\n", reg);
+        serial_printf("LAPIC: Attempt to write to unmapped LAPIC (reg: 0x%x)\n", reg);
         return;
     }
 
     if (reg & 0x3) {
-        serial_printf(COM1, "LAPIC: Unaligned register access: 0x%x\n", reg);
+        serial_printf("LAPIC: Unaligned register access: 0x%x\n", reg);
         return;
     }
 
@@ -29,12 +29,12 @@ void lapic_write(uint32_t reg, uint32_t value) {
 
 uint32_t lapic_read(uint32_t reg) {
     if (!lapic_base) {
-        serial_printf(COM1, "LAPIC: Attempt to read from unmapped LAPIC (reg: 0x%x)\n", reg);
+        serial_printf("LAPIC: Attempt to read from unmapped LAPIC (reg: 0x%x)\n", reg);
         return 0;
     }
 
     if (reg & 0x3) {
-        serial_printf(COM1, "LAPIC: Unaligned register access: 0x%x\n", reg);
+        serial_printf("LAPIC: Unaligned register access: 0x%x\n", reg);
         return 0;
     }
 
@@ -46,7 +46,7 @@ void lapic_enable(void) {
     if (!lapic_base) return;
 
     lapic_write(LAPIC_SIVR, lapic_read(LAPIC_SIVR) | LAPIC_ENABLE | LAPIC_SPURIOUS_VECTOR);
-    serial_printf(COM1, "LAPIC enabled, ID: 0x%x\n", lapic_get_id());
+    serial_printf("LAPIC enabled, ID: 0x%x\n", lapic_get_id());
 }
 
 uint32_t lapic_get_id(void) {
@@ -58,11 +58,11 @@ void lapic_eoi(void) {
 }
 
 void lapic_timer_init(uint32_t vector, uint32_t count, bool periodic, uint8_t divisor) {
-    serial_printf(COM1, "Initializing LAPIC timer: vector=0x%x, count=%u, periodic=%d, divisor=%u\n",
+    serial_printf("Initializing LAPIC timer: vector=0x%x, count=%u, periodic=%d, divisor=%u\n",
                   vector, count, periodic, divisor);
 
     if (count == 0) {
-        serial_writestring(COM1, "Warning: APIC timer count is 0, timer will not generate interrupts\n");
+        serial_writestring("Warning: APIC timer count is 0, timer will not generate interrupts\n");
     }
 
     lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED);
@@ -79,7 +79,7 @@ void lapic_timer_init(uint32_t vector, uint32_t count, bool periodic, uint8_t di
     lapic_write(LAPIC_TIMER, timer_config);
 
     uint32_t current = lapic_read(LAPIC_TIMER_CCR);
-    serial_printf(COM1, "LAPIC timer started: current count: %u\n", current);
+    serial_printf("LAPIC timer started: current count: %u\n", current);
 }
 
 void lapic_timer_stop(void) {
@@ -101,7 +101,7 @@ void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector)
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf(COM1, "Sent IPI vector 0x%02x to LAPIC %u\n", vector, target_lapic_id);
+    serial_printf("Sent IPI vector 0x%02x to LAPIC %u\n", vector, target_lapic_id);
 }
 
 void lapic_send_ipi_to_all_but_self(uint8_t vector)
@@ -114,7 +114,7 @@ void lapic_send_ipi_to_all_but_self(uint8_t vector)
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf(COM1, "Broadcast IPI (all but self) vector 0x%02x sent\n", vector);
+    serial_printf("Broadcast IPI (all but self) vector 0x%02x sent\n", vector);
 }
 
 void ipi_reschedule_all(void) {
@@ -135,7 +135,7 @@ void ipi_reschedule_single(uint32_t target_lapic_id) {
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf(COM1, "Reschedule IPI sent to LAPIC %u\n", target_lapic_id);
+    serial_printf("Reschedule IPI sent to LAPIC %u\n", target_lapic_id);
 }
 
 void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
@@ -157,7 +157,7 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf(COM1, "TLB shootdown broadcast sent for %zu addresses\n", count);
+    serial_printf("TLB shootdown broadcast sent for %zu addresses\n", count);
 }
 
 void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
@@ -176,5 +176,5 @@ void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf(COM1, "TLB shootdown sent to LAPIC %u for virt 0x%llx\n", target_lapic_id, addr);
+    serial_printf("TLB shootdown sent to LAPIC %u for virt 0x%llx\n", target_lapic_id, addr);
 }

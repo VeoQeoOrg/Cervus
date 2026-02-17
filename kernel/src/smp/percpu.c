@@ -14,13 +14,13 @@ percpu_t* percpu_regions[MAX_CPUS] = {0};
 
 void init_percpu_regions(void) {
     size_t percpu_size = &__percpu_end - &__percpu_start;
-    serial_printf(COM1, "PerCPU size: %zu bytes\n", percpu_size);
+    serial_printf("PerCPU size: %zu bytes\n", percpu_size);
 
     smp_info_t* info = smp_get_info();
     for (uint32_t i = 0; i < info->cpu_count; i++) {
         void* region = pmm_alloc((percpu_size + PAGE_SIZE - 1) / PAGE_SIZE);
         if (!region) {
-            serial_printf(COM1, "PerCPU: Alloc failed for CPU %u\n", i);
+            serial_printf("PerCPU: Alloc failed for CPU %u\n", i);
             continue;
         }
         memset(region, 0, percpu_size);
@@ -29,7 +29,7 @@ void init_percpu_regions(void) {
         percpu_regions[i] = (percpu_t*)region;
         percpu_regions[i]->cpu_id = info->cpus[i].lapic_id;
 
-        serial_printf(COM1, "PerCPU region for CPU %u at 0x%llx\n", i, (uint64_t)region);
+        serial_printf("PerCPU region for CPU %u at 0x%llx\n", i, (uint64_t)region);
     }
 }
 

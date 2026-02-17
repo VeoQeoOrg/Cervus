@@ -203,7 +203,7 @@ static void print_size(size_t bytes, const char* label) {
     }
 
     printf("%s: %.2f %s\n", label, value, unit);
-    serial_printf(0x3F8, "%s: %.2f %s\n", label, value, unit);
+    serial_printf("%s: %.2f %s\n", label, value, unit);
 }
 
 void pmm_print_stats(void) {
@@ -214,7 +214,7 @@ void pmm_print_stats(void) {
     size_t reserved     = total_bytes - usable_bytes;
 
     printf("\n=== Physical Memory ===\n");
-    serial_printf(0x3F8, "\n=== Physical Memory ===\n");
+    serial_printf("\n=== Physical Memory ===\n");
 
     print_size(usable_bytes, "Usable RAM");
     print_size(free_bytes,   "Free RAM");
@@ -222,9 +222,9 @@ void pmm_print_stats(void) {
     print_size(reserved,     "Reserved/MMIO");
 
     printf("Page size    : %u bytes\n", PAGE_SIZE);
-    serial_printf(0x3F8, "Page size    : %u bytes\n", PAGE_SIZE);
+    serial_printf("Page size    : %u bytes\n", PAGE_SIZE);
 
     printf("=======================\n");
-    serial_printf(0x3F8, "=======================\n");
+    serial_printf("=======================\n");
 }
 

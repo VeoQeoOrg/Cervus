@@ -14,7 +14,7 @@ void irq_common_handler(struct int_frame_t* regs) {
     uint64_t vec = regs->interrupt;
 
     if (vec >= IRQ_INTERRUPTS_COUNT || vec < (IDT_MAX_DESCRIPTORS - IRQ_INTERRUPTS_COUNT)) {
-        serial_printf(COM1, "IRQ vector out of range: %d\n", vec);
+        serial_printf("IRQ vector out of range: %d\n", vec);
         while (1)
         {
             asm volatile ("hlt");
@@ -25,7 +25,7 @@ void irq_common_handler(struct int_frame_t* regs) {
         return registered_irq_interrupts[vec](regs);
     }
 
-    serial_printf(COM1, "IRQ interrupt handler\n");
+    serial_printf("IRQ interrupt handler\n");
 
     while (1)
     {
@@ -37,11 +37,11 @@ void setup_defined_irq_handlers(void) {
     const int_desc_t* desc;
     for (desc = __start_irq_handlers; desc < __stop_irq_handlers; desc++) {
         if(desc->vector >= IRQ_INTERRUPTS_COUNT) {
-            serial_printf(COM1, "Invalid IRQ vector number! Must be < %d\n", IRQ_INTERRUPTS_COUNT);
+            serial_printf("Invalid IRQ vector number! Must be < %d\n", IRQ_INTERRUPTS_COUNT);
             continue;
         }
         registered_irq_interrupts[desc->vector] = desc->handler;
-        serial_printf(COM1, "Registered IRQ vector 0x%d\n", desc->vector);
+        serial_printf("Registered IRQ vector 0x%d\n", desc->vector);
     }
 }
 

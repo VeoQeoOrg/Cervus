@@ -54,7 +54,7 @@ void idt_load(void) {
 }
 
 void setup_interrupt_descriptor_table(uint64_t kernel_code_segment) {
-    serial_printf(COM1, "[IDT] Initializing IDT...\n");
+    serial_printf("[IDT] Initializing IDT...\n");
 
     idtr.base  = (idt_entry_t *)&idt_entries[0];
     idtr.limit = (uint16_t)sizeof(idt_entry_t) * IDT_MAX_DESCRIPTORS - 1;
@@ -70,5 +70,5 @@ void setup_interrupt_descriptor_table(uint64_t kernel_code_segment) {
 
     idt_load();
 
-    serial_printf(COM1, "[IDT] IDT initialized successfully\n");
+    serial_printf("[IDT] IDT initialized successfully\n");
 }

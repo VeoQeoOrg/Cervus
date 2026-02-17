@@ -58,7 +58,7 @@ void sched_init(void) {
         }
     }
 
-    serial_writestring(COM1, "Scheduler initialized (PREEMPTIVE SMP MODE)\n");
+    serial_writestring("Scheduler initialized (PREEMPTIVE SMP MODE)\n");
 }
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
@@ -111,7 +111,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
 
     t->fpu_state = (fpu_state_t*)pmm_alloc(1);
     if (!t->fpu_state) {
-        serial_printf(COM1, "WARNING: Failed to allocate FPU state for task %s\n", name);
+        serial_printf("WARNING: Failed to allocate FPU state for task %s\n", name);
         t->fpu_used = false;
     } else {
         memset(t->fpu_state, 0, sizeof(fpu_state_t));
@@ -124,7 +124,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
 
         t->fpu_used = false;
 
-        serial_printf(COM1, "Task %s: FPU state initialized (FCW=0x%x, MXCSR=0x%x)\n",
+        serial_printf("Task %s: FPU state initialized (FCW=0x%x, MXCSR=0x%x)\n",
                      name, *fcw, *mxcsr);
     }
 
@@ -135,7 +135,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     ready_queues[t->priority] = t;
     spin_unlock(&global_queue_lock);
 
-    serial_printf(COM1, "Task created: %s (prio %d, timeslice %u, rsp=0x%llx, FPU=%s)\n",
+    serial_printf("Task created: %s (prio %d, timeslice %u, rsp=0x%llx, FPU=%s)\n",
                   name, t->priority, t->time_slice, t->rsp,
                   t->fpu_state ? "yes" : "no");
 
@@ -167,7 +167,7 @@ static task_t* sched_pick_next(uint32_t cpu) {
             t->cpu_id = cpu;
 
             if (pick_calls <= 10) {
-                serial_printf(COM1, "[CPU %u] Migrated task %s from global queue\n",
+                serial_printf("[CPU %u] Migrated task %s from global queue\n",
                              cpu, t->name);
             }
 
@@ -186,7 +186,7 @@ void sched_reschedule(void) {
     reschedule_calls++;
 
     if (first_call == 0) {
-        serial_writestring(COM1, "\n!!! FIRST SCHED_RESCHEDULE CALL !!!\n");
+        serial_writestring("\n!!! FIRST SCHED_RESCHEDULE CALL !!!\n");
         first_call = 1;
     }
 
@@ -194,14 +194,14 @@ void sched_reschedule(void) {
     task_t* old = current_task[cpu];
 
     if (reschedule_calls <= 10) {
-        serial_printf(COM1, "[CPU %u] Reschedule #%llu: old task: %s\n",
+        serial_printf("[CPU %u] Reschedule #%llu: old task: %s\n",
                      cpu, reschedule_calls, old ? old->name : "NULL");
     }
 
     task_t* next = sched_pick_next(cpu);
 
     if (reschedule_calls <= 10) {
-        serial_printf(COM1, "[CPU %u]   Picked next: %s (fpu_used=%d)\n",
+        serial_printf("[CPU %u]   Picked next: %s (fpu_used=%d)\n",
                      cpu, next ? next->name : "NULL", next ? next->fpu_used : -1);
     }
 
@@ -214,7 +214,7 @@ void sched_reschedule(void) {
         if (!old->fpu_used) {
             old->fpu_used = true;
             if (reschedule_calls <= 10) {
-                serial_printf(COM1, "[CPU %u] Task %s started using FPU\n",
+                serial_printf("[CPU %u] Task %s started using FPU\n",
                              cpu, old->name);
             }
         }
@@ -222,7 +222,7 @@ void sched_reschedule(void) {
         fpu_save(old->fpu_state);
 
         if (reschedule_calls <= 10) {
-            serial_printf(COM1, "[CPU %u]   Saved FPU state for %s\n", cpu, old->name);
+            serial_printf("[CPU %u]   Saved FPU state for %s\n", cpu, old->name);
         }
     }
 
@@ -240,21 +240,21 @@ void sched_reschedule(void) {
 
     if (!old) {
         if (reschedule_calls <= 10) {
-            serial_printf(COM1, "[CPU %u]   First switch - calling first_task_start for %s\n",
+            serial_printf("[CPU %u]   First switch - calling first_task_start for %s\n",
                          cpu, next->name);
         }
 
         if (next->fpu_state) {
             fpu_restore(next->fpu_state);
             if (reschedule_calls <= 10) {
-                serial_printf(COM1, "[CPU %u]   Initialized FPU from fpu_state\n", cpu);
+                serial_printf("[CPU %u]   Initialized FPU from fpu_state\n", cpu);
             }
         }
 
         asm volatile ("" ::: "memory");
         first_task_start(next);
 
-        serial_writestring(COM1, "[SCHED] FATAL: first_task_start returned!\n");
+        serial_writestring("[SCHED] FATAL: first_task_start returned!\n");
         while (1) {
             asm volatile ("cli; hlt");
         }
@@ -263,12 +263,12 @@ void sched_reschedule(void) {
     if (next->fpu_state && next->fpu_used) {
         fpu_restore(next->fpu_state);
         if (reschedule_calls <= 10) {
-            serial_printf(COM1, "[CPU %u]   Restored FPU state for %s\n", cpu, next->name);
+            serial_printf("[CPU %u]   Restored FPU state for %s\n", cpu, next->name);
         }
     }
 
     if (reschedule_calls <= 10) {
-        serial_printf(COM1, "[CPU %u]   Calling context_switch(0x%llx, 0x%llx)\n",
+        serial_printf("[CPU %u]   Calling context_switch(0x%llx, 0x%llx)\n",
                      cpu, (uint64_t)old, (uint64_t)next);
     }
 
@@ -280,9 +280,9 @@ void task_yield(void) {
 }
 
 void sched_print_stats(void) {
-    serial_printf(COM1, "\n=== Scheduler Statistics (SMP) ===\n");
+    serial_printf("\n=== Scheduler Statistics (SMP) ===\n");
 
-    serial_writestring(COM1, "Global queue:\n");
+    serial_writestring("Global queue:\n");
     for (int p = MAX_PRIORITY; p >= 0; p--) {
         task_t* t = ready_queues[p];
         int count = 0;
@@ -291,15 +291,15 @@ void sched_print_stats(void) {
             t = t->next;
         }
         if (count > 0) {
-            serial_printf(COM1, "  Priority %d: %d tasks\n", p, count);
+            serial_printf("  Priority %d: %d tasks\n", p, count);
         }
     }
 
     for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
-        serial_printf(COM1, "\nCPU %u:\n", cpu);
+        serial_printf("\nCPU %u:\n", cpu);
 
         if (current_task[cpu]) {
-            serial_printf(COM1, "  Running: %s (FPU: %s)\n",
+            serial_printf("  Running: %s (FPU: %s)\n",
                          current_task[cpu]->name,
                          current_task[cpu]->fpu_used ? "yes" : "no");
         }
@@ -312,10 +312,10 @@ void sched_print_stats(void) {
                 t = t->next;
             }
             if (count > 0) {
-                serial_printf(COM1, "  Priority %d: %d tasks\n", p, count);
+                serial_printf("  Priority %d: %d tasks\n", p, count);
             }
         }
     }
 
-    serial_printf(COM1, "============================\n\n");
+    serial_printf("============================\n\n");
 }

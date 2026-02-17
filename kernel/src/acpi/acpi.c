@@ -22,14 +22,14 @@ static bool checksum(void *base, size_t len) {
 
 void acpi_init(void) {
     if (!rsdp_request.response) {
-        serial_writestring(COM1, "ACPI: no RSDP\n");
+        serial_writestring("ACPI: no RSDP\n");
         return;
     }
 
     rsdp = (acpi_rsdp2_t *)rsdp_request.response->address;
 
     if (!checksum(&rsdp->rsdp_v1, sizeof(acpi_rsdp_t))) {
-        serial_writestring(COM1, "ACPI: bad RSDP checksum\n");
+        serial_writestring("ACPI: bad RSDP checksum\n");
         return;
     }
 
@@ -76,24 +76,24 @@ void *acpi_find_table(const char *sig, uint64_t index) {
 }
 
 void acpi_print_tables(void) {
-    serial_writestring(COM1, "ACPI tables:\n");
+    serial_writestring("ACPI tables:\n");
 
     for (uint64_t i = 0;; i++) {
         acpi_sdt_header_t *h = acpi_find_table("APIC", i);
         if (!h) break;
-        serial_writestring(COM1, "  - APIC (MADT)\n");
+        serial_writestring("  - APIC (MADT)\n");
     }
 
     for (uint64_t i = 0;; i++) {
         acpi_sdt_header_t *h = acpi_find_table("HPET", i);
         if (!h) break;
-        serial_writestring(COM1, "  - HPET\n");
+        serial_writestring("  - HPET\n");
     }
 
     for (uint64_t i = 0;; i++) {
         acpi_sdt_header_t *h = acpi_find_table("MCFG", i);
         if (!h) break;
-        serial_writestring(COM1, "  - MCFG (PCIe)\n");
+        serial_writestring("  - MCFG (PCIe)\n");
     }
 }
 
@@ -120,17 +120,17 @@ static void acpi_send_pm1_command(acpi_fadt_t *fadt, uint8_t slp_typ, uint8_t sl
 void acpi_shutdown(void) {
     acpi_fadt_t *fadt = (acpi_fadt_t *)acpi_find_table("FACP", 0);
     if (!fadt) {
-        serial_writestring(COM1, "ACPI shutdown: FADT not found\n");
+        serial_writestring("ACPI shutdown: FADT not found\n");
         return;
     }
 
     const uint8_t candidates[] = {5, 0, 7, 1, 2, 3, 4, 6};
     size_t n = sizeof(candidates) / sizeof(candidates[0]);
 
-    serial_writestring(COM1, "ACPI shutdown: trying S5 candidates...\n");
+    serial_writestring("ACPI shutdown: trying S5 candidates...\n");
 
     for (size_t i = 0; i < n; i++) {
-        serial_printf(COM1, "  Trying SLP_TYP=%d for S5...\n", candidates[i]);
+        serial_printf("  Trying SLP_TYP=%d for S5...\n", candidates[i]);
         acpi_send_pm1_command(fadt, candidates[i], 10);
     }
 }

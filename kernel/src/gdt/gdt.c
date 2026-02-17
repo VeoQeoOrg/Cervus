@@ -30,9 +30,9 @@ void gdt_init() {
     gdtr.size = (5 * sizeof(gdt_entry_t)) - 1;
     gdtr.pointer = &gdt.gdt_entries[0];
 
-    serial_printf(COM1, "Installing temporary GDT for BSP...\n");
+    serial_printf("Installing temporary GDT for BSP...\n");
     gdt_load();
-    serial_printf(COM1, "Temporary GDT installed\n");
+    serial_printf("Temporary GDT installed\n");
 }
 
 void gdt_load(void) {

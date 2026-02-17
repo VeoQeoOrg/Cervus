@@ -42,19 +42,19 @@ void paging_init(void) {
                          0xFFFFFFFF80000000ULL,
                          0xFFFFFFFFC0000000ULL);
 
-    serial_printf(COM1, "Paging: subsystem initialized\n");
+    serial_printf("Paging: subsystem initialized\n");
 }
 
 bool paging_reserve_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t virt_end) {
     (void)pagemap;
 
     if (reserved_count >= MAX_RESERVED) {
-        serial_printf(COM1, "PAGING ERROR: too many reserved ranges\n");
+        serial_printf("PAGING ERROR: too many reserved ranges\n");
         return false;
     }
 
     if (virt_start >= virt_end) {
-        serial_printf(COM1, "PAGING ERROR: invalid reserved range\n");
+        serial_printf("PAGING ERROR: invalid reserved range\n");
         return false;
     }
 
@@ -62,7 +62,7 @@ bool paging_reserve_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_
         if (ranges_overlap(virt_start, virt_end,
                           reserved_ranges[i].start,
                           reserved_ranges[i].end)) {
-            serial_printf(COM1, "PAGING ERROR: reserved range overlaps\n");
+            serial_printf("PAGING ERROR: reserved range overlaps\n");
             return false;
         }
     }
@@ -71,7 +71,7 @@ bool paging_reserve_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_
     reserved_ranges[reserved_count].end   = virt_end;
     reserved_count++;
 
-    serial_printf(COM1, "Paging: reserved range 0x%llx-0x%llx\n", virt_start, virt_end);
+    serial_printf("Paging: reserved range 0x%llx-0x%llx\n", virt_start, virt_end);
     return true;
 }
 
@@ -101,13 +101,13 @@ bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
         return false;
 
     if (!is_aligned(virt_start, PAGE_SIZE) || !is_aligned(phys_start, PAGE_SIZE)) {
-        serial_printf(COM1, "PAGING ERROR: unaligned addresses\n");
+        serial_printf("PAGING ERROR: unaligned addresses\n");
         return false;
     }
 
     uintptr_t virt_end = virt_start + page_count * PAGE_SIZE;
     if (is_range_reserved(virt_start, virt_end)) {
-        serial_printf(COM1, "PAGING ERROR: range overlaps reserved area\n");
+        serial_printf("PAGING ERROR: range overlaps reserved area\n");
         return false;
     }
 
@@ -118,7 +118,7 @@ bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
         uintptr_t existing_phys;
         if (vmm_virt_to_phys(pagemap, virt, &existing_phys)) {
             if (existing_phys != phys) {
-                serial_printf(COM1, "PAGING ERROR: page at 0x%llx already mapped to 0x%llx\n",
+                serial_printf("PAGING ERROR: page at 0x%llx already mapped to 0x%llx\n",
                               virt, existing_phys);
                 return false;
             }
@@ -131,7 +131,7 @@ bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
             }
         } else {
             if (!vmm_map_page(pagemap, virt, phys, flags)) {
-                serial_printf(COM1, "PAGING ERROR: failed to map 0x%llx -> 0x%llx\n", virt, phys);
+                serial_printf("PAGING ERROR: failed to map 0x%llx -> 0x%llx\n", virt, phys);
                 for (size_t j = 0; j < i; j++)
                     vmm_unmap_page(pagemap, virt_start + j * PAGE_SIZE);
                 return false;
@@ -157,7 +157,7 @@ bool paging_change_flags(vmm_pagemap_t* pagemap, uintptr_t virt_start,
         return false;
 
     if (!is_aligned(virt_start, PAGE_SIZE)) {
-        serial_printf(COM1, "PAGING ERROR: unaligned address 0x%llx\n", virt_start);
+        serial_printf("PAGING ERROR: unaligned address 0x%llx\n", virt_start);
         return false;
     }
 
@@ -166,13 +166,13 @@ bool paging_change_flags(vmm_pagemap_t* pagemap, uintptr_t virt_start,
         uintptr_t phys;
 
         if (!vmm_virt_to_phys(pagemap, virt, &phys)) {
-            serial_printf(COM1, "PAGING ERROR: page at 0x%llx not mapped\n", virt);
+            serial_printf("PAGING ERROR: page at 0x%llx not mapped\n", virt);
             return false;
         }
 
         vmm_unmap_page(pagemap, virt);
         if (!vmm_map_page(pagemap, virt, phys, new_flags)) {
-            serial_printf(COM1, "PAGING ERROR: failed to remap 0x%llx\n", virt);
+            serial_printf("PAGING ERROR: failed to remap 0x%llx\n", virt);
             return false;
         }
     }
@@ -183,7 +183,7 @@ paging_region_t* paging_create_region(vmm_pagemap_t* pagemap,
                                      uintptr_t virt_start, size_t size,
                                      uint64_t flags) {
     if (region_count >= MAX_REGIONS) {
-        serial_printf(COM1, "PAGING ERROR: too many regions\n");
+        serial_printf("PAGING ERROR: too many regions\n");
         return NULL;
     }
 
@@ -191,20 +191,20 @@ paging_region_t* paging_create_region(vmm_pagemap_t* pagemap,
     uintptr_t virt_end = virt_start + page_count * PAGE_SIZE;
 
     if (!paging_is_range_free(pagemap, virt_start, virt_end)) {
-        serial_printf(COM1, "PAGING ERROR: region overlaps existing mapping\n");
+        serial_printf("PAGING ERROR: region overlaps existing mapping\n");
         return NULL;
     }
 
     void* phys_mem = pmm_alloc_zero(page_count);
     if (!phys_mem) {
-        serial_printf(COM1, "PAGING ERROR: out of physical memory\n");
+        serial_printf("PAGING ERROR: out of physical memory\n");
         return NULL;
     }
 
     uintptr_t phys_start = pmm_virt_to_phys(phys_mem);
     if (!paging_map_range(pagemap, virt_start, phys_start, page_count, flags)) {
         pmm_free(phys_mem, page_count);
-        serial_printf(COM1, "PAGING ERROR: failed to map region\n");
+        serial_printf("PAGING ERROR: failed to map region\n");
         return NULL;
     }
 
@@ -216,7 +216,7 @@ paging_region_t* paging_create_region(vmm_pagemap_t* pagemap,
     region->page_count = page_count;
     region->allocated = true;
 
-    serial_printf(COM1, "Paging: created region 0x%llx-0x%llx (%zu pages)\n",
+    serial_printf("Paging: created region 0x%llx-0x%llx (%zu pages)\n",
                   virt_start, virt_end, page_count);
     return region;
 }
@@ -259,7 +259,7 @@ void* paging_alloc_pages(vmm_pagemap_t* pagemap, size_t page_count,
         return NULL;
     }
 
-    serial_printf(COM1, "Paging: allocated %zu pages at virt 0x%llx\n", page_count, virt_start);
+    serial_printf("Paging: allocated %zu pages at virt 0x%llx\n", page_count, virt_start);
     return (void*)virt_start;
 }
 
@@ -269,14 +269,14 @@ void paging_free_pages(vmm_pagemap_t* pagemap, void* virt_addr, size_t page_coun
 
     uintptr_t virt_start = (uintptr_t)virt_addr;
     paging_unmap_range(pagemap, virt_start, page_count);
-    serial_printf(COM1, "Paging: freed %zu pages at virt 0x%llx\n", page_count, virt_start);
+    serial_printf("Paging: freed %zu pages at virt 0x%llx\n", page_count, virt_start);
 }
 
 void paging_print_stats(vmm_pagemap_t* pagemap) {
     (void)pagemap;
 
-    serial_printf(COM1, "\n=== Paging Statistics ===\n");
-    serial_printf(COM1, "Regions: %zu, Reserved: %zu\n", region_count, reserved_count);
+    serial_printf("\n=== Paging Statistics ===\n");
+    serial_printf("Regions: %zu, Reserved: %zu\n", region_count, reserved_count);
 
     size_t active = 0, total_pages = 0, total_bytes = 0;
     for (size_t i = 0; i < region_count; i++) {
@@ -287,19 +287,19 @@ void paging_print_stats(vmm_pagemap_t* pagemap) {
         }
     }
 
-    serial_printf(COM1, "Active regions: %zu\n", active);
-    serial_printf(COM1, "Total pages: %zu (%.2f MB)\n", total_pages, total_bytes / (1024.0 * 1024.0));
-    serial_printf(COM1, "Next alloc: 0x%llx\n", next_alloc_virt);
+    serial_printf("Active regions: %zu\n", active);
+    serial_printf("Total pages: %zu (%.2f MB)\n", total_pages, total_bytes / (1024.0 * 1024.0));
+    serial_printf("Next alloc: 0x%llx\n", next_alloc_virt);
 
-    serial_printf(COM1, "\nReserved ranges:\n");
+    serial_printf("\nReserved ranges:\n");
     for (size_t i = 0; i < reserved_count; i++) {
-        serial_printf(COM1, "  0x%llx - 0x%llx\n",
+        serial_printf("  0x%llx - 0x%llx\n",
                       reserved_ranges[i].start, reserved_ranges[i].end);
     }
 }
 
 void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t virt_end) {
-    serial_printf(COM1, "\n=== Page Table Dump (0x%llx - 0x%llx) ===\n", virt_start, virt_end);
+    serial_printf("\n=== Page Table Dump (0x%llx - 0x%llx) ===\n", virt_start, virt_end);
 
     size_t mapped = 0, total = 0;
     for (uintptr_t virt = virt_start; virt < virt_end; virt += PAGE_SIZE) {
@@ -308,13 +308,13 @@ void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t v
         uint64_t flags;
         if (vmm_virt_to_phys(pagemap, virt, &phys) && vmm_get_page_flags(pagemap, virt, &flags)) {
             mapped++;
-            serial_printf(COM1, "0x%llx -> 0x%llx [", virt, phys);
-            if (flags & PAGING_PRESENT) serial_printf(COM1, "P");
-            if (flags & PAGING_WRITE)  serial_printf(COM1, "W");
-            if (flags & PAGING_USER)   serial_printf(COM1, "U");
-            if (flags & PAGING_NOEXEC) serial_printf(COM1, "NX");
-            serial_printf(COM1, "]\n");
+            serial_printf("0x%llx -> 0x%llx [", virt, phys);
+            if (flags & PAGING_PRESENT) serial_printf("P");
+            if (flags & PAGING_WRITE)  serial_printf("W");
+            if (flags & PAGING_USER)   serial_printf("U");
+            if (flags & PAGING_NOEXEC) serial_printf("NX");
+            serial_printf("]\n");
         }
     }
-    serial_printf(COM1, "Mapped: %zu/%zu pages (%.1f%%)\n", mapped, total, (float)mapped / total * 100);
+    serial_printf("Mapped: %zu/%zu pages (%.1f%%)\n", mapped, total, (float)mapped / total * 100);
 }

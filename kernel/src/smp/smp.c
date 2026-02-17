@@ -29,15 +29,15 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
 
     lapic_write(0xF0, 0);
 
-    serial_printf(COM1, "GDT Loading\n");
+    serial_printf("GDT Loading\n");
     gdt_load();
-    serial_printf(COM1, "GDT Loaded\n");
+    serial_printf("GDT Loaded\n");
 
-    serial_printf(COM1, "IDT Loading\n");
+    serial_printf("IDT Loading\n");
     idt_load();
-    serial_printf(COM1, "IDT Loaded\n");
+    serial_printf("IDT Loaded\n");
 
-    serial_printf(COM1, "TSS Loading\n");
+    serial_printf("TSS Loading\n");
     uint32_t lapic_id = lapic_get_id();
     smp_info_t* info = smp_get_info();
     uint32_t my_index = 0;
@@ -49,7 +49,7 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
         }
     }
     load_tss(info->cpus[my_index].tss_selector);
-    serial_printf(COM1, "TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
+    serial_printf("TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
 
     fpu_init();
     sse_init();
@@ -59,18 +59,18 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     cpu_info_t* cpu = smp_get_current_cpu();
     percpu_t* region = percpu_regions[cpu->cpu_index];
     set_percpu_base(region);
-    serial_printf(COM1, "PerCPU base set for AP %u: 0x%llx\n", lapic_get_id(), (uint64_t)region);
+    serial_printf("PerCPU base set for AP %u: 0x%llx\n", lapic_get_id(), (uint64_t)region);
 
     __sync_fetch_and_add(&ap_online_count, 1);
     lapic_eoi();
     asm volatile ("sti");
 
-    serial_printf(COM1, "SMP: AP (LAPIC ID %u) initialized and online!\n", lapic_id);
+    serial_printf("SMP: AP (LAPIC ID %u) initialized and online!\n", lapic_id);
 
     while (1) {
         uint32_t id = lapic_get_id();
         if (id < MAX_CPUS && percpu_regions[id] != NULL && percpu_regions[id]->need_resched) {
-            serial_printf(COM1, "AP %u: need_resched from IPI!\n", id);
+            serial_printf("AP %u: need_resched from IPI!\n", id);
             percpu_regions[id]->need_resched = false;
         }
         asm volatile ("hlt");
@@ -99,22 +99,22 @@ static uint64_t smp_allocate_stack(uint32_t cpu_index, size_t stack_size) {
     size_t pages = (stack_size + PAGE_SIZE - 1) / PAGE_SIZE;
     void* stack_pages = pmm_alloc(pages);
     if (!stack_pages) {
-        serial_printf(COM1, "SMP: WARNING - Failed to allocate stack for CPU %u\n", cpu_index);
+        serial_printf("SMP: WARNING - Failed to allocate stack for CPU %u\n", cpu_index);
         return 0;
     }
     uint64_t stack_virt = (uint64_t)stack_pages + stack_size;
-    serial_printf(COM1, "SMP: Allocated stack for CPU %u at 0x%llx (size %zu)\n",
+    serial_printf("SMP: Allocated stack for CPU %u at 0x%llx (size %zu)\n",
                   cpu_index, stack_virt, stack_size);
     return stack_virt;
 }
 
 void smp_boot_aps(struct limine_mp_response* mp_response) {
     if (!mp_response) {
-        serial_writestring(COM1, "SMP: ERROR - MP response is NULL\n");
+        serial_writestring("SMP: ERROR - MP response is NULL\n");
         return;
     }
 
-    serial_writestring(COM1, "\n=== Booting Application Processors ===\n");
+    serial_writestring("\n=== Booting Application Processors ===\n");
 
     smp_info_t* info = smp_get_info();
     uint32_t bsp_lapic_id = info->bsp_lapic_id;
@@ -129,7 +129,7 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
 
         uint64_t stack_top = smp_allocate_stack(i, AP_STACK_SIZE);
         if (stack_top == 0) {
-            serial_printf(COM1, "SMP: Skipping CPU %u (stack alloc failed)\n", i);
+            serial_printf("SMP: Skipping CPU %u (stack alloc failed)\n", i);
             info->cpus[i].state = CPU_FAULTED;
             continue;
         }
@@ -140,7 +140,7 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
         cpu->extra_argument = stack_top;
         cpu->goto_address = (void*)ap_entry_point;
 
-        serial_printf(COM1, "SMP: Configured AP %lu (LAPIC ID %u) to boot at 0x%llx\n",
+        serial_printf("SMP: Configured AP %lu (LAPIC ID %u) to boot at 0x%llx\n",
                       i, cpu->lapic_id, (uint64_t)ap_entry_point);
         ap_count++;
     }
@@ -148,7 +148,7 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
     __sync_synchronize();
 
     if (ap_count > 0) {
-        serial_printf(COM1, "SMP: Waiting for %u AP(s) to initialize...\n", ap_count);
+        serial_printf("SMP: Waiting for %u AP(s) to initialize...\n", ap_count);
         uint64_t timeout = 10000000;
         while (ap_online_count < ap_count && timeout--) {
             asm volatile ("pause");
@@ -156,27 +156,27 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
 
         uint32_t online = ap_online_count;
         if (online == ap_count) {
-            serial_printf(COM1, "SMP: SUCCESS - All %u AP(s) online!\n", ap_count);
+            serial_printf("SMP: SUCCESS - All %u AP(s) online!\n", ap_count);
         } else {
-            serial_printf(COM1, "SMP: WARNING - Only %u/%u AP(s) online (timeout)\n",
+            serial_printf("SMP: WARNING - Only %u/%u AP(s) online (timeout)\n",
                           online, ap_count);
         }
 
         info->online_count = 1 + online;
     } else {
-        serial_writestring(COM1, "SMP: No APs to boot\n");
+        serial_writestring("SMP: No APs to boot\n");
     }
 
-    serial_writestring(COM1, "=== AP Boot Sequence Complete ===\n\n");
+    serial_writestring("=== AP Boot Sequence Complete ===\n\n");
 }
 
 static void smp_init_limine(struct limine_mp_response* response) {
     if (!response) {
-        serial_writestring(COM1, "SMP: Limine MP response is NULL\n");
+        serial_writestring("SMP: Limine MP response is NULL\n");
         return;
     }
 
-    serial_printf(COM1, "SMP: Initializing via Limine MP (CPU count: %u)\n",
+    serial_printf("SMP: Initializing via Limine MP (CPU count: %u)\n",
                   response->cpu_count);
 
     smp_info.cpu_count = response->cpu_count;
@@ -185,10 +185,10 @@ static void smp_init_limine(struct limine_mp_response* response) {
     acpi_madt_t* madt = (acpi_madt_t*)acpi_find_table("APIC", 0);
     if (madt) {
         smp_info.lapic_base = madt->local_apic_address;
-        serial_printf(COM1, "SMP: LAPIC base from ACPI: 0x%x\n", smp_info.lapic_base);
+        serial_printf("SMP: LAPIC base from ACPI: 0x%x\n", smp_info.lapic_base);
     } else {
         smp_info.lapic_base = 0xFEE00000;
-        serial_printf(COM1, "SMP: Using default LAPIC base: 0x%x\n", smp_info.lapic_base);
+        serial_printf("SMP: Using default LAPIC base: 0x%x\n", smp_info.lapic_base);
     }
 
     for (uint64_t i = 0; i < response->cpu_count; i++) {
@@ -204,18 +204,18 @@ static void smp_init_limine(struct limine_mp_response* response) {
         if (smp_info.cpus[i].is_bsp) {
             smp_info.bsp_lapic_id = cpu->lapic_id;
             smp_info.cpus[i].state = CPU_ONLINE;
-            serial_printf(COM1, "SMP: BSP detected - APIC ID: %u\n",
+            serial_printf("SMP: BSP detected - APIC ID: %u\n",
                           cpu->lapic_id);
         }
 
-        serial_printf(COM1, "SMP: CPU[%lu] - APIC ID: %u, Processor ID: %u, BSP: %s\n",
+        serial_printf("SMP: CPU[%lu] - APIC ID: %u, Processor ID: %u, BSP: %s\n",
                       i, cpu->lapic_id, cpu->lapic_id,
                       smp_info.cpus[i].is_bsp ? "YES" : "NO");
     }
 }
 
 void smp_init(struct limine_mp_response* mp_response) {
-    serial_writestring(COM1, "\n=== SMP Initialization ===\n");
+    serial_writestring("\n=== SMP Initialization ===\n");
 
     smp_init_limine(mp_response);
 
@@ -230,7 +230,7 @@ void smp_init(struct limine_mp_response* mp_response) {
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
         tss[i] = (tss_t *)pmm_alloc(1);
         if (!tss[i]) {
-            serial_printf(COM1, "SMP: FAILED to allocate TSS for CPU %u\n", i);
+            serial_printf("SMP: FAILED to allocate TSS for CPU %u\n", i);
             continue;
         }
         memset(tss[i], 0, sizeof(tss_t));
@@ -243,7 +243,7 @@ void smp_init(struct limine_mp_response* mp_response) {
 
         tss[i]->iobase = sizeof(tss_t);
 
-        serial_printf(COM1, "TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
+        serial_printf("TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
 
         tss_entry_t *entry = (tss_entry_t *)&gdt.gdt_entries[5 + (i * 2)];
         entry->limit_low = sizeof(tss_t) - 1;
@@ -261,14 +261,14 @@ void smp_init(struct limine_mp_response* mp_response) {
 
     gdtr.size = (5 + (smp_info.cpu_count * 2)) * sizeof(gdt_entry_t) - 1;
 
-    serial_printf(COM1, "Reloading extended GDT on BSP...\n");
+    serial_printf("Reloading extended GDT on BSP...\n");
     gdt_load();
 
     load_tss(smp_info.cpus[bsp_index].tss_selector);
-    serial_printf(COM1, "BSP TSS loaded (selector 0x%x)\n", smp_info.cpus[bsp_index].tss_selector);
+    serial_printf("BSP TSS loaded (selector 0x%x)\n", smp_info.cpus[bsp_index].tss_selector);
 
     uint32_t current_lapic_id = lapic_get_id();
-    serial_printf(COM1, "SMP: Current LAPIC ID: %u\n", current_lapic_id);
+    serial_printf("SMP: Current LAPIC ID: %u\n", current_lapic_id);
 
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
         if (smp_info.cpus[i].lapic_id == current_lapic_id) {
@@ -283,8 +283,8 @@ void smp_init(struct limine_mp_response* mp_response) {
     init_percpu_regions();
     smp_boot_aps(mp_response);
     set_percpu_base(percpu_regions[bsp_index]);
-    serial_printf(COM1, "PerCPU base set for BSP %u: 0x%llx\n", smp_info.bsp_lapic_id, (uint64_t)percpu_regions[bsp_index]);
-    serial_writestring(COM1, "=== SMP Initialization Complete ===\n\n");
+    serial_printf("PerCPU base set for BSP %u: 0x%llx\n", smp_info.bsp_lapic_id, (uint64_t)percpu_regions[bsp_index]);
+    serial_writestring("=== SMP Initialization Complete ===\n\n");
 }
 
 smp_info_t* smp_get_info(void) {
@@ -323,15 +323,15 @@ bool smp_is_bsp(void) {
 }
 
 void smp_print_info(void) {
-    serial_writestring(COM1, "\n=== SMP CPU Information ===\n");
-    serial_printf(COM1, "Total CPUs: %u\n", smp_info.cpu_count);
-    serial_printf(COM1, "Online CPUs: %u\n", smp_info.online_count);
-    serial_printf(COM1, "BSP APIC ID: %u\n", smp_info.bsp_lapic_id);
+    serial_writestring("\n=== SMP CPU Information ===\n");
+    serial_printf("Total CPUs: %u\n", smp_info.cpu_count);
+    serial_printf("Online CPUs: %u\n", smp_info.online_count);
+    serial_printf("BSP APIC ID: %u\n", smp_info.bsp_lapic_id);
 
     if (smp_info.lapic_base != 0) {
-        serial_printf(COM1, "LAPIC Base: 0x%llx\n", smp_info.lapic_base);
+        serial_printf("LAPIC Base: 0x%llx\n", smp_info.lapic_base);
     } else {
-        serial_writestring(COM1, "LAPIC Base: NOT AVAILABLE\n");
+        serial_writestring("LAPIC Base: NOT AVAILABLE\n");
     }
 
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
@@ -345,7 +345,7 @@ void smp_print_info(void) {
             default: state_str = "UNKNOWN"; break;
         }
 
-        serial_printf(COM1, "CPU[%u]: APIC ID: %u, Processor ID: %u, ACPI ID: %u, State: %s, BSP: %s\n",
+        serial_printf("CPU[%u]: APIC ID: %u, Processor ID: %u, ACPI ID: %u, State: %s, BSP: %s\n",
                       i, smp_info.cpus[i].lapic_id,
                       smp_info.cpus[i].processor_id,
                       smp_info.cpus[i].acpi_id,
@@ -353,7 +353,7 @@ void smp_print_info(void) {
                       smp_info.cpus[i].is_bsp ? "YES" : "NO");
     }
 
-    serial_writestring(COM1, "=== End SMP CPU Information ===\n");
+    serial_writestring("=== End SMP CPU Information ===\n");
 }
 
 void smp_print_info_fb(void) {
