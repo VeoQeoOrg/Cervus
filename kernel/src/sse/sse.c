@@ -359,7 +359,7 @@ void enable_fsgsbase(void) {
                   : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
                   : "0"(eax), "2"(0));
 
-    if (ebx & (1 << 0)) {  // FSGSBASE supported
+    if (ebx & (1 << 0)) {
         uint64_t cr4;
         asm volatile ("mov %%cr4, %0" : "=r"(cr4));
         cr4 |= (1ULL << 16);
@@ -367,6 +367,5 @@ void enable_fsgsbase(void) {
         serial_printf("[FSGSBASE] Enabled on CPU %u\n", lapic_get_id());
     } else {
         serial_writestring("ERROR: FSGSBASE not supported by CPU!\n");
-        // Здесь можно hcf() или fallback на MSR (см. ниже), но для простоты assume supported
     }
 }
