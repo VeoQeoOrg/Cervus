@@ -38,5 +38,4 @@ static inline size_t _heap_bin_of(size_t size) {
     return i;
 }
 
-
 #endif
