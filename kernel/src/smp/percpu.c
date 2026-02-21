@@ -3,6 +3,7 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+#include <stdlib.h>
 
 extern uintptr_t __percpu_start;
 extern uintptr_t __percpu_end;
@@ -18,7 +19,7 @@ void init_percpu_regions(void) {
 
     smp_info_t* info = smp_get_info();
     for (uint32_t i = 0; i < info->cpu_count; i++) {
-        void* region = pmm_alloc((percpu_size + PAGE_SIZE - 1) / PAGE_SIZE);
+        void* region = malloc(percpu_size);
         if (!region) {
             serial_printf("PerCPU: Alloc failed for CPU %u\n", i);
             continue;

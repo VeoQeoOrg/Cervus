@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 extern tss_t *tss[MAX_CPUS];
 extern struct {
@@ -204,8 +205,7 @@ static void smp_init_limine(struct limine_mp_response* response) {
         if (smp_info.cpus[i].is_bsp) {
             smp_info.bsp_lapic_id = cpu->lapic_id;
             smp_info.cpus[i].state = CPU_ONLINE;
-            serial_printf("SMP: BSP detected - APIC ID: %u\n",
-                          cpu->lapic_id);
+            serial_printf("SMP: BSP detected - APIC ID: %u\n", cpu->lapic_id);
         }
 
         serial_printf("SMP: CPU[%lu] - APIC ID: %u, Processor ID: %u, BSP: %s\n",
@@ -228,18 +228,17 @@ void smp_init(struct limine_mp_response* mp_response) {
     }
 
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
-        tss[i] = (tss_t *)pmm_alloc(1);
+        tss[i] = (tss_t *)calloc(1, sizeof(tss_t));
         if (!tss[i]) {
             serial_printf("SMP: FAILED to allocate TSS for CPU %u\n", i);
             continue;
         }
-        memset(tss[i], 0, sizeof(tss_t));
 
-        tss[i]->rsp0 = smp_allocate_stack(i, KERNEL_STACK_SIZE);
-        tss[i]->ist[0] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
-        tss[i]->ist[1] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
-        tss[i]->ist[2] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
-        tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->rsp0     = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[0]   = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[1]   = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[2]   = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        tss[i]->ist[3]   = smp_allocate_stack(i, KERNEL_STACK_SIZE);
 
         tss[i]->iobase = sizeof(tss_t);
 
@@ -338,11 +337,11 @@ void smp_print_info(void) {
         const char* state_str;
         switch (smp_info.cpus[i].state) {
             case CPU_UNINITIALIZED: state_str = "UNINITIALIZED"; break;
-            case CPU_BOOTED: state_str = "BOOTED"; break;
-            case CPU_ONLINE: state_str = "ONLINE"; break;
-            case CPU_OFFLINE: state_str = "OFFLINE"; break;
-            case CPU_FAULTED: state_str = "FAULTED"; break;
-            default: state_str = "UNKNOWN"; break;
+            case CPU_BOOTED:        state_str = "BOOTED";        break;
+            case CPU_ONLINE:        state_str = "ONLINE";        break;
+            case CPU_OFFLINE:       state_str = "OFFLINE";       break;
+            case CPU_FAULTED:       state_str = "FAULTED";       break;
+            default:                state_str = "UNKNOWN";       break;
         }
 
         serial_printf("CPU[%u]: APIC ID: %u, Processor ID: %u, ACPI ID: %u, State: %s, BSP: %s\n",

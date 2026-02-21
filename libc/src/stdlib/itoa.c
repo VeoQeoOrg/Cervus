@@ -23,13 +23,11 @@ char *itoa(int val, char *restrict str, int base) {
         val = val / base;
     }
 
-    // добавить знак минуса если число отрицательное
     if (negative)
         str[i++] = '-';
 
     str[i] = '\0';
-    
-    // переворачиваем строку, которая получилась в результате
+
     int start = 0, end = strlen(str) - 1;
     while (start < end) {
         char temp = str[start];

@@ -6,6 +6,7 @@
 #include "../include/memory/vmm.h"
 #include "../include/drivers/timer.h"
 #include <string.h>
+#include <stdlib.h>
 
 task_t* ready_queues[MAX_PRIORITY + 1] = {0};
 
@@ -64,14 +65,12 @@ void sched_init(void) {
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
     (void)arg;
 
-    task_t* t = pmm_alloc(1);
+    task_t* t = calloc(1, sizeof(task_t));
     if (!t) return NULL;
-
-    memset(t, 0, sizeof(task_t));
 
     uintptr_t stack_virt = (uintptr_t)pmm_alloc(4);
     if (!stack_virt) {
-        pmm_free(t, 1);
+        free(t);
         return NULL;
     }
 
@@ -109,7 +108,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     t->time_slice_init = TASK_DEFAULT_TIMESLICE;
     t->total_runtime = 0;
 
-    t->fpu_state = (fpu_state_t*)pmm_alloc(1);
+    t->fpu_state = (fpu_state_t*)aligned_alloc(16, sizeof(fpu_state_t));
     if (!t->fpu_state) {
         serial_printf("WARNING: Failed to allocate FPU state for task %s\n", name);
         t->fpu_used = false;
@@ -151,8 +150,6 @@ static task_t* sched_pick_next(uint32_t cpu) {
             task_t* t = percpu_ready_queues[cpu][p];
             percpu_ready_queues[cpu][p] = t->next;
             t->next = NULL;
-            t->time_slice = t->time_slice_init;
-            t->cpu_id = cpu;
             return t;
         }
     }
@@ -163,8 +160,6 @@ static task_t* sched_pick_next(uint32_t cpu) {
             task_t* t = ready_queues[p];
             ready_queues[p] = t->next;
             t->next = NULL;
-            t->time_slice = t->time_slice_init;
-            t->cpu_id = cpu;
 
             if (pick_calls <= 10) {
                 serial_printf("[CPU %u] Migrated task %s from global queue\n",

@@ -176,6 +176,7 @@ void kernel_main(void) {
     serial_writestring("Paging [OK]\n");
     vmm_init();
     serial_writestring("VMM [OK]\n");
+    malloc_init();
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");
@@ -206,8 +207,7 @@ void kernel_main(void) {
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
     print_simd_cpuid();
     pmm_print_stats();
-
-    //timer_sleep_ms(2000);
+    //timer_sleep_ms(200000);
     printf("2 seconds\n");
     //timer_sleep_us(10000000);
     printf("10 seconds\n");
