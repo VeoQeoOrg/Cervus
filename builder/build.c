@@ -31,7 +31,7 @@
 #define COLOR_BOLD    "\033[1m"
 
 const char *DIRS_TO_CLEAN[] = { "bin", "obj", "iso_root", "limine", "kernel/linker-scripts", "demo_iso", "limine-tools", "edk2-ovmf", NULL };
-const char *FILES_TO_CLEAN[] = { "Cervus.iso", "Cervus.hdd", "kernel/.deps-obtained", "limine.conf", "OS-TREE.txt", NULL };
+const char *FILES_TO_CLEAN[] = { "Cervus.iso", "Cervus.hdd", "kernel/.deps-obtained", "limine.conf", "OS-TREE.txt", "log.txt", NULL };
 
 const char *SSE_FILES[] = {
     "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c", "serial.c", "pmm.c", "paging.c", "apic.c", "kernel.c", NULL
@@ -669,7 +669,7 @@ int main(int argc, char **argv) {
         if (ARG_TREE) do_generate_tree();
         char iso_path[PATH_MAX]; snprintf(iso_path, sizeof(iso_path), "demo_iso/%s.latest.iso", IMAGE_NAME);
         print_color(COLOR_GREEN, "Starting QEMU...");
-        cmd_run(false, "qemu-system-x86_64 -M q35 -cdrom %s -boot d -serial stdio %s", iso_path, QEMUFLAGS);
+        cmd_run(false, "qemu-system-x86_64 -M q35 -cdrom %s -boot d -serial stdio %s 2>&1 | tee log.txt", iso_path, QEMUFLAGS);
         if (!ARG_NO_CLEAN) { rm_rf("obj"); rm_rf("bin"); }
         return 0;
     }

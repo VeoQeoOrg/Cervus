@@ -9,7 +9,7 @@
 #include "../../include/interrupts/idt.h"
 #include "../../include/sse/fpu.h"
 #include "../../include/sse/sse.h"
-#include "../../include/sched/task.h"
+#include "../../include/sched/sched.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -291,6 +291,12 @@ void smp_wait_for_ready(void) {
     while (smp_get_online_count() < smp_get_cpu_count())
         asm volatile ("pause");
     serial_writestring("All APs ready.\n");
+}
+
+uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index) {
+    smp_info_t* info = smp_get_info();
+    if (cpu_index >= info->cpu_count) return 0xFFFFFFFF;
+    return info->cpus[cpu_index].lapic_id;
 }
 
 void smp_print_info(void) {

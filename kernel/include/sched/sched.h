@@ -13,6 +13,13 @@ typedef struct {
     uint8_t data[512] __attribute__((aligned(16)));
 } fpu_state_t;
 
+typedef enum {
+    TASK_RUNNING = 0,
+    TASK_READY,
+    TASK_ZOMBIE,
+    TASK_DEAD,
+} task_state_t;
+
 typedef struct task {
     uint64_t rsp;
     uint64_t rip;
@@ -38,6 +45,10 @@ typedef struct task {
     void (*entry)(void*);
     void *arg;
 
+    uintptr_t stack_base;
+
+    task_state_t state;
+
     struct task* next;
 } task_t;
 
@@ -48,11 +59,17 @@ _Static_assert(offsetof(task_t, arg)   == 128, "task_t: arg offset changed   —
 extern task_t* ready_queues[MAX_PRIORITY + 1];
 extern task_t* current_task[8];
 
-void    sched_init(void);
+void sched_init(void);
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
-void    task_yield(void);
-void    sched_reschedule(void);
-void    sched_print_stats(void);
+void task_yield(void);
+void sched_reschedule(void);
+void sched_print_stats(void);
+
+__attribute__((noreturn)) void task_exit(void);
+
+void task_kill(task_t* task);
+
+void task_destroy(task_t* task);
 
 extern void context_switch(task_t* old, task_t* next);
 extern void first_task_start(task_t* task);

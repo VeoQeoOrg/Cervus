@@ -1,6 +1,8 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
+#include "../../include/apic/apic.h"
+#include "../../include/smp/smp.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -8,6 +10,7 @@
 #define MASK 0x1FF
 
 static vmm_pagemap_t kernel_pagemap;
+
 static inline void invlpg(void* addr) {
     asm volatile ("invlpg (%0)" :: "r"(addr) : "memory");
 }
@@ -30,7 +33,6 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index) {
 }
 
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
-    serial_printf("Mapping virt 0x%llx -> phys 0x%llx with flags 0x%llx\n", virt, phys, flags);
     size_t pml4_i = (virt >> 39) & MASK;
     size_t pdpt_i = (virt >> 30) & MASK;
     size_t pd_i   = (virt >> 21) & MASK;
@@ -41,14 +43,27 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     vmm_pte_t* pt   = get_table(pd, pd_i);
 
     pt[pt_i] = (phys & ~0xFFF) | flags | VMM_PRESENT | VMM_WRITE;
-    invlpg((void*)virt);
 
     asm volatile ("mfence" ::: "memory");
-    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    invlpg((void*)virt);
     asm volatile ("mfence" ::: "memory");
-    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
 
     return true;
+}
+
+void vmm_unmap_page_noflush(vmm_pagemap_t* map, uintptr_t virt) {
+    size_t pml4_i = (virt >> 39) & MASK;
+    size_t pdpt_i = (virt >> 30) & MASK;
+    size_t pd_i   = (virt >> 21) & MASK;
+    size_t pt_i   = (virt >> 12) & MASK;
+
+    if (!(map->pml4[pml4_i] & VMM_PRESENT)) return;
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
+    if (!(pdpt[pdpt_i] & VMM_PRESENT)) return;
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
+    if (!(pd[pd_i] & VMM_PRESENT)) return;
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+    pt[pt_i] = 0;
 }
 
 void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
@@ -63,9 +78,17 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
     if (!(pd[pd_i] & VMM_PRESENT)) return;
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+
     pt[pt_i] = 0;
+    asm volatile ("mfence" ::: "memory");
+
     invlpg((void*)virt);
+
+    if (smp_get_cpu_count() > 1) {
+        ipi_tlb_shootdown_broadcast(&virt, 1);
+    }
 }
+
 
 vmm_pagemap_t* vmm_create_pagemap(void) {
     vmm_pagemap_t* map = pmm_alloc_zero(1);
@@ -80,9 +103,9 @@ vmm_pagemap_t* vmm_create_pagemap(void) {
         map->pml4[i] = kernel_pagemap.pml4[i];
     }
 
-    serial_printf("VMM: new pagemap created\n");
     return map;
 }
+
 
 void vmm_switch_pagemap(vmm_pagemap_t* map) {
     uintptr_t phys = pmm_virt_to_phys(map->pml4);

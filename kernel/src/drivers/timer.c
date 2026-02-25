@@ -3,7 +3,7 @@
 #include "../include/io/serial.h"
 #include "../include/interrupts/interrupts.h"
 #include "../include/io/ports.h"
-#include "../include/sched/task.h"
+#include "../include/sched/sched.h"
 #include "../include/smp/percpu.h"
 
 static volatile uint64_t ticks = 0;

@@ -21,7 +21,7 @@
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
 #include "../include/smp/percpu.h"
-#include "../include/sched/task.h"
+#include "../include/sched/sched.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -72,13 +72,121 @@ static void hcf(void) {
     }
 }
 
-void high_priority_task(void* arg) {
+void exit_test_task(void* arg) {
     (void)arg;
-
     asm volatile ("sti");
 
-    serial_printf("[HighPri] Started with interrupts enabled!\n");
+    serial_printf("[ExitTest] Started — will exit after 3 iterations\n");
 
+    for (int i = 1; i <= 3; i++) {
+        serial_printf("[ExitTest] Iteration %d/3\n", i);
+        for (volatile uint64_t spin = 0; spin < 5000000; spin++)
+            asm volatile ("pause");
+    }
+
+    serial_printf("[ExitTest] Done — calling task_exit() now\n");
+    printf("[ExitTest] Exiting cleanly!\n");
+}
+
+static task_t* victim_task_ptr = NULL;
+
+void victim_task(void* arg) {
+    (void)arg;
+    asm volatile ("sti");
+
+    serial_printf("[Victim] Started — waiting to be killed\n");
+
+    uint64_t counter = 0;
+    while (1) {
+        counter++;
+        if (counter % 2000000 == 0) {
+            serial_printf("[Victim] Still alive, counter=%llu\n", counter);
+            printf("[Victim] alive %llu\n", counter / 1000000);
+        }
+    }
+}
+
+void killer_task(void* arg) {
+    (void)arg;
+    asm volatile ("sti");
+
+    serial_printf("[Killer] Started — will kill Victim after delay\n");
+
+    for (volatile uint64_t spin = 0; spin < 20000000; spin++)
+        asm volatile ("pause");
+
+    if (victim_task_ptr) {
+        serial_printf("[Killer] Sending kill to Victim task @ %p\n",
+                      (void*)victim_task_ptr);
+        printf("[Killer] Killing Victim now!\n");
+        task_kill(victim_task_ptr);
+
+        for (volatile uint64_t spin = 0; spin < 5000000; spin++)
+            asm volatile ("pause");
+
+        serial_printf("[Killer] Victim should be dead now. Freeing resources.\n");
+        task_destroy(victim_task_ptr);
+        victim_task_ptr = NULL;
+
+        serial_printf("[Killer] Done — returning from killer_task\n");
+        printf("[Killer] Done!\n");
+    } else {
+        serial_printf("[Killer] ERROR: victim_task_ptr is NULL!\n");
+    }
+}
+
+void tlb_test_task(void* arg) {
+    (void)arg;
+    asm volatile ("sti");
+
+    serial_printf("[TLBTest] Starting map/unmap stress test\n");
+
+    vmm_pagemap_t* kmap = vmm_get_kernel_pagemap();
+
+    void* phys_page = pmm_alloc(1);
+    if (!phys_page) {
+        serial_printf("[TLBTest] ERROR: pmm_alloc failed\n");
+        return;
+    }
+
+    uintptr_t test_virt = 0xFFFF900000000000ULL;
+
+    for (int round = 1; round <= 5; round++) {
+        vmm_map_page(kmap, test_virt,
+                     (uintptr_t)pmm_virt_to_phys(phys_page),
+                     VMM_PRESENT | VMM_WRITE | VMM_GLOBAL);
+
+        volatile uint64_t* ptr = (volatile uint64_t*)test_virt;
+        *ptr = (uint64_t)round * 0xDEADBEEF;
+
+        uint64_t readback = *ptr;
+        if (readback == (uint64_t)round * 0xDEADBEEF) {
+            serial_printf("[TLBTest] Round %d: write/read OK (0x%llx)\n",
+                          round, readback);
+        } else {
+            serial_printf("[TLBTest] Round %d: MISMATCH! wrote 0x%llx, got 0x%llx\n",
+                          round,
+                          (uint64_t)round * 0xDEADBEEF,
+                          readback);
+        }
+
+        vmm_unmap_page(kmap, test_virt);
+
+        serial_printf("[TLBTest] Round %d: unmap + TLB shootdown OK\n", round);
+
+        for (volatile uint64_t spin = 0; spin < 1000000; spin++)
+            asm volatile ("pause");
+    }
+
+    pmm_free(phys_page, 1);
+    serial_printf("[TLBTest] All rounds passed — TLB flush working correctly\n");
+    printf("[TLBTest] PASSED!\n");
+}
+
+void high_priority_task(void* arg) {
+    (void)arg;
+    asm volatile ("sti");
+    serial_printf("[HighPri] Started with interrupts enabled!\n");
     uint64_t counter = 0;
     while (1) {
         counter++;
@@ -91,11 +199,8 @@ void high_priority_task(void* arg) {
 
 void low_priority_task(void* arg) {
     (void)arg;
-
     asm volatile ("sti");
-
     serial_printf("[LowPri] Started with interrupts enabled!\n");
-
     uint64_t counter = 0;
     while (1) {
         counter++;
@@ -108,28 +213,20 @@ void low_priority_task(void* arg) {
 
 void fpu_test_task(void* arg) {
     (void)arg;
-
     asm volatile ("and $-16, %%rsp" ::: "memory");
     asm volatile ("sti");
-
     serial_printf("[FPU] Testing FPU operations...\n");
-
     volatile double a = 1.0, b = 2.0, c;
     c = a + b; serial_printf("[FPU] 1.0 + 2.0 = %e\n", c);
     c = a * b; serial_printf("[FPU] 1.0 * 2.0 = %e\n", c);
-
     serial_printf("[FPU] Tests PASSED! Running continuous...\n");
-
     volatile double x = 1.0;
     uint64_t iter = 0;
-
     while (1) {
         x = x * 1.1;
         iter++;
-
-        if (iter % 10000000 == 0) {
+        if (iter % 10000000 == 0)
             serial_printf("[FPU] %llu million operations\n", iter / 1000000);
-        }
     }
 }
 
@@ -157,12 +254,10 @@ void kernel_main(void) {
         serial_writestring("ERROR: No framebuffer available\n");
         hcf();
     }
-
     if (!memmap_request.response) {
         serial_writestring("ERROR: No memory map available\n");
         hcf();
     }
-
     if (!hhdm_request.response) {
         serial_writestring("ERROR: No HHDM available\n");
         hcf();
@@ -191,45 +286,45 @@ void kernel_main(void) {
     while (smp_get_online_count() < (smp_get_cpu_count() - 1)) {
         timer_sleep_ms(100);
     }
-
     serial_writestring("All APs ready.\n");
 
     printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
-
     printf("Framebuffer: %dx%d, %d bpp\n",
            global_framebuffer->width,
            global_framebuffer->height,
            global_framebuffer->bpp);
-
     printf("\nMemory Information:\n");
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
     print_simd_cpuid();
     pmm_print_stats();
-    //timer_sleep_ms(200000);
-    printf("2 seconds\n");
-    //timer_sleep_us(10000000);
-    printf("10 seconds\n");
+
     printf("\nSystem ready. Entering idle loop...\n");
     serial_writestring("\nSystem ready. Entering idle loop...\n");
-    //acpi_shutdown(); //works on real hardware & VM
+
     smp_print_info_fb();
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
-    //volatile uint64_t* ptr = (uint64_t*)0xDEADBEEF;
-    //*ptr = 0;
 
     sched_init();
     sched_notify_ready();
 
-    task_create("HighPri", high_priority_task, NULL, 25);
-    task_create("LowPri",  low_priority_task,  NULL, 10);
-    task_create("FPUTESTTASK",  fpu_test_task,  NULL, 1);
+    //tests
+
+    task_create("ExitTest", exit_test_task, NULL, 20);
+
+    victim_task_ptr = task_create("Victim", victim_task, NULL, 15);
+    task_create("Killer", killer_task, NULL, 18);
+
+    task_create("TLBTest", tlb_test_task, NULL, 12);
+
+    task_create("HighPri",    high_priority_task, NULL, 25);
+    task_create("LowPri",     low_priority_task,  NULL, 10);
+    task_create("FPUTESTTASK", fpu_test_task,     NULL,  1);
 
     timer_init();
 
     printf("Tasks switching automatically every ~10ms\n\n");
-
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
 

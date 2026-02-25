@@ -13,6 +13,13 @@ int putchar(int c);
 int puts(const char *str);
 int printf(const char *format, ...);
 
+int sprintf (char* restrict buf, const char* restrict fmt, ...);
+int snprintf(char* restrict buf, size_t size, const char* restrict fmt, ...);
+int vsprintf (char* restrict buf, const char* restrict fmt, va_list ap);
+int vsnprintf(char* restrict buf, size_t size, const char* restrict fmt, va_list ap);
+
+int vprintf(const char* restrict fmt, va_list ap);
+
 extern uint32_t cursor_x;
 extern uint32_t cursor_y;
 
@@ -28,4 +35,4 @@ void set_text_color(uint32_t color);
 void clear_screen(void);
 void scroll_up(int lines);
 
-#endif 
+#endif

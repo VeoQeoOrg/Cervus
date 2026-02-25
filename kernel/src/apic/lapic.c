@@ -141,16 +141,27 @@ void ipi_reschedule_single(uint32_t target_lapic_id) {
 void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
     if (count > MAX_TLB_ADDRESSES) count = MAX_TLB_ADDRESSES;
 
-    uint32_t id = lapic_get_id();
-    tlb_shootdown_t* q = &tlb_shootdown_queue[id];
+    uint32_t   my_lapic = lapic_get_id();
+    smp_info_t* info    = smp_get_info();
 
-    q->count = count;
-    for (size_t i = 0; i < count; i++) {
-        q->addresses[i] = addrs[i];
+    for (uint32_t i = 0; i < info->cpu_count; i++) {
+        uint32_t target_lapic = info->cpus[i].lapic_id;
+        if (target_lapic == my_lapic) continue;
+
+        tlb_shootdown_t* q = &tlb_shootdown_queue[target_lapic];
+        q->count = count;
+        for (size_t j = 0; j < count; j++)
+            q->addresses[j] = addrs[j];
+        __atomic_store_n(&q->pending, true, __ATOMIC_RELEASE);
     }
-    q->pending = true;
 
-    uint32_t icr_low = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14) | (3 << 18);
+    asm volatile ("mfence" ::: "memory");
+
+    uint32_t icr_low = IPI_TLB_SHOOTDOWN
+                     | (0 << 8)
+                     | (1 << 14)
+                     | (3 << 18);
+
     lapic_write(0x310, 0);
     lapic_write(0x300, icr_low);
 
@@ -165,10 +176,12 @@ void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
 
     q->addresses[0] = addr;
     q->count = 1;
-    q->pending = true;
+    __atomic_store_n(&q->pending, true, __ATOMIC_RELEASE);
+
+    asm volatile ("mfence" ::: "memory");
 
     uint32_t icr_high = target_lapic_id << 24;
-    uint32_t icr_low = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14);
+    uint32_t icr_low  = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14);
 
     lapic_write(0x310, icr_high);
     lapic_write(0x300, icr_low);
@@ -176,5 +189,6 @@ void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf("TLB shootdown sent to LAPIC %u for virt 0x%llx\n", target_lapic_id, addr);
+    serial_printf("TLB shootdown sent to LAPIC %u for virt 0x%llx\n",
+                  target_lapic_id, addr);
 }
