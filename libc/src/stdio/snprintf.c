@@ -364,6 +364,10 @@ int vprintf(const char* restrict fmt, va_list ap) {
     return n;
 }
 
+int vsprintf(char* restrict buf, const char* restrict fmt, va_list ap) {
+    return vsnprintf(buf, (size_t)-1, fmt, ap);
+}
+
 int snprintf(char* restrict buf, size_t size, const char* restrict fmt, ...) {
     va_list ap; va_start(ap, fmt);
     int n = vsnprintf(buf, size, fmt, ap);
