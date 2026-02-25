@@ -593,7 +593,7 @@ void generate_tree_recursive(const char *base_dir, FILE *out, int level) {
                 FILE *src = fopen(path, "r");
                 if (src) {
                     char line[4096]; int ln = 1;
-                    while (fgets(line, sizeof(line), src) && ln <= 500) {
+                    while (fgets(line, sizeof(line), src) && ln <= 5000) {
                         for (int j = 0; j <= level; j++) fprintf(out, "│   ");
                         fprintf(out, "│ %4d: %s", ln++, line);
                     }

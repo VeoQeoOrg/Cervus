@@ -4,9 +4,9 @@
 #include "../include/interrupts/interrupts.h"
 #include "../include/io/ports.h"
 #include "../include/sched/task.h"
+#include "../include/smp/percpu.h"
 
 static volatile uint64_t ticks = 0;
-static volatile uint64_t reschedule_count = 0;
 
 DEFINE_IRQ(0x20, timer_handler)
 {
@@ -22,9 +22,15 @@ DEFINE_IRQ(0x20, timer_handler)
         current->time_slice--;
     }
 
-    if (current->time_slice == 0) {
+    bool force_resched = false;
+    percpu_t* pc = get_percpu();
+    if (pc && pc->need_resched) {
+        pc->need_resched = false;
+        force_resched = true;
+    }
+
+    if (current->time_slice == 0 || force_resched) {
         sched_reschedule();
-        //serial_printf("TICK\n");
     }
 
     (void)frame;
@@ -76,23 +82,6 @@ bool timer_init(void) {
     if (!(rflags & 0x200)) {
         serial_writestring("WARNING: Interrupts are DISABLED! Enabling...\n");
         asm volatile("sti");
-    }
-
-    serial_writestring("PREEMPTIVE SCHEDULING ENABLED!\n");
-    serial_writestring("DEBUG MODE: Will print timer info every 100 ticks\n");
-
-    serial_printf("Timer ticks at init: %llu\n", ticks);
-
-    if (hpet_is_available()) {
-        hpet_sleep_ms(100);
-        serial_printf("Timer ticks after 100ms: %llu\n", ticks);
-
-        if (ticks == 0) {
-            serial_writestring("ERROR: Timer is NOT firing interrupts!\n");
-            serial_writestring("Check: IRQ handler registration, LAPIC setup, interrupts enabled\n");
-        } else {
-            serial_printf("SUCCESS: Timer is working! (%llu ticks in 100ms)\n", ticks);
-        }
     }
 
     return true;

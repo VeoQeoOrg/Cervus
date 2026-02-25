@@ -220,6 +220,7 @@ void kernel_main(void) {
     //*ptr = 0;
 
     sched_init();
+    sched_notify_ready();
 
     task_create("HighPri", high_priority_task, NULL, 25);
     task_create("LowPri",  low_priority_task,  NULL, 10);

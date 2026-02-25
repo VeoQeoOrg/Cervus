@@ -56,4 +56,5 @@ void smp_print_info(void);
 void smp_print_info_fb(void);
 void smp_wait_for_ready(void);
 void ap_entry_point(struct limine_mp_info* cpu_info);
+void sched_notify_ready(void);
 #endif
