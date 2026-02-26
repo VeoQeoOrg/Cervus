@@ -21,6 +21,9 @@
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
 
+#define HELLO_SRC     "test/hello.c"
+#define HELLO_ELF     "test/hello.elf"
+
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
 #define COLOR_GREEN   "\033[92m"
@@ -251,6 +254,33 @@ SECTIONS
     print_color(COLOR_GREEN, "x86_64.lds created");
 }
 
+bool build_hello_elf() {
+    if (!file_exists(HELLO_SRC)) {
+        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", HELLO_SRC);
+        return true;
+    }
+
+    if (file_exists(HELLO_ELF) && get_mtime(HELLO_SRC) <= get_mtime(HELLO_ELF)) {
+        print_color(COLOR_GREEN, "[ELF] %s is up to date", HELLO_ELF);
+        return true;
+    }
+
+    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", HELLO_SRC, HELLO_ELF);
+
+    int ret = cmd_run(false,
+        "gcc -nostdlib -nostartfiles -static -ffreestanding "
+        "-O2 -o %s %s",
+        HELLO_ELF, HELLO_SRC);
+
+    if (ret != 0) {
+        print_color(COLOR_RED, "[ELF] Failed to compile %s", HELLO_SRC);
+        return false;
+    }
+
+    print_color(COLOR_GREEN, "[ELF] %s built successfully", HELLO_ELF);
+    return true;
+}
+
 typedef struct {
     char **paths;
     int count;
@@ -294,6 +324,8 @@ bool compile_kernel() {
     print_color(COLOR_GREEN, "Compiling kernel...");
     ensure_linker_script();
     if (!setup_dependencies()) return false;
+
+    if (!build_hello_elf()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -395,14 +427,20 @@ bool create_iso() {
         print_color(COLOR_YELLOW, "Warning: Wallpaper not found at %s", WALLPAPER_SRC);
     }
 
-    FILE *f = fopen("limine.conf", "w");
-    if (file_exists(WALLPAPER_SRC)) {
-        fprintf(f,
-            "wallpaper: %s\n",
-            WALLPAPER_DST
-        );
+    bool has_hello = file_exists(HELLO_ELF);
+    if (has_hello) {
+        cmd_run(false, "cp %s iso_root/boot/hello.elf", HELLO_ELF);
+        print_color(COLOR_GREEN, "[ELF] hello.elf added to iso_root/boot/");
+    } else {
+        print_color(COLOR_YELLOW, "[ELF] hello.elf not found — booting without module");
     }
+
+    FILE *f = fopen("limine.conf", "w");
     if (f) {
+        if (file_exists(WALLPAPER_SRC)) {
+            fprintf(f, "wallpaper: %s\n", WALLPAPER_DST);
+        }
+
         fprintf(f,
             "timeout: 3\n"
             "/%s %s\n"
@@ -410,6 +448,13 @@ bool create_iso() {
             "    path: boot():/boot/kernel\n",
             IMAGE_NAME, VERSION
         );
+
+        if (has_hello) {
+            fprintf(f,
+                "    module_path: boot():/boot/hello.elf\n"
+            );
+            print_color(COLOR_GREEN, "[ELF] module_path added to limine.conf");
+        }
 
         fclose(f);
     }
@@ -641,6 +686,10 @@ int main(int argc, char **argv) {
     if (strcmp(command, "clean") == 0) {
         for (int i = 0; DIRS_TO_CLEAN[i]; i++) rm_rf(DIRS_TO_CLEAN[i]);
         for (int i = 0; FILES_TO_CLEAN[i]; i++) if(file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
+        if (file_exists(HELLO_ELF)) {
+            remove(HELLO_ELF);
+            print_color(COLOR_BLUE, "Removed %s", HELLO_ELF);
+        }
         cmd_run(false, "rm temp_* 2>/dev/null");
         print_color(COLOR_GREEN, "Cleanup complete");
         return 0;
@@ -655,6 +704,10 @@ int main(int argc, char **argv) {
     if (strcmp(command, "gitclean") == 0) {
         for (int i = 0; DIRS_TO_CLEAN[i]; i++) rm_rf(DIRS_TO_CLEAN[i]);
         for (int i = 0; FILES_TO_CLEAN[i]; i++) if(file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
+        if (file_exists(HELLO_ELF)) {
+            remove(HELLO_ELF);
+            print_color(COLOR_BLUE, "Removed %s", HELLO_ELF);
+        }
         print_color(COLOR_GREEN, "Git-ready cleanup complete");
         return 0;
     }

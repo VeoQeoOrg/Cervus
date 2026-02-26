@@ -22,6 +22,7 @@
 #include "../include/smp/smp.h"
 #include "../include/smp/percpu.h"
 #include "../include/sched/sched.h"
+#include "../include/elf/elf.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -58,6 +59,12 @@ volatile struct limine_rsdp_request rsdp_request = {
     .response = NULL
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
+    .revision = 0
+};
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
 
@@ -71,6 +78,51 @@ static void hcf(void) {
         asm ("hlt");
     }
 }
+
+static void load_elf_module(void) {
+    if (!module_request.response) {
+        serial_writestring("[ELF] No module response from Limine\n");
+        return;
+    }
+    if (module_request.response->module_count == 0) {
+        serial_writestring("[ELF] No modules provided\n");
+        return;
+    }
+
+    struct limine_file* mod = module_request.response->modules[0];
+    serial_printf("[ELF] Module: path='%s' size=%llu addr=%p\n",
+                  mod->path, mod->size, mod->address);
+
+    elf_load_result_t r = elf_load(mod->address, (size_t)mod->size, 0);
+
+    if (r.error != ELF_OK) {
+        serial_printf("[ELF] LOAD FAILED: %s\n", elf_strerror(r.error));
+        printf("[ELF] Failed to load: %s\n", elf_strerror(r.error));
+        return;
+    }
+
+    serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n",
+                  r.entry, r.stack_top);
+    printf("[ELF] Loaded! entry=0x%llx\n", r.entry);
+
+    task_t* t = task_create("hello.elf",
+                            (void (*)(void*))r.entry,
+                            NULL,
+                            16);
+
+    if (!t) {
+        serial_writestring("[ELF] task_create failed\n");
+        elf_unload(&r);
+        return;
+    }
+
+    t->cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
+
+    serial_printf("[ELF] Task 'hello.elf' created: cr3=0x%llx rsp=0x%llx\n",
+                  t->cr3, t->rsp);
+    printf("[ELF] Task 'hello.elf' scheduled!\n");
+}
+
 
 void exit_test_task(void* arg) {
     (void)arg;
@@ -165,13 +217,10 @@ void tlb_test_task(void* arg) {
                           round, readback);
         } else {
             serial_printf("[TLBTest] Round %d: MISMATCH! wrote 0x%llx, got 0x%llx\n",
-                          round,
-                          (uint64_t)round * 0xDEADBEEF,
-                          readback);
+                          round, (uint64_t)round * 0xDEADBEEF, readback);
         }
 
         vmm_unmap_page(kmap, test_virt);
-
         serial_printf("[TLBTest] Round %d: unmap + TLB shootdown OK\n", round);
 
         for (volatile uint64_t spin = 0; spin < 1000000; spin++)
@@ -277,7 +326,6 @@ void kernel_main(void) {
     serial_writestring("ACPI [OK]\n");
     apic_init();
     serial_writestring("APIC [OK]\n");
-
     clear_screen();
     smp_init(mp_request.response);
     serial_writestring("SMP [OK]\n");
@@ -309,18 +357,18 @@ void kernel_main(void) {
     sched_init();
     sched_notify_ready();
 
-    //tests
+    load_elf_module();
 
-    task_create("ExitTest", exit_test_task, NULL, 20);
+    //task_create("ExitTest", exit_test_task, NULL, 20);
 
-    victim_task_ptr = task_create("Victim", victim_task, NULL, 15);
-    task_create("Killer", killer_task, NULL, 18);
+    //victim_task_ptr = task_create("Victim", victim_task, NULL, 15);
+    //task_create("Killer", killer_task, NULL, 18);
 
-    task_create("TLBTest", tlb_test_task, NULL, 12);
+    //task_create("TLBTest", tlb_test_task, NULL, 12);
 
-    task_create("HighPri",    high_priority_task, NULL, 25);
-    task_create("LowPri",     low_priority_task,  NULL, 10);
-    task_create("FPUTESTTASK", fpu_test_task,     NULL,  1);
+    //task_create("HighPri",     high_priority_task, NULL, 25);
+    //task_create("LowPri",      low_priority_task,  NULL, 10);
+    //task_create("FPUTESTTASK", fpu_test_task,       NULL,  1);
 
     timer_init();
 
