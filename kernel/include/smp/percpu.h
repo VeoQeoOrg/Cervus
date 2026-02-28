@@ -6,13 +6,15 @@
 
 #define PERCPU_SECTION __attribute__((section(".percpu")))
 
-extern uintptr_t __percpu_start;
-extern uintptr_t __percpu_end;
 typedef struct {
+    uint64_t syscall_kernel_rsp;
+    uint64_t syscall_user_rsp;
     uint32_t cpu_id;
-    void* current_task;
+    uint32_t _pad;
+    void*    current_task;
     uint64_t some_counter;
-    bool need_resched;
+    bool     need_resched;
+    uint8_t _pad2[23];
 } __attribute__((aligned(64))) percpu_t;
 
 extern percpu_t percpu;

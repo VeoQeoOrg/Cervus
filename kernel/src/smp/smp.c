@@ -10,6 +10,7 @@
 #include "../../include/sse/fpu.h"
 #include "../../include/sse/sse.h"
 #include "../../include/sched/sched.h"
+#include "../include/syscall/syscall.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -60,7 +61,6 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     sse_init();
     enable_fsgsbase();
     lapic_enable();
-
     apic_timer_calibrate();
     serial_printf("[SMP] AP %u LAPIC timer started\n", lapic_id);
 
@@ -69,7 +69,7 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     set_percpu_base(region);
     serial_printf("PerCPU base set for AP %u: 0x%llx\n",
                   lapic_id, (uint64_t)region);
-
+    syscall_init();
     __sync_fetch_and_add(&ap_online_count, 1);
     lapic_eoi();
 

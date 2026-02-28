@@ -1,10 +1,10 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/memory/pmm.h"
-#include "../../include/io/serial.h"
-#include "../../include/apic/apic.h"
 #include "../../include/smp/smp.h"
-#include <string.h>
+#include "../../include/apic/apic.h"
+#include "../../include/io/serial.h"
 #include <stdio.h>
+#include <string.h>
 
 #define KERNEL_TEST_BASE 0xFFFF800000100000ULL
 #define MASK 0x1FF
@@ -24,10 +24,15 @@ static vmm_pte_t* alloc_table(void) {
     return (vmm_pte_t*)page;
 }
 
-static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index) {
+static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index, uint64_t flags) {
     if (!(parent[index] & VMM_PRESENT)) {
         vmm_pte_t* table = alloc_table();
-        parent[index] = pmm_virt_to_phys(table) | VMM_PRESENT | VMM_WRITE;
+        parent[index] = pmm_virt_to_phys(table)
+                        | VMM_PRESENT
+                        | VMM_WRITE
+                        | (flags & VMM_USER);
+    } else if (flags & VMM_USER) {
+        parent[index] |= VMM_USER;
     }
     return (vmm_pte_t*)pmm_phys_to_virt(parent[index] & ~0xFFF);
 }
@@ -38,9 +43,9 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     size_t pd_i   = (virt >> 21) & MASK;
     size_t pt_i   = (virt >> 12) & MASK;
 
-    vmm_pte_t* pdpt = get_table(map->pml4, pml4_i);
-    vmm_pte_t* pd   = get_table(pdpt, pdpt_i);
-    vmm_pte_t* pt   = get_table(pd, pd_i);
+    vmm_pte_t* pdpt = get_table(map->pml4, pml4_i, flags);
+    vmm_pte_t* pd   = get_table(pdpt,      pdpt_i, flags);
+    vmm_pte_t* pt   = get_table(pd,        pd_i,   flags);
 
     pt[pt_i] = (phys & ~0xFFF) | flags | VMM_PRESENT | VMM_WRITE;
 
@@ -81,14 +86,12 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
 
     pt[pt_i] = 0;
     asm volatile ("mfence" ::: "memory");
-
     invlpg((void*)virt);
 
     if (smp_get_cpu_count() > 1) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
     }
 }
-
 
 vmm_pagemap_t* vmm_create_pagemap(void) {
     vmm_pagemap_t* map = pmm_alloc_zero(1);
@@ -105,7 +108,6 @@ vmm_pagemap_t* vmm_create_pagemap(void) {
 
     return map;
 }
-
 
 void vmm_switch_pagemap(vmm_pagemap_t* map) {
     uintptr_t phys = pmm_virt_to_phys(map->pml4);
@@ -154,7 +156,9 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
     *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));
     return true;
 }
+
 uintptr_t kernel_pml4_phys;
+
 void vmm_init(void) {
     uintptr_t cr3;
     asm volatile ("mov %%cr3, %0" : "=r"(cr3));

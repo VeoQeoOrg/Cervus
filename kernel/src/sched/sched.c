@@ -1,11 +1,11 @@
 #include "../include/sched/sched.h"
-#include "../include/smp/smp.h"
-#include "../include/apic/apic.h"
-#include "../include/io/serial.h"
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
-#include "../include/drivers/timer.h"
-#include "../include/sse/fpu.h"
+#include "../include/io/serial.h"
+#include "../include/smp/smp.h"
+#include "../include/smp/percpu.h"
+#include "../include/apic/apic.h"
+#include "../include/gdt/gdt.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -15,32 +15,21 @@ task_t* current_task[8] = {0};
 static task_t* percpu_ready_queues[8][MAX_PRIORITY + 1] = {0};
 static task_t  idle_tasks[8];
 static volatile uint64_t reschedule_calls = 0;
-static volatile uint32_t global_queue_lock = 0;
 
-void idle_loop(void* arg) {
-    (void)arg;
-    while (1) {
-        asm volatile ("hlt");
-    }
-}
+#define KERNEL_STACK_PAGES (KERNEL_STACK_SIZE / 0x1000)
 
-static inline void spin_lock(volatile uint32_t* lock) {
-    while (__sync_lock_test_and_set(lock, 1))
-        asm volatile ("pause");
-}
+extern tss_t* tss[MAX_CPUS];
 
-static inline void spin_unlock(volatile uint32_t* lock) {
-    __sync_lock_release(lock);
-}
+static void idle_loop(void* arg);
 
 static uint64_t alloc_and_init_stack(task_t* t) {
-    uintptr_t stack_virt = (uintptr_t)pmm_alloc(4);
+    uintptr_t stack_virt = (uintptr_t)pmm_alloc(KERNEL_STACK_PAGES);
     if (!stack_virt) return 0;
 
     t->stack_base = stack_virt;
 
     uintptr_t stack_phys = pmm_virt_to_phys((void*)stack_virt);
-    for (size_t i = 0; i < 4; i++) {
+    for (size_t i = 0; i < KERNEL_STACK_PAGES; i++) {
         vmm_map_page(vmm_get_kernel_pagemap(),
                      stack_virt + i * 0x1000,
                      stack_phys + i * 0x1000,
@@ -48,12 +37,17 @@ static uint64_t alloc_and_init_stack(task_t* t) {
     }
     asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
 
-    uintptr_t stack_top = (stack_virt + 0x4000) & ~0xFULL;
+    uintptr_t stack_top = (stack_virt + KERNEL_STACK_SIZE) & ~0xFULL;
     uint64_t* sp = (uint64_t*)stack_top;
 
-    extern void task_trampoline(void);
+    if (t->is_userspace) {
+        extern void task_trampoline_user(void);
+        *--sp = (uint64_t)task_trampoline_user;
+    } else {
+        extern void task_trampoline(void);
+        *--sp = (uint64_t)task_trampoline;
+    }
 
-    *--sp = (uint64_t)task_trampoline;
     *--sp = (uint64_t)t;
     *--sp = 0;
     *--sp = 0;
@@ -68,18 +62,20 @@ void sched_init(void) {
     for (uint32_t i = 0; i < smp_get_cpu_count(); i++) {
         task_t* idle = &idle_tasks[i];
         memset(idle, 0, sizeof(task_t));
-        idle->priority       = 0;
-        idle->runnable       = true;
-        idle->state          = TASK_READY;
-        idle->cpu_id         = i;
-        idle->last_cpu       = i;
-        idle->rip            = (uint64_t)idle_loop;
-        idle->time_slice     = 1;
-        idle->time_slice_init= 1;
-        idle->fpu_used       = false;
-        idle->fpu_state      = NULL;
-        idle->entry          = idle_loop;
-        idle->arg            = NULL;
+        idle->priority        = 0;
+        idle->runnable        = true;
+        idle->state           = TASK_READY;
+        idle->cpu_id          = i;
+        idle->last_cpu        = i;
+        idle->rip             = (uint64_t)idle_loop;
+        idle->time_slice      = 1;
+        idle->time_slice_init = 1;
+        idle->fpu_used        = false;
+        idle->fpu_state       = NULL;
+        idle->entry           = idle_loop;
+        idle->arg             = NULL;
+        idle->is_userspace    = 0;
+        idle->user_rsp        = 0;
         idle->name[0]='i'; idle->name[1]='d'; idle->name[2]='l'; idle->name[3]='e';
 
         idle->rsp = alloc_and_init_stack(idle);
@@ -99,152 +95,127 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     task_t* t = calloc(1, sizeof(task_t));
     if (!t) return NULL;
 
-    t->entry          = entry;
-    t->arg            = arg;
-    t->priority       = priority > MAX_PRIORITY ? MAX_PRIORITY : priority;
-    t->runnable       = true;
-    t->state          = TASK_READY;
-    t->cpu_id         = (uint32_t)-1;
-    t->last_cpu       = 0;
-    t->cpu_affinity   = 0;
-    t->time_slice     = TASK_DEFAULT_TIMESLICE;
-    t->time_slice_init= TASK_DEFAULT_TIMESLICE;
-    t->total_runtime  = 0;
-    t->rip            = (uint64_t)entry;
+    t->entry           = entry;
+    t->arg             = arg;
+    t->priority        = priority > MAX_PRIORITY ? MAX_PRIORITY : priority;
+    t->runnable        = true;
+    t->state           = TASK_READY;
+    t->cpu_id          = (uint32_t)-1;
+    t->last_cpu        = 0;
+    t->cpu_affinity    = 0;
+    t->time_slice      = TASK_DEFAULT_TIMESLICE;
+    t->time_slice_init = TASK_DEFAULT_TIMESLICE;
+    t->total_runtime   = 0;
+    t->rip             = (uint64_t)entry;
+    t->is_userspace    = 0;
+    t->user_rsp        = 0;
+
+    strncpy(t->name, name, sizeof(t->name) - 1);
 
     t->rsp = alloc_and_init_stack(t);
-    if (!t->rsp) {
-        free(t);
-        return NULL;
-    }
+    if (!t->rsp) { free(t); return NULL; }
 
-    t->fpu_state = (fpu_state_t*)aligned_alloc(16, sizeof(fpu_state_t));
-    if (!t->fpu_state) {
-        serial_printf("WARNING: Failed to allocate FPU state for task %s\n", name);
-        t->fpu_used = false;
-    } else {
-        memset(t->fpu_state, 0, sizeof(fpu_state_t));
-        *(uint16_t*)(t->fpu_state->data)      = 0x037F;
-        *(uint32_t*)(t->fpu_state->data + 24) = 0x1F80;
-        t->fpu_used = false;
-        serial_printf("Task %s: FPU state initialized (FCW=0x%x, MXCSR=0x%x)\n",
-                      name,
-                      *(uint16_t*)(t->fpu_state->data),
-                      *(uint32_t*)(t->fpu_state->data + 24));
-    }
-
-    strncpy(t->name, name, 31);
-
-    spin_lock(&global_queue_lock);
+    t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     t->next = ready_queues[t->priority];
     ready_queues[t->priority] = t;
-    spin_unlock(&global_queue_lock);
 
-    serial_printf("Task created: %s (prio %d, timeslice %u, rsp=0x%llx, FPU=%s)\n",
-                  name, t->priority, t->time_slice, t->rsp,
-                  t->fpu_state ? "yes" : "no");
+    serial_printf("Task created: %s (prio %d, timeslice %d, rsp=0x%llx, FPU=%s)\n",
+                  t->name, t->priority, t->time_slice,
+                  t->rsp, t->fpu_state ? "yes" : "no");
+    return t;
+}
+
+task_t* task_create_user(const char* name,
+                          uintptr_t   entry,
+                          uintptr_t   user_rsp,
+                          uint64_t    cr3,
+                          int         priority)
+{
+    task_t* t = calloc(1, sizeof(task_t));
+    if (!t) return NULL;
+    t->entry           = (void (*)(void*))entry;
+    t->arg             = NULL;
+    t->priority        = priority > MAX_PRIORITY ? MAX_PRIORITY : priority;
+    t->runnable        = true;
+    t->state           = TASK_READY;
+    t->cpu_id          = (uint32_t)-1;
+    t->last_cpu        = 0;
+    t->cpu_affinity    = 0;
+    t->time_slice      = TASK_DEFAULT_TIMESLICE;
+    t->time_slice_init = TASK_DEFAULT_TIMESLICE;
+    t->total_runtime   = 0;
+    t->rip             = entry;
+    t->is_userspace    = 1;
+    t->user_rsp        = user_rsp;
+    t->cr3             = cr3;
+
+    strncpy(t->name, name, sizeof(t->name) - 1);
+
+    t->rsp = alloc_and_init_stack(t);
+    if (!t->rsp) { free(t); return NULL; }
+
+    t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+
+    t->next = ready_queues[t->priority];
+    ready_queues[t->priority] = t;
+
+    serial_printf("Task created (user): %s (prio %d, entry=0x%llx, user_rsp=0x%llx, cr3=0x%llx)\n",
+                  t->name, t->priority, entry, user_rsp, cr3);
     return t;
 }
 
 void task_destroy(task_t* task) {
     if (!task) return;
-
-    serial_printf("[SCHED] Destroying task '%s'\n", task->name);
-
-    if (task->stack_base) {
-        for (size_t i = 0; i < 4; i++) {
-            vmm_unmap_page(vmm_get_kernel_pagemap(),
-                           task->stack_base + i * 0x1000);
-        }
-        pmm_free((void*)task->stack_base, 4);
-        task->stack_base = 0;
-    }
-
     if (task->fpu_state) {
-        aligned_free(task->fpu_state);
+        pmm_free(task->fpu_state, 1);
         task->fpu_state = NULL;
     }
-
-    task->state = TASK_DEAD;
+    if (task->stack_base) {
+        pmm_free((void*)task->stack_base, KERNEL_STACK_PAGES);
+        task->stack_base = 0;
+    }
     free(task);
 }
 
 __attribute__((noreturn)) void task_exit(void) {
     asm volatile ("cli");
-
     uint32_t cpu = lapic_get_id();
-    task_t*  me  = current_task[cpu];
+    task_t* me = current_task[cpu];
 
     if (me) {
-        serial_printf("[SCHED] task_exit: '%s' on CPU %u\n", me->name, cpu);
-        me->runnable = false;
         me->state    = TASK_ZOMBIE;
-        current_task[cpu] = NULL;
+        me->runnable = false;
     }
 
-    task_t* next = NULL;
+    serial_printf("[SCHED] task_exit: '%s' on CPU %u\n",
+                  me ? me->name : "?", cpu);
 
-    for (int p = MAX_PRIORITY; p >= 0; p--) {
-        if (percpu_ready_queues[cpu][p]) {
-            next = percpu_ready_queues[cpu][p];
-            percpu_ready_queues[cpu][p] = next->next;
-            next->next = NULL;
-            break;
-        }
-    }
-    if (!next) {
-        spin_lock(&global_queue_lock);
-        for (int p = MAX_PRIORITY; p >= 0; p--) {
-            if (ready_queues[p]) {
-                next = ready_queues[p];
-                ready_queues[p] = next->next;
-                next->next = NULL;
-                break;
-            }
-        }
-        spin_unlock(&global_queue_lock);
-    }
-    if (!next) next = &idle_tasks[cpu];
-
-    if (next->cr3 != 0)
-        asm volatile ("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
-
-    next->cpu_id      = cpu;
-    next->state       = TASK_RUNNING;
-    current_task[cpu] = next;
-
-    if (next->fpu_state)
-        fpu_restore(next->fpu_state);
-
-    asm volatile ("" ::: "memory");
-    first_task_start(next);
+    vmm_switch_pagemap(vmm_get_kernel_pagemap());
+    current_task[cpu] = NULL;
+    sched_reschedule();
 
     while (1) asm volatile ("cli; hlt");
 }
 
 void task_kill(task_t* target) {
-    if (!target || target->state == TASK_ZOMBIE || target->state == TASK_DEAD)
-        return;
+    if (!target) return;
 
-    serial_printf("[SCHED] task_kill: killing '%s'\n", target->name);
+    asm volatile ("cli");
 
-    __sync_bool_compare_and_swap(&target->runnable, true, false);
-    target->state = TASK_ZOMBIE;
+    target->runnable = false;
+    target->state    = TASK_ZOMBIE;
 
-    spin_lock(&global_queue_lock);
     task_t* prev = NULL;
     task_t* cur  = ready_queues[target->priority];
     while (cur) {
         if (cur == target) {
             if (prev) prev->next = cur->next;
             else      ready_queues[target->priority] = cur->next;
-            cur->next = NULL;
             break;
         }
         prev = cur;
         cur  = cur->next;
     }
-    spin_unlock(&global_queue_lock);
 
     for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
         prev = NULL;
@@ -253,44 +224,40 @@ void task_kill(task_t* target) {
             if (cur == target) {
                 if (prev) prev->next = cur->next;
                 else      percpu_ready_queues[cpu][target->priority] = cur->next;
-                cur->next = NULL;
                 break;
             }
             prev = cur;
             cur  = cur->next;
         }
-    }
 
-    for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
         if (current_task[cpu] == target) {
             serial_printf("[SCHED] task_kill: target running on CPU %u, sending reschedule IPI\n", cpu);
-            extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu);
+            extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index);
             ipi_reschedule_cpu(smp_get_lapic_id_for_cpu(cpu));
-            break;
         }
     }
+
+    asm volatile ("sti");
 }
 
 static task_t* sched_pick_next(uint32_t cpu) {
     for (int p = MAX_PRIORITY; p >= 0; p--) {
-        if (percpu_ready_queues[cpu][p]) {
-            task_t* t = percpu_ready_queues[cpu][p];
+        task_t* t = percpu_ready_queues[cpu][p];
+        if (t && t->runnable) {
             percpu_ready_queues[cpu][p] = t->next;
             t->next = NULL;
             return t;
         }
     }
-    spin_lock(&global_queue_lock);
+
     for (int p = MAX_PRIORITY; p >= 0; p--) {
-        if (ready_queues[p]) {
-            task_t* t = ready_queues[p];
+        task_t* t = ready_queues[p];
+        if (t && t->runnable) {
             ready_queues[p] = t->next;
             t->next = NULL;
-            spin_unlock(&global_queue_lock);
             return t;
         }
     }
-    spin_unlock(&global_queue_lock);
     return &idle_tasks[cpu];
 }
 
@@ -322,8 +289,16 @@ void sched_reschedule(void) {
     if (next->cr3 != 0 && (!old || old->cr3 != next->cr3))
         asm volatile ("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
 
-    next->cpu_id    = cpu;
-    next->state     = TASK_RUNNING;
+    if (tss[cpu]) {
+        tss[cpu]->rsp0 = next->stack_base + KERNEL_STACK_SIZE;
+        percpu_t* pc = get_percpu();
+        if (pc) {
+            pc->syscall_kernel_rsp = tss[cpu]->rsp0;
+        }
+    }
+
+    next->cpu_id  = cpu;
+    next->state   = TASK_RUNNING;
     current_task[cpu] = next;
 
     if (next->fpu_state)
@@ -331,6 +306,12 @@ void sched_reschedule(void) {
 
     if (!old) {
         asm volatile ("" ::: "memory");
+        if (next->is_userspace) {
+            serial_printf("[SCHED] CPU %u: launching userspace '%s' "
+                          "(entry=0x%llx user_rsp=0x%llx cr3=0x%llx)\n",
+                          cpu, next->name,
+                          (uint64_t)next->entry, next->user_rsp, next->cr3);
+        }
         first_task_start(next);
         serial_writestring("[SCHED] FATAL: first_task_start returned!\n");
         while (1) asm volatile ("cli; hlt");
@@ -344,25 +325,23 @@ void task_yield(void) {
 }
 
 void sched_print_stats(void) {
-    serial_printf("\nScheduler Statistics (SMP)\n");
-    serial_writestring("Global queue:\n");
+    serial_printf("[SCHED] reschedule_calls=%llu\n", reschedule_calls);
     for (int p = MAX_PRIORITY; p >= 0; p--) {
         int count = 0;
         for (task_t* t = ready_queues[p]; t; t = t->next) count++;
-        if (count) serial_printf("  Priority %d: %d tasks\n", p, count);
+        if (count) serial_printf("  prio %d: %d tasks\n", p, count);
     }
     for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
-        serial_printf("\nCPU %u:\n", cpu);
-        if (current_task[cpu])
-            serial_printf("  Running: %s (FPU: %s, state: %d)\n",
-                          current_task[cpu]->name,
-                          current_task[cpu]->fpu_used ? "yes" : "no",
-                          current_task[cpu]->state);
-        for (int p = MAX_PRIORITY; p >= 0; p--) {
-            int count = 0;
+        int count = 0;
+        for (int p = MAX_PRIORITY; p >= 0; p--)
             for (task_t* t = percpu_ready_queues[cpu][p]; t; t = t->next) count++;
-            if (count) serial_printf("  Priority %d: %d tasks\n", p, count);
-        }
+        if (count) serial_printf("  cpu %u percpu: %d tasks\n", cpu, count);
     }
-    serial_printf("============================\n\n");
+}
+
+static void idle_loop(void* arg) {
+    (void)arg;
+    while (1) {
+        asm volatile ("sti; hlt");
+    }
 }

@@ -23,6 +23,7 @@
 #include "../include/smp/percpu.h"
 #include "../include/sched/sched.h"
 #include "../include/elf/elf.h"
+#include "../include/syscall/syscall.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -105,21 +106,24 @@ static void load_elf_module(void) {
                   r.entry, r.stack_top);
     printf("[ELF] Loaded! entry=0x%llx\n", r.entry);
 
-    task_t* t = task_create("hello.elf",
-                            (void (*)(void*))r.entry,
-                            NULL,
-                            16);
+    uint64_t cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
+
+    task_t* t = task_create_user(
+        "hello.elf",
+        r.entry,
+        r.stack_top,
+        cr3,
+        16
+    );
 
     if (!t) {
-        serial_writestring("[ELF] task_create failed\n");
+        serial_writestring("[ELF] task_create_user failed\n");
         elf_unload(&r);
         return;
     }
 
-    t->cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
-
-    serial_printf("[ELF] Task 'hello.elf' created: cr3=0x%llx rsp=0x%llx\n",
-                  t->cr3, t->rsp);
+    serial_printf("[ELF] Task 'hello.elf' created: cr3=0x%llx user_rsp=0x%llx kernel_rsp=0x%llx\n",
+                  t->cr3, t->user_rsp, t->rsp);
     printf("[ELF] Task 'hello.elf' scheduled!\n");
 }
 
@@ -353,7 +357,7 @@ void kernel_main(void) {
 
     smp_print_info_fb();
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
-
+    syscall_init();
     sched_init();
     sched_notify_ready();
 

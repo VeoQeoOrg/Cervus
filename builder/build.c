@@ -16,7 +16,7 @@
 
 #define IMAGE_NAME "Cervus"
 #define VERSION "v0.0.1"
-#define QEMUFLAGS "-m 12G -smp 8 -cpu qemu64,+fsgsbase"
+#define QEMUFLAGS "-m 8G -smp 8 -cpu qemu64,+fsgsbase"
 
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
@@ -268,8 +268,8 @@ bool build_hello_elf() {
     print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", HELLO_SRC, HELLO_ELF);
 
     int ret = cmd_run(false,
-        "gcc -nostdlib -nostartfiles -static -ffreestanding "
-        "-O2 -o %s %s",
+        "gcc -O0 -nostdlib -nostartfiles -static -ffreestanding "
+        "-Wl,-Ttext-segment=0x400000 -o %s %s",
         HELLO_ELF, HELLO_SRC);
 
     if (ret != 0) {

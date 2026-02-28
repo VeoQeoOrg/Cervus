@@ -13,6 +13,13 @@ PERCPU_SECTION int dummy_percpu = 0xDEADBEEF;
 
 percpu_t* percpu_regions[MAX_CPUS] = {0};
 
+#define MSR_GS_BASE         0xC0000101
+#define MSR_KERNEL_GS_BASE  0xC0000102
+
+static inline void wrmsr(uint32_t msr, uint64_t val) {
+    asm volatile ("wrmsr" :: "c"(msr), "a"((uint32_t)val), "d"((uint32_t)(val >> 32)));
+}
+
 void init_percpu_regions(void) {
     size_t percpu_size = &__percpu_end - &__percpu_start;
     serial_printf("PerCPU size: %zu bytes\n", percpu_size);
@@ -29,6 +36,8 @@ void init_percpu_regions(void) {
 
         percpu_regions[i] = (percpu_t*)region;
         percpu_regions[i]->cpu_id = info->cpus[i].lapic_id;
+        percpu_regions[i]->syscall_kernel_rsp = 0;
+        percpu_regions[i]->syscall_user_rsp   = 0;
 
         serial_printf("PerCPU region for CPU %u at 0x%llx\n", i, (uint64_t)region);
     }
@@ -37,9 +46,7 @@ void init_percpu_regions(void) {
 percpu_t* get_percpu(void) {
     uint64_t gs_base;
     asm volatile ("rdgsbase %0" : "=r"(gs_base));
-    if (gs_base == 0) {
-        return NULL;
-    }
+    if (gs_base == 0) return NULL;
     return (percpu_t*)gs_base;
 }
 
@@ -48,10 +55,6 @@ percpu_t* get_percpu_mut(void) {
 }
 
 void set_percpu_base(percpu_t* base) {
-    __asm__ volatile (
-        "wrgsbase %0"
-        :
-        : "r"(base)
-        : "memory"
-    );
+    asm volatile ("wrgsbase %0" :: "r"(base) : "memory");
+    wrmsr(MSR_KERNEL_GS_BASE, (uint64_t)base);
 }
