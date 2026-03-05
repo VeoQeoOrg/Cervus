@@ -113,8 +113,16 @@ static void load_elf_module(void) {
         r.entry,
         r.stack_top,
         cr3,
-        16
+        16,
+        r.pagemap,
+        0,           // ← uid = root
+        0            // ← gid = root
     );
+
+    if (t) {
+        t->brk_start   = r.load_end;
+        t->brk_current = r.load_end;
+    }
 
     if (!t) {
         serial_writestring("[ELF] task_create_user failed\n");

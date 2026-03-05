@@ -11,10 +11,20 @@ typedef struct {
     uint64_t syscall_user_rsp;
     uint32_t cpu_id;
     uint32_t _pad;
-    void*    current_task;
+    void* current_task;
     uint64_t some_counter;
-    bool     need_resched;
-    uint8_t _pad2[23];
+    bool need_resched;
+    uint8_t _pad2[7];
+    uint64_t user_saved_rbp;
+    uint64_t user_saved_rbx;
+
+    uint64_t user_saved_r12;
+    uint64_t user_saved_r13;
+    uint64_t user_saved_r14;
+    uint64_t user_saved_r15;
+    uint64_t user_saved_r11;
+    uint64_t user_saved_rip;
+    uint8_t  _pad3[16];
 } __attribute__((aligned(64))) percpu_t;
 
 extern percpu_t percpu;

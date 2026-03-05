@@ -268,9 +268,10 @@ bool build_hello_elf() {
     print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", HELLO_SRC, HELLO_ELF);
 
     int ret = cmd_run(false,
-        "gcc -O0 -nostdlib -nostartfiles -static -ffreestanding "
-        "-Wl,-Ttext-segment=0x400000 -o %s %s",
-        HELLO_ELF, HELLO_SRC);
+        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
+        " -O0 -g"
+        " -Wl,-Ttext-segment=0x401000"
+        " -Wl,-e,_start -o test/hello.elf test/hello.c");
 
     if (ret != 0) {
         print_color(COLOR_RED, "[ELF] Failed to compile %s", HELLO_SRC);

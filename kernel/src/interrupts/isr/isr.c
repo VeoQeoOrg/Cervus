@@ -8,16 +8,27 @@ extern const int_desc_t __stop_isr_handlers[];
 static int_handler_f registered_isr_interrupts[ISR_EXCEPTION_COUNT]__attribute__((aligned(64)));
 
 void registers_dump(struct int_frame_t *regs) {
+    uint64_t cr2 = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(cr2));
+
     serial_printf("\nRegisters Dump:\n");
-    serial_printf("\tRAX:0x%x\n\tRBX:0x%x\n\tRCX:0x%x\n\tRDX:0x%x\n", regs->rax, regs->rbx, regs->rcx, regs->rdx);
-    serial_printf("\tRSI:0x%x\n\tRDI:0x%x\n\tRBP:0x%x\n\tRSP:0x%x\n", regs->rsi, regs->rdi, regs->rbp, regs->rsp);
-    serial_printf("\tRIP:0x%x\n\tRFL:0x%x\n\tCS:0x%x\n\tERR:0x%x\n", regs->rip, regs->rflags, regs->cs, regs->error);
+    serial_printf("\tRAX:0x%llx\n\tRBX:0x%llx\n\tRCX:0x%llx\n\tRDX:0x%llx\n",
+                  regs->rax, regs->rbx, regs->rcx, regs->rdx);
+    serial_printf("\tRSI:0x%llx\n\tRDI:0x%llx\n\tRBP:0x%llx\n\tRSP:0x%llx\n",
+                  regs->rsi, regs->rdi, regs->rbp, regs->rsp);
+    serial_printf("\tRIP:0x%llx\n\tRFL:0x%llx\n\tCS:0x%llx\n\tERR:0x%llx\n",
+                  regs->rip, regs->rflags, regs->cs, regs->error);
+    serial_printf("\tCR2:0x%llx\n", cr2);
     serial_printf("\nInt:%d (%s)\n", regs->interrupt, exception_names[regs->interrupt]);
 
     printf("\nRegisters Dump:\n");
-    printf("\tRAX:0x%x\n\tRBX:0x%x\n\tRCX:0x%x\n\tRDX:0x%x\n", regs->rax, regs->rbx, regs->rcx, regs->rdx);
-    printf("\tRSI:0x%x\n\tRDI:0x%x\n\tRBP:0x%x\n\tRSP:0x%x\n", regs->rsi, regs->rdi, regs->rbp, regs->rsp);
-    printf("\tRIP:0x%x\n\tRFL:0x%x\n\tCS:0x%x\n\tERR:0x%x\n", regs->rip, regs->rflags, regs->cs, regs->error);
+    printf("\tRAX:0x%llx\n\tRBX:0x%llx\n\tRCX:0x%llx\n\tRDX:0x%llx\n",
+           regs->rax, regs->rbx, regs->rcx, regs->rdx);
+    printf("\tRSI:0x%llx\n\tRDI:0x%llx\n\tRBP:0x%llx\n\tRSP:0x%llx\n",
+           regs->rsi, regs->rdi, regs->rbp, regs->rsp);
+    printf("\tRIP:0x%llx\n\tRFL:0x%llx\n\tCS:0x%llx\n\tERR:0x%llx\n",
+           regs->rip, regs->rflags, regs->cs, regs->error);
+    printf("\tCR2:0x%llx\n", cr2);
     printf("\nInt:%d (%s)\n", regs->interrupt, exception_names[regs->interrupt]);
 }
 
@@ -79,7 +90,7 @@ void setup_defined_isr_handlers(void) {
     const int_desc_t* desc;
     for (desc = __start_isr_handlers; desc < __stop_isr_handlers; desc++) {
         if(desc->vector >= ISR_EXCEPTION_COUNT) {
-            serial_printf("Invalid ISR vector %d\n", desc->vector);
+            serial_printf("ISR: vector %d out of range\n", desc->vector);
             continue;
         }
         registered_isr_interrupts[desc->vector] = desc->handler;

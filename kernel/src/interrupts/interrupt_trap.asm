@@ -21,11 +21,15 @@ common_stub:
     mov rax, ds
     push rax
 
+    mov rax, [rsp + 19*8]
+    and rax, 3
+    jz .kernel_entry
+    swapgs
+.kernel_entry:
+
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
     mov ss, ax
 
     mov rdi, rsp
@@ -34,9 +38,13 @@ common_stub:
     pop rax
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
     mov ss, ax
+
+    mov rax, [rsp + 18*8]
+    and rax, 3
+    jz .kernel_exit
+    swapgs
+.kernel_exit:
 
     pop r15
     pop r14

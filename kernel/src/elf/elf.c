@@ -175,6 +175,7 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
     const uint8_t*      bytes = (const uint8_t*)data;
     const elf64_phdr_t* phdrs = (const elf64_phdr_t*)(bytes + ehdr->e_phoff);
     bool has_load = false;
+    uintptr_t max_vaddr = 0;
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const elf64_phdr_t* ph = &phdrs[i];
@@ -188,13 +189,19 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
 
         elf_error_t err = load_segment(map, bytes, size, ph, load_bias);
         if (err != ELF_OK) { result.error = err; return result; }
+
+        uintptr_t seg_end = ph->p_vaddr + load_bias + ph->p_memsz;
+        if (seg_end > max_vaddr) max_vaddr = seg_end;
     }
 
     if (!has_load) { result.error = ELF_ERR_NO_LOAD; return result; }
 
     result.entry     = ehdr->e_entry + load_bias;
     result.load_base = load_bias;
-    serial_printf("[ELF] Entry point: 0x%llx\n", result.entry);
+    result.load_end  = page_align_up(max_vaddr);
+
+    serial_printf("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
+                  result.entry, result.load_end);
 
     if (stack_sz == 0) stack_sz = ELF_DEFAULT_STACK;
     result.stack_size = stack_sz;

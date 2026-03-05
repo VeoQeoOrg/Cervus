@@ -106,6 +106,7 @@ typedef struct {
     uintptr_t       stack_top;
     size_t          stack_size;
     elf_error_t     error;
+    uintptr_t       load_end;
 } elf_load_result_t;
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);

@@ -28,14 +28,13 @@ void vmm_init(void);
 vmm_pagemap_t* vmm_create_pagemap(void);
 void vmm_switch_pagemap(vmm_pagemap_t* map);
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags);
-
 void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt);
-
 void vmm_unmap_page_noflush(vmm_pagemap_t* map, uintptr_t virt);
-
 bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out);
 bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out);
 vmm_pagemap_t* vmm_get_kernel_pagemap(void);
+vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src);
+void vmm_free_pagemap(vmm_pagemap_t* map);
 void vmm_test(void);
 
 #endif

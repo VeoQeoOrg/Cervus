@@ -8,6 +8,19 @@ global fpu_save
 global fpu_restore
 global task_trampoline
 global task_trampoline_user
+global task_trampoline_fork
+
+TASK_ENTRY_OFFSET            equ 120
+TASK_ARG_OFFSET              equ 128
+TASK_USER_RSP_OFFSET         equ 144
+TASK_USER_SAVED_RIP_OFFSET   equ 264
+TASK_USER_SAVED_RBP_OFFSET   equ 272
+TASK_USER_SAVED_RBX_OFFSET   equ 280
+TASK_USER_SAVED_R12_OFFSET   equ 288
+TASK_USER_SAVED_R13_OFFSET   equ 296
+TASK_USER_SAVED_R14_OFFSET   equ 304
+TASK_USER_SAVED_R15_OFFSET   equ 312
+TASK_USER_SAVED_R11_OFFSET   equ 320
 
 context_switch:
     push rbp
@@ -33,8 +46,6 @@ context_switch:
 first_task_start:
     mov rsp, [rdi]
 
-    xor rbp, rbp
-
     pop r15
     pop r14
     pop r13
@@ -52,20 +63,12 @@ fpu_restore:
     fxrstor [rdi]
     ret
 
-TASK_ENTRY_OFFSET    equ 120
-TASK_ARG_OFFSET      equ 128
-TASK_USER_RSP_OFFSET equ 144
-
 task_trampoline:
     mov  rdi, [rbp + TASK_ARG_OFFSET]
     mov  rax, [rbp + TASK_ENTRY_OFFSET]
-
     xor  rbp, rbp
-
     sti
-
     call rax
-
     call task_exit
 .hang:
     cli
@@ -75,7 +78,6 @@ task_trampoline:
 task_trampoline_user:
     mov  rax, [rbp + TASK_ENTRY_OFFSET]
     mov  rcx, [rbp + TASK_USER_RSP_OFFSET]
-
     xor  rbp, rbp
 
     push qword 0x1B
@@ -102,5 +104,31 @@ task_trampoline_user:
     xor r13, r13
     xor r14, r14
     xor r15, r15
+    iretq
+
+task_trampoline_fork:
+
+    cli
+
+    mov rax, [rbp + TASK_USER_SAVED_RIP_OFFSET]
+    mov rcx, [rbp + TASK_USER_RSP_OFFSET]
+    mov r11, [rbp + TASK_USER_SAVED_R11_OFFSET]
+
+    mov rbx, [rbp + TASK_USER_SAVED_RBX_OFFSET]
+    mov r12, [rbp + TASK_USER_SAVED_R12_OFFSET]
+    mov r13, [rbp + TASK_USER_SAVED_R13_OFFSET]
+    mov r14, [rbp + TASK_USER_SAVED_R14_OFFSET]
+    mov r15, [rbp + TASK_USER_SAVED_R15_OFFSET]
+    mov rbp, [rbp + TASK_USER_SAVED_RBP_OFFSET]
+
+    or r11, (1 << 9)
+
+    push qword 0x1B
+    push rcx
+    push r11
+    push qword 0x23
+    push rax
+
+    xor rax, rax
 
     iretq

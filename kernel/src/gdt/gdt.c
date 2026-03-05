@@ -22,13 +22,11 @@ extern void _reload_segments(uint64_t cs, uint64_t ds);
 
 void gdt_init(void) {
     memset(&gdt, 0, sizeof(gdt));
-
     gdt.gdt_entries[0] = (gdt_entry_t)GDT_ENTRY(0, 0,       0x00, 0x0);
     gdt.gdt_entries[1] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0x9A, 0xA);
     gdt.gdt_entries[2] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0x92, 0xC);
-    gdt.gdt_entries[3] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0xF2, 0xC);
+    gdt.gdt_entries[3] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0xF2, 0x8);
     gdt.gdt_entries[4] = (gdt_entry_t)GDT_ENTRY(0, 0xFFFFF, 0xFA, 0xA);
-
     gdtr.size    = (5 * sizeof(gdt_entry_t)) - 1;
     gdtr.pointer = &gdt.gdt_entries[0];
 
