@@ -16,7 +16,7 @@
 
 #define IMAGE_NAME "Cervus"
 #define VERSION "v0.0.1"
-#define QEMUFLAGS "-m 8G -smp 8 -cpu qemu64,+fsgsbase"
+#define QEMUFLAGS "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on "
 
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
@@ -723,7 +723,7 @@ int main(int argc, char **argv) {
         if (ARG_TREE) do_generate_tree();
         char iso_path[PATH_MAX]; snprintf(iso_path, sizeof(iso_path), "demo_iso/%s.latest.iso", IMAGE_NAME);
         print_color(COLOR_GREEN, "Starting QEMU...");
-        cmd_run(false, "qemu-system-x86_64 -M q35 -cdrom %s -boot d -serial stdio %s 2>&1 | tee log.txt", iso_path, QEMUFLAGS);
+        cmd_run(false, "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc -cdrom %s -boot d -serial stdio %s 2>&1 | tee log.txt", iso_path, QEMUFLAGS);
         if (!ARG_NO_CLEAN) { rm_rf("obj"); rm_rf("bin"); }
         return 0;
     }

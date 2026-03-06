@@ -37,8 +37,8 @@ Cervus is currently in the active development phase. The kernel implements core 
 | *APIC / IOAPIC* | Done | Advanced Interrupt Controllers |
 | *Timers (HPET/APIC)* | Done | High Precision Event Timers |
 | *SMP* | Done | Multicore Initialization |
-| *Scheduler* | Done | Preemptive Multitasking |
-| *Userspace* | TODO | Syscalls & Ring 3 execution |
+| *Scheduler* | Done/In parallel development | Preemptive Multitasking |
+| *Userspace* | In parallel development | Syscalls & Ring 3 execution |
 
 ---
 

@@ -24,6 +24,7 @@
 #include "../include/sched/sched.h"
 #include "../include/elf/elf.h"
 #include "../include/syscall/syscall.h"
+#include "../include/drivers/ps2.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -368,8 +369,7 @@ void kernel_main(void) {
     syscall_init();
     sched_init();
     sched_notify_ready();
-
-    load_elf_module();
+    //load_elf_module();
 
     //task_create("ExitTest", exit_test_task, NULL, 20);
 
@@ -385,6 +385,15 @@ void kernel_main(void) {
     timer_init();
 
     printf("Tasks switching automatically every ~10ms\n\n");
+
+    printf("\n[PS2] Initializing PS/2 driver...\n");
+    serial_writestring("[PS2] Initializing PS/2 driver...\n");
+
+    ps2_init();
+    printf("[PS2] Driver OK. Keyboard + Mouse active.\n");
+    printf("Type on keyboard (Shift, CapsLock work):\n");
+    printf("> ");
+
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
 
