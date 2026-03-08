@@ -6,11 +6,14 @@
 
 char* itoa(int val, char* restrict str, int base);
 
-long          strtol (const char* restrict s, char** restrict end, int base);
-unsigned long strtoul(const char* restrict s, char** restrict end, int base);
+long          strtol  (const char * restrict s, char ** restrict end, int base);
+unsigned long strtoul (const char * restrict s, char ** restrict end, int base);
 
-static inline int  atoi(const char* s) { return (int)strtol(s, (char**)0, 10); }
-static inline long atol(const char* s) {      return strtol(s, (char**)0, 10); }
+long long          strtoll (const char * restrict s, char ** restrict end, int base);
+unsigned long long strtoull(const char * restrict s, char ** restrict end, int base);
+
+static inline int  atoi(const char* s) { return (int)strtol (s, (char**)0, 10); }
+static inline long atol(const char* s) {      return strtol (s, (char**)0, 10); }
 
 void  malloc_init(void);
 void* malloc (size_t size);
