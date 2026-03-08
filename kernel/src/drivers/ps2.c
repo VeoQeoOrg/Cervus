@@ -227,24 +227,8 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
     if (released)                              { lapic_eoi(); return; }
 
     char c = scancode_to_char(key);
-    if (c != 0) {
-        if (c == '\b') {
-            if (kb_buf.head != kb_buf.tail) {
-                kb_buf.tail = (kb_buf.tail + KB_BUF_SIZE - 1) % KB_BUF_SIZE;
-            }
-            if (cursor_x >= 8) {
-                cursor_x -= 8;
-            } else if (cursor_y >= 16) {
-                cursor_y -= 16;
-                cursor_x = (get_screen_width() / 8) * 8 - 8;
-            }
-            if (global_framebuffer)
-                fb_fill_rect(global_framebuffer, cursor_x, cursor_y, 8, 16, bg_color);
-        } else {
-            kb_buf_push(c);
-            putchar((int)c);
-        }
-    }
+    if (c != 0)
+        kb_buf_push(c);
 
     lapic_eoi();
 }

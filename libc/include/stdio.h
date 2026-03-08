@@ -17,8 +17,13 @@ int sprintf (char* restrict buf, const char* restrict fmt, ...);
 int snprintf(char* restrict buf, size_t size, const char* restrict fmt, ...);
 int vsprintf (char* restrict buf, const char* restrict fmt, va_list ap);
 int vsnprintf(char* restrict buf, size_t size, const char* restrict fmt, va_list ap);
-
 int vprintf(const char* restrict fmt, va_list ap);
+
+int getchar(void);
+int scanf (const char * restrict fmt, ...);
+int vscanf(const char * restrict fmt, va_list ap);
+int sscanf (const char * restrict str, const char * restrict fmt, ...);
+int vsscanf(const char *str, const char *fmt, va_list ap);
 
 extern uint32_t cursor_x;
 extern uint32_t cursor_y;
@@ -31,6 +36,7 @@ uint32_t get_screen_width(void);
 uint32_t get_screen_height(void);
 
 void set_cursor_position(uint32_t x, uint32_t y);
+void get_cursor_position(uint32_t *x, uint32_t *y);
 void set_text_color(uint32_t color);
 void clear_screen(void);
 void scroll_up(int lines);

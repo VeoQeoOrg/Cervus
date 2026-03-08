@@ -390,8 +390,19 @@ void kernel_main(void) {
 
     ps2_init();
     printf("[PS2] Driver OK. Keyboard + Mouse active.\n");
-    printf("Type on keyboard (Shift, CapsLock work):\n");
-    printf("> ");
+
+    {
+        char name[32];
+        int  age;
+
+        printf("Enter your name: ");
+        scanf("%31s", name);
+        printf("Hello, %s!\n", name);
+
+        printf("Enter a number: ");
+        scanf("%d", &age);
+        printf("You entered: %d\n", age);
+    }
 
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
