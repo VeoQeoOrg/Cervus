@@ -328,12 +328,12 @@ void kernel_main(void) {
     global_framebuffer = framebuffer_request.response->framebuffers[0];
 
     pmm_init(memmap_request.response, hhdm_request.response);
+    slab_init();
     serial_writestring("PMM [OK]\n");
     paging_init();
     serial_writestring("Paging [OK]\n");
     vmm_init();
     serial_writestring("VMM [OK]\n");
-    malloc_init();
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");
@@ -383,7 +383,6 @@ void kernel_main(void) {
     //task_create("FPUTESTTASK", fpu_test_task,       NULL,  1);
 
     timer_init();
-
     printf("Tasks switching automatically every ~10ms\n\n");
 
     printf("\n[PS2] Initializing PS/2 driver...\n");
