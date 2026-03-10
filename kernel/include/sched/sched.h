@@ -6,6 +6,33 @@
 #include <stddef.h>
 #include "capabilities.h"
 #include "../memory/vmm.h"
+#include "../smp/smp.h"
+
+#ifndef __ATOMIC_RELAXED
+#define __ATOMIC_RELAXED 0
+#define __ATOMIC_ACQUIRE 2
+#define __ATOMIC_RELEASE 3
+#endif
+
+typedef struct { volatile bool _val; } atomic_bool;
+
+static inline void atomic_init_bool(atomic_bool *a, bool v) {
+    __atomic_store_n(&a->_val, v, __ATOMIC_RELAXED);
+}
+static inline bool atomic_load_bool_acq(const atomic_bool *a) {
+    return __atomic_load_n(&a->_val, __ATOMIC_ACQUIRE);
+}
+static inline void atomic_store_bool_rel(atomic_bool *a, bool v) {
+    __atomic_store_n(&a->_val, v, __ATOMIC_RELEASE);
+}
+
+static inline bool atomic_cas_bool(atomic_bool *a, bool *expected, bool desired) {
+    return __atomic_compare_exchange_n(
+        &a->_val, expected, desired,
+        false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+
+typedef struct fd_table fd_table_t;
 
 typedef struct {
     uint8_t data[512] __attribute__((aligned(16)));
@@ -91,12 +118,18 @@ typedef struct task {
     uint64_t user_saved_r15;
     uint64_t user_saved_r11;
 
+    fd_table_t      *fd_table;
+
+    atomic_bool on_cpu;
+
 } task_t;
 
-#define TASK_FLAG_TRACE    (1 << 0)
-#define TASK_FLAG_VFORK    (1 << 1)
-#define TASK_FLAG_FORK     (1 << 2)
-#define TASK_FLAG_STARTED  (1 << 3)
+#define TASK_FLAG_TRACE          (1 << 0)
+#define TASK_FLAG_VFORK          (1 << 1)
+#define TASK_FLAG_FORK           (1 << 2)
+#define TASK_FLAG_STARTED        (1 << 3)
+#define TASK_FLAG_OWN_PAGEMAP    (1 << 4)
+#define TASK_FLAG_STACK_DEFERRED (1 << 5)
 
 _Static_assert(offsetof(task_t, rsp)            ==   0, "task_t: rsp");
 _Static_assert(offsetof(task_t, entry)          == 120, "task_t: entry — update TASK_ENTRY_OFFSET");
@@ -107,7 +140,7 @@ _Static_assert(offsetof(task_t, user_saved_rip) == 264, "task_t: user_saved_rip"
 _Static_assert(offsetof(task_t, user_saved_rbp) == 272, "task_t: user_saved_rbp — update TASK_USER_SAVED_RBP_OFFSET");
 
 extern task_t* ready_queues[MAX_PRIORITY + 1];
-extern task_t* current_task[8];
+extern task_t* current_task[MAX_CPUS];
 
 void sched_init(void);
 void sched_reschedule(void);
@@ -127,12 +160,11 @@ uint32_t task_alloc_pid(void);
 void    task_reparent(task_t* child, task_t* new_parent);
 void    task_wakeup_waiters(uint32_t pid);
 
-extern void context_switch(task_t* old, task_t* next);
+extern void context_switch(task_t* old, task_t* next, task_t** current_task_slot, uint64_t new_cr3);
 extern void first_task_start(task_t* task);
 extern void task_trampoline(void);
 extern void task_trampoline_user(void);
 extern void task_trampoline_fork(void);
 extern void fpu_save(fpu_state_t* state);
 extern void fpu_restore(fpu_state_t* state);
-
 #endif

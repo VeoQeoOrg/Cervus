@@ -1,5 +1,9 @@
 section .text
 extern base_trap
+extern sched_reschedule
+extern get_percpu
+
+PERCPU_NEED_RESCHED equ 40
 
 common_stub:
     push rax
@@ -43,7 +47,21 @@ common_stub:
     mov rax, [rsp + 18*8]
     and rax, 3
     jz .kernel_exit
+
+.check_resched:
+    call get_percpu
+    test rax, rax
+    jz .do_swapgs
+    cmp byte [rax + PERCPU_NEED_RESCHED], 0
+    je .do_swapgs
+    mov byte [rax + PERCPU_NEED_RESCHED], 0
+    call sched_reschedule
+    jmp .check_resched
+
+.do_swapgs:
     swapgs
+    jmp .kernel_exit
+
 .kernel_exit:
 
     pop r15

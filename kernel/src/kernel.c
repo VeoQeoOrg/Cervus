@@ -25,6 +25,10 @@
 #include "../include/elf/elf.h"
 #include "../include/syscall/syscall.h"
 #include "../include/drivers/ps2.h"
+#include "../include/fs/vfs.h"
+#include "../include/fs/ramfs.h"
+#include "../include/fs/devfs.h"
+#include "../include/fs/initramfs.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -91,39 +95,31 @@ static void load_elf_module(void) {
         return;
     }
 
-    struct limine_file* mod = module_request.response->modules[0];
+    struct limine_file *mod = module_request.response->modules[0];
     serial_printf("[ELF] Module: path='%s' size=%llu addr=%p\n",
                   mod->path, mod->size, mod->address);
 
     elf_load_result_t r = elf_load(mod->address, (size_t)mod->size, 0);
-
     if (r.error != ELF_OK) {
         serial_printf("[ELF] LOAD FAILED: %s\n", elf_strerror(r.error));
-        printf("[ELF] Failed to load: %s\n", elf_strerror(r.error));
         return;
     }
 
     serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n",
                   r.entry, r.stack_top);
-    printf("[ELF] Loaded! entry=0x%llx\n", r.entry);
 
     uint64_t cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
 
-    task_t* t = task_create_user(
-        "hello.elf",
+    task_t *t = task_create_user(
+        "init",
         r.entry,
         r.stack_top,
         cr3,
         16,
         r.pagemap,
-        0,           // ← uid = root
-        0            // ← gid = root
+        0,    /* uid = root */
+        0     /* gid = root */
     );
-
-    if (t) {
-        t->brk_start   = r.load_end;
-        t->brk_current = r.load_end;
-    }
 
     if (!t) {
         serial_writestring("[ELF] task_create_user failed\n");
@@ -131,11 +127,17 @@ static void load_elf_module(void) {
         return;
     }
 
-    serial_printf("[ELF] Task 'hello.elf' created: cr3=0x%llx user_rsp=0x%llx kernel_rsp=0x%llx\n",
-                  t->cr3, t->user_rsp, t->rsp);
-    printf("[ELF] Task 'hello.elf' scheduled!\n");
-}
+    t->brk_start   = r.load_end;
+    t->brk_current = r.load_end;
 
+    int sr = vfs_init_stdio(t);
+    if (sr < 0)
+        serial_printf("[VFS] vfs_init_stdio failed: %d\n", sr);
+    else
+        serial_writestring("[VFS] stdio assigned to task\n");
+
+    serial_printf("[ELF] Task 'init' created: cr3=0x%llx\n", t->cr3);
+}
 
 void exit_test_task(void* arg) {
     (void)arg;
@@ -292,6 +294,12 @@ void fpu_test_task(void* arg) {
     }
 }
 
+void ps2_task(void* arg) {
+    (void)arg;
+    asm volatile ("sti");
+    ps2_init();
+}
+
 void kernel_main(void) {
     serial_initialize(COM1, 115200);
     serial_writestring("\n=== SERIAL PORT INITIALIZED ===\n");
@@ -334,6 +342,23 @@ void kernel_main(void) {
     serial_writestring("Paging [OK]\n");
     vmm_init();
     serial_writestring("VMM [OK]\n");
+    vfs_init();
+    serial_writestring("VFS [OK]\n");
+
+    vnode_t *rootfs = ramfs_create_root();
+    vfs_mount("/", rootfs);
+    vnode_unref(rootfs);
+    serial_writestring("rootfs [OK]\n");
+
+    vfs_mkdir("/dev",  0755);
+    vfs_mkdir("/bin",  0755);
+    vfs_mkdir("/etc",  0755);
+    vfs_mkdir("/tmp",  0755);
+    vfs_mkdir("/proc", 0755);
+
+    vnode_t *devroot = devfs_create_root();
+    vfs_mount("/dev", devroot);
+    serial_writestring("devfs [OK]\n");
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");
@@ -367,9 +392,26 @@ void kernel_main(void) {
     smp_print_info_fb();
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
     syscall_init();
+
+    if (module_request.response &&
+        module_request.response->module_count >= 2) {
+        struct limine_file *tar = module_request.response->modules[1];
+        serial_printf("[initramfs] module: '%s' size=%llu\n",
+                      tar->path, tar->size);
+        int r = initramfs_mount(tar->address, (size_t)tar->size);
+        if (r == 0)
+            serial_writestring("[initramfs] mounted OK\n");
+        else
+            serial_printf("[initramfs] mount FAILED: %d\n", r);
+    } else {
+        serial_writestring("[initramfs] no TAR module (modules[1] missing)\n");
+    }
+
+    timer_init();
+
     sched_init();
     sched_notify_ready();
-    //load_elf_module();
+    load_elf_module();
 
     //task_create("ExitTest", exit_test_task, NULL, 20);
 
@@ -380,36 +422,11 @@ void kernel_main(void) {
 
     //task_create("HighPri",     high_priority_task, NULL, 25);
     //task_create("LowPri",      low_priority_task,  NULL, 10);
-    //task_create("FPUTESTTASK", fpu_test_task,       NULL,  1);
-
-    timer_init();
-    printf("Tasks switching automatically every ~10ms\n\n");
-
-    printf("\n[PS2] Initializing PS/2 driver...\n");
-    serial_writestring("[PS2] Initializing PS/2 driver...\n");
-
-    ps2_init();
-    printf("[PS2] Driver OK. Keyboard + Mouse active.\n");
-
-    {
-        char name[32];
-        int  age;
-
-        printf("Enter your name: ");
-        scanf("%31s", name);
-        printf("Hello, %s!\n", name);
-
-        printf("Enter a number: ");
-        scanf("%d", &age);
-        printf("You entered: %d\n", age);
-    }
-
+    //task_create("FPUTESTTASK", fpu_test_task,      NULL,  1);
+    task_create("PS/2",        ps2_task,           NULL, 10);
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
 
-    serial_writestring("\n=== All tasks completed ===\n");
-    serial_writestring("System will continue running tasks...\n");
-    printf("\nSystem will continue running tasks...\n");
     while (1) {
         hcf();
     }

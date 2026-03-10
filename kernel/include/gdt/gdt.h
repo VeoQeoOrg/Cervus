@@ -16,6 +16,7 @@
 
 #define TSS_SELECTOR_BASE     0x28
 #define KERNEL_STACK_SIZE     (4096 * 8)
+#define KERNEL_STACK_PAGES (KERNEL_STACK_SIZE / 0x1000)
 
 #define GDT_LIMIT_LOW(limit)  (limit & 0xFFFF)
 #define GDT_BASE_LOW(base)    (base & 0xFFFF)

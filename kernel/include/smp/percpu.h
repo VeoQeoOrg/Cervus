@@ -24,7 +24,9 @@ typedef struct {
     uint64_t user_saved_r15;
     uint64_t user_saved_r11;
     uint64_t user_saved_rip;
-    uint8_t  _pad3[16];
+    uint8_t  _pad3[8];
+    void* deferred_free_task;
+    uint64_t sched_stack_top;
 } __attribute__((aligned(64))) percpu_t;
 
 extern percpu_t percpu;

@@ -1,7 +1,5 @@
 section .text
-
 extern task_exit
-
 global context_switch
 global first_task_start
 global fpu_save
@@ -13,6 +11,7 @@ global task_trampoline_fork
 TASK_ENTRY_OFFSET            equ 120
 TASK_ARG_OFFSET              equ 128
 TASK_USER_RSP_OFFSET         equ 144
+TASK_CR3_OFFSET              equ 24
 TASK_USER_SAVED_RIP_OFFSET   equ 264
 TASK_USER_SAVED_RBP_OFFSET   equ 272
 TASK_USER_SAVED_RBX_OFFSET   equ 280
@@ -21,6 +20,8 @@ TASK_USER_SAVED_R13_OFFSET   equ 296
 TASK_USER_SAVED_R14_OFFSET   equ 304
 TASK_USER_SAVED_R15_OFFSET   equ 312
 TASK_USER_SAVED_R11_OFFSET   equ 320
+
+PERCPU_CURRENT_TASK equ 24
 
 context_switch:
     push rbp
@@ -32,7 +33,18 @@ context_switch:
 
     mov [rdi], rsp
 
+    test rdx, rdx
+    jz .skip_global
+    mov [rdx], rsi
+.skip_global:
+    mov [gs:PERCPU_CURRENT_TASK], rsi
+
     mov rsp, [rsi]
+
+    test rcx, rcx
+    jz .skip_cr3
+    mov cr3, rcx
+.skip_cr3:
 
     pop r15
     pop r14
@@ -44,7 +56,15 @@ context_switch:
     ret
 
 first_task_start:
+    mov [gs:PERCPU_CURRENT_TASK], rdi
+
+    mov rsi, [rdi + TASK_CR3_OFFSET]
     mov rsp, [rdi]
+
+    test rsi, rsi
+    jz .skip_cr3_fts
+    mov cr3, rsi
+.skip_cr3_fts:
 
     pop r15
     pop r14
@@ -107,7 +127,6 @@ task_trampoline_user:
     iretq
 
 task_trampoline_fork:
-
     cli
 
     mov rax, [rbp + TASK_USER_SAVED_RIP_OFFSET]

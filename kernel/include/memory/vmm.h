@@ -35,6 +35,7 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
 vmm_pagemap_t* vmm_get_kernel_pagemap(void);
 vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src);
 void vmm_free_pagemap(vmm_pagemap_t* map);
+void vmm_sync_kernel_mappings(vmm_pagemap_t* map);
 void vmm_test(void);
 
 #endif

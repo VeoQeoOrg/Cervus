@@ -272,11 +272,22 @@ static inline uintptr_t _slab_obj_start(slab_t *s) {
     return _align_up((uintptr_t)s + sizeof(slab_t), 8);
 }
 
+static inline size_t _slab_pages(size_t obj_size) {
+    uintptr_t hdr_end = _align_up(sizeof(slab_t), 8);
+    if (obj_size <= PAGE_SIZE - hdr_end)
+        return 1;
+    if (obj_size <= PAGE_SIZE)
+        return 2;
+    return 0;
+}
+
 static inline uint16_t _slab_capacity(size_t obj_size) {
-    if (obj_size == 0 || obj_size > PAGE_SIZE - sizeof(slab_t)) return 0;
+    size_t pages = _slab_pages(obj_size);
+    if (pages == 0) return 0;
     uintptr_t obj_start = _align_up(sizeof(slab_t), 8);
-    size_t avail = PAGE_SIZE - obj_start;
-    return (uint16_t)(avail / obj_size);
+    size_t avail = pages * PAGE_SIZE - obj_start;
+    uint16_t cap = (uint16_t)(avail / obj_size);
+    return cap > 0 ? cap : 0;
 }
 
 static void _slab_list_push(slab_t **head, slab_t *s) {
@@ -296,7 +307,9 @@ static slab_t *_slab_new(slab_cache_t *cache) {
     uint16_t cap = _slab_capacity(cache->obj_size);
     if (!cap) return NULL;
 
-    slab_t *s = (slab_t *)SLAB_PAGE_ALLOC(1);
+    size_t pages = _slab_pages(cache->obj_size);
+
+    slab_t *s = (slab_t *)SLAB_PAGE_ALLOC(pages);
     if (!s) return NULL;
 
     s->obj_size = (uint16_t)cache->obj_size;
@@ -419,7 +432,8 @@ void kfree(void *ptr) {
     }
     if (s->used == 0) {
         _slab_list_remove(&cache->partial, s);
-        SLAB_PAGE_FREE(s, 1);
+        size_t pages = _slab_pages(s->obj_size);
+        SLAB_PAGE_FREE(s, pages > 0 ? pages : 1);
     }
 }
 

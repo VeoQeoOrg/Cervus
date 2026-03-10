@@ -18,6 +18,7 @@
 #define MSR_LSTAR  0xC0000082
 #define MSR_SFMASK 0xC0000084
 #define EFER_SCE   (1ULL << 0)
+#define EFER_NXE   (1ULL << 11)
 
 static inline uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
@@ -30,7 +31,9 @@ static inline void wrmsr(uint32_t msr, uint64_t val) {
 }
 
 static inline task_t* cur_task(void) {
-    return current_task[lapic_get_id()];
+    percpu_t* pc = get_percpu();
+    if (!pc) return NULL;
+    return (task_t*)pc->current_task;
 }
 
 static bool uptr_validate(const void* ptr, size_t len) {
@@ -141,13 +144,14 @@ retry:;
     }
 
     if (!zombie) {
-
         if (flags & WNOHANG) return 0;
         percpu_t* pc2 = get_percpu();
         if (pc2) parent->user_rsp = pc2->syscall_user_rsp;
         parent->wait_for_pid = (pid_arg == (uint64_t)-1) ? (uint32_t)-1 : (uint32_t)pid_arg;
         parent->runnable = false;
         parent->state    = TASK_BLOCKED;
+        serial_printf("[WAIT] pid=%u blocking: user_rsp=0x%llx task_rsp=0x%llx\n",
+                      parent->pid, parent->user_rsp, parent->rsp);
         sched_reschedule();
         goto retry;
     }
@@ -271,18 +275,23 @@ static int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count) {
         return -EFAULT;
     kbuf[count] = '\0';
 
-    serial_writestring("[USER] ");
-    for (uint64_t i = 0; i < count; i++)
+    static bool at_line_start = true;
+    for (uint64_t i = 0; i < count; i++) {
+        if (at_line_start) {
+            serial_writestring("[USER] ");
+            at_line_start = false;
+        }
         serial_write(kbuf[i]);
+        if (kbuf[i] == '\n')
+            at_line_start = true;
+    }
 
     return (int64_t)count;
 }
 
-
 static int64_t sys_read(uint64_t fd, uint64_t buf_ptr, uint64_t count) {
     (void)buf_ptr; (void)count;
     if (fd != 0) return -EBADF;
-
     return -EAGAIN;
 }
 
@@ -304,7 +313,6 @@ static int64_t sys_brk(uint64_t new_brk) {
     uintptr_t new_page = (new_brk + 0xFFFULL) & ~0xFFFULL;
 
     if (new_brk > old_brk) {
-
         for (uintptr_t p = old_page; p < new_page; p += 0x1000) {
             void* phys = pmm_alloc_zero(1);
             if (!phys) return (int64_t)t->brk_current;
@@ -316,7 +324,6 @@ static int64_t sys_brk(uint64_t new_brk) {
             }
         }
     } else if (new_brk < old_brk) {
-
         for (uintptr_t p = new_page; p < old_page; p += 0x1000)
             vmm_unmap_page(t->pagemap, p);
     }
@@ -344,7 +351,6 @@ static int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t 
         if (!hint) return (int64_t)MAP_FAILED;
         addr = hint & ~0xFFFULL;
     } else {
-
         addr = (t->brk_max - (uint64_t)pages * 0x1000) & ~0xFFFULL;
         t->brk_max = addr;
     }
@@ -356,7 +362,6 @@ static int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t 
     for (size_t i = 0; i < pages; i++) {
         void* phys = pmm_alloc_zero(1);
         if (!phys) {
-
             for (size_t j = 0; j < i; j++)
                 vmm_unmap_page(t->pagemap, addr + j * 0x1000);
             return (int64_t)MAP_FAILED;
@@ -375,7 +380,6 @@ static int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t 
     return (int64_t)addr;
 }
 
-
 static int64_t sys_munmap(uint64_t addr, uint64_t length) {
     task_t* t = cur_task();
     if (!t || !t->is_userspace) return -EINVAL;
@@ -393,7 +397,6 @@ static int64_t sys_uptime(void) {
     return 0;
 }
 
-
 static int64_t sys_clock_get(uint64_t clk_id, uint64_t ts_ptr) {
     if (!ts_ptr) return -EINVAL;
     (void)clk_id;
@@ -405,10 +408,8 @@ static int64_t sys_clock_get(uint64_t clk_id, uint64_t ts_ptr) {
     return copy_to_user((void*)ts_ptr, &ts, sizeof(ts));
 }
 
-
 static int64_t sys_sleep_ns(uint64_t ns) {
     (void)ns;
-
     task_yield();
     return 0;
 }
@@ -431,7 +432,6 @@ static int64_t sys_dbg_print(uint64_t str_ptr, uint64_t len) {
     serial_printf("[DBG pid=%u] %s", t->pid, kbuf);
     return (int64_t)len;
 }
-
 
 static int64_t sys_task_kill(uint64_t pid_arg) {
     task_t* me     = cur_task();
@@ -476,8 +476,6 @@ static int64_t sys_ioport_write(uint64_t port, uint64_t width, uint64_t val) {
 }
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-
-#define SC(fn)  [(fn##_NR)] = (syscall_fn_t)(void*)fn
 
 static int64_t _sys_exit(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)b;(void)c;(void)d;(void)e;(void)f;return sys_exit(a);}
 static int64_t _sys_exit_group(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)b;(void)c;(void)d;(void)e;(void)f;return sys_exit_group(a);}
@@ -581,7 +579,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, ui
 void syscall_init(void) {
     extern void syscall_entry(void);
 
-    wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE);
+    wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE | EFER_NXE);
 
     uint64_t star = ((uint64_t)GDT_STAR_SYSRET_BASE << 48)
                   | ((uint64_t)GDT_STAR_SYSCALL_CS  << 32);

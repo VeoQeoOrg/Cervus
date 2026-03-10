@@ -35,7 +35,7 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index, uint64_t flags) {
     } else if (flags & VMM_USER) {
         parent[index] |= VMM_USER;
     }
-    return (vmm_pte_t*)pmm_phys_to_virt(parent[index] & ~0xFFF);
+    return (vmm_pte_t*)pmm_phys_to_virt(parent[index] & PTE_PHYS_MASK);
 }
 
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
@@ -46,7 +46,7 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     vmm_pte_t* pdpt = get_table(map->pml4, pml4_i, flags);
     vmm_pte_t* pd   = get_table(pdpt,      pdpt_i, flags);
     vmm_pte_t* pt   = get_table(pd,        pd_i,   flags);
-    pt[pt_i] = (phys & ~0xFFF) | (flags | VMM_PRESENT);
+    pt[pt_i] = (phys & PTE_PHYS_MASK) | (flags | VMM_PRESENT);
 
     asm volatile ("mfence" ::: "memory");
     invlpg((void*)virt);
@@ -62,11 +62,11 @@ void vmm_unmap_page_noflush(vmm_pagemap_t* map, uintptr_t virt) {
     size_t pt_i   = (virt >> 12) & MASK;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
     pt[pt_i] = 0;
 }
 
@@ -77,11 +77,15 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     size_t pt_i   = (virt >> 12) & MASK;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return;
-    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
+
+    if (!(pt[pt_i] & VMM_PRESENT)) return;
+
+    uintptr_t phys = pt[pt_i] & PTE_PHYS_MASK;
 
     pt[pt_i] = 0;
     asm volatile ("mfence" ::: "memory");
@@ -89,6 +93,10 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
 
     if (smp_get_cpu_count() > 1) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
+    }
+
+    if (phys) {
+        pmm_free(pmm_phys_to_virt(phys), 1);
     }
 }
 
@@ -125,14 +133,14 @@ bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
     size_t pt_i   = (virt >> 12) & MASK;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
 
-    *phys_out = (pt[pt_i] & ~0xFFF) | (virt & 0xFFF);
+    *phys_out = (pt[pt_i] & PTE_PHYS_MASK) | (virt & 0xFFF);
     return true;
 }
 
@@ -145,11 +153,11 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
     size_t pt_i   = (virt >> 12) & MASK;
 
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & ~0xFFF);
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & ~0xFFF);
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
-    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & ~0xFFF);
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
 
     *flags_out = pt[pt_i] & (0xFFF | (1ULL << 63));
@@ -164,7 +172,7 @@ vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src) {
     dst->pml4 = alloc_table();
 
     for (size_t i = 256; i < 512; i++)
-        dst->pml4[i] = src->pml4[i];
+        dst->pml4[i] = kernel_pagemap.pml4[i];
 
     for (size_t pml4_i = 0; pml4_i < 256; pml4_i++) {
         if (!(src->pml4[pml4_i] & VMM_PRESENT)) continue;
@@ -187,7 +195,9 @@ vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src) {
                     if (!new_hp) continue;
                     void* old_hp = pmm_phys_to_virt(src_pd[pd_i] & PTE_PHYS_MASK & ~0x1FFFFFULL);
                     memcpy(new_hp, old_hp, 512 * 0x1000);
-                    dst_pd[pd_i] = pmm_virt_to_phys(new_hp) | (src_pd[pd_i] & (0x1FFFFF | (1ULL << 63)));
+                    uint64_t hp_flags = src_pd[pd_i] & ~(PTE_PHYS_MASK & ~0x1FFFFFULL);
+                    dst_pd[pd_i] = (pmm_virt_to_phys(new_hp) & (PTE_PHYS_MASK & ~0x1FFFFFULL))
+                                 | hp_flags;
                     continue;
                 }
 
@@ -258,6 +268,13 @@ void vmm_init(void) {
 
 vmm_pagemap_t* vmm_get_kernel_pagemap(void) {
     return &kernel_pagemap;
+}
+
+void vmm_sync_kernel_mappings(vmm_pagemap_t* map) {
+    if (!map) return;
+    for (size_t i = 256; i < 512; i++) {
+        map->pml4[i] = kernel_pagemap.pml4[i];
+    }
 }
 
 void vmm_test(void) {

@@ -144,7 +144,7 @@ static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
                  stack_bottom, ELF_USER_STACK_TOP,
                  (page_count * PAGE_SIZE) / 1024);
 
-    return ELF_USER_STACK_TOP & ~(uintptr_t)0xF;
+    return (ELF_USER_STACK_TOP - 8) & ~(uintptr_t)0xF;
 }
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {

@@ -87,8 +87,13 @@ void serial_writestring_port(uint16_t port, const char* str) {
 
 void serial_writestring(const char* str) {
     if (default_serial_port == 0) return;
+    while (__sync_lock_test_and_set(&serial_lock, 1))
+        __asm__ volatile("pause" ::: "memory");
     serial_writestring_port(default_serial_port, str);
+    __sync_lock_release(&serial_lock);
 }
+
+
 
 static void reverse_string(char* str, int length) {
     int start = 0;

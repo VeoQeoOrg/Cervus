@@ -27,6 +27,7 @@
 #define SYS_DUP          28
 #define SYS_DUP2         29
 #define SYS_PIPE         30
+#define SYS_FCNTL        31
 
 #define SYS_MMAP         40
 #define SYS_MUNMAP       41

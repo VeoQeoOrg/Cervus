@@ -15,10 +15,11 @@
 #define MAX_PIDS 1024
 
 task_t* ready_queues[MAX_PRIORITY + 1] = {0};
-task_t* current_task[8] = {0};
+task_t* current_task[MAX_CPUS] = {0};
 
-static task_t* percpu_ready_queues[8][MAX_PRIORITY + 1] = {0};
-static task_t  idle_tasks[8];
+static task_t* percpu_ready_queues[MAX_CPUS][MAX_PRIORITY + 1] = {0};
+static task_t  idle_tasks[MAX_CPUS];
+static task_t  bootstrap_tasks[MAX_CPUS];
 static volatile uint64_t reschedule_calls = 0;
 static spinlock_t ready_queue_lock = SPINLOCK_INIT;
 static task_t*    pid_table[MAX_PIDS] = {0};
@@ -26,6 +27,14 @@ static uint32_t   next_pid = 1;
 static spinlock_t pid_lock = SPINLOCK_INIT;
 
 extern tss_t* tss[MAX_CPUS];
+
+static inline void fix_gs_base(percpu_t* pc) {
+    uint64_t val = (uint64_t)pc;
+    asm volatile("wrmsr"
+                 :: "c"(0xC0000101U),
+                    "a"((uint32_t)val),
+                    "d"((uint32_t)(val >> 32)));
+}
 
 uint32_t task_alloc_pid(void) {
     spinlock_acquire(&pid_lock);
@@ -95,6 +104,7 @@ static void enqueue_global(task_t* t) {
 
 void sched_init(void) {
     memset(pid_table, 0, sizeof(pid_table));
+    memset(bootstrap_tasks, 0, sizeof(bootstrap_tasks));
     next_pid = 1;
     for (uint32_t i = 0; i < smp_get_cpu_count(); i++) {
         task_t* idle = &idle_tasks[i];
@@ -113,6 +123,7 @@ void sched_init(void) {
         idle->uid             = UID_ROOT;
         idle->gid             = GID_ROOT;
         idle->capabilities    = CAP_ALL;
+        atomic_init_bool(&idle->on_cpu, false);
         idle->name[0]='i'; idle->name[1]='d';
         idle->name[2]='l'; idle->name[3]='e';
         idle->rsp = alloc_and_init_stack(idle);
@@ -146,6 +157,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     t->time_slice_init = TASK_DEFAULT_TIMESLICE;
     t->rip             = (uint64_t)entry;
     t->is_userspace    = TASK_TYPE_KERNEL;
+    atomic_init_bool(&t->on_cpu, false);
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
@@ -156,7 +168,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     return t;
 }
 
-task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, uint64_t cr3, int priority, vmm_pagemap_t* pagemap, uint32_t uid,uint32_t gid) {
+task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, uint64_t cr3, int priority, vmm_pagemap_t* pagemap, uint32_t uid, uint32_t gid) {
     task_t* t = calloc(1, sizeof(task_t));
     if (!t) return NULL;
     t->pid             = task_alloc_pid();
@@ -181,41 +193,36 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->brk_start       = 0;
     t->brk_current     = 0;
     t->brk_max         = 0x0000700000000000ULL;
+    atomic_init_bool(&t->on_cpu, false);
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     pid_register(t);
     enqueue_global(t);
-    serial_printf("[SCHED] task_create_user: '%s' pid=%u uid=%u entry=0x%llx user_rsp=0x%llx caps=0x%llx\n", t->name, t->pid, t->uid, entry, user_rsp, t->capabilities);
+    serial_printf("[SCHED] task_create_user: '%s' pid=%u uid=%u entry=0x%llx user_rsp=0x%llx caps=0x%llx\n",
+                  t->name, t->pid, t->uid, entry, user_rsp, t->capabilities);
     return t;
 }
 
 task_t* task_fork(task_t* parent) {
-    if (!parent)
-        return NULL;
+    if (!parent) return NULL;
     task_t* child = calloc(1, sizeof(task_t));
-    if (!child)
-        return NULL;
+    if (!child) return NULL;
     child->pid = task_alloc_pid();
-    if (!child->pid) {
-        free(child);
-        return NULL;
-    }
-    child->ppid = parent->pid;
-    child->priority     = parent->priority;
-    child->is_userspace = parent->is_userspace;
+    if (!child->pid) { free(child); return NULL; }
+    child->ppid            = parent->pid;
+    child->priority        = parent->priority;
+    child->is_userspace    = parent->is_userspace;
     strncpy(child->name, parent->name, sizeof(child->name)-1);
-    child->uid          = parent->uid;
-    child->gid          = parent->gid;
-    child->capabilities = parent->capabilities;
+    child->uid             = parent->uid;
+    child->gid             = parent->gid;
+    child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;
     child->pagemap = vmm_clone_pagemap(parent->pagemap);
-    if (!child->pagemap) {
-        free(child);
-        return NULL;
-    }
+    if (!child->pagemap) { free(child); return NULL; }
+    vmm_sync_kernel_mappings(child->pagemap);
     child->cr3 = (uint64_t)pmm_virt_to_phys(child->pagemap->pml4);
     child->brk_start   = parent->brk_start;
     child->brk_current = parent->brk_current;
@@ -227,6 +234,7 @@ task_t* task_fork(task_t* parent) {
         child->user_rsp = parent->user_rsp;
     }
     child->flags |= TASK_FLAG_FORK;
+    atomic_init_bool(&child->on_cpu, false);
     child->rsp = alloc_and_init_stack(child);
     if (!child->rsp) {
         vmm_free_pagemap(child->pagemap);
@@ -246,15 +254,16 @@ task_t* task_fork(task_t* parent) {
     child->user_saved_r14 = parent->user_saved_r14;
     child->user_saved_r15 = parent->user_saved_r15;
     child->user_saved_r11 = parent->user_saved_r11;
-    child->flags |= TASK_FLAG_STARTED;
-    child->state    = TASK_READY;
+    child->flags  |= TASK_FLAG_STARTED;
+    child->state   = TASK_READY;
     child->runnable = true;
     child->parent  = parent;
     child->sibling = parent->children;
     parent->children = child;
     pid_register(child);
     enqueue_global(child);
-    serial_printf("[SCHED] fork: parent='%s' pid=%u -> child pid=%u\n", parent->name, parent->pid, child->pid);
+    serial_printf("[SCHED] fork: parent='%s' pid=%u -> child pid=%u\n",
+                  parent->name, parent->pid, child->pid);
     return child;
 }
 
@@ -265,7 +274,7 @@ void task_destroy(task_t* task) {
         pmm_free(task->fpu_state, 1);
         task->fpu_state = NULL;
     }
-    if (task->stack_base) {
+    if (task->stack_base && !(task->flags & TASK_FLAG_STACK_DEFERRED)) {
         pmm_free((void*)task->stack_base, KERNEL_STACK_PAGES);
         task->stack_base = 0;
     }
@@ -285,45 +294,81 @@ void task_reparent(task_t* child, task_t* new_parent) {
 }
 
 void task_wakeup_waiters(uint32_t pid) {
-    extern task_t* pid_table[];
-    for (uint32_t i = 1; i < 1024; i++) {
+    spinlock_acquire(&pid_lock);
+    for (uint32_t i = 1; i < MAX_PIDS; i++) {
         task_t* t = pid_table[i];
         if (!t) continue;
         if (t->state != TASK_BLOCKED) continue;
         if (t->wait_for_pid != pid && t->wait_for_pid != (uint32_t)-1) continue;
-
+        serial_printf("[SCHED] wakeup_waiters: waking pid=%u (waited for pid=%u) on_cpu=%d\n",
+                      t->pid, pid, (int)t->on_cpu._val);
         t->wait_for_pid = 0;
         t->runnable     = true;
         t->state        = TASK_READY;
+        spinlock_release(&pid_lock);
         enqueue_global(t);
+        spinlock_acquire(&pid_lock);
     }
+    spinlock_release(&pid_lock);
 }
 
 __attribute__((noreturn)) void task_exit(void) {
     uint32_t cpu = lapic_get_id();
-    task_t* me   = current_task[cpu];
     asm volatile("cli");
 
-    if (me) {
-        me->runnable = false;
-        me->state    = TASK_ZOMBIE;
-        task_t* init  = task_find_by_pid(1);
-        task_t* child = me->children;
-        while (child) {
-            task_t* sib = child->sibling;
-            if (init && init != me)
-                task_reparent(child, init);
-            child = sib;
-        }
-        serial_printf("[SCHED] task_exit: '%s' pid=%u exit=%d cpu=%u\n", me->name, me->pid, me->exit_code, cpu);
-        task_wakeup_waiters(me->pid);
+    percpu_t* pc = get_percpu();
+    task_t* me = pc ? (task_t*)pc->current_task : current_task[cpu];
+
+    if (pc) fix_gs_base(pc);
+
+    if (!me || !me->is_userspace) {
+        uint64_t gs_base = 0;
+        uint64_t kgs_base_lo = 0, kgs_base_hi = 0;
+        asm volatile("rdgsbase %0" : "=r"(gs_base));
+        asm volatile("mov $0xC0000102, %%ecx; rdmsr"
+                     : "=a"(kgs_base_lo), "=d"(kgs_base_hi)
+                     :: "ecx");
+        uint64_t kgs_base = kgs_base_lo | ((uint64_t)kgs_base_hi << 32);
+
+        serial_printf("[SCHED] task_exit: spurious call on cpu=%u (current='%s')\n"
+                      "  pc=0x%llx gs_base=0x%llx kgs_base=0x%llx\n"
+                      "  current_task[%u]=%p gs:current_task=%p\n",
+                      cpu, me ? me->name : "null",
+                      (uint64_t)pc, gs_base, kgs_base,
+                      cpu, current_task[cpu],
+                      pc ? (void*)pc->current_task : (void*)0xDEAD);
+        sched_reschedule();
+        while (1) asm volatile("hlt");
     }
-    vmm_switch_pagemap(vmm_get_kernel_pagemap());
+
+    me->runnable = false;
+    me->state    = TASK_ZOMBIE;
+
     current_task[cpu] = NULL;
-    asm volatile("sti");
+    if (pc) {
+        pc->current_task = NULL;
+        me->flags |= TASK_FLAG_STACK_DEFERRED;
+        pc->deferred_free_task = (void*)me;
+    }
+
+    task_t* init  = task_find_by_pid(1);
+    task_t* child = me->children;
+    while (child) {
+        task_t* sib = child->sibling;
+        if (init && init != me)
+            task_reparent(child, init);
+        child = sib;
+    }
+
+    serial_printf("[SCHED] task_exit: '%s' pid=%u exit=%d cpu=%u\n",
+                  me->name, me->pid, me->exit_code, cpu);
+
+    task_wakeup_waiters(me->pid);
+
+    vmm_switch_pagemap(vmm_get_kernel_pagemap());
+
     sched_reschedule();
-    while (1)
-        asm volatile("hlt");
+    while (1) asm volatile("hlt");
 }
 
 void task_kill(task_t* target) {
@@ -364,42 +409,85 @@ void task_kill(task_t* target) {
 
 static task_t* sched_pick_next(uint32_t cpu) {
     for (int p = MAX_PRIORITY; p >= 0; p--) {
-        task_t* t = percpu_ready_queues[cpu][p];
-        if (t && t->runnable) {
-            percpu_ready_queues[cpu][p] = t->next;
-            t->next = NULL;
-            return t;
+        task_t** head = &percpu_ready_queues[cpu][p];
+        task_t*  t    = *head;
+        while (t) {
+            if (t->runnable) {
+                bool expected = false;
+                if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
+                    *head   = t->next;
+                    t->next = NULL;
+                    return t;
+                }
+            }
+            head = &t->next;
+            t    = *head;
         }
     }
 
     spinlock_acquire(&ready_queue_lock);
     task_t* found = NULL;
     for (int p = MAX_PRIORITY; p >= 0; p--) {
-        task_t* t = ready_queues[p];
-        if (t && t->runnable) {
-            ready_queues[p] = t->next;
-            t->next = NULL;
-            found = t;
-            break;
+        task_t** head = &ready_queues[p];
+        task_t*  t    = *head;
+        while (t) {
+            if (t->runnable) {
+                bool expected = false;
+                if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
+                    *head   = t->next;
+                    t->next = NULL;
+                    found   = t;
+                    goto done_global;
+                }
+            }
+            head = &t->next;
+            t    = *head;
         }
     }
+done_global:
     spinlock_release(&ready_queue_lock);
     return found ? found : &idle_tasks[cpu];
 }
 
 void sched_reschedule(void) {
+    asm volatile("cli");
+
     reschedule_calls++;
     uint32_t cpu  = lapic_get_id();
     task_t*  old  = current_task[cpu];
     task_t*  next = sched_pick_next(cpu);
 
-    if (!next)
-        return;
+    if (!next) { asm volatile("sti"); return; }
 
     if (old == next) {
-        if (old)
+        if (old == &idle_tasks[cpu]) {
+            spinlock_acquire(&ready_queue_lock);
+            task_t* found = NULL;
+            for (int p = MAX_PRIORITY; p >= 0 && !found; p--) {
+                task_t** head = &ready_queues[p];
+                task_t*  t    = *head;
+                while (t) {
+                    if (t->runnable) {
+                        bool expected = false;
+                        if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
+                            *head   = t->next;
+                            t->next = NULL;
+                            found   = t;
+                            break;
+                        }
+                    }
+                    head = &t->next;
+                    t    = *head;
+                }
+            }
+            spinlock_release(&ready_queue_lock);
+            if (found) next = found;
+            else        { asm volatile("sti"); return; }
+        } else {
             old->time_slice = old->time_slice_init;
-        return;
+            asm volatile("sti");
+            return;
+        }
     }
 
     if (old && old->fpu_state) {
@@ -407,16 +495,26 @@ void sched_reschedule(void) {
         old->fpu_used = true;
     }
 
-    if (old && old != &idle_tasks[cpu] && old->runnable) {
-        old->time_slice = old->time_slice_init;
-        old->last_cpu   = cpu;
-        old->state      = TASK_READY;
-        old->next = percpu_ready_queues[cpu][old->priority];
-        percpu_ready_queues[cpu][old->priority] = old;
+    if (old && old != &idle_tasks[cpu]) {
+        if (old->runnable) {
+            old->time_slice = old->time_slice_init;
+            old->last_cpu   = cpu;
+            old->state      = TASK_READY;
+            old->next = percpu_ready_queues[cpu][old->priority];
+            percpu_ready_queues[cpu][old->priority] = old;
+            asm volatile("" ::: "memory");
+            atomic_store_bool_rel(&old->on_cpu, false);
+        } else {
+            atomic_store_bool_rel(&old->on_cpu, false);
+        }
     }
 
+    uint64_t switch_cr3 = 0;
     if (next->cr3 && (!old || old->cr3 != next->cr3)) {
-        asm volatile("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
+        if (next->pagemap)
+            vmm_sync_kernel_mappings(next->pagemap);
+        asm volatile("mfence" ::: "memory");
+        switch_cr3 = next->cr3;
     }
 
     if (tss[cpu]) {
@@ -424,39 +522,47 @@ void sched_reschedule(void) {
         percpu_t* pc = get_percpu();
         if (pc) {
             pc->syscall_kernel_rsp = tss[cpu]->rsp0;
-            if (next->is_userspace) {
+            if (next->is_userspace)
                 pc->syscall_user_rsp = next->user_rsp;
-            }
         }
     }
+
     next->cpu_id = cpu;
     next->state  = TASK_RUNNING;
-    current_task[cpu] = next;
-    if (next->fpu_state)
-        fpu_restore(next->fpu_state);
+    if (next->fpu_state) fpu_restore(next->fpu_state);
 
     if (!(next->flags & TASK_FLAG_STARTED)) {
         next->flags |= TASK_FLAG_STARTED;
+        current_task[cpu] = next;
         if (next->is_userspace) {
-            serial_printf(
-                "[SCHED] CPU %u: first start '%s' pid=%u entry=0x%llx user_rsp=0x%llx\n",
-                cpu,
-                next->name,
-                next->pid,
-                (uint64_t)next->entry,
-                next->user_rsp
-            );
+            serial_printf("[SCHED] CPU %u: first start '%s' pid=%u entry=0x%llx user_rsp=0x%llx\n",
+                          cpu, next->name, next->pid,
+                          (uint64_t)next->entry, next->user_rsp);
         }
+        asm volatile("sti");
         first_task_start(next);
         __builtin_unreachable();
     }
 
-    if (old) {
-        context_switch(old, next);
-    } else {
-        static task_t bootstrap_task;
-        context_switch(&bootstrap_task, next);
+    {
+        percpu_t* _pc = get_percpu();
+        uint64_t _krsp = _pc ? _pc->syscall_kernel_rsp : 0;
+        uint64_t _tss  = (tss[cpu]) ? tss[cpu]->rsp0 : 0;
+        serial_printf("[SCHED] ctx_switch cpu=%u: old=%p(rsp=0x%llx run=%d) -> next=pid=%u(rsp=0x%llx sb=0x%llx) tss_rsp0=0x%llx krsp=0x%llx\n",
+                      cpu,
+                      (void*)old, old ? old->rsp : 0ULL, old ? (int)old->runnable : -1,
+                      next->pid, next->rsp, next->stack_base, _tss, _krsp);
+
+        if (next->stack_base && next->rsp != 0 &&
+            (next->rsp < next->stack_base || next->rsp >= next->stack_base + KERNEL_STACK_SIZE)) {
+            serial_printf("[SCHED] *** STACK CORRUPTION: pid=%u rsp=0x%llx NOT in [0x%llx, 0x%llx)! ***\n",
+                          next->pid, next->rsp, next->stack_base, next->stack_base + KERNEL_STACK_SIZE);
+        }
     }
+    if (old) context_switch(old, next, &current_task[cpu], switch_cr3);
+    else     context_switch(&bootstrap_tasks[cpu], next, &current_task[cpu], switch_cr3);
+
+    asm volatile("sti");
 }
 
 void task_yield(void) {
@@ -476,7 +582,5 @@ void sched_print_stats(void) {
 
 static void idle_loop(void* arg) {
     (void)arg;
-    while (1) {
-        asm volatile("hlt");
-    }
+    while (1) asm volatile("sti; hlt");
 }

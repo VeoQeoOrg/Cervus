@@ -5,6 +5,8 @@
 #include "../include/io/ports.h"
 #include "../include/sched/sched.h"
 #include "../include/smp/percpu.h"
+#include "../include/memory/pmm.h"
+#include "../include/gdt/gdt.h"
 
 static volatile uint64_t ticks = 0;
 
@@ -15,23 +17,24 @@ DEFINE_IRQ(0x20, timer_handler)
 
     uint32_t cpu = lapic_get_id();
     task_t* current = current_task[cpu];
+    percpu_t* pc = get_percpu();
+
+    if (pc && pc->deferred_free_task) {
+        task_t* dead = (task_t*)pc->deferred_free_task;
+        pc->deferred_free_task = NULL;
+        if (dead->stack_base) {
+            pmm_free((void*)dead->stack_base, KERNEL_STACK_PAGES);
+            dead->stack_base = 0;
+        }
+    }
 
     if (!current) return;
 
-    if (current->time_slice > 0) {
+    if (current->time_slice > 0)
         current->time_slice--;
-    }
 
-    bool force_resched = false;
-    percpu_t* pc = get_percpu();
-    if (pc && pc->need_resched) {
-        pc->need_resched = false;
-        force_resched = true;
-    }
-
-    if (current->time_slice == 0 || force_resched) {
-        sched_reschedule();
-    }
+    if (current->time_slice == 0 && pc)
+        pc->need_resched = true;
 
     (void)frame;
 }
