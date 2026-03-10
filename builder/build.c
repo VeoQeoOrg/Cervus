@@ -165,7 +165,7 @@ bool build_limine(void) {
     print_color(COLOR_GREEN, "Building Limine...");
     if (file_exists("limine")) rm_rf("limine");
     if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine "
-                      "--branch=v10.7.0-binary --depth=1") != 0) return false;
+                      "--branch=v10.8.3-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
     return true;
 }
