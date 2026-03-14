@@ -16,6 +16,7 @@ typedef int64_t  off_t;
 #define SYS_GETPPID       3
 #define SYS_FORK          4
 #define SYS_WAIT          5
+#define SYS_EXECVE       14
 #define SYS_YIELD         6
 #define SYS_GETUID        7
 #define SYS_GETGID        8
@@ -145,6 +146,10 @@ static inline int setgid(gid_t gid) { return (int)syscall1(SYS_SETGID, gid); }
 
 static inline pid_t fork(void)  { return (pid_t)syscall0(SYS_FORK);  }
 static inline void  yield(void) { syscall0(SYS_YIELD); }
+
+static inline int execve(const char *path, const char *argv[], const char *envp[]) {
+    return (int)syscall3(SYS_EXECVE, path, argv, envp);
+}
 
 static inline pid_t wait(int* status) {
     return (pid_t)syscall3(SYS_WAIT, (uint64_t)-1, status, 0);

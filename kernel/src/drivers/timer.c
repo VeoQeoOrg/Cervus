@@ -7,6 +7,7 @@
 #include "../include/smp/percpu.h"
 #include "../include/memory/pmm.h"
 #include "../include/gdt/gdt.h"
+#include <stdlib.h>
 
 static volatile uint64_t ticks = 0;
 
@@ -22,10 +23,11 @@ DEFINE_IRQ(0x20, timer_handler)
     if (pc && pc->deferred_free_task) {
         task_t* dead = (task_t*)pc->deferred_free_task;
         pc->deferred_free_task = NULL;
-        if (dead->stack_base) {
-            pmm_free((void*)dead->stack_base, KERNEL_STACK_PAGES);
-            dead->stack_base = 0;
-        }
+        uintptr_t sb = dead->stack_base;
+        dead->stack_base = 0;
+        if (sb)
+            pmm_free((void*)sb, KERNEL_STACK_PAGES);
+        free(dead);
     }
 
     if (!current) return;

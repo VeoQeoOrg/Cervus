@@ -7,6 +7,7 @@
 #define SYS_GETPPID       3
 #define SYS_FORK          4
 #define SYS_WAIT          5
+#define SYS_EXECVE        14
 #define SYS_YIELD         6
 #define SYS_GETUID        7
 #define SYS_GETGID        8

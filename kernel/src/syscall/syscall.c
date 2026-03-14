@@ -10,8 +10,11 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
+#include "../../include/fs/vfs.h"
+#include "../../include/elf/elf.h"
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define MSR_EFER   0xC0000080
 #define MSR_STAR   0xC0000081
@@ -70,7 +73,6 @@ static int copy_to_user(void* dst, const void* src, size_t n) {
     return 0;
 }
 
-__attribute__((unused))
 static int strncpy_from_user(char* dst, const char* src, size_t max_len) {
     if (!uptr_validate(src, 1)) return -EFAULT;
     size_t i;
@@ -125,6 +127,304 @@ static int64_t sys_fork(void) {
     serial_printf("[SYSCALL] fork: parent pid=%u → child pid=%u\n",
                   parent->pid, child->pid);
     return (int64_t)child->pid;
+}
+
+#define EXECVE_MAX_PATH   512
+#define EXECVE_MAX_ARGS   128
+#define EXECVE_MAX_ARGLEN 4096
+
+#define AT_NULL   0
+#define AT_PHDR   3
+#define AT_PHENT  4
+#define AT_PHNUM  5
+#define AT_PAGESZ 6
+#define AT_ENTRY  9
+
+static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, const char *argv_k[], int argc, const char *envp_k[], int envc, const elf_load_result_t *elf) {
+    size_t str_bytes = 0;
+    for (int i = 0; i < argc; i++)
+        str_bytes += strlen(argv_k[i]) + 1;
+    for (int i = 0; i < envc; i++)
+        str_bytes += strlen(envp_k[i]) + 1;
+
+    size_t frame_bytes = 8 + (argc + 1) * 8 + (envc + 1) * 8 + 6 * 16 + str_bytes + 32;
+    size_t frame_pages = (frame_bytes + 0xFFF) >> 12;
+
+    uintptr_t frame_base = (stack_top - frame_pages * 0x1000) & ~(uintptr_t)0xF;
+
+    uint8_t *kbuf = (uint8_t *)malloc(frame_pages * 0x1000);
+    if (!kbuf) return 0;
+    memset(kbuf, 0, frame_pages * 0x1000);
+
+    uintptr_t kbase = (uintptr_t)kbuf;
+
+#define PUSH64(val) do {                    \
+    rsp_user -= 8;                          \
+    uintptr_t _off = rsp_user - frame_base; \
+    if (_off < frame_pages * 0x1000)        \
+        *(uint64_t*)(kbase + _off) = (uint64_t)(val); \
+} while(0)
+
+    uintptr_t str_region_user = stack_top - str_bytes - 8;
+    str_region_user &= ~(uintptr_t)0xF;
+    uintptr_t str_ptr_user = str_region_user;
+
+    uint64_t argv_user[EXECVE_MAX_ARGS + 1];
+    for (int i = 0; i < argc; i++) {
+        size_t slen = strlen(argv_k[i]) + 1;
+        uintptr_t off = str_ptr_user - frame_base;
+        if (off < frame_pages * 0x1000)
+            memcpy((void*)(kbase + off), argv_k[i], slen);
+        argv_user[i] = str_ptr_user;
+        str_ptr_user += slen;
+    }
+    argv_user[argc] = 0;
+
+    uint64_t envp_user[EXECVE_MAX_ARGS + 1];
+    for (int i = 0; i < envc; i++) {
+        size_t slen = strlen(envp_k[i]) + 1;
+        uintptr_t off = str_ptr_user - frame_base;
+        if (off < frame_pages * 0x1000)
+            memcpy((void*)(kbase + off), envp_k[i], slen);
+        envp_user[i] = str_ptr_user;
+        str_ptr_user += slen;
+    }
+    envp_user[envc] = 0;
+
+    int num_pushes = 15 + argc + envc;
+
+    uintptr_t rsp_user = str_region_user & ~(uintptr_t)0xF;
+
+    if ((num_pushes & 1) != 0)
+        rsp_user -= 8;
+
+    PUSH64(0);
+    PUSH64(AT_NULL);
+    PUSH64(0x1000);
+    PUSH64(AT_PAGESZ);
+    PUSH64(elf->entry);
+    PUSH64(AT_ENTRY);
+    PUSH64(0);
+    PUSH64(AT_PHNUM);
+    PUSH64(56);
+    PUSH64(AT_PHENT);
+    PUSH64(elf->load_base + 64);
+    PUSH64(AT_PHDR);
+
+    PUSH64(0);
+    for (int i = envc - 1; i >= 0; i--)
+        PUSH64(envp_user[i]);
+
+    PUSH64(0);
+    for (int i = argc - 1; i >= 0; i--)
+        PUSH64(argv_user[i]);
+
+    PUSH64((uint64_t)argc);
+#undef PUSH64
+    for (size_t pg = 0; pg < frame_pages; pg++) {
+        uintptr_t virt = frame_base + pg * 0x1000;
+        uint64_t flags = 0;
+        if (!vmm_get_page_flags(map, virt, &flags)) {
+            void *phys_page = pmm_alloc_zero(1);
+            if (!phys_page) { free(kbuf); return 0; }
+            if (!vmm_map_page(map, virt, pmm_virt_to_phys(phys_page), VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC)) {
+                pmm_free(phys_page, 1);
+                free(kbuf);
+                return 0;
+            }
+        }
+        uintptr_t phys = 0;
+        if (vmm_virt_to_phys(map, virt, &phys) && phys) {
+            void *kvirt = pmm_phys_to_virt(phys);
+            if (kvirt)
+                memcpy(kvirt, kbuf + pg * 0x1000, 0x1000);
+        }
+    }
+
+    free(kbuf);
+
+    serial_printf("[EXECVE] stack built: frame_base=0x%llx rsp=0x%llx argc=%d envc=%d\n",
+                  frame_base, rsp_user, argc, envc);
+    return rsp_user;
+}
+
+static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr) {
+    task_t *t = cur_task();
+    if (!t || !t->is_userspace) return -EPERM;
+
+    char kpath[EXECVE_MAX_PATH];
+    int plen = strncpy_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (plen < 0) return -EFAULT;
+    if (plen == 0) return -ENOENT;
+
+    serial_printf("[EXECVE] pid=%u execve(\"%s\")\n", t->pid, kpath);
+
+    const char *kargv_ptrs[EXECVE_MAX_ARGS + 1];
+    char (*kargv_store)[EXECVE_MAX_ARGLEN] =
+        malloc(EXECVE_MAX_ARGS * EXECVE_MAX_ARGLEN);
+    if (!kargv_store) return -ENOMEM;
+    int argc = 0;
+
+    if (argv_ptr) {
+        for (;;) {
+            if (argc >= EXECVE_MAX_ARGS) { free(kargv_store); return -E2BIG; }
+
+            uint64_t uargv_slot = argv_ptr + (uint64_t)argc * 8;
+            uint64_t arg_ptr = 0;
+            if (copy_from_user(&arg_ptr, (const void *)uargv_slot,
+                               sizeof(uint64_t)) < 0)
+                { free(kargv_store); return -EFAULT; }
+
+            if (arg_ptr == 0) break;
+
+            int alen = strncpy_from_user(kargv_store[argc],
+                                         (const char *)arg_ptr,
+                                         EXECVE_MAX_ARGLEN);
+            if (alen < 0) { free(kargv_store); return -EFAULT; }
+            kargv_ptrs[argc] = kargv_store[argc];
+            argc++;
+        }
+    }
+    kargv_ptrs[argc] = NULL;
+
+    if (argc == 0) {
+        strncpy(kargv_store[0], kpath, EXECVE_MAX_ARGLEN - 1);
+        kargv_store[0][EXECVE_MAX_ARGLEN - 1] = '\0';
+        kargv_ptrs[0] = kargv_store[0];
+        kargv_ptrs[1] = NULL;
+        argc = 1;
+    }
+
+    const char *kenvp_ptrs[EXECVE_MAX_ARGS + 1];
+    char (*kenvp_store)[EXECVE_MAX_ARGLEN] =
+        malloc(EXECVE_MAX_ARGS * EXECVE_MAX_ARGLEN);
+    if (!kenvp_store) { free(kargv_store); return -ENOMEM; }
+    int envc = 0;
+
+    if (envp_ptr) {
+        for (;;) {
+            if (envc >= EXECVE_MAX_ARGS) break;
+
+            uint64_t uenv_slot = envp_ptr + (uint64_t)envc * 8;
+            uint64_t env_ptr = 0;
+            if (copy_from_user(&env_ptr, (const void *)uenv_slot,
+                               sizeof(uint64_t)) < 0) break;
+
+            if (env_ptr == 0) break;
+
+            int elen = strncpy_from_user(kenvp_store[envc], (const char *)env_ptr, EXECVE_MAX_ARGLEN);
+            if (elen < 0) break;
+            kenvp_ptrs[envc] = kenvp_store[envc];
+            envc++;
+        }
+    }
+    kenvp_ptrs[envc] = NULL;
+
+    vfs_file_t *vfile = NULL;
+    int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
+    if (vret < 0) {
+        serial_printf("[EXECVE] vfs_open failed: %d\n", vret);
+        free(kargv_store);
+        free(kenvp_store);
+        return (int64_t)vret;
+    }
+
+    vfs_stat_t st;
+    if (vfs_fstat(vfile, &st) < 0 || st.st_size == 0) {
+        vfs_close(vfile);
+        free(kargv_store);
+        free(kenvp_store);
+        return -EIO;
+    }
+
+    size_t fsize = (size_t)st.st_size;
+    uint8_t *elf_data = (uint8_t *)malloc(fsize);
+    if (!elf_data) { vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOMEM; }
+
+    int64_t nread = vfs_read(vfile, elf_data, fsize);
+    vfs_close(vfile);
+    if (nread < 0 || (size_t)nread != fsize) {
+        free(elf_data);
+        free(kargv_store);
+        free(kenvp_store);
+        return -EIO;
+    }
+
+    elf_load_result_t elf = elf_load(elf_data, fsize, 0);
+    free(elf_data);
+
+    if (elf.error != ELF_OK) {
+        serial_printf("[EXECVE] elf_load failed: %s\n", elf_strerror(elf.error));
+        if (elf.pagemap) vmm_free_pagemap(elf.pagemap);
+        free(kargv_store);
+        free(kenvp_store);
+        return -ENOEXEC;
+    }
+
+    uintptr_t new_rsp = execve_build_stack(elf.pagemap,
+                                            elf.stack_top,
+                                            kargv_ptrs, argc,
+                                            kenvp_ptrs, envc,
+                                            &elf);
+    free(kargv_store);
+    free(kenvp_store);
+    if (!new_rsp) {
+        vmm_free_pagemap(elf.pagemap);
+        return -ENOMEM;
+    }
+
+    if (t->fd_table)
+        fd_table_cloexec(t->fd_table);
+
+    vmm_switch_pagemap(vmm_get_kernel_pagemap());
+
+    if (t->pagemap && (t->flags & (TASK_FLAG_OWN_PAGEMAP | TASK_FLAG_FORK))) {
+        vmm_free_pagemap(t->pagemap);
+    }
+
+    t->pagemap    = elf.pagemap;
+    t->cr3        = (uint64_t)pmm_virt_to_phys(elf.pagemap->pml4);
+    t->flags     |= TASK_FLAG_OWN_PAGEMAP;
+    t->flags     &= ~TASK_FLAG_FORK;
+
+    t->brk_start   = elf.load_end;
+    t->brk_current = elf.load_end;
+    t->brk_max     = 0x0000700000000000ULL;
+
+    t->user_rsp       = new_rsp;
+    t->user_saved_rip = elf.entry;
+    t->user_saved_rbp = 0;
+    t->user_saved_rbx = 0;
+    t->user_saved_r12 = 0;
+    t->user_saved_r13 = 0;
+    t->user_saved_r14 = 0;
+    t->user_saved_r15 = 0;
+    t->user_saved_r11 = 0;
+
+    const char *bname = kpath;
+    for (const char *p = kpath; *p; p++)
+        if (*p == '/') bname = p + 1;
+    strncpy(t->name, bname, sizeof(t->name) - 1);
+    t->name[sizeof(t->name) - 1] = '\0';
+
+    percpu_t *pc = get_percpu();
+    if (pc) {
+        pc->syscall_user_rsp = new_rsp;
+        pc->user_saved_rip   = elf.entry;
+        pc->user_saved_rbp   = 0;
+        pc->user_saved_rbx   = 0;
+        pc->user_saved_r12   = 0;
+        pc->user_saved_r13   = 0;
+        pc->user_saved_r14   = 0;
+        pc->user_saved_r15   = 0;
+        pc->user_saved_r11   = 0x200;
+    }
+
+    vmm_switch_pagemap(t->pagemap);
+
+    serial_printf("[EXECVE] exec ok: entry=0x%llx rsp=0x%llx name='%s'\n", elf.entry, new_rsp, t->name);
+
+    return 0;
 }
 
 static int64_t sys_wait(uint64_t pid_arg, uint64_t status_ptr, uint64_t flags) {
@@ -482,6 +782,7 @@ static int64_t _sys_exit_group(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint6
 static int64_t _sys_getpid(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return sys_getpid();}
 static int64_t _sys_getppid(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return sys_getppid();}
 static int64_t _sys_fork(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return sys_fork();}
+static int64_t _sys_execve(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_execve(a,b,c);}
 static int64_t _sys_wait(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_wait(a,b,c);}
 static int64_t _sys_yield(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return sys_yield();}
 static int64_t _sys_getuid(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return sys_getuid();}
@@ -510,6 +811,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETPID]     = _sys_getpid,
     [SYS_GETPPID]    = _sys_getppid,
     [SYS_FORK]       = _sys_fork,
+    [SYS_EXECVE]     = _sys_execve,
     [SYS_WAIT]       = _sys_wait,
     [SYS_YIELD]      = _sys_yield,
     [SYS_GETUID]     = _sys_getuid,
@@ -585,7 +887,7 @@ void syscall_init(void) {
                   | ((uint64_t)GDT_STAR_SYSCALL_CS  << 32);
     wrmsr(MSR_STAR, star);
     wrmsr(MSR_LSTAR, (uint64_t)syscall_entry);
-    wrmsr(MSR_SFMASK, (1U << 9) | (1U << 10));
+    wrmsr(MSR_SFMASK, (1U << 9) | (1U << 10) | (1U << 8) | (1U << 18));
 
     percpu_t* pc = get_percpu();
     if (!pc) {

@@ -24,6 +24,9 @@
 #define HELLO_SRC     "test/hello.c"
 #define HELLO_ELF     "test/hello.elf"
 
+#define EXECVE_TARGET_SRC  "test/execve_target.c"
+#define EXECVE_TARGET_ELF  "test/execve_target.elf"
+
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
 
@@ -253,6 +256,37 @@ bool build_hello_elf(void) {
     return true;
 }
 
+bool build_execve_target(void) {
+    if (!file_exists(EXECVE_TARGET_SRC)) {
+        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", EXECVE_TARGET_SRC);
+        return true;
+    }
+    if (file_exists(EXECVE_TARGET_ELF) &&
+        get_mtime(EXECVE_TARGET_SRC) <= get_mtime(EXECVE_TARGET_ELF)) {
+        print_color(COLOR_GREEN, "[ELF] %s is up to date", EXECVE_TARGET_ELF);
+        return true;
+    }
+
+    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s",
+                EXECVE_TARGET_SRC, EXECVE_TARGET_ELF);
+
+    int ret = cmd_run(false,
+        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
+        " -O0 -g"
+        " -Itest"
+        " -Wl,-Ttext-segment=0x401000"
+        " -Wl,-e,_start"
+        " -o %s %s",
+        EXECVE_TARGET_ELF, EXECVE_TARGET_SRC);
+
+    if (ret != 0) {
+        print_color(COLOR_RED, "[ELF] Failed to compile %s", EXECVE_TARGET_SRC);
+        return false;
+    }
+    print_color(COLOR_GREEN, "[ELF] %s built successfully", EXECVE_TARGET_ELF);
+    return true;
+}
+
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
         print_color(COLOR_YELLOW, "[initramfs] skipped (--no-initramfs)");
@@ -262,7 +296,9 @@ bool build_initramfs(void) {
     bool tar_exists = file_exists(INITRAMFS_TAR);
     bool elf_newer  = file_exists(HELLO_ELF) &&
                       (!tar_exists || get_mtime(HELLO_ELF) > get_mtime(INITRAMFS_TAR));
-    if (tar_exists && !elf_newer) {
+    bool target_newer = file_exists(EXECVE_TARGET_ELF) &&
+                        (!tar_exists || get_mtime(EXECVE_TARGET_ELF) > get_mtime(INITRAMFS_TAR));
+    if (tar_exists && !elf_newer && !target_newer) {
         print_color(COLOR_GREEN, "[initramfs] %s is up to date", INITRAMFS_TAR);
         return true;
     }
@@ -316,6 +352,16 @@ bool build_initramfs(void) {
         print_color(COLOR_YELLOW, "[initramfs] hello.elf not found — bin/init will be empty");
         FILE *stub = fopen(INITRAMFS_ROOTFS "/bin/.keep", "w");
         if (stub) fclose(stub);
+    }
+
+    if (file_exists(EXECVE_TARGET_ELF)) {
+        if (cmd_run(false, "cp %s %s/bin/target", EXECVE_TARGET_ELF, INITRAMFS_ROOTFS) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy execve_target.elf -> bin/target");
+            return false;
+        }
+        print_color(COLOR_GREEN, "[initramfs] execve_target.elf -> rootfs/bin/target");
+    } else {
+        print_color(COLOR_YELLOW, "[initramfs] execve_target.elf not found — skipping /bin/target");
     }
 
     print_color(COLOR_CYAN, "[initramfs] Packing %s...", INITRAMFS_TAR);
@@ -384,6 +430,7 @@ bool compile_kernel(void) {
     if (!setup_dependencies()) return false;
 
     if (!build_hello_elf()) return false;
+    if (!build_execve_target()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -820,6 +867,7 @@ int main(int argc, char **argv) {
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
         if (file_exists(HELLO_ELF)) { remove(HELLO_ELF); print_color(COLOR_BLUE, "Removed %s", HELLO_ELF); }
+        if (file_exists(EXECVE_TARGET_ELF)) { remove(EXECVE_TARGET_ELF); print_color(COLOR_BLUE, "Removed %s", EXECVE_TARGET_ELF); }
         cmd_run(false, "rm -f temp_* 2>/dev/null");
         print_color(COLOR_GREEN, "Cleanup complete");
         return 0;

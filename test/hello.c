@@ -168,6 +168,57 @@ static void test_cap_drop(void) {
         prln("  CAP_DBG_SERIAL drop: FAIL");
 }
 
+static void test_execve(void) {
+    prln("=== FORK + EXECVE ===");
+
+    pid_t child = fork();
+
+    if (child < 0) {
+        prln("  fork FAILED");
+        return;
+    }
+
+    if (child == 0) {
+        prln("  [child] calling execve(\"/bin/target\", ...)");
+
+        const char *argv[] = { "/bin/target", "hello", "from", "execve", (void*)0 };
+        const char *envp[] = { (void*)0 };
+
+        int ret = execve("/bin/target", argv, envp);
+
+        pr("  [child] execve FAILED, ret=");
+        prd((uint64_t)(ret < 0 ? (uint64_t)(-ret) : 0));
+        pr(" (");
+        if (ret == -2)  pr("ENOENT");
+        else if (ret == -8)  pr("ENOEXEC");
+        else if (ret == -12) pr("ENOMEM");
+        else if (ret == -5)  pr("EIO");
+        else pr("?");
+        prln(")");
+        exit(1);
+    }
+
+    pr("  [parent] waiting for execve child pid=");
+    prd(child);
+    pr("\n");
+
+    int status = 0;
+    pid_t waited = waitpid(child, &status, 0);
+
+    if (waited > 0) {
+        int code = (status >> 8) & 0xFF;
+        pr("  [parent] child pid="); prd(waited);
+        pr(" exited with code=");    prd(code);
+        pr("\n");
+        if (code == 99)
+            prln("  execve: OK (got expected exit code 99)");
+        else
+            prln("  execve: UNEXPECTED exit code");
+    } else {
+        prln("  [parent] waitpid failed");
+    }
+}
+
 void _start(void) {
     prln("=== Cervus OS userspace test ===");
     prln("=== hello from Ring 3!       ===");
@@ -184,6 +235,8 @@ void _start(void) {
     test_cap_drop();
     pr("\n");
     test_fork_wait();
+    pr("\n");
+    test_execve();
     pr("\n");
 
     prln("=== All tests done. Exiting. ===");

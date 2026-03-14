@@ -8,6 +8,7 @@
 #include "../include/smp/percpu.h"
 #include "../include/apic/apic.h"
 #include "../include/gdt/gdt.h"
+#include "../include/fs/vfs.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -198,6 +199,15 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+
+    t->fd_table = fd_table_create();
+    if (t->fd_table) {
+        int stdio_ret = vfs_init_stdio(t);
+        if (stdio_ret < 0)
+            serial_printf("[SCHED] task_create_user: vfs_init_stdio failed: %d\n",
+                          stdio_ret);
+    }
+
     pid_register(t);
     enqueue_global(t);
     serial_printf("[SCHED] task_create_user: '%s' pid=%u uid=%u entry=0x%llx user_rsp=0x%llx caps=0x%llx\n",
@@ -241,6 +251,8 @@ task_t* task_fork(task_t* parent) {
         free(child);
         return NULL;
     }
+    serial_printf("[FORK-DBG] child pid=%u stack_base=0x%llx rsp=0x%llx\n",
+                  child->pid, child->stack_base, child->rsp);
     child->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     if (child->fpu_state && parent->fpu_state) {
         memcpy(child->fpu_state, parent->fpu_state, sizeof(fpu_state_t));
@@ -254,6 +266,10 @@ task_t* task_fork(task_t* parent) {
     child->user_saved_r14 = parent->user_saved_r14;
     child->user_saved_r15 = parent->user_saved_r15;
     child->user_saved_r11 = parent->user_saved_r11;
+
+    if (parent->fd_table)
+        child->fd_table = fd_table_clone(parent->fd_table);
+
     child->flags  |= TASK_FLAG_STARTED;
     child->state   = TASK_READY;
     child->runnable = true;
@@ -274,13 +290,26 @@ void task_destroy(task_t* task) {
         pmm_free(task->fpu_state, 1);
         task->fpu_state = NULL;
     }
-    if (task->stack_base && !(task->flags & TASK_FLAG_STACK_DEFERRED)) {
+    if (task->flags & TASK_FLAG_STACK_DEFERRED) {
+        for (uint32_t i = 0; i < MAX_CPUS; i++) {
+            if (percpu_regions[i] &&
+                percpu_regions[i]->deferred_free_task == (void*)task) {
+                percpu_regions[i]->deferred_free_task = NULL;
+                break;
+            }
+        }
+    }
+    if (task->stack_base) {
         pmm_free((void*)task->stack_base, KERNEL_STACK_PAGES);
         task->stack_base = 0;
     }
-    if (task->pagemap && (task->flags & TASK_FLAG_FORK)) {
+    if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
         vmm_free_pagemap(task->pagemap);
         task->pagemap = NULL;
+    }
+    if (task->fd_table) {
+        fd_table_destroy(task->fd_table);
+        task->fd_table = NULL;
     }
     free(task);
 }
@@ -518,6 +547,12 @@ void sched_reschedule(void) {
     }
 
     if (tss[cpu]) {
+        if (next->is_userspace && next->stack_base == 0) {
+            serial_printf("[SCHED] *** BUG: pid=%u is_userspace but stack_base=0! "
+                          "rsp=0x%llx flags=0x%x ***\n",
+                          next->pid, next->rsp, next->flags);
+            asm volatile("cli; hlt");
+        }
         tss[cpu]->rsp0 = next->stack_base + KERNEL_STACK_SIZE;
         percpu_t* pc = get_percpu();
         if (pc) {

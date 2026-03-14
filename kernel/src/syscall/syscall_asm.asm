@@ -65,5 +65,7 @@ syscall_entry:
 
 .no_resched:
     mov  rsp, [gs:PERCPU_USER_RSP]
+    mov  rcx, [gs:PERCPU_SAVED_RIP]
+    mov  r11, [gs:PERCPU_SAVED_R11]
     swapgs
     o64 sysret
