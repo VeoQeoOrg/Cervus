@@ -127,7 +127,7 @@ void sse_init(void) {
             : "eax", "ebx", "edx"
         );
 
-        if (ecx & (1 << 27)) { // OSXSAVE bit
+        if (ecx & (1 << 27)) {
             serial_writestring("[SSE] AVX supported, enabling...\n");
 
             cr4 |= (1 << 18);

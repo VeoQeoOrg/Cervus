@@ -14,11 +14,10 @@ void fpu_init(void) {
     uint64_t cr0;
     asm volatile("mov %%cr0, %0" : "=r"(cr0));
 
-    cr0 &= ~(1 << 2);  // Clear EM
-    cr0 |= (1 << 1);   // Set MP
-
-    cr0 &= ~(1 << 3);  // Clear TS
-    cr0 &= ~(1 << 5);  // Clear NE
+    cr0 &= ~(1 << 2);
+    cr0 |= (1 << 1);
+    cr0 &= ~(1 << 3);
+    cr0 &= ~(1 << 5);
 
     asm volatile("mov %0, %%cr0" : : "r"(cr0));
 

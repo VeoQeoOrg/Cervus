@@ -29,46 +29,41 @@ void fb_clear(struct limine_framebuffer *fb, uint32_t color) {
 
 int psf_validate(void) {
     const uint8_t *raw = get_font_data();
-    
-    // Проверка для PSF v2
-    if (raw[0] == 0x72 && raw[1] == 0xb5 && 
+
+    if (raw[0] == 0x72 && raw[1] == 0xb5 &&
         raw[2] == 0x4a && raw[3] == 0x86) {
-        return 2; // PSF v2
+        return 2;
     }
-    
-    // Проверка для PSF v1
+
     if (raw[0] == 0x36 && raw[1] == 0x04) {
-        return 1; // PSF v1
+        return 1;
     }
-    
-    return 0; // Невалидный шрифт
+
+    return 0;
 }
 
 void fb_draw_char(struct limine_framebuffer *fb, char c, uint32_t x, uint32_t y, uint32_t color) {
     const uint8_t *raw = get_font_data();
     uint32_t headersize = 32;
     uint32_t charsiz = *(uint32_t*)(raw + 20);
-    
+
     uint8_t *glyphs = (uint8_t*)raw + headersize;
     uint32_t glyph_index;
-    
-    // Обработка разных диапазонов символов
+
     if ((uint8_t)c < 128) {
         glyph_index = (uint8_t)c;
     } else if ((uint8_t)c >= 128) {
-        glyph_index = '?'; 
+        glyph_index = '?';
     } else {
-        glyph_index = '?'; 
+        glyph_index = '?';
     }
-    
-    // Проверка границ
+
     if (glyph_index >= 512) {
         glyph_index = '?';
     }
-    
+
     uint8_t *glyph = &glyphs[glyph_index * charsiz];
 
-    // Отрисовка
     for (uint32_t row = 0; row < 16; row++) {
         uint8_t byte = glyph[row];
         for (uint32_t col = 0; col < 8; col++) {

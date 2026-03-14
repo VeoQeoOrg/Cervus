@@ -81,6 +81,7 @@ static uint64_t alloc_and_init_stack(task_t* t) {
     asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
     uintptr_t stack_top = (stack_virt + KERNEL_STACK_SIZE) & ~0xFULL;
     uint64_t* sp = (uint64_t*)stack_top;
+    sp -= 32;
     if (t->flags & TASK_FLAG_FORK) {
         extern void task_trampoline_fork(void);
         *--sp = (uint64_t)task_trampoline_fork;
@@ -366,6 +367,13 @@ __attribute__((noreturn)) void task_exit(void) {
                       (uint64_t)pc, gs_base, kgs_base,
                       cpu, current_task[cpu],
                       pc ? (void*)pc->current_task : (void*)0xDEAD);
+
+        if (me) {
+            me->runnable = false; me->state = TASK_ZOMBIE; me->exit_code = 0;
+            current_task[cpu] = NULL;
+            if (pc) { pc->current_task = NULL; me->flags |= TASK_FLAG_STACK_DEFERRED; pc->deferred_free_task = (void*)me; }
+            task_wakeup_waiters(me->pid);
+        }
         sched_reschedule();
         while (1) asm volatile("hlt");
     }
@@ -529,8 +537,10 @@ void sched_reschedule(void) {
             old->time_slice = old->time_slice_init;
             old->last_cpu   = cpu;
             old->state      = TASK_READY;
-            old->next = percpu_ready_queues[cpu][old->priority];
-            percpu_ready_queues[cpu][old->priority] = old;
+            spinlock_acquire(&ready_queue_lock);
+            old->next = ready_queues[old->priority];
+            ready_queues[old->priority] = old;
+            spinlock_release(&ready_queue_lock);
             asm volatile("" ::: "memory");
             atomic_store_bool_rel(&old->on_cpu, false);
         } else {
@@ -574,9 +584,6 @@ void sched_reschedule(void) {
                           cpu, next->name, next->pid,
                           (uint64_t)next->entry, next->user_rsp);
         }
-        asm volatile("sti");
-        first_task_start(next);
-        __builtin_unreachable();
     }
 
     {
@@ -613,6 +620,13 @@ void sched_print_stats(void) {
         if (n) serial_printf("  prio %d: %d tasks\n", p, n);
     }
     spinlock_release(&ready_queue_lock);
+}
+
+void task_unblock(task_t* t) {
+    if (!t) return;
+    t->runnable = true;
+    t->state    = TASK_READY;
+    enqueue_global(t);
 }
 
 static void idle_loop(void* arg) {

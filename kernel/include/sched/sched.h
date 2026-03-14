@@ -159,6 +159,7 @@ task_t* task_find_by_pid(uint32_t pid);
 uint32_t task_alloc_pid(void);
 void    task_reparent(task_t* child, task_t* new_parent);
 void    task_wakeup_waiters(uint32_t pid);
+void    task_unblock(task_t* t);
 
 extern void context_switch(task_t* old, task_t* next, task_t** current_task_slot, uint64_t new_cr3);
 extern void first_task_start(task_t* task);

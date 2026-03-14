@@ -27,6 +27,17 @@
 #define EXECVE_TARGET_SRC  "test/execve_target.c"
 #define EXECVE_TARGET_ELF  "test/execve_target.elf"
 
+#define TEST_PROCESS_SRC   "test/test_process.c"
+#define TEST_PROCESS_ELF   "test/test_process.elf"
+#define TEST_FILES_SRC     "test/test_files.c"
+#define TEST_FILES_ELF     "test/test_files.elf"
+#define TEST_PIPE_SRC      "test/test_pipe.c"
+#define TEST_PIPE_ELF      "test/test_pipe.elf"
+#define TEST_EXECVE_SRC    "test/test_execve.c"
+#define TEST_EXECVE_ELF    "test/test_execve.elf"
+#define TEST_MEM_SRC       "test/test_mem.c"
+#define TEST_MEM_ELF       "test/test_mem.elf"
+
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
 
@@ -50,6 +61,10 @@ const char *FILES_TO_CLEAN[] = {
     "kernel/.deps-obtained",
     "limine.conf",
     "OS-TREE.txt", "log.txt",
+    "test/hello.elf", "test/execve_target.elf",
+    "test/test_execve.elf", "test/test_files.elf",
+    "test/test_mem.elf", "test/test_pipe.elf",
+    "test/test_process.elf",
     INITRAMFS_TAR,
     NULL
 };
@@ -287,6 +302,39 @@ bool build_execve_target(void) {
     return true;
 }
 
+static bool build_test_elf(const char *src, const char *elf) {
+    if (!file_exists(src)) {
+        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", src);
+        return true;
+    }
+    if (file_exists(elf) && get_mtime(src) <= get_mtime(elf)) {
+        print_color(COLOR_GREEN, "[ELF] %s is up to date", elf);
+        return true;
+    }
+    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", src, elf);
+    int ret = cmd_run(false,
+        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
+        " -O0 -g -Itest"
+        " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
+        " -o %s %s",
+        elf, src);
+    if (ret != 0) {
+        print_color(COLOR_RED, "[ELF] Failed to compile %s", src);
+        return false;
+    }
+    print_color(COLOR_GREEN, "[ELF] %s built successfully", elf);
+    return true;
+}
+
+bool build_test_suite(void) {
+    if (!build_test_elf(TEST_PROCESS_SRC, TEST_PROCESS_ELF)) return false;
+    if (!build_test_elf(TEST_FILES_SRC,   TEST_FILES_ELF))   return false;
+    if (!build_test_elf(TEST_PIPE_SRC,    TEST_PIPE_ELF))    return false;
+    if (!build_test_elf(TEST_EXECVE_SRC,  TEST_EXECVE_ELF))  return false;
+    if (!build_test_elf(TEST_MEM_SRC,     TEST_MEM_ELF))     return false;
+    return true;
+}
+
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
         print_color(COLOR_YELLOW, "[initramfs] skipped (--no-initramfs)");
@@ -298,7 +346,17 @@ bool build_initramfs(void) {
                       (!tar_exists || get_mtime(HELLO_ELF) > get_mtime(INITRAMFS_TAR));
     bool target_newer = file_exists(EXECVE_TARGET_ELF) &&
                         (!tar_exists || get_mtime(EXECVE_TARGET_ELF) > get_mtime(INITRAMFS_TAR));
-    if (tar_exists && !elf_newer && !target_newer) {
+    const char *test_elfs[] = {
+        TEST_PROCESS_ELF, TEST_FILES_ELF, TEST_PIPE_ELF,
+        TEST_EXECVE_ELF,  TEST_MEM_ELF,   NULL
+    };
+    bool tests_newer = false;
+    for (int i = 0; test_elfs[i]; i++) {
+        if (file_exists(test_elfs[i]) &&
+            (!tar_exists || get_mtime(test_elfs[i]) > get_mtime(INITRAMFS_TAR)))
+            tests_newer = true;
+    }
+    if (tar_exists && !elf_newer && !target_newer && !tests_newer) {
         print_color(COLOR_GREEN, "[initramfs] %s is up to date", INITRAMFS_TAR);
         return true;
     }
@@ -362,6 +420,27 @@ bool build_initramfs(void) {
         print_color(COLOR_GREEN, "[initramfs] execve_target.elf -> rootfs/bin/target");
     } else {
         print_color(COLOR_YELLOW, "[initramfs] execve_target.elf not found — skipping /bin/target");
+    }
+
+    struct { const char *elf; const char *name; } tests[] = {
+        { TEST_PROCESS_ELF, "test_process" },
+        { TEST_FILES_ELF,   "test_files"   },
+        { TEST_PIPE_ELF,    "test_pipe"    },
+        { TEST_EXECVE_ELF,  "test_execve"  },
+        { TEST_MEM_ELF,     "test_mem"     },
+        { NULL, NULL }
+    };
+    for (int i = 0; tests[i].elf; i++) {
+        if (file_exists(tests[i].elf)) {
+            char dst[256];
+            snprintf(dst, sizeof(dst), "%s/bin/%s", INITRAMFS_ROOTFS, tests[i].name);
+            if (cmd_run(false, "cp %s %s", tests[i].elf, dst) != 0) {
+                print_color(COLOR_RED, "[initramfs] Failed to copy %s", tests[i].elf);
+            } else {
+                print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/%s",
+                            tests[i].elf, tests[i].name);
+            }
+        }
     }
 
     print_color(COLOR_CYAN, "[initramfs] Packing %s...", INITRAMFS_TAR);
@@ -431,6 +510,7 @@ bool compile_kernel(void) {
 
     if (!build_hello_elf()) return false;
     if (!build_execve_target()) return false;
+    if (!build_test_suite()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -866,8 +946,6 @@ int main(int argc, char **argv) {
         for (int i = 0; DIRS_TO_CLEAN[i];  i++) rm_rf(DIRS_TO_CLEAN[i]);
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
-        if (file_exists(HELLO_ELF)) { remove(HELLO_ELF); print_color(COLOR_BLUE, "Removed %s", HELLO_ELF); }
-        if (file_exists(EXECVE_TARGET_ELF)) { remove(EXECVE_TARGET_ELF); print_color(COLOR_BLUE, "Removed %s", EXECVE_TARGET_ELF); }
         cmd_run(false, "rm -f temp_* 2>/dev/null");
         print_color(COLOR_GREEN, "Cleanup complete");
         return 0;

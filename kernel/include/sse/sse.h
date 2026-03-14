@@ -28,4 +28,4 @@ void mmx_exit(void);
 void print_simd_cpuid(void);
 void enable_fsgsbase(void);
 
-#endif // SSE_H
+#endif

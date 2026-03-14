@@ -20,16 +20,15 @@
 #define COLOR_DARKGRAY  RGB( 64,  64,  64)
 #define COLOR_BROWN     RGB(165,  42,  42)
 
-// Структура заголовка PSFv2
 struct psf_header {
-    uint32_t magic;        // 0x72b54a86
-    uint32_t version;      // 0
-    uint32_t headersize;   // 32
-    uint32_t flags;        // 0 или 1 (есть таблица Unicode)
-    uint32_t numglyph;     // число глифов
-    uint32_t bytesperglyph;// размер одного глифа
-    uint32_t height;       // высота символа
-    uint32_t width;        // ширина символа (обычно 8)
+    uint32_t magic;
+    uint32_t version;
+    uint32_t headersize;
+    uint32_t flags;
+    uint32_t numglyph;
+    uint32_t bytesperglyph;
+    uint32_t height;
+    uint32_t width;
 } __attribute__((packed));
 
 extern uint8_t _binary_font_psf_start[];
@@ -53,4 +52,4 @@ void fb_clear(struct limine_framebuffer *fb, uint32_t color);
 void fb_draw_char(struct limine_framebuffer *fb, char c, uint32_t x, uint32_t y, uint32_t color);
 void fb_draw_string(struct limine_framebuffer *fb, const char *str, uint32_t x, uint32_t y, uint32_t color);
 
-#endif 
+#endif
