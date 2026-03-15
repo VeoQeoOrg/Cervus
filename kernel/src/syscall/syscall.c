@@ -332,6 +332,7 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
     t->pagemap    = elf.pagemap;
     t->cr3        = (uint64_t)pmm_virt_to_phys(elf.pagemap->pml4);
     t->flags     |= TASK_FLAG_OWN_PAGEMAP;
+    asm volatile("mov %0, %%cr3" :: "r"(t->cr3) : "memory");
     t->flags     &= ~TASK_FLAG_FORK;
     t->brk_start = t->brk_current = elf.load_end;
     t->brk_max   = 0x0000700000000000ULL;
@@ -467,10 +468,12 @@ static int64_t sys_dup(uint64_t fd) {
     if (!t || !t->fd_table) return -EBADF;
     vfs_file_t *f = fd_get(t->fd_table, (int)fd);
     if (!f) return -EBADF;
-    __atomic_fetch_add(&f->refcount, 1, __ATOMIC_RELAXED);
+    if (f->vnode && f->vnode->ops && f->vnode->ops->ref)
+        f->vnode->ops->ref(f->vnode);
     int nfd = fd_alloc(t->fd_table, f, 0);
     if (nfd < 0) {
-        __atomic_fetch_sub(&f->refcount, 1, __ATOMIC_RELAXED);
+        if (f->vnode && f->vnode->ops && f->vnode->ops->unref)
+            f->vnode->ops->unref(f->vnode);
         return -EMFILE;
     }
     return (int64_t)nfd;
@@ -563,10 +566,8 @@ static void pipe_ref_op(vnode_t *n)   { (void)n; }
 static void pipe_unref_op(vnode_t *n) {
     pipe_vdata_t  *vd = (pipe_vdata_t*)n->fs_data;
     pipe_shared_t *ps = vd->shared;
-
-    if (vd->end == 0) {
-        ps->readers--;
-    } else {
+    if (vd->end == 0) ps->readers--;
+    else {
         ps->writers--;
         if (ps->reader_waiting_pid) {
             task_t *reader = task_find_by_pid(ps->reader_waiting_pid);
@@ -579,8 +580,7 @@ static void pipe_unref_op(vnode_t *n) {
         }
     }
 
-    free(vd);
-    free(n);
+    free(vd); free(n);
 
     if (ps->readers <= 0 && ps->writers <= 0)
         free(ps);
@@ -630,24 +630,18 @@ static int64_t sys_pipe(uint64_t fds_ptr) {
     vfs_file_t *rf = vfs_file_alloc();
     vfs_file_t *wf = vfs_file_alloc();
     if (!rf||!wf) {
-        if (rf) vfs_file_free(rf);
-        else { rd->end=0; ps->readers--; free(rd); free(rv); }
-        if (wf) vfs_file_free(wf);
-        else { wd->end=1; ps->writers--; free(wd); free(wv); }
-        if (ps->readers <= 0 && ps->writers <= 0) free(ps);
+        free(ps);free(rv);free(wv);free(rd);free(wd);
+        if(rf) vfs_file_free(rf);
+        if(wf) vfs_file_free(wf);
         return -ENOMEM;
     }
     rf->vnode=rv; rf->flags=O_RDONLY; rf->offset=0; rf->refcount=1;
     wf->vnode=wv; wf->flags=O_WRONLY; wf->offset=0; wf->refcount=1;
 
     int rfd = fd_alloc(t->fd_table, rf, 0);
-    int wfd = -1;
-    if (rfd >= 0) wfd = fd_alloc(t->fd_table, wf, 0);
-    if (rfd < 0 || wfd < 0) {
-        if (rfd >= 0) fd_close(t->fd_table, rfd);
-        else vfs_file_free(rf);
-        vfs_file_free(wf);
-        return -EMFILE;
+    int wfd = fd_alloc(t->fd_table, wf, 0);
+    if (rfd<0||wfd<0) {
+        fd_close(t->fd_table,rfd); fd_close(t->fd_table,wfd); return -EMFILE;
     }
 
     int fds[2] = {rfd, wfd};

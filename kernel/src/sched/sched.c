@@ -82,13 +82,6 @@ static uint64_t alloc_and_init_stack(task_t* t) {
     }
     asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
 
-    if (smp_get_cpu_count() > 1) {
-        uintptr_t addrs[KERNEL_STACK_PAGES];
-        for (size_t i = 0; i < KERNEL_STACK_PAGES; i++)
-            addrs[i] = stack_virt + i * 0x1000;
-        ipi_tlb_shootdown_broadcast(addrs, KERNEL_STACK_PAGES);
-    }
-
     uintptr_t stack_top = (stack_virt + KERNEL_STACK_SIZE) & ~0xFULL;
     uint64_t* sp = (uint64_t*)stack_top;
     sp -= 32;
@@ -599,6 +592,7 @@ void sched_reschedule(void) {
     if (!(next->flags & TASK_FLAG_STARTED)) {
         next->flags |= TASK_FLAG_STARTED;
         current_task[cpu] = next;
+        asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
         if (next->is_userspace) {
             serial_printf("[SCHED] CPU %u: first start '%s' pid=%u entry=0x%llx user_rsp=0x%llx\n",
                           cpu, next->name, next->pid,
