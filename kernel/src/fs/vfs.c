@@ -17,18 +17,16 @@ void vfs_init(void) {
 
 void vnode_ref(vnode_t *node) {
     if (!node) return;
-    if (node->ops && node->ops->ref)
-        node->ops->ref(node);
-    else
-        __atomic_fetch_add(&node->refcount, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&node->refcount, 1, __ATOMIC_RELAXED);
 }
 
 void vnode_unref(vnode_t *node) {
     if (!node) return;
-    if (node->ops && node->ops->unref)
-        node->ops->unref(node);
-    else
-        __atomic_fetch_sub(&node->refcount, 1, __ATOMIC_RELAXED);
+    int old = __atomic_fetch_sub(&node->refcount, 1, __ATOMIC_ACQ_REL);
+    if (old <= 1) {
+        if (node->ops && node->ops->unref)
+            node->ops->unref(node);
+    }
 }
 
 int vfs_mount(const char *path, vnode_t *fs_root) {

@@ -43,13 +43,10 @@ static vnode_t *ramfs_alloc_vnode(vnode_type_t type, uint32_t mode) {
 }
 
 static void ramfs_ref(vnode_t *node) {
-    __atomic_fetch_add(&node->refcount, 1, __ATOMIC_RELAXED);
+    (void)node;
 }
 
 static void ramfs_unref(vnode_t *node) {
-    int old = __atomic_fetch_sub(&node->refcount, 1, __ATOMIC_ACQ_REL);
-    if (old != 1) return;
-
     ramfs_node_t *rn = node->fs_data;
 
     if (rn->data) kfree(rn->data);

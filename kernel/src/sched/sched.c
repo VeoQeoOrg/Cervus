@@ -38,7 +38,8 @@ static inline void fix_gs_base(percpu_t* pc) {
 }
 
 uint32_t task_alloc_pid(void) {
-    spinlock_acquire(&pid_lock);
+    uint64_t _irqf;
+    _irqf = spinlock_acquire_irqsave(&pid_lock);
     uint32_t found = 0;
     for (uint32_t i = next_pid; i < MAX_PIDS; i++) {
         if (!pid_table[i]) { next_pid = i + 1; found = i; break; }
@@ -48,7 +49,7 @@ uint32_t task_alloc_pid(void) {
             if (!pid_table[i]) { next_pid = i + 1; found = i; break; }
         }
     }
-    spinlock_release(&pid_lock);
+    spinlock_release_irqrestore(&pid_lock, _irqf);
     return found;
 }
 
@@ -72,13 +73,22 @@ static uint64_t alloc_and_init_stack(task_t* t) {
     if (!stack_virt) return 0;
     t->stack_base = stack_virt;
     uintptr_t stack_phys = pmm_virt_to_phys((void*)stack_virt);
+
     for (size_t i = 0; i < KERNEL_STACK_PAGES; i++) {
         vmm_map_page(vmm_get_kernel_pagemap(),
                      stack_virt + i * 0x1000,
                      stack_phys + i * 0x1000,
-                     VMM_PRESENT | VMM_WRITE | VMM_GLOBAL);
+                     VMM_PRESENT | VMM_WRITE);
     }
     asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+
+    if (smp_get_cpu_count() > 1) {
+        uintptr_t addrs[KERNEL_STACK_PAGES];
+        for (size_t i = 0; i < KERNEL_STACK_PAGES; i++)
+            addrs[i] = stack_virt + i * 0x1000;
+        ipi_tlb_shootdown_broadcast(addrs, KERNEL_STACK_PAGES);
+    }
+
     uintptr_t stack_top = (stack_virt + KERNEL_STACK_SIZE) & ~0xFULL;
     uint64_t* sp = (uint64_t*)stack_top;
     sp -= 32;
@@ -98,10 +108,10 @@ static uint64_t alloc_and_init_stack(task_t* t) {
 }
 
 static void enqueue_global(task_t* t) {
-    spinlock_acquire(&ready_queue_lock);
+    uint64_t f = spinlock_acquire_irqsave(&ready_queue_lock);
     t->next = ready_queues[t->priority];
     ready_queues[t->priority] = t;
-    spinlock_release(&ready_queue_lock);
+    spinlock_release_irqrestore(&ready_queue_lock, f);
 }
 
 void sched_init(void) {
@@ -238,12 +248,9 @@ task_t* task_fork(task_t* parent) {
     child->brk_start   = parent->brk_start;
     child->brk_current = parent->brk_current;
     child->brk_max     = parent->brk_max;
-    percpu_t* pc = get_percpu();
-    if (pc) {
-        child->user_rsp = pc->syscall_user_rsp;
-    } else {
-        child->user_rsp = parent->user_rsp;
-    }
+    child->user_rsp = parent->user_rsp;
+    serial_printf("[FORK-DBG2] parent pid=%u user_rsp=0x%llx user_saved_rip=0x%llx\n",
+                  parent->pid, parent->user_rsp, parent->user_saved_rip);
     child->flags |= TASK_FLAG_FORK;
     atomic_init_bool(&child->on_cpu, false);
     child->rsp = alloc_and_init_stack(child);
@@ -291,19 +298,30 @@ void task_destroy(task_t* task) {
         pmm_free(task->fpu_state, 1);
         task->fpu_state = NULL;
     }
+
     if (task->flags & TASK_FLAG_STACK_DEFERRED) {
+        bool stack_freed_by_timer = true;
         for (uint32_t i = 0; i < MAX_CPUS; i++) {
-            if (percpu_regions[i] &&
-                percpu_regions[i]->deferred_free_task == (void*)task) {
-                percpu_regions[i]->deferred_free_task = NULL;
+            if (!percpu_regions[i]) continue;
+            void *expected = (void*)task;
+            void *prev = __sync_val_compare_and_swap(
+                             (void**)&percpu_regions[i]->deferred_free_task,
+                             expected, NULL);
+            if (prev == expected) {
+                stack_freed_by_timer = false;
+                uintptr_t sb = task->stack_base;
+                task->stack_base = 0;
+                asm volatile("" ::: "memory");
+                if (sb) pmm_free((void*)sb, KERNEL_STACK_PAGES);
                 break;
             }
         }
-    }
-    if (task->stack_base) {
+        (void)stack_freed_by_timer;
+    } else if (task->stack_base) {
         pmm_free((void*)task->stack_base, KERNEL_STACK_PAGES);
         task->stack_base = 0;
     }
+
     if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
         vmm_free_pagemap(task->pagemap);
         task->pagemap = NULL;
@@ -324,7 +342,8 @@ void task_reparent(task_t* child, task_t* new_parent) {
 }
 
 void task_wakeup_waiters(uint32_t pid) {
-    spinlock_acquire(&pid_lock);
+    uint64_t _irqf;
+    _irqf = spinlock_acquire_irqsave(&pid_lock);
     for (uint32_t i = 1; i < MAX_PIDS; i++) {
         task_t* t = pid_table[i];
         if (!t) continue;
@@ -335,11 +354,11 @@ void task_wakeup_waiters(uint32_t pid) {
         t->wait_for_pid = 0;
         t->runnable     = true;
         t->state        = TASK_READY;
-        spinlock_release(&pid_lock);
+        spinlock_release_irqrestore(&pid_lock, _irqf);
         enqueue_global(t);
-        spinlock_acquire(&pid_lock);
+        _irqf = spinlock_acquire_irqsave(&pid_lock);
     }
-    spinlock_release(&pid_lock);
+    spinlock_release_irqrestore(&pid_lock, _irqf);
 }
 
 __attribute__((noreturn)) void task_exit(void) {
@@ -410,10 +429,11 @@ __attribute__((noreturn)) void task_exit(void) {
 
 void task_kill(task_t* target) {
     if (!target) return;
+    uint64_t _irqf;
     asm volatile("cli");
     target->runnable = false;
     target->state    = TASK_ZOMBIE;
-    spinlock_acquire(&ready_queue_lock);
+    _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
     task_t* prev = NULL;
     task_t* cur  = ready_queues[target->priority];
     while (cur) {
@@ -424,7 +444,7 @@ void task_kill(task_t* target) {
         }
         prev = cur; cur = cur->next;
     }
-    spinlock_release(&ready_queue_lock);
+    spinlock_release_irqrestore(&ready_queue_lock, _irqf);
     for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
         prev = NULL;
         cur  = percpu_ready_queues[cpu][target->priority];
@@ -445,6 +465,7 @@ void task_kill(task_t* target) {
 }
 
 static task_t* sched_pick_next(uint32_t cpu) {
+    uint64_t _irqf;
     for (int p = MAX_PRIORITY; p >= 0; p--) {
         task_t** head = &percpu_ready_queues[cpu][p];
         task_t*  t    = *head;
@@ -462,7 +483,7 @@ static task_t* sched_pick_next(uint32_t cpu) {
         }
     }
 
-    spinlock_acquire(&ready_queue_lock);
+    _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
     task_t* found = NULL;
     for (int p = MAX_PRIORITY; p >= 0; p--) {
         task_t** head = &ready_queues[p];
@@ -482,11 +503,12 @@ static task_t* sched_pick_next(uint32_t cpu) {
         }
     }
 done_global:
-    spinlock_release(&ready_queue_lock);
+    spinlock_release_irqrestore(&ready_queue_lock, _irqf);
     return found ? found : &idle_tasks[cpu];
 }
 
 void sched_reschedule(void) {
+    uint64_t _irqf;
     asm volatile("cli");
 
     reschedule_calls++;
@@ -498,7 +520,7 @@ void sched_reschedule(void) {
 
     if (old == next) {
         if (old == &idle_tasks[cpu]) {
-            spinlock_acquire(&ready_queue_lock);
+            _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
             task_t* found = NULL;
             for (int p = MAX_PRIORITY; p >= 0 && !found; p--) {
                 task_t** head = &ready_queues[p];
@@ -517,7 +539,7 @@ void sched_reschedule(void) {
                     t    = *head;
                 }
             }
-            spinlock_release(&ready_queue_lock);
+            spinlock_release_irqrestore(&ready_queue_lock, _irqf);
             if (found) next = found;
             else        { asm volatile("sti"); return; }
         } else {
@@ -537,10 +559,8 @@ void sched_reschedule(void) {
             old->time_slice = old->time_slice_init;
             old->last_cpu   = cpu;
             old->state      = TASK_READY;
-            spinlock_acquire(&ready_queue_lock);
-            old->next = ready_queues[old->priority];
-            ready_queues[old->priority] = old;
-            spinlock_release(&ready_queue_lock);
+            old->next = percpu_ready_queues[cpu][old->priority];
+            percpu_ready_queues[cpu][old->priority] = old;
             asm volatile("" ::: "memory");
             atomic_store_bool_rel(&old->on_cpu, false);
         } else {
@@ -612,14 +632,15 @@ void task_yield(void) {
 }
 
 void sched_print_stats(void) {
+    uint64_t _irqf;
     serial_printf("[SCHED] reschedule_calls=%llu\n", reschedule_calls);
-    spinlock_acquire(&ready_queue_lock);
+    _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
     for (int p = MAX_PRIORITY; p >= 0; p--) {
         int n = 0;
         for (task_t* t = ready_queues[p]; t; t = t->next) n++;
         if (n) serial_printf("  prio %d: %d tasks\n", p, n);
     }
-    spinlock_release(&ready_queue_lock);
+    spinlock_release_irqrestore(&ready_queue_lock, _irqf);
 }
 
 void task_unblock(task_t* t) {

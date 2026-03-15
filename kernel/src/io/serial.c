@@ -87,10 +87,13 @@ void serial_writestring_port(uint16_t port, const char* str) {
 
 void serial_writestring(const char* str) {
     if (default_serial_port == 0) return;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     while (__sync_lock_test_and_set(&serial_lock, 1))
         __asm__ volatile("pause" ::: "memory");
     serial_writestring_port(default_serial_port, str);
     __sync_lock_release(&serial_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
 
@@ -340,6 +343,8 @@ static int double_to_general(double value, char* buffer, int precision, bool upp
 }
 
 void serial_printf_port(uint16_t port, const char* format, ...) {
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     while (__sync_lock_test_and_set(&serial_lock, 1)) {
         __asm__ volatile("pause" ::: "memory");
     }
@@ -566,11 +571,13 @@ void serial_printf_port(uint16_t port, const char* format, ...) {
 
     va_end(args);
     __sync_lock_release(&serial_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
 void serial_printf(const char* format, ...) {
     if (default_serial_port == 0) return;
-
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     while (__sync_lock_test_and_set(&serial_lock, 1)) {
         __asm__ volatile("pause" ::: "memory");
     }
@@ -797,4 +804,5 @@ void serial_printf(const char* format, ...) {
 
     va_end(args);
     __sync_lock_release(&serial_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }

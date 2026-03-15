@@ -386,9 +386,6 @@ void kernel_main(void) {
     print_simd_cpuid();
     pmm_print_stats();
 
-    printf("\nSystem ready. Entering idle loop...\n");
-    serial_writestring("\nSystem ready. Entering idle loop...\n");
-
     smp_print_info_fb();
     printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
     syscall_init();

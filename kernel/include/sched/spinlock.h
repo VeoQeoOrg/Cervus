@@ -29,4 +29,16 @@ static inline int spinlock_try_acquire(spinlock_t* lock) {
                                        0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
 }
 
+static inline uint64_t spinlock_acquire_irqsave(spinlock_t* lock) {
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(lock);
+    return flags;
+}
+
+static inline void spinlock_release_irqrestore(spinlock_t* lock, uint64_t flags) {
+    spinlock_release(lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+}
+
 #endif

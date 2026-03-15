@@ -50,11 +50,11 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
 }
 
 static void devfs_ref(vnode_t *node) {
-    __atomic_fetch_add(&node->refcount, 1, __ATOMIC_RELAXED);
+    (void)node;
 }
 
 static void devfs_unref(vnode_t *node) {
-    __atomic_fetch_sub(&node->refcount, 1, __ATOMIC_RELAXED);
+    (void)node;
 }
 
 static int devfs_stat(vnode_t *node, vfs_stat_t *out) {

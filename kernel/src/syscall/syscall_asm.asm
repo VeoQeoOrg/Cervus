@@ -14,6 +14,17 @@ PERCPU_SAVED_R15    equ 88
 PERCPU_SAVED_R11    equ 96
 PERCPU_SAVED_RIP    equ 104
 PERCPU_NEED_RESCHED equ 40
+PERCPU_CURRENT_TASK equ 24
+
+TASK_USER_RSP       equ 144
+TASK_USER_SAVED_RIP equ 264
+TASK_USER_SAVED_RBP equ 272
+TASK_USER_SAVED_RBX equ 280
+TASK_USER_SAVED_R12 equ 288
+TASK_USER_SAVED_R13 equ 296
+TASK_USER_SAVED_R14 equ 304
+TASK_USER_SAVED_R15 equ 312
+TASK_USER_SAVED_R11 equ 320
 
 syscall_entry:
     swapgs
@@ -64,8 +75,19 @@ syscall_entry:
     jmp  .check_resched
 
 .no_resched:
-    mov  rsp, [gs:PERCPU_USER_RSP]
-    mov  rcx, [gs:PERCPU_SAVED_RIP]
-    mov  r11, [gs:PERCPU_SAVED_R11]
+    cli
+
+    mov  r10, rax
+    mov  rax, [gs:PERCPU_CURRENT_TASK]
+    mov  rsp, [rax + TASK_USER_RSP]
+    mov  rcx, [rax + TASK_USER_SAVED_RIP]
+    mov  r11, [rax + TASK_USER_SAVED_R11]
+    mov  rbp, [rax + TASK_USER_SAVED_RBP]
+    mov  rbx, [rax + TASK_USER_SAVED_RBX]
+    mov  r12, [rax + TASK_USER_SAVED_R12]
+    mov  r13, [rax + TASK_USER_SAVED_R13]
+    mov  r14, [rax + TASK_USER_SAVED_R14]
+    mov  r15, [rax + TASK_USER_SAVED_R15]
+    mov  rax, r10
     swapgs
     o64 sysret

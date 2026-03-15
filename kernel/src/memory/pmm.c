@@ -1,9 +1,11 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
+#include "../../include/sched/spinlock.h"
 #include <string.h>
 #include <stdio.h>
 
 static pmm_buddy_state_t g_buddy;
+static spinlock_t g_pmm_lock = SPINLOCK_INIT;
 
 static inline uintptr_t _align_up(uintptr_t v, uintptr_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -151,7 +153,12 @@ void *pmm_alloc(size_t pages) {
     if (!pages) return NULL;
     int order = _pages_to_order(pages);
     if (order < 0) return NULL;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_pmm_lock);
     uintptr_t phys = _buddy_alloc_order(order);
+    spinlock_release(&g_pmm_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
     return phys ? (void *)(phys + g_buddy.hhdm_offset) : NULL;
 }
 
@@ -180,13 +187,20 @@ void *pmm_alloc_aligned(size_t pages, size_t alignment) {
     int order = _pages_to_order(req);
     if (order < 0) return NULL;
 
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_pmm_lock);
     uintptr_t phys = _buddy_alloc_order(order);
-    if (!phys) return NULL;
+    if (!phys) { spinlock_release(&g_pmm_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
 
     if (phys & (alignment - 1)) {
         _buddy_free_order(phys, order);
+        spinlock_release(&g_pmm_lock);
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         return NULL;
     }
+    spinlock_release(&g_pmm_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 
     return (void *)(phys + g_buddy.hhdm_offset);
 }
@@ -196,7 +210,12 @@ void pmm_free(void *addr, size_t pages) {
     uintptr_t phys = (uintptr_t)addr - g_buddy.hhdm_offset;
     int order = _pages_to_order(pages);
     if (order < 0) return;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_pmm_lock);
     _buddy_free_order(phys, order);
+    spinlock_release(&g_pmm_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
 void     *pmm_phys_to_virt(uintptr_t phys)  { return (void *)(phys + g_buddy.hhdm_offset); }
@@ -358,11 +377,19 @@ void slab_init(void) {
                   SLAB_NUM_CACHES);
 }
 
+static spinlock_t g_slab_lock = SPINLOCK_INIT;
+
 void *kmalloc(size_t size) {
     if (!size) return NULL;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_slab_lock);
 
+    void *result;
     if (size > SLAB_MAX_SIZE) {
         size_t pages = (size + sizeof(large_hdr_t) + PAGE_SIZE - 1) / PAGE_SIZE;
+        spinlock_release(&g_slab_lock);
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         large_hdr_t *hdr = (large_hdr_t *)SLAB_PAGE_ALLOC(pages);
         if (!hdr) return NULL;
         hdr->magic = LARGE_ALLOC_MAGIC;
@@ -371,11 +398,15 @@ void *kmalloc(size_t size) {
     }
 
     slab_cache_t *cache = _cache_for(size);
-    if (!cache) return NULL;
+    if (!cache) { spinlock_release(&g_slab_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
 
     if (!cache->partial) {
+        spinlock_release(&g_slab_lock);
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         slab_t *s = _slab_new(cache);
         if (!s) return NULL;
+        asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+        spinlock_acquire(&g_slab_lock);
         _slab_list_push(&cache->partial, s);
     }
     slab_t *s = cache->partial;
@@ -389,7 +420,10 @@ void *kmalloc(size_t size) {
         _slab_list_remove(&cache->partial, s);
         _slab_list_push(&cache->full, s);
     }
-    return obj;
+    result = obj;
+    spinlock_release(&g_slab_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+    return result;
 }
 
 void *kzalloc(size_t size) {
@@ -409,6 +443,10 @@ void kfree(void *ptr) {
         return;
     }
 
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_slab_lock);
+
     slab_t *s = (slab_t *)((uintptr_t)ptr & ~((uintptr_t)PAGE_SIZE - 1));
 
     slab_cache_t *cache = NULL;
@@ -418,7 +456,7 @@ void kfree(void *ptr) {
             break;
         }
     }
-    if (!cache) return;
+    if (!cache) { spinlock_release(&g_slab_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return; }
 
     bool was_full = (s->used == s->total);
     *(void **)ptr = s->freelist;
@@ -433,8 +471,13 @@ void kfree(void *ptr) {
     if (s->used == 0) {
         _slab_list_remove(&cache->partial, s);
         size_t pages = _slab_pages(s->obj_size);
+        spinlock_release(&g_slab_lock);
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         SLAB_PAGE_FREE(s, pages > 0 ? pages : 1);
+        return;
     }
+    spinlock_release(&g_slab_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
 void *krealloc(void *ptr, size_t new_size) {

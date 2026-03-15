@@ -21,13 +21,16 @@ DEFINE_IRQ(0x20, timer_handler)
     percpu_t* pc = get_percpu();
 
     if (pc && pc->deferred_free_task) {
-        task_t* dead = (task_t*)pc->deferred_free_task;
-        pc->deferred_free_task = NULL;
-        uintptr_t sb = dead->stack_base;
-        dead->stack_base = 0;
-        if (sb)
-            pmm_free((void*)sb, KERNEL_STACK_PAGES);
-        free(dead);
+        void *snap = pc->deferred_free_task;
+        task_t* dead = (task_t*)__sync_val_compare_and_swap(
+                            (void**)&pc->deferred_free_task, snap, NULL);
+        if (dead) {
+            uintptr_t sb = dead->stack_base;
+            dead->stack_base = 0;
+            asm volatile("" ::: "memory");
+            if (sb)
+                pmm_free((void*)sb, KERNEL_STACK_PAGES);
+        }
     }
 
     if (!current) return;
