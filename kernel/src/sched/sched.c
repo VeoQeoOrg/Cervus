@@ -236,7 +236,6 @@ task_t* task_fork(task_t* parent) {
     child->time_slice_init = parent->time_slice_init;
     child->pagemap = vmm_clone_pagemap(parent->pagemap);
     if (!child->pagemap) { free(child); return NULL; }
-    vmm_sync_kernel_mappings(child->pagemap);
     child->cr3 = (uint64_t)pmm_virt_to_phys(child->pagemap->pml4);
     child->brk_start   = parent->brk_start;
     child->brk_current = parent->brk_current;
@@ -252,6 +251,7 @@ task_t* task_fork(task_t* parent) {
         free(child);
         return NULL;
     }
+    vmm_sync_kernel_mappings(child->pagemap);
     serial_printf("[FORK-DBG] child pid=%u stack_base=0x%llx rsp=0x%llx\n",
                   child->pid, child->stack_base, child->rsp);
     child->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
@@ -271,7 +271,6 @@ task_t* task_fork(task_t* parent) {
     if (parent->fd_table)
         child->fd_table = fd_table_clone(parent->fd_table);
 
-    child->flags  |= TASK_FLAG_STARTED;
     child->state   = TASK_READY;
     child->runnable = true;
     child->parent  = parent;
@@ -554,10 +553,8 @@ void sched_reschedule(void) {
             old->state      = TASK_READY;
             old->next = percpu_ready_queues[cpu][old->priority];
             percpu_ready_queues[cpu][old->priority] = old;
-            asm volatile("" ::: "memory");
-            atomic_store_bool_rel(&old->on_cpu, false);
         } else {
-            atomic_store_bool_rel(&old->on_cpu, false);
+
         }
     }
 
@@ -592,7 +589,12 @@ void sched_reschedule(void) {
     if (!(next->flags & TASK_FLAG_STARTED)) {
         next->flags |= TASK_FLAG_STARTED;
         current_task[cpu] = next;
-        asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+        if (next->cr3) {
+            asm volatile("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
+            switch_cr3 = 0;
+        } else {
+            asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+        }
         if (next->is_userspace) {
             serial_printf("[SCHED] CPU %u: first start '%s' pid=%u entry=0x%llx user_rsp=0x%llx\n",
                           cpu, next->name, next->pid,

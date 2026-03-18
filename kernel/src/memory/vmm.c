@@ -90,8 +90,7 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     pt[pt_i] = 0;
     asm volatile ("mfence" ::: "memory");
     invlpg((void*)virt);
-
-    if (smp_get_cpu_count() > 1) {
+    if (smp_get_cpu_count() > 1 && (virt >= 0xffff800000000000ULL)) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
     }
 

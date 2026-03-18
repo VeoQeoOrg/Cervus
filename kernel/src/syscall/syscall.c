@@ -728,8 +728,6 @@ static int64_t sys_munmap(uint64_t addr, uint64_t length) {
     if (!t||!t->is_userspace||addr&0xFFF||!length) return -EINVAL;
     size_t pages = (length+0xFFFULL)>>12;
     for (size_t i=0;i<pages;i++) vmm_unmap_page(t->pagemap, addr+i*0x1000);
-    uintptr_t addrs[1] = {addr};
-    ipi_tlb_shootdown_broadcast(addrs, 1);
     return 0;
 }
 

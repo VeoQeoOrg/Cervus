@@ -22,6 +22,7 @@ TASK_USER_SAVED_R15_OFFSET   equ 312
 TASK_USER_SAVED_R11_OFFSET   equ 320
 
 PERCPU_CURRENT_TASK equ 24
+TASK_ON_CPU_OFFSET  equ 0x150
 
 context_switch:
     push rbp
@@ -32,6 +33,8 @@ context_switch:
     push r15
 
     mov [rdi], rsp
+    mfence
+    mov byte [rdi + TASK_ON_CPU_OFFSET], 0
 
     test rdx, rdx
     jz .skip_global
