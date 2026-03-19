@@ -379,12 +379,42 @@ static int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count) {
     }
 
     if (fd != 1 && fd != 2) return -EBADF;
-    static bool at_line_start = true;
-    for (uint64_t i = 0; i < count; i++) {
-        if (at_line_start) { serial_writestring("[USER] "); at_line_start = false; }
-        serial_write(kbuf[i]);
-        putchar((unsigned char)kbuf[i]);
-        if (kbuf[i] == '\n') at_line_start = true;
+
+    {
+        static bool at_line_start = true;
+        uint64_t i = 0;
+        while (i < count) {
+            uint64_t j = i;
+            while (j < count && kbuf[j] != '\n') j++;
+            bool has_newline = (j < count && kbuf[j] == '\n');
+
+            char chunk[4096 + 8];
+            size_t clen = 0;
+            if (at_line_start && j > i) {
+                chunk[clen++] = '['; chunk[clen++] = 'U';
+                chunk[clen++] = 'S'; chunk[clen++] = 'E';
+                chunk[clen++] = 'R'; chunk[clen++] = ']';
+                chunk[clen++] = ' ';
+            }
+            size_t seg = j - i;
+            if (seg > 0) {
+                __builtin_memcpy(chunk + clen, kbuf + i, seg);
+                clen += seg;
+            }
+            if (has_newline) {
+                chunk[clen++] = '\n';
+                at_line_start = true;
+                i = j + 1;
+            } else {
+                if (seg > 0) at_line_start = false;
+                i = j;
+            }
+            if (clen > 0) {
+                serial_writebuf(chunk, clen);
+                printf("%.*s", (int)clen, chunk);
+            }
+            if (!has_newline) break;
+        }
     }
     return (int64_t)count;
 }

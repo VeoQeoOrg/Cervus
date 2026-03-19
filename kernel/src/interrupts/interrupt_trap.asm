@@ -46,7 +46,7 @@ common_stub:
 
     mov rax, [rsp + 18*8]
     and rax, 3
-    jz .kernel_resched   ; kernel mode - check resched then exit without swapgs
+    jz .kernel_resched
 
 .check_resched:
     call get_percpu
@@ -65,12 +65,19 @@ common_stub:
 .kernel_resched:
     call get_percpu
     test rax, rax
-    jz .kernel_exit
+    jz .kernel_check_cs
     cmp byte [rax + PERCPU_NEED_RESCHED], 0
-    je .kernel_exit
+    je .kernel_check_cs
     mov byte [rax + PERCPU_NEED_RESCHED], 0
     call sched_reschedule
     jmp .kernel_resched
+
+.kernel_check_cs:
+    mov rax, [rsp + 18*8]
+    and rax, 3
+    jz .kernel_exit
+    swapgs
+    jmp .kernel_exit
 
 .kernel_exit:
 

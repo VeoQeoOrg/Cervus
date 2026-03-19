@@ -36,11 +36,8 @@ static int64_t tty_write(vnode_t *node, const void *buf,
                           size_t len, uint64_t offset)
 {
     (void)node; (void)offset;
-    const char *src = buf;
-    for (size_t i = 0; i < len; i++) {
-        serial_write(src[i]);
-    }
-    printf("%.*s", (int)len, src);
+    serial_writebuf((const char *)buf, len);
+    printf("%.*s", (int)len, (const char *)buf);
     return (int64_t)len;
 }
 

@@ -40,6 +40,7 @@ char serial_read(void);
 int serial_is_transmit_empty(void);
 void serial_write(char c);
 void serial_writestring(const char* str);
+void serial_writebuf(const char* buf, size_t len);
 void serial_printf(const char* format, ...);
 
 uint16_t serial_get_default_port(void);

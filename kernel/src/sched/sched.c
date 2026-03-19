@@ -362,7 +362,7 @@ __attribute__((noreturn)) void task_exit(void) {
 
     if (pc) fix_gs_base(pc);
 
-    if (!me || !me->is_userspace) {
+    if (!me) {
         uint64_t gs_base = 0;
         uint64_t kgs_base_lo = 0, kgs_base_hi = 0;
         asm volatile("rdgsbase %0" : "=r"(gs_base));
@@ -371,20 +371,14 @@ __attribute__((noreturn)) void task_exit(void) {
                      :: "ecx");
         uint64_t kgs_base = kgs_base_lo | ((uint64_t)kgs_base_hi << 32);
 
-        serial_printf("[SCHED] task_exit: spurious call on cpu=%u (current='%s')\n"
+        serial_printf("[SCHED] task_exit: spurious call on cpu=%u (no current task)\n"
                       "  pc=0x%llx gs_base=0x%llx kgs_base=0x%llx\n"
                       "  current_task[%u]=%p gs:current_task=%p\n",
-                      cpu, me ? me->name : "null",
+                      cpu,
                       (uint64_t)pc, gs_base, kgs_base,
                       cpu, current_task[cpu],
                       pc ? (void*)pc->current_task : (void*)0xDEAD);
 
-        if (me) {
-            me->runnable = false; me->state = TASK_ZOMBIE; me->exit_code = 0;
-            current_task[cpu] = NULL;
-            if (pc) { pc->current_task = NULL; me->flags |= TASK_FLAG_STACK_DEFERRED; pc->deferred_free_task = (void*)me; }
-            task_wakeup_waiters(me->pid);
-        }
         sched_reschedule();
         while (1) asm volatile("hlt");
     }

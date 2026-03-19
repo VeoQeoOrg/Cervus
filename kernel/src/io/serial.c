@@ -97,6 +97,19 @@ void serial_writestring(const char* str) {
 }
 
 
+void serial_writebuf(const char* buf, size_t len) {
+    if (default_serial_port == 0 || !buf || len == 0) return;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    while (__sync_lock_test_and_set(&serial_lock, 1))
+        __asm__ volatile("pause" ::: "memory");
+    for (size_t i = 0; i < len; i++)
+        serial_write_port(default_serial_port, buf[i]);
+    __sync_lock_release(&serial_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+}
+
+
 
 static void reverse_string(char* str, int length) {
     int start = 0;
