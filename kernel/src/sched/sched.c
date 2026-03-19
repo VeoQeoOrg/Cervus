@@ -84,7 +84,7 @@ static uint64_t alloc_and_init_stack(task_t* t) {
 
     uintptr_t stack_top = (stack_virt + KERNEL_STACK_SIZE) & ~0xFULL;
     uint64_t* sp = (uint64_t*)stack_top;
-    sp -= 32;
+
     if (t->flags & TASK_FLAG_FORK) {
         extern void task_trampoline_fork(void);
         *--sp = (uint64_t)task_trampoline_fork;
@@ -95,8 +95,14 @@ static uint64_t alloc_and_init_stack(task_t* t) {
         extern void task_trampoline(void);
         *--sp = (uint64_t)task_trampoline;
     }
+
     *--sp = (uint64_t)t;
-    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+    *--sp = 0;
+
     return (uint64_t)sp;
 }
 
@@ -547,8 +553,6 @@ void sched_reschedule(void) {
             old->state      = TASK_READY;
             old->next = percpu_ready_queues[cpu][old->priority];
             percpu_ready_queues[cpu][old->priority] = old;
-        } else {
-
         }
     }
 

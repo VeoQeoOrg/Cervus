@@ -33,7 +33,9 @@ context_switch:
     push r15
 
     mov [rdi], rsp
+
     mfence
+
     mov byte [rdi + TASK_ON_CPU_OFFSET], 0
 
     test rdx, rdx
@@ -48,7 +50,6 @@ context_switch:
     jz .skip_cr3
     mov cr3, rcx
 .skip_cr3:
-
     pop r15
     pop r14
     pop r13
@@ -101,6 +102,7 @@ task_trampoline:
 task_trampoline_user:
     mov  rax, [rbp + TASK_ENTRY_OFFSET]
     mov  rcx, [rbp + TASK_USER_RSP_OFFSET]
+
     xor  rbp, rbp
 
     push qword 0x1B
@@ -127,6 +129,8 @@ task_trampoline_user:
     xor r13, r13
     xor r14, r14
     xor r15, r15
+
+    swapgs
     iretq
 
 task_trampoline_fork:
@@ -135,7 +139,6 @@ task_trampoline_fork:
     mov rax, [rbp + TASK_USER_SAVED_RIP_OFFSET]
     mov rcx, [rbp + TASK_USER_RSP_OFFSET]
     mov r11, [rbp + TASK_USER_SAVED_R11_OFFSET]
-
     mov rbx, [rbp + TASK_USER_SAVED_RBX_OFFSET]
     mov r12, [rbp + TASK_USER_SAVED_R12_OFFSET]
     mov r13, [rbp + TASK_USER_SAVED_R13_OFFSET]
@@ -153,4 +156,5 @@ task_trampoline_fork:
 
     xor rax, rax
 
+    swapgs
     iretq

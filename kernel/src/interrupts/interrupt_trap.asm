@@ -30,19 +30,15 @@ common_stub:
     jz .kernel_entry
     swapgs
 .kernel_entry:
-
     mov ax, 0x10
     mov ds, ax
     mov es, ax
-    mov ss, ax
-
     mov rdi, rsp
     call base_trap
 
     pop rax
     mov ds, ax
     mov es, ax
-    mov ss, ax
 
     mov rax, [rsp + 18*8]
     and rax, 3
@@ -80,7 +76,6 @@ common_stub:
     jmp .kernel_exit
 
 .kernel_exit:
-
     pop r15
     pop r14
     pop r13
