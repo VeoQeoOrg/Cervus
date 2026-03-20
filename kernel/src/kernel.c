@@ -303,7 +303,6 @@ void ps2_task(void* arg) {
 void kernel_main(void) {
     serial_initialize(COM1, 115200);
     serial_writestring("\n=== SERIAL PORT INITIALIZED ===\n");
-    serial_writestring("Cervus OS v0.0.1 - Kernel initialized!\n");
 
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
         serial_writestring("ERROR: Unsupported Limine base revision\n");
@@ -374,7 +373,6 @@ void kernel_main(void) {
     }
     serial_writestring("All APs ready.\n");
 
-    printf("\n\tCERVUS OS v0.0.1\n");
     printf("Kernel initialized successfully!\n\n");
     printf("Framebuffer: %dx%d, %d bpp\n",
            global_framebuffer->width,
@@ -408,6 +406,8 @@ void kernel_main(void) {
 
     sched_init();
     sched_notify_ready();
+    timer_sleep_ms(10);
+    clear_screen();
     load_elf_module();
 
     //task_create("ExitTest", exit_test_task, NULL, 20);

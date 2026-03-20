@@ -247,6 +247,23 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
     if (key == SC_CAPS && !released)           { kb_state.caps_lock = !kb_state.caps_lock; lapic_eoi(); return; }
     if (released)                              { lapic_eoi(); return; }
 
+    if (kb_state.ctrl) {
+        char base = scancode_to_char(key);
+        serial_printf("[PS2] ctrl+key sc=0x%02x base='%c'(0x%02x)\n", (unsigned)key, (base>=0x20&&base<0x7f)?base:'?', (unsigned)(uint8_t)base);
+        if (base >= 'a' && base <= 'z') {
+            uint8_t ctrl_char = (uint8_t)(base - 'a' + 1);
+            serial_printf("[PS2] ctrl char generated: 0x%02x\n", ctrl_char);
+            kb_buf_push((char)ctrl_char);
+            lapic_eoi();
+            return;
+        }
+        if (base >= 'A' && base <= 'Z') {
+            kb_buf_push((char)(base - 'A' + 1));
+            lapic_eoi();
+            return;
+        }
+    }
+
     char c = scancode_to_char(key);
     if (c != 0)
         kb_buf_push(c);
@@ -441,6 +458,34 @@ bool kb_buf_try_getc(char *out) {
     *out = kb_buf.buf[kb_buf.head];
     kb_buf.head = (kb_buf.head + 1) % KB_BUF_SIZE;
     return true;
+}
+
+bool kb_buf_has_ctrlc(void) {
+    uint8_t h = kb_buf.head;
+    while (h != kb_buf.tail) {
+        if (kb_buf.buf[h] == 0x03) return true;
+        h = (h + 1) % KB_BUF_SIZE;
+    }
+    return false;
+}
+
+void kb_buf_consume_ctrlc(void) {
+    uint8_t h = kb_buf.head, t = kb_buf.tail;
+    uint8_t pos = h;
+    bool found = false;
+    while (pos != t) {
+        if (kb_buf.buf[pos] == 0x03) { found = true; break; }
+        pos = (pos + 1) % KB_BUF_SIZE;
+    }
+    if (!found) return;
+    uint8_t cur = pos;
+    uint8_t nxt = (cur + 1) % KB_BUF_SIZE;
+    while (nxt != t) {
+        kb_buf.buf[cur] = kb_buf.buf[nxt];
+        cur = nxt;
+        nxt = (nxt + 1) % KB_BUF_SIZE;
+    }
+    kb_buf.tail = cur;
 }
 
 char kb_buf_getc(void) {

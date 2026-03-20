@@ -14,12 +14,12 @@ void test_main(uint64_t *sp) {
 
     {
         const char *argv[] = {
-            "/bin/target", "hello", "from", "execve", NULL
+            "/apps/execve_target", "hello", "from", "execve", NULL
         };
         pid_t child = fork();
         if (child < 0) { fail("fork"); exit(1); }
         if (child == 0) {
-            execve("/bin/target", argv, NULL);
+            execve("/apps/execve_target", argv, NULL);
             printf("  [FATAL] execve failed\n");
             exit(127);
         }
@@ -52,7 +52,7 @@ void test_main(uint64_t *sp) {
         pid_t child = fork();
         if (child < 0) { fail("fork"); exit(1); }
         if (child == 0) {
-            execve("/bin/target", NULL, NULL);
+            execve("/apps/execve_target", NULL, NULL);
             exit(127);
         }
         int status = 0;

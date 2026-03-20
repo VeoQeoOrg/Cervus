@@ -167,7 +167,7 @@ bool build_limine(void) {
     print_color(COLOR_GREEN, "Building Limine...");
     if (file_exists("limine")) rm_rf("limine");
     if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine "
-                      "--branch=v10.8.3-binary --depth=1") != 0) return false;
+                      "--branch=v10.8.5-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
     return true;
 }
@@ -371,13 +371,18 @@ bool build_initramfs(void) {
     if (motd) {
         fprintf(motd,
             "\n"
-            " +-+-+-+-+-+-+-+\n"
-            " |C|E|R|V|U|S|!|\n"
-            " +-+-+-+-+-+-+-+\n"
+            "    $$$$$$\\                                                    \n"
+            "   $$  __$$\\                                                   \n"
+            "   $$ /  \\__| $$$$$$\\   $$$$$$\\ $$\\    $$\\ $$\\   $$\\  $$$$$$$\\ \n"
+            "   $$ |      $$  __$$\\ $$  __$$\\\\$$\\  $$  |$$ |  $$ |$$  _____|\n"
+            "   $$ |      $$$$$$$$ |$$ |  \\__|\\$$\\$$  / $$ |  $$ |\\$$$$$$\\  \n"
+            "   $$ |  $$\\ $$   ____|$$ |       \\$$$  /  $$ |  $$ | \\____$$\\ \n"
+            "   \\$$$$$$  |\\$$$$$$$\\ $$ |        \\$  /   \\$$$$$$  |$$$$$$$  |\n"
+            "    \\______/  \\______||\\__|         \\_/     \\______/ \\_______/\n"
             "\n"
-            " Cervus OS " VERSION "\n"
+            " Cervus OS " VERSION " (Alpha release)\n"
             "\n"
-            " Type \'help\' to see available commands.\n"
+            " Type 'help' to see available commands.\n"
             "\n");
         fclose(motd);
     }
@@ -416,7 +421,7 @@ bool build_initramfs(void) {
             "Cervus OS v0.0.1\n"
             "================\n"
             "\n"
-            "This is Cervus - a hobby x86_64 OS written in C.\n"
+            "This is Cervus — a hobby x86_64 OS written in C.\n"
             "With Limine Bootloader.\n"
             "\n"
             "Shell commands:\n"
@@ -992,8 +997,16 @@ int main(int argc, char **argv) {
             iso_path, QEMUFLAGS);
 
         if (!ARG_NO_CLEAN) {
+            print_color(COLOR_CYAN, "[post-run] Cleaning build artifacts...");
             rm_rf("obj");
             rm_rf("bin");
+            rm_rf(INITRAMFS_ROOTFS);
+            if (file_exists(INITRAMFS_TAR)) {
+                remove(INITRAMFS_TAR);
+                print_color(COLOR_GREEN, "[post-run] removed %s", INITRAMFS_TAR);
+            }
+            clean_apps_elfs();
+            print_color(COLOR_GREEN, "[post-run] Done.");
         }
         return 0;
     }

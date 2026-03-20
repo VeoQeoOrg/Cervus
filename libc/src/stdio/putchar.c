@@ -193,6 +193,7 @@ int putchar(int c) {
 
     case PS_CSI:
         if (ch == '?') { ps_state = PS_CSI_PRIV; break; }
+        __attribute__((fallthrough));
     case PS_CSI_PRIV:
         if (ch >= '0' && ch <= '9') {
             ps_cur = ps_cur * 10 + (ch - '0');

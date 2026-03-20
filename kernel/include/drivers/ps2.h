@@ -85,5 +85,7 @@ const mouse_state_t*  ps2_mouse_get_state(void);
 bool  kb_buf_empty(void);
 char  kb_buf_getc(void);
 bool  kb_buf_try_getc(char *out);
+bool  kb_buf_has_ctrlc(void);
+void  kb_buf_consume_ctrlc(void);
 
 #endif

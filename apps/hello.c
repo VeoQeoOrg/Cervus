@@ -31,42 +31,42 @@ static void run_all_tests(void) {
     printf("  GID:  %d\n", (int)getgid());
     printf("  CAPS: %llx\n", cap_get());
 
-    puts("\n=== test_process (/bin/test_process) ===");
+    puts("\n=== test_process (/apps/test_process) ===");
     {
-        const char *argv[] = { "/bin/test_process", NULL };
-        rc = run_test("/bin/test_process", argv);
+        const char *argv[] = { "/apps/test_process", NULL };
+        rc = run_test("/apps/test_process", argv);
         if (rc == 0) print_ok("process test");
         else { printf("  exit code = %d\n", rc); print_fail("process test"); }
     }
 
-    puts("\n=== test_files (/bin/test_files) ===");
+    puts("\n=== test_files (/apps/test_files) ===");
     {
-        const char *argv[] = { "/bin/test_files", NULL };
-        rc = run_test("/bin/test_files", argv);
+        const char *argv[] = { "/apps/test_files", NULL };
+        rc = run_test("/apps/test_files", argv);
         if (rc == 0) print_ok("file I/O test");
         else { printf("  exit code = %d\n", rc); print_fail("file I/O test"); }
     }
 
-    puts("\n=== test_pipe (/bin/test_pipe) ===");
+    puts("\n=== test_pipe (/apps/test_pipe) ===");
     {
-        const char *argv[] = { "/bin/test_pipe", NULL };
-        rc = run_test("/bin/test_pipe", argv);
+        const char *argv[] = { "/apps/test_pipe", NULL };
+        rc = run_test("/apps/test_pipe", argv);
         if (rc == 0) print_ok("pipe test");
         else { printf("  exit code = %d\n", rc); print_fail("pipe test"); }
     }
 
-    puts("\n=== test_execve (/bin/test_execve) ===");
+    puts("\n=== test_execve (/apps/test_execve) ===");
     {
-        const char *argv[] = { "/bin/test_execve", NULL };
-        rc = run_test("/bin/test_execve", argv);
+        const char *argv[] = { "/apps/test_execve", NULL };
+        rc = run_test("/apps/test_execve", argv);
         if (rc == 0) print_ok("execve test");
         else { printf("  exit code = %d\n", rc); print_fail("execve test"); }
     }
 
-    puts("\n=== test_mem (/bin/test_mem) ===");
+    puts("\n=== test_mem (/apps/test_mem) ===");
     {
-        const char *argv[] = { "/bin/test_mem", NULL };
-        rc = run_test("/bin/test_mem", argv);
+        const char *argv[] = { "/apps/test_mem", NULL };
+        rc = run_test("/apps/test_mem", argv);
         if (rc == 0) print_ok("memory test");
         else { printf("  exit code = %d\n", rc); print_fail("memory test"); }
     }
