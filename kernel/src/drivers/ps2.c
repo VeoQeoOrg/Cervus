@@ -216,9 +216,30 @@ static void mouse_print_status(void) {
 DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 {
     (void)frame;
+    static bool e0_prefix = false;
     uint8_t sc       = inb(PS2_DATA_PORT);
     bool    released = (sc & PS2_KEY_RELEASE_BIT) != 0;
     uint8_t key      = sc & ~PS2_KEY_RELEASE_BIT;
+
+    if (sc == 0xE0) { e0_prefix = true; lapic_eoi(); return; }
+
+    if (e0_prefix) {
+        e0_prefix = false;
+        if (!released) {
+            switch (key) {
+                case 0x48: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('A'); break;
+                case 0x50: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('B'); break;
+                case 0x4D: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('C'); break;
+                case 0x4B: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('D'); break;
+                case 0x47: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('H'); break;
+                case 0x4F: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('F'); break;
+                case 0x53: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('3'); kb_buf_push('~'); break;
+                default: break;
+            }
+        }
+        lapic_eoi();
+        return;
+    }
 
     if (key == SC_LSHIFT || key == SC_RSHIFT) { kb_state.shift     = !released; lapic_eoi(); return; }
     if (key == SC_LCTRL)                       { kb_state.ctrl      = !released; lapic_eoi(); return; }

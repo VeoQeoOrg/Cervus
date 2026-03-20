@@ -493,6 +493,18 @@ static int64_t sys_fstat(uint64_t fd, uint64_t stat_ptr) {
     return copy_to_user((void*)stat_ptr, &st, sizeof(st));
 }
 
+static int64_t sys_readdir(uint64_t fd, uint64_t dirent_ptr) {
+    if (!dirent_ptr) return -EINVAL;
+    task_t *t = cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f = fd_get(t->fd_table, (int)fd);
+    if (!f) return -EBADF;
+    vfs_dirent_t kd;
+    int r = vfs_readdir(f, &kd);
+    if (r < 0) return (int64_t)r;
+    return copy_to_user((void*)dirent_ptr, &kd, sizeof(kd));
+}
+
 static int64_t sys_dup(uint64_t fd) {
     task_t *t = cur_task();
     if (!t || !t->fd_table) return -EBADF;
@@ -825,6 +837,7 @@ W3(sys_seek)        W2(sys_stat)
 W2(sys_fstat)       W1(sys_dup)
 W2(sys_dup2)        W1(sys_pipe)
 W3(sys_fcntl)
+W2(sys_readdir)
 W1(sys_brk)         W6(sys_mmap)
 W2(sys_munmap)
 W2(sys_clock_get)   W1(sys_sleep_ns)   W0(sys_uptime)
@@ -862,6 +875,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_DUP2]         = _sys_dup2,
     [SYS_PIPE]         = _sys_pipe,
     [SYS_FCNTL]        = _sys_fcntl,
+    [SYS_READDIR]      = _sys_readdir,
     [SYS_BRK]          = _sys_brk,
     [SYS_MMAP]         = _sys_mmap,
     [SYS_MUNMAP]       = _sys_munmap,

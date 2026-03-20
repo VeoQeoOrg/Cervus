@@ -39,6 +39,7 @@ typedef int64_t  intptr_t;
 #define SYS_DUP2         29
 #define SYS_PIPE         30
 #define SYS_FCNTL        31
+#define SYS_READDIR      32
 
 #define SYS_MMAP         40
 #define SYS_MUNMAP       41
@@ -85,6 +86,7 @@ typedef int64_t  intptr_t;
 #define O_APPEND    0x400
 #define O_NONBLOCK  0x800
 #define O_CLOEXEC   0x80000
+#define O_DIRECTORY 0x10000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -139,6 +141,20 @@ typedef struct {
     uint32_t st_uid, st_gid;
     uint64_t st_size, st_blocks;
 } cervus_stat_t;
+
+#define DT_UNKNOWN 0
+#define DT_FILE    0
+#define DT_DIR     1
+#define DT_CHR     2
+#define DT_BLK     3
+#define DT_LNK     4
+#define DT_PIPE    5
+
+typedef struct {
+    uint64_t d_ino;
+    uint8_t  d_type;
+    char     d_name[256];
+} cervus_dirent_t;
 
 static inline int64_t
 __syscall(uint64_t nr,
@@ -207,6 +223,7 @@ static inline int dup(int fd)                 { return (int)syscall1(SYS_DUP, fd
 static inline int dup2(int old, int nw)       { return (int)syscall2(SYS_DUP2, old, nw); }
 static inline int pipe(int fds[2])            { return (int)syscall1(SYS_PIPE, fds); }
 static inline int fcntl(int fd, int cmd, int arg) { return (int)syscall3(SYS_FCNTL, fd, cmd, arg); }
+static inline int readdir(int fd, cervus_dirent_t *d) { return (int)syscall2(SYS_READDIR, fd, d); }
 
 static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off) {
     return (void*)syscall6(SYS_MMAP, addr, len, prot, flags, fd, (uint64_t)off);

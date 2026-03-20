@@ -601,14 +601,6 @@ void sched_reschedule(void) {
     }
 
     {
-        percpu_t* _pc = get_percpu();
-        uint64_t _krsp = _pc ? _pc->syscall_kernel_rsp : 0;
-        uint64_t _tss  = (tss[cpu]) ? tss[cpu]->rsp0 : 0;
-        serial_printf("[SCHED] ctx_switch cpu=%u: old=%p(rsp=0x%llx run=%d) -> next=pid=%u(rsp=0x%llx sb=0x%llx) tss_rsp0=0x%llx krsp=0x%llx\n",
-                      cpu,
-                      (void*)old, old ? old->rsp : 0ULL, old ? (int)old->runnable : -1,
-                      next->pid, next->rsp, next->stack_base, _tss, _krsp);
-
         if (next->stack_base && next->rsp != 0 &&
             (next->rsp < next->stack_base || next->rsp >= next->stack_base + KERNEL_STACK_SIZE)) {
             serial_printf("[SCHED] *** STACK CORRUPTION: pid=%u rsp=0x%llx NOT in [0x%llx, 0x%llx)! ***\n",

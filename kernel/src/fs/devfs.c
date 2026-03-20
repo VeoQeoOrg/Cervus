@@ -8,18 +8,37 @@
 #include "../../include/io/serial.h"
 #include "../../include/drivers/ps2.h"
 #include "../../include/sched/sched.h"
+#include "../../include/apic/apic.h"
 
-static int64_t tty_read(vnode_t *node, void *buf,
-                         size_t len, uint64_t offset)
-{
+extern void draw_cursor(void);
+extern void erase_cursor(void);
+
+static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
     if (len == 0) return 0;
 
     char *dst = buf;
 
+    uint64_t freq      = hpet_is_available() ? hpet_get_frequency() : 0;
+    uint64_t half_tick = freq ? freq / 2 : 0;
+    uint64_t next_blink = half_tick ? (hpet_read_counter() + half_tick) : 0;
+    int      cursor_on  = 1;
+    draw_cursor();
+
     while (kb_buf_empty()) {
+        if (half_tick) {
+            uint64_t now = hpet_read_counter();
+            if (now >= next_blink) {
+                if (cursor_on) { erase_cursor(); cursor_on = 0; }
+                else           { draw_cursor();  cursor_on = 1; }
+                next_blink = now + half_tick;
+            }
+        }
         task_yield();
     }
+
+    erase_cursor();
+
     dst[0] = kb_buf_getc();
     size_t got = 1;
 
@@ -32,9 +51,7 @@ static int64_t tty_read(vnode_t *node, void *buf,
     return (int64_t)got;
 }
 
-static int64_t tty_write(vnode_t *node, const void *buf,
-                          size_t len, uint64_t offset)
-{
+static int64_t tty_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
     serial_writebuf((const char *)buf, len);
     printf("%.*s", (int)len, (const char *)buf);

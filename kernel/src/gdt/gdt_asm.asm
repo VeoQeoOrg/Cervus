@@ -19,7 +19,7 @@ _reload_segments:
 
     retfq
 .reload_cs:
-    mov ax, si      ; ds
+    mov ax, si
     mov ds, ax
     mov es, ax
     mov fs, ax

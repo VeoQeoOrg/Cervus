@@ -21,22 +21,9 @@
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
 
-#define HELLO_SRC     "test/hello.c"
-#define HELLO_ELF     "test/hello.elf"
-
-#define EXECVE_TARGET_SRC  "test/execve_target.c"
-#define EXECVE_TARGET_ELF  "test/execve_target.elf"
-
-#define TEST_PROCESS_SRC   "test/test_process.c"
-#define TEST_PROCESS_ELF   "test/test_process.elf"
-#define TEST_FILES_SRC     "test/test_files.c"
-#define TEST_FILES_ELF     "test/test_files.elf"
-#define TEST_PIPE_SRC      "test/test_pipe.c"
-#define TEST_PIPE_ELF      "test/test_pipe.elf"
-#define TEST_EXECVE_SRC    "test/test_execve.c"
-#define TEST_EXECVE_ELF    "test/test_execve.elf"
-#define TEST_MEM_SRC       "test/test_mem.c"
-#define TEST_MEM_ELF       "test/test_mem.elf"
+#define APPS_DIR   "apps"
+#define SHELL_SRC  "apps/shell.c"
+#define SHELL_ELF  "apps/shell.elf"
 
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
@@ -61,10 +48,7 @@ const char *FILES_TO_CLEAN[] = {
     "kernel/.deps-obtained",
     "limine.conf",
     "OS-TREE.txt", "log.txt",
-    "test/hello.elf", "test/execve_target.elf",
-    "test/test_execve.elf", "test/test_files.elf",
-    "test/test_mem.elf", "test/test_pipe.elf",
-    "test/test_process.elf",
+    "apps/shell.elf",
     INITRAMFS_TAR,
     NULL
 };
@@ -242,98 +226,98 @@ void ensure_linker_script(void) {
     print_color(COLOR_GREEN, "x86_64.lds created");
 }
 
-bool build_hello_elf(void) {
-    if (!file_exists(HELLO_SRC)) {
-        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", HELLO_SRC);
-        return true;
-    }
-    if (file_exists(HELLO_ELF) && get_mtime(HELLO_SRC) <= get_mtime(HELLO_ELF)) {
-        print_color(COLOR_GREEN, "[ELF] %s is up to date", HELLO_ELF);
-        return true;
-    }
+typedef struct {
+    char src[512];
+    char elf[512];
+    char name[256];
+} app_entry_t;
 
-    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", HELLO_SRC, HELLO_ELF);
+#define MAX_APPS 64
+static app_entry_t g_apps[MAX_APPS];
+static int         g_naps = 0;
 
-    int ret = cmd_run(false,
-        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
-        " -O0 -g"
-        " -Itest"
-        " -Wl,-Ttext-segment=0x401000"
-        " -Wl,-e,_start"
-        " -o %s %s",
-        HELLO_ELF, HELLO_SRC);
-
-    if (ret != 0) {
-        print_color(COLOR_RED, "[ELF] Failed to compile %s", HELLO_SRC);
-        return false;
+static int scan_apps(void) {
+    g_naps = 0;
+    DIR *d = opendir(APPS_DIR);
+    if (!d) {
+        print_color(COLOR_RED, "[apps] Cannot open directory '%s'", APPS_DIR);
+        return 0;
     }
-    print_color(COLOR_GREEN, "[ELF] %s built successfully", HELLO_ELF);
-    return true;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && g_naps < MAX_APPS) {
+        const char *nm = de->d_name;
+        size_t nlen = strlen(nm);
+        if (nlen < 3) continue;
+        if (nm[0] == '.') continue;
+        if (strcmp(nm + nlen - 2, ".c") != 0) continue;
+
+        app_entry_t *e = &g_apps[g_naps];
+        snprintf(e->src,  sizeof(e->src),  "%s/%s",   APPS_DIR, nm);
+        snprintf(e->elf,  sizeof(e->elf),  "%s/%.*s.elf", APPS_DIR, (int)(nlen-2), nm);
+        snprintf(e->name, sizeof(e->name), "%.*s", (int)(nlen-2), nm);
+        g_naps++;
+    }
+    closedir(d);
+    for (int i = 1; i < g_naps; i++) {
+        app_entry_t tmp = g_apps[i]; int j = i-1;
+        while (j >= 0 && strcmp(g_apps[j].name, tmp.name) > 0) {
+            g_apps[j+1] = g_apps[j]; j--;
+        }
+        g_apps[j+1] = tmp;
+    }
+    return g_naps;
 }
 
-bool build_execve_target(void) {
-    if (!file_exists(EXECVE_TARGET_SRC)) {
-        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", EXECVE_TARGET_SRC);
+static bool build_one_app(const app_entry_t *e) {
+    if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
+        print_color(COLOR_GREEN, "[ELF] %s is up to date", e->elf);
         return true;
     }
-    if (file_exists(EXECVE_TARGET_ELF) &&
-        get_mtime(EXECVE_TARGET_SRC) <= get_mtime(EXECVE_TARGET_ELF)) {
-        print_color(COLOR_GREEN, "[ELF] %s is up to date", EXECVE_TARGET_ELF);
-        return true;
-    }
-
-    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s",
-                EXECVE_TARGET_SRC, EXECVE_TARGET_ELF);
-
+    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", e->src, e->elf);
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
-        " -O0 -g"
-        " -Itest"
-        " -Wl,-Ttext-segment=0x401000"
-        " -Wl,-e,_start"
-        " -o %s %s",
-        EXECVE_TARGET_ELF, EXECVE_TARGET_SRC);
-
-    if (ret != 0) {
-        print_color(COLOR_RED, "[ELF] Failed to compile %s", EXECVE_TARGET_SRC);
-        return false;
-    }
-    print_color(COLOR_GREEN, "[ELF] %s built successfully", EXECVE_TARGET_ELF);
-    return true;
-}
-
-static bool build_test_elf(const char *src, const char *elf) {
-    if (!file_exists(src)) {
-        print_color(COLOR_YELLOW, "[ELF] %s not found — skipping", src);
-        return true;
-    }
-    if (file_exists(elf) && get_mtime(src) <= get_mtime(elf)) {
-        print_color(COLOR_GREEN, "[ELF] %s is up to date", elf);
-        return true;
-    }
-    print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", src, elf);
-    int ret = cmd_run(false,
-        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
-        " -O0 -g -Itest"
+        " -O0 -g -I" APPS_DIR
         " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
         " -o %s %s",
-        elf, src);
+        e->elf, e->src);
     if (ret != 0) {
-        print_color(COLOR_RED, "[ELF] Failed to compile %s", src);
+        print_color(COLOR_RED, "[ELF] Failed to compile %s", e->src);
         return false;
     }
-    print_color(COLOR_GREEN, "[ELF] %s built successfully", elf);
+    print_color(COLOR_GREEN, "[ELF] %s built successfully", e->elf);
     return true;
 }
 
-bool build_test_suite(void) {
-    if (!build_test_elf(TEST_PROCESS_SRC, TEST_PROCESS_ELF)) return false;
-    if (!build_test_elf(TEST_FILES_SRC,   TEST_FILES_ELF))   return false;
-    if (!build_test_elf(TEST_PIPE_SRC,    TEST_PIPE_ELF))    return false;
-    if (!build_test_elf(TEST_EXECVE_SRC,  TEST_EXECVE_ELF))  return false;
-    if (!build_test_elf(TEST_MEM_SRC,     TEST_MEM_ELF))     return false;
+bool build_all_apps(void) {
+    scan_apps();
+    if (g_naps == 0) {
+        print_color(COLOR_YELLOW, "[apps] No .c files found in '%s'", APPS_DIR);
+        return true;
+    }
+    print_color(COLOR_CYAN, "[apps] Found %d app(s) in '%s'", g_naps, APPS_DIR);
+    for (int i = 0; i < g_naps; i++) {
+        if (!build_one_app(&g_apps[i])) return false;
+    }
     return true;
 }
+
+void clean_apps_elfs(void) {
+    DIR *d = opendir(APPS_DIR);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t nlen = strlen(nm);
+        if (nlen < 5) continue;
+        if (strcmp(nm + nlen - 4, ".elf") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", APPS_DIR, nm);
+        remove(path);
+        print_color(COLOR_YELLOW, "[clean] removed %s", path);
+    }
+    closedir(d);
+}
+
 
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
@@ -342,21 +326,19 @@ bool build_initramfs(void) {
     }
 
     bool tar_exists = file_exists(INITRAMFS_TAR);
-    bool elf_newer  = file_exists(HELLO_ELF) &&
-                      (!tar_exists || get_mtime(HELLO_ELF) > get_mtime(INITRAMFS_TAR));
-    bool target_newer = file_exists(EXECVE_TARGET_ELF) &&
-                        (!tar_exists || get_mtime(EXECVE_TARGET_ELF) > get_mtime(INITRAMFS_TAR));
-    const char *test_elfs[] = {
-        TEST_PROCESS_ELF, TEST_FILES_ELF, TEST_PIPE_ELF,
-        TEST_EXECVE_ELF,  TEST_MEM_ELF,   NULL
-    };
-    bool tests_newer = false;
-    for (int i = 0; test_elfs[i]; i++) {
-        if (file_exists(test_elfs[i]) &&
-            (!tar_exists || get_mtime(test_elfs[i]) > get_mtime(INITRAMFS_TAR)))
-            tests_newer = true;
+    bool any_newer = false;
+    if (!tar_exists) {
+        any_newer = true;
+    } else {
+        scan_apps();
+        for (int i = 0; i < g_naps; i++) {
+            if (file_exists(g_apps[i].elf) &&
+                get_mtime(g_apps[i].elf) > get_mtime(INITRAMFS_TAR)) {
+                any_newer = true; break;
+            }
+        }
     }
-    if (tar_exists && !elf_newer && !target_newer && !tests_newer) {
+    if (tar_exists && !any_newer) {
         print_color(COLOR_GREEN, "[initramfs] %s is up to date", INITRAMFS_TAR);
         return true;
     }
@@ -389,58 +371,77 @@ bool build_initramfs(void) {
     if (motd) {
         fprintf(motd,
             "\n"
-            "  ██████╗███████╗██████╗ ██╗   ██╗██╗   ██╗███████╗\n"
-            " ██╔════╝██╔════╝██╔══██╗██║   ██║██║   ██║██╔════╝\n"
-            " ██║     █████╗  ██████╔╝██║   ██║██║   ██║███████╗\n"
-            " ██║     ██╔══╝  ██╔══██╗╚██╗ ██╔╝██║   ██║╚════██║\n"
-            " ╚██████╗███████╗██║  ██║ ╚████╔╝ ╚██████╔╝███████║\n"
-            "  ╚═════╝╚══════╝╚═╝  ╚═╝  ╚═══╝   ╚═════╝ ╚══════╝\n"
-            "                                            " VERSION "\n"
+            " +-+-+-+-+-+-+-+\n"
+            " |C|E|R|V|U|S|!|\n"
+            " +-+-+-+-+-+-+-+\n"
+            "\n"
+            " Cervus OS " VERSION "\n"
+            "\n"
+            " Type \'help\' to see available commands.\n"
             "\n");
         fclose(motd);
     }
 
-    if (file_exists(HELLO_ELF)) {
-        if (cmd_run(false, "cp %s %s/bin/init", HELLO_ELF, INITRAMFS_ROOTFS) != 0) {
-            print_color(COLOR_RED, "[initramfs] Failed to copy hello.elf -> bin/init");
+    if (file_exists(SHELL_ELF)) {
+        if (cmd_run(false, "cp %s %s/bin/init", SHELL_ELF, INITRAMFS_ROOTFS) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy shell.elf -> bin/init");
             return false;
         }
-        print_color(COLOR_GREEN, "[initramfs] hello.elf -> rootfs/bin/init");
+        cmd_run(false, "cp %s %s/bin/shell", SHELL_ELF, INITRAMFS_ROOTFS);
+        print_color(COLOR_GREEN, "[initramfs] shell.elf -> /bin/init + /bin/shell");
     } else {
-        print_color(COLOR_YELLOW, "[initramfs] hello.elf not found — bin/init will be empty");
+        print_color(COLOR_RED, "[initramfs] shell.elf not found — boot will drop to nothing!");
         FILE *stub = fopen(INITRAMFS_ROOTFS "/bin/.keep", "w");
         if (stub) fclose(stub);
     }
 
-    if (file_exists(EXECVE_TARGET_ELF)) {
-        if (cmd_run(false, "cp %s %s/bin/target", EXECVE_TARGET_ELF, INITRAMFS_ROOTFS) != 0) {
-            print_color(COLOR_RED, "[initramfs] Failed to copy execve_target.elf -> bin/target");
-            return false;
+    ensure_dir(INITRAMFS_ROOTFS "/apps");
+    scan_apps();
+    for (int i = 0; i < g_naps; i++) {
+        if (strcmp(g_apps[i].name, "shell") == 0) continue;
+        if (!file_exists(g_apps[i].elf)) continue;
+        char dst[512];
+        snprintf(dst, sizeof(dst), "%s/apps/%s", INITRAMFS_ROOTFS, g_apps[i].name);
+        if (cmd_run(false, "cp %s %s", g_apps[i].elf, dst) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy %s", g_apps[i].elf);
+        } else {
+            print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/apps/%s",
+                        g_apps[i].elf, g_apps[i].name);
         }
-        print_color(COLOR_GREEN, "[initramfs] execve_target.elf -> rootfs/bin/target");
-    } else {
-        print_color(COLOR_YELLOW, "[initramfs] execve_target.elf not found — skipping /bin/target");
     }
 
-    struct { const char *elf; const char *name; } tests[] = {
-        { TEST_PROCESS_ELF, "test_process" },
-        { TEST_FILES_ELF,   "test_files"   },
-        { TEST_PIPE_ELF,    "test_pipe"    },
-        { TEST_EXECVE_ELF,  "test_execve"  },
-        { TEST_MEM_ELF,     "test_mem"     },
-        { NULL, NULL }
-    };
-    for (int i = 0; tests[i].elf; i++) {
-        if (file_exists(tests[i].elf)) {
-            char dst[256];
-            snprintf(dst, sizeof(dst), "%s/bin/%s", INITRAMFS_ROOTFS, tests[i].name);
-            if (cmd_run(false, "cp %s %s", tests[i].elf, dst) != 0) {
-                print_color(COLOR_RED, "[initramfs] Failed to copy %s", tests[i].elf);
-            } else {
-                print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/%s",
-                            tests[i].elf, tests[i].name);
-            }
-        }
+    FILE *readme = fopen(INITRAMFS_ROOTFS "/etc/readme.txt", "w");
+    if (readme) {
+        fprintf(readme,
+            "Cervus OS v0.0.1\n"
+            "================\n"
+            "\n"
+            "This is Cervus - a hobby x86_64 OS written in C.\n"
+            "With Limine Bootloader.\n"
+            "\n"
+            "Shell commands:\n"
+            "  help, ls, cat, cd, pwd\n"
+            "  meminfo, cpuinfo, uname, clear, echo\n"
+            "\n"
+            "Source: https://github.com/VeoQeo/Cervus\n"
+        );
+        fclose(readme);
+        print_color(COLOR_GREEN, "[initramfs] created /etc/readme.txt");
+    }
+
+    FILE *welcome = fopen(INITRAMFS_ROOTFS "/etc/welcome.txt", "w");
+    if (welcome) {
+        fprintf(welcome,
+            "Welcome to Cervus Shell!\n"
+            "\n"
+            "Tips:\n"
+            "  - Use arrow keys to move cursor within a command\n"
+            "  - Use Up/Down to browse command history (max 20)\n"
+            "  - Type 'ls' to list files, 'cat <file>' to read .txt files\n"
+            "  - Binaries are in /bin and /apps\n"
+        );
+        fclose(welcome);
+        print_color(COLOR_GREEN, "[initramfs] created /etc/welcome.txt");
     }
 
     print_color(COLOR_CYAN, "[initramfs] Packing %s...", INITRAMFS_TAR);
@@ -508,9 +509,7 @@ bool compile_kernel(void) {
     ensure_linker_script();
     if (!setup_dependencies()) return false;
 
-    if (!build_hello_elf()) return false;
-    if (!build_execve_target()) return false;
-    if (!build_test_suite()) return false;
+    if (!build_all_apps()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -637,12 +636,12 @@ bool create_iso(void) {
 
     cmd_run(false, "cp bin/kernel iso_root/boot/kernel");
 
-    bool has_elf = file_exists(HELLO_ELF);
+    bool has_elf = file_exists(SHELL_ELF);
     if (has_elf) {
-        cmd_run(false, "cp %s iso_root/boot/hello.elf", HELLO_ELF);
-        print_color(COLOR_GREEN, "[module 0] hello.elf -> iso_root/boot/hello.elf");
+        cmd_run(false, "cp %s iso_root/boot/shell.elf", SHELL_ELF);
+        print_color(COLOR_GREEN, "[module 0] shell.elf -> iso_root/boot/shell.elf");
     } else {
-        print_color(COLOR_YELLOW, "[module 0] hello.elf not found — booting without ELF module");
+        print_color(COLOR_RED, "[module 0] shell.elf not found — boot will fail!");
     }
 
     bool has_initramfs = !ARG_NO_INITRAMFS && file_exists(INITRAMFS_TAR);
@@ -669,9 +668,9 @@ bool create_iso(void) {
 
     if (has_elf) {
         fprintf(f,
-            "    module_path: boot():/boot/hello.elf\n"
+            "    module_path: boot():/boot/shell.elf\n"
             "    module_cmdline: init\n");
-        print_color(COLOR_GREEN, "[limine.conf] module 0: hello.elf (init)");
+        print_color(COLOR_GREEN, "[limine.conf] module 0: shell.elf (init)");
     }
 
     if (has_initramfs) {
@@ -944,6 +943,7 @@ int main(int argc, char **argv) {
 
     if (strcmp(command, "clean") == 0 || strcmp(command, "gitclean") == 0) {
         for (int i = 0; DIRS_TO_CLEAN[i];  i++) rm_rf(DIRS_TO_CLEAN[i]);
+        clean_apps_elfs();
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
         cmd_run(false, "rm -f temp_* 2>/dev/null");
