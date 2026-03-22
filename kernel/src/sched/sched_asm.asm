@@ -12,17 +12,17 @@ TASK_ENTRY_OFFSET            equ 120
 TASK_ARG_OFFSET              equ 128
 TASK_USER_RSP_OFFSET         equ 144
 TASK_CR3_OFFSET              equ 24
-TASK_USER_SAVED_RIP_OFFSET   equ 264
-TASK_USER_SAVED_RBP_OFFSET   equ 272
-TASK_USER_SAVED_RBX_OFFSET   equ 280
-TASK_USER_SAVED_R12_OFFSET   equ 288
-TASK_USER_SAVED_R13_OFFSET   equ 296
-TASK_USER_SAVED_R14_OFFSET   equ 304
-TASK_USER_SAVED_R15_OFFSET   equ 312
-TASK_USER_SAVED_R11_OFFSET   equ 320
+TASK_USER_SAVED_RIP_OFFSET   equ 272
+TASK_USER_SAVED_RBP_OFFSET   equ 280
+TASK_USER_SAVED_RBX_OFFSET   equ 288
+TASK_USER_SAVED_R12_OFFSET   equ 296
+TASK_USER_SAVED_R13_OFFSET   equ 304
+TASK_USER_SAVED_R14_OFFSET   equ 312
+TASK_USER_SAVED_R15_OFFSET   equ 320
+TASK_USER_SAVED_R11_OFFSET   equ 328
 
 PERCPU_CURRENT_TASK equ 24
-TASK_ON_CPU_OFFSET  equ 0x150
+TASK_ON_CPU_OFFSET  equ 0x158
 
 context_switch:
     push rbp
@@ -32,7 +32,16 @@ context_switch:
     push r14
     push r15
 
+    mov rax, [rdi + 136]
+    test rax, rax
+    jz .save_rsp
+    mov r11, rsp
+    sub r11, rax
+    cmp r11, 32768
+    ja .skip_save_rsp
+.save_rsp:
     mov [rdi], rsp
+.skip_save_rsp:
 
     mfence
 

@@ -79,6 +79,7 @@ void lapic_timer_stop(void);
 uint32_t lapic_timer_get_current(void);
 void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector);
 void lapic_send_ipi_to_all_but_self(uint8_t vector);
+void lapic_send_nmi_to_all_but_self(void);
 
 void ioapic_write(uintptr_t base, uint32_t reg, uint32_t value);
 uint32_t ioapic_read(uintptr_t base, uint32_t reg);
@@ -92,6 +93,7 @@ void apic_timer_calibrate(void);
 
 uint64_t hpet_read_counter(void);
 uint64_t hpet_get_frequency(void);
+uint64_t hpet_elapsed_ns(void);
 void hpet_sleep_ns(uint64_t nanoseconds);
 void hpet_sleep_us(uint64_t microseconds);
 void hpet_sleep_ms(uint64_t milliseconds);
@@ -100,6 +102,7 @@ extern uintptr_t lapic_base;
 extern uintptr_t ioapic_base;
 extern uintptr_t hpet_base;
 extern uint32_t hpet_period;
+extern uint64_t g_hpet_boot_counter;
 
 void ipi_reschedule_all(void);
 void ipi_reschedule_cpu(uint32_t lapic_id);

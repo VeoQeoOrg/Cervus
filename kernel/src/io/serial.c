@@ -41,6 +41,11 @@ void serial_set_default_port(uint16_t port) {
     default_serial_port = port;
 }
 
+void serial_force_unlock(void) {
+    __sync_lock_release(&serial_lock);
+    asm volatile("sti");
+}
+
 int serial_received_port(uint16_t port) {
     return inb(port + 5) & 1;
 }

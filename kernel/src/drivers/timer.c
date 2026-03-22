@@ -10,6 +10,10 @@
 #include <stdlib.h>
 
 static volatile uint64_t ticks = 0;
+volatile uint32_t g_ctrlc_pending = 0;
+extern task_t* task_find_foreground(void);
+extern void    task_kill(task_t* target);
+extern void    sched_wakeup_sleepers(uint64_t now_ns);
 
 DEFINE_IRQ(0x20, timer_handler)
 {
@@ -20,20 +24,31 @@ DEFINE_IRQ(0x20, timer_handler)
     task_t* current = current_task[cpu];
     percpu_t* pc = get_percpu();
 
-    if (pc && pc->deferred_free_task) {
-        void *snap = pc->deferred_free_task;
-        task_t* dead = (task_t*)__sync_val_compare_and_swap(
-                            (void**)&pc->deferred_free_task, snap, NULL);
-        if (dead) {
-            uintptr_t sb = dead->stack_base;
-            dead->stack_base = 0;
-            asm volatile("" ::: "memory");
-            if (sb)
-                pmm_free((void*)sb, KERNEL_STACK_PAGES);
+    if (cpu == 0 && g_ctrlc_pending) {
+        g_ctrlc_pending = 0;
+        task_t *fg = task_find_foreground();
+        if (fg) {
+            task_kill(fg);
+        } else {
+            extern void kb_buf_push(char c);
+            extern bool kb_buf_has_ctrlc(void);
+            if (!kb_buf_has_ctrlc())
+                kb_buf_push(0x03);
         }
     }
 
+    if (cpu == 0 && hpet_is_available()) {
+        sched_wakeup_sleepers(hpet_elapsed_ns());
+    }
+
     if (!current) return;
+
+    if (current->pending_kill && pc) {
+        current->time_slice = 0;
+        pc->need_resched = true;
+        (void)frame;
+        return;
+    }
 
     if (current->time_slice > 0)
         current->time_slice--;

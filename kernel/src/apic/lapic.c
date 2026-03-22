@@ -117,6 +117,19 @@ void lapic_send_ipi_to_all_but_self(uint8_t vector)
     serial_printf("Broadcast IPI (all but self) vector 0x%02x sent\n", vector);
 }
 
+void lapic_send_nmi_to_all_but_self(void)
+{
+    uint32_t icr_low = 0x02 | (0x4 << 8) | (1 << 14) | (3 << 18);
+
+    lapic_write(0x310, 0);
+    lapic_write(0x300, icr_low);
+
+    for (int _w = 0; _w < 10000 && (lapic_read(0x300) & (1 << 12)); _w++)
+        asm volatile ("pause");
+
+    serial_printf("NMI broadcast (all but self) sent\n");
+}
+
 void ipi_reschedule_all(void) {
     lapic_send_ipi_to_all_but_self(IPI_RESCHEDULE_VECTOR);
 }

@@ -1,4 +1,7 @@
 #include "../../include/drivers/ps2.h"
+#include "../../include/sched/sched.h"
+#include "../../include/fs/devfs.h"
+#include "../../include/drivers/timer.h"
 #include "../../include/interrupts/interrupts.h"
 #include "../../include/apic/apic.h"
 #include "../../include/io/ports.h"
@@ -171,7 +174,7 @@ static char scancode_to_char(uint8_t sc) {
     return use_upper ? sc_upper[sc] : sc_lower[sc];
 }
 
-static void kb_buf_push(char c) {
+void kb_buf_push(char c) {
     uint8_t next = (kb_buf.tail + 1) % KB_BUF_SIZE;
     if (next != kb_buf.head) {
         kb_buf.buf[kb_buf.tail] = c;
@@ -253,6 +256,11 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
         if (base >= 'a' && base <= 'z') {
             uint8_t ctrl_char = (uint8_t)(base - 'a' + 1);
             serial_printf("[PS2] ctrl char generated: 0x%02x\n", ctrl_char);
+            if (ctrl_char == 0x03) {
+                g_ctrlc_pending = 1;
+                lapic_eoi();
+                return;
+            }
             kb_buf_push((char)ctrl_char);
             lapic_eoi();
             return;

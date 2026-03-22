@@ -338,9 +338,20 @@ static void run_command(char *line){
     int status=0;waitpid(child,&status,0);}
 
 __attribute__((naked)) void _start(void){
-    asm volatile("mov %%rsp,%%rdi\nand $-16,%%rsp\ncall _start_main\nud2\n":::"memory");}
+    asm volatile(
+        "mov %%rsp, %%rdi\n"
+        "and $-16, %%rsp\n"
+        "call _start_main\n"
+        "xor %%rdi, %%rdi\n"
+        "xor %%rax, %%rax\n"
+        "syscall\n"
+        ".byte 0xf4\n"
+        "jmp . - 1\n"
+        ::: "memory"
+    );
+}
 
-void _start_main(uint64_t *initial_rsp){
+__attribute__((noreturn)) void _start_main(uint64_t *initial_rsp){
     (void)initial_rsp;
     scpy(cwd,"/",sizeof(cwd));
     print_motd();
@@ -348,10 +359,15 @@ void _start_main(uint64_t *initial_rsp){
     for(;;){
         print_prompt();
         int n=readline_edit(line,LINE_MAX);
-        if(n<0){ws("\nlogout\n");break;}
+        if(n<0){
+            ws("\nSession ended. Restarting shell...\n");
+            scpy(cwd,"/",sizeof(cwd));
+            print_motd();
+            continue;
+        }
         int len=slen(line);
         while(len>0&&(line[len-1]==' '||line[len-1]=='\t'))line[--len]='\0';
         if(len>0){hist_push(line);run_command(line);}
     }
-    exit(0);
+    __builtin_unreachable();
 }

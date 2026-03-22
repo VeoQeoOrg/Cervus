@@ -73,69 +73,79 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
     uintptr_t page_end   = page_align_up(virt_end);
     size_t    page_count = (page_end - page_start) / PAGE_SIZE;
 
-    void* phys_pages = pmm_alloc_zero(page_count);
-    if (!phys_pages) {
-        serial_printf("[ELF] pmm_alloc_zero(%zu) failed for vaddr 0x%llx\n",
-                      page_count, virt_start);
-        return ELF_ERR_NO_MEM;
+    if (phdr->p_filesz > 0 && phdr->p_offset + phdr->p_filesz > file_size) {
+        serial_printf("[ELF] Segment data out of file bounds\n");
+        return ELF_ERR_TOO_SMALL;
     }
 
-    uint8_t*  mapped_virt = (uint8_t*)pmm_phys_to_virt(pmm_virt_to_phys(phys_pages));
-    size_t    page_offset = virt_start - page_start;
-
-    if (phdr->p_filesz > 0) {
-        if (phdr->p_offset + phdr->p_filesz > file_size) {
-            serial_printf("[ELF] Segment data out of file bounds\n");
-            pmm_free(phys_pages, page_count);
-            return ELF_ERR_TOO_SMALL;
-        }
-        memcpy(mapped_virt + page_offset, data + phdr->p_offset, phdr->p_filesz);
-    }
-
-    uint64_t  vmm_flags = phdr_flags_to_vmm(phdr->p_flags);
-    uintptr_t phys_base = pmm_virt_to_phys(phys_pages);
+    uint64_t  vmm_flags  = phdr_flags_to_vmm(phdr->p_flags);
 
     for (size_t i = 0; i < page_count; i++) {
-        uintptr_t virt = page_start + i * PAGE_SIZE;
-        uintptr_t phys = phys_base  + i * PAGE_SIZE;
-        if (!vmm_map_page(map, virt, phys, vmm_flags)) {
-            serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
+        void* page = pmm_alloc_zero(1);
+        if (!page) {
+            serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n",
+                          i, virt_start);
             for (size_t j = 0; j < i; j++)
                 vmm_unmap_page(map, page_start + j * PAGE_SIZE);
-            pmm_free(phys_pages, page_count);
+            return ELF_ERR_NO_MEM;
+        }
+
+        if (phdr->p_filesz > 0) {
+            uintptr_t pv_start = page_start + i * PAGE_SIZE;
+            uintptr_t pv_end   = pv_start + PAGE_SIZE;
+            uintptr_t data_end = virt_start + phdr->p_filesz;
+            uintptr_t cp_start = (pv_start > virt_start) ? pv_start : virt_start;
+            uintptr_t cp_end   = (pv_end   < data_end)   ? pv_end   : data_end;
+
+            if (cp_start < cp_end) {
+                size_t dst_off = cp_start - pv_start;
+                size_t src_off = cp_start - virt_start;
+                memcpy((uint8_t*)page + dst_off,
+                       data + phdr->p_offset + src_off,
+                       cp_end - cp_start);
+            }
+        }
+
+        uintptr_t phys = pmm_virt_to_phys(page);
+        uintptr_t virt = page_start + i * PAGE_SIZE;
+        if (!vmm_map_page(map, virt, phys, vmm_flags)) {
+            serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
+            pmm_free(page, 1);
+            for (size_t j = 0; j < i; j++)
+                vmm_unmap_page(map, page_start + j * PAGE_SIZE);
             return ELF_ERR_MAP_FAIL;
         }
     }
 
     serial_printf("[ELF] Segment loaded: virt=0x%llx-0x%llx flags=%s%s%s "
-                 "phys=0x%llx pages=%zu\n",
+                 "phys=<per-page> pages=%zu\n",
                  virt_start, virt_end,
                  (phdr->p_flags & PF_R) ? "R" : "-",
                  (phdr->p_flags & PF_W) ? "W" : "-",
                  (phdr->p_flags & PF_X) ? "X" : "-",
-                 phys_base, page_count);
+                 page_count);
     return ELF_OK;
 }
 
 static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
-    size_t    page_count = page_align_up(stack_size) / PAGE_SIZE;
-    void*     phys       = pmm_alloc_zero(page_count);
-    if (!phys) {
-        serial_printf("[ELF] Stack alloc failed (%zu pages)\n", page_count);
-        return 0;
-    }
-
+    size_t    page_count   = page_align_up(stack_size) / PAGE_SIZE;
     uintptr_t stack_bottom = ELF_USER_STACK_TOP - page_count * PAGE_SIZE;
-    uintptr_t phys_base    = pmm_virt_to_phys(phys);
     uint64_t  flags        = VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC;
 
     for (size_t i = 0; i < page_count; i++) {
-        if (!vmm_map_page(map, stack_bottom + i * PAGE_SIZE,
-                               phys_base    + i * PAGE_SIZE, flags)) {
-            serial_printf("[ELF] Stack map failed at page %zu\n", i);
+        void* page = pmm_alloc_zero(1);
+        if (!page) {
+            serial_printf("[ELF] Stack alloc failed at page %zu\n", i);
             for (size_t j = 0; j < i; j++)
                 vmm_unmap_page(map, stack_bottom + j * PAGE_SIZE);
-            pmm_free(phys, page_count);
+            return 0;
+        }
+        if (!vmm_map_page(map, stack_bottom + i * PAGE_SIZE,
+                               pmm_virt_to_phys(page), flags)) {
+            serial_printf("[ELF] Stack map failed at page %zu\n", i);
+            pmm_free(page, 1);
+            for (size_t j = 0; j < i; j++)
+                vmm_unmap_page(map, stack_bottom + j * PAGE_SIZE);
             return 0;
         }
     }
@@ -216,7 +226,7 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
 void elf_unload(elf_load_result_t* result) {
     if (!result) return;
     if (result->pagemap) {
-        free(result->pagemap);
+        vmm_free_pagemap(result->pagemap);
         result->pagemap = NULL;
     }
     serial_printf("[ELF] Process unloaded.\n");

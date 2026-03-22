@@ -268,18 +268,38 @@ static int scan_apps(void) {
     return g_naps;
 }
 
+static const char *FPU_APPS[] = {
+    "calc.c", NULL
+};
+
+static bool app_needs_fpu(const char *src) {
+    const char *base = strrchr(src, '/');
+    base = base ? base + 1 : src;
+    for (int i = 0; FPU_APPS[i]; i++)
+        if (strcmp(base, FPU_APPS[i]) == 0) return true;
+    return false;
+}
+
 static bool build_one_app(const app_entry_t *e) {
     if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
         print_color(COLOR_GREEN, "[ELF] %s is up to date", e->elf);
         return true;
     }
     print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", e->src, e->elf);
+
+    bool fpu = app_needs_fpu(e->src);
+    const char *sse_flags = fpu
+        ? " -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2"
+        : " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2";
+
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
         " -O0 -g -I" APPS_DIR
+        "%s"
+        " -mno-red-zone"
         " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
         " -o %s %s",
-        e->elf, e->src);
+        sse_flags, e->elf, e->src);
     if (ret != 0) {
         print_color(COLOR_RED, "[ELF] Failed to compile %s", e->src);
         return false;

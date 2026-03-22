@@ -46,5 +46,6 @@ void serial_printf(const char* format, ...);
 uint16_t serial_get_default_port(void);
 
 void serial_set_default_port(uint16_t port);
+void serial_force_unlock(void);
 
 #endif

@@ -54,8 +54,11 @@ static inline pmm_block_t *_fl_first(pmm_free_list_t *fl) {
 }
 
 static pmm_block_t *_fl_find(pmm_free_list_t *fl, uintptr_t phys) {
-    for (pmm_block_t *b = fl->head.next; b != &fl->head; b = b->next)
+    size_t limit = g_buddy.total_pages + 16;
+    for (pmm_block_t *b = fl->head.next; b != &fl->head; b = b->next) {
         if (_block_phys(b) == phys) return b;
+        if (limit-- == 0) return NULL;
+    }
     return NULL;
 }
 
@@ -80,9 +83,11 @@ static uintptr_t _buddy_alloc_order(int order) {
 }
 
 static void _buddy_free_order(uintptr_t phys, int order) {
+    if (phys < PMM_FREE_MIN_PHYS) return;
     while (order < PMM_MAX_ORDER) {
         uintptr_t buddy_phys = phys ^ ((uintptr_t)PAGE_SIZE << order);
 
+        if (buddy_phys < PMM_FREE_MIN_PHYS) break;
         if (buddy_phys < g_buddy.mem_start || buddy_phys >= g_buddy.mem_end)
             break;
 
@@ -97,6 +102,11 @@ static void _buddy_free_order(uintptr_t phys, int order) {
     }
     _fl_push(&g_buddy.orders[order], _phys_to_block(phys), order);
     g_buddy.free_pages += (size_t)1 << order;
+}
+
+static void _buddy_free_nocoalesce(uintptr_t phys) {
+    _fl_push(&g_buddy.orders[0], _phys_to_block(phys), 0);
+    g_buddy.free_pages += 1;
 }
 
 void pmm_init(struct limine_memmap_response *memmap,
@@ -130,6 +140,11 @@ void pmm_init(struct limine_memmap_response *memmap,
         uintptr_t base = _align_up(e->base, PAGE_SIZE);
         uintptr_t end  = (e->base + e->length) & ~(PAGE_SIZE - 1);
 
+        if (base < PMM_FREE_MIN_PHYS) {
+            base = PMM_FREE_MIN_PHYS;
+            if (base >= end) continue;
+        }
+
         while (base < end) {
             size_t rem = (end - base) >> PAGE_SHIFT;
             int order  = PMM_MAX_ORDER;
@@ -149,6 +164,9 @@ void pmm_init(struct limine_memmap_response *memmap,
                   g_buddy.total_pages, g_buddy.free_pages);
 }
 
+static volatile uint64_t g_pmm_alloc_count = 0;
+static volatile uint64_t g_pmm_free_count  = 0;
+
 void *pmm_alloc(size_t pages) {
     if (!pages) return NULL;
     int order = _pages_to_order(pages);
@@ -157,8 +175,24 @@ void *pmm_alloc(size_t pages) {
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     spinlock_acquire(&g_pmm_lock);
     uintptr_t phys = _buddy_alloc_order(order);
+    size_t free_after = g_buddy.free_pages;
     spinlock_release(&g_pmm_lock);
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+    if (phys) {
+        if (phys < PMM_FREE_MIN_PHYS) {
+            serial_printf("[PMM_BUG] alloc returned low phys=0x%llx — discarding (should not happen after pmm_init fix)\n",
+                          (unsigned long long)phys);
+            phys = 0;
+        } else {
+            __atomic_fetch_add(&g_pmm_alloc_count, (size_t)1 << order, __ATOMIC_RELAXED);
+        }
+    }
+    if (!phys) {
+        serial_printf("[PMM_OOM] alloc FAILED pages=%zu order=%d free=%zu allocs=%llu frees=%llu\n",
+                      pages, order, free_after,
+                      (unsigned long long)g_pmm_alloc_count,
+                      (unsigned long long)g_pmm_free_count);
+    }
     return phys ? (void *)(phys + g_buddy.hhdm_offset) : NULL;
 }
 
@@ -166,9 +200,8 @@ void *pmm_alloc_zero(size_t pages) {
     if (!pages) return NULL;
     int order = _pages_to_order(pages);
     if (order < 0) return NULL;
-    size_t actual_pages = (size_t)1 << order;
     void *p = pmm_alloc(pages);
-    if (p) memset(p, 0, actual_pages * PAGE_SIZE);
+    if (p) memset(p, 0, pages * PAGE_SIZE);
     return p;
 }
 
@@ -208,12 +241,54 @@ void *pmm_alloc_aligned(size_t pages, size_t alignment) {
 void pmm_free(void *addr, size_t pages) {
     if (!addr || !pages) return;
     uintptr_t phys = (uintptr_t)addr - g_buddy.hhdm_offset;
+    if (phys < g_buddy.mem_start || phys >= g_buddy.mem_end) {
+        serial_printf("[PMM_FREE_BUG] out-of-range addr=%p phys=0x%llx pages=%zu\n",
+                      addr, (unsigned long long)phys, pages);
+        return;
+    }
+    if (phys < 0x100000ULL) {
+        serial_printf("[PMM_FREE_BUG] low-phys addr=%p phys=0x%llx pages=%zu\n",
+                      addr, (unsigned long long)phys, pages);
+        return;
+    }
     int order = _pages_to_order(pages);
-    if (order < 0) return;
+    if (order < 0) { serial_printf("[PMM_FREE] bad order pages=%zu\n", pages); return; }
+
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     spinlock_acquire(&g_pmm_lock);
+
+    pmm_block_t *existing = _fl_find(&g_buddy.orders[order], phys);
+    if (existing) {
+        serial_printf("[PMM_DOUBLE_FREE] addr=%p phys=0x%llx pages=%zu order=%d ALREADY FREE!\n",
+                      addr, (unsigned long long)phys, pages, order);
+        spinlock_release(&g_pmm_lock);
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        return;
+    }
+
+    size_t free_before = g_buddy.free_pages;
     _buddy_free_order(phys, order);
+    size_t free_after = g_buddy.free_pages;
+    __atomic_fetch_add(&g_pmm_free_count, (size_t)1 << order, __ATOMIC_RELAXED);
+
+    if (free_after <= free_before) {
+        serial_printf("[PMM_FREE_BUG] free_pages didn't grow: before=%zu after=%zu phys=0x%llx\n",
+                      free_before, free_after, (unsigned long long)phys);
+    }
+
+    spinlock_release(&g_pmm_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+}
+
+void pmm_free_single(void *addr) {
+    if (!addr) return;
+    uintptr_t phys = (uintptr_t)addr - g_buddy.hhdm_offset;
+    if (phys < g_buddy.mem_start || phys >= g_buddy.mem_end) return;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_pmm_lock);
+    _buddy_free_nocoalesce(phys);
     spinlock_release(&g_pmm_lock);
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }

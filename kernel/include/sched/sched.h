@@ -100,6 +100,8 @@ typedef struct task {
     struct task* sibling;
 
     int exit_code;
+    volatile bool pending_kill;
+    uint8_t _pad4[3];
 
     uintptr_t brk_start;
     uintptr_t brk_current;
@@ -107,8 +109,10 @@ typedef struct task {
     vmm_pagemap_t* pagemap;
 
     uint32_t flags;
-
     uint32_t wait_for_pid;
+
+    uint64_t wakeup_time_ns;
+
     uint64_t user_saved_rip;
     uint64_t user_saved_rbp;
     uint64_t user_saved_rbx;
@@ -136,8 +140,8 @@ _Static_assert(offsetof(task_t, entry)          == 120, "task_t: entry — updat
 _Static_assert(offsetof(task_t, arg)            == 128, "task_t: arg   — update TASK_ARG_OFFSET");
 _Static_assert(offsetof(task_t, stack_base)     == 136, "task_t: stack_base");
 _Static_assert(offsetof(task_t, user_rsp)       == 144, "task_t: user_rsp — update TASK_USER_RSP_OFFSET");
-_Static_assert(offsetof(task_t, user_saved_rip) == 264, "task_t: user_saved_rip");
-_Static_assert(offsetof(task_t, user_saved_rbp) == 272, "task_t: user_saved_rbp — update TASK_USER_SAVED_RBP_OFFSET");
+_Static_assert(offsetof(task_t, user_saved_rip) == 272, "task_t: user_saved_rip");
+_Static_assert(offsetof(task_t, user_saved_rbp) == 280, "task_t: user_saved_rbp — update TASK_USER_SAVED_RBP_OFFSET");
 
 extern task_t* ready_queues[MAX_PRIORITY + 1];
 extern task_t* current_task[MAX_CPUS];
@@ -158,8 +162,15 @@ task_t* task_fork(task_t* parent);
 task_t* task_find_by_pid(uint32_t pid);
 uint32_t task_alloc_pid(void);
 void    task_reparent(task_t* child, task_t* new_parent);
+
+#include "spinlock.h"
+extern spinlock_t children_lock;
 void    task_wakeup_waiters(uint32_t pid);
 void    task_unblock(task_t* t);
+void    sched_wakeup_sleepers(uint64_t now_ns);
+task_t* task_find_foreground(void);
+extern volatile uint32_t g_foreground_pid;
+void task_set_foreground(uint32_t pid);
 
 extern void context_switch(task_t* old, task_t* next, task_t** current_task_slot, uint64_t new_cr3);
 extern void first_task_start(task_t* task);

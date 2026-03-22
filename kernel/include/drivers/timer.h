@@ -12,4 +12,6 @@ void timer_sleep_ms(uint64_t milliseconds);
 void timer_sleep_us(uint64_t microseconds);
 void timer_sleep_ns(uint64_t nanoseconds);
 
+extern volatile uint32_t g_ctrlc_pending;
+
 #endif

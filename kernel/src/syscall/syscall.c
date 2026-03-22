@@ -12,6 +12,9 @@
 #include "../../include/io/serial.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/elf/elf.h"
+#include "../../include/apic/apic.h"
+#include "../../include/memory/pmm.h"
+#include "../../include/panic/panic.h"
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -134,7 +137,17 @@ static int64_t sys_task_kill(uint64_t pid_arg) {
 static int64_t sys_fork(void) {
     task_t*parent=cur_task(); if(!parent) return -ESRCH;
     percpu_t*pc=get_percpu();
-    if(pc) parent->user_rsp=pc->syscall_user_rsp;
+    if(pc) {
+        parent->user_rsp       = pc->syscall_user_rsp;
+        parent->user_saved_rip = pc->user_saved_rip;
+        parent->user_saved_rbp = pc->user_saved_rbp;
+        parent->user_saved_rbx = pc->user_saved_rbx;
+        parent->user_saved_r12 = pc->user_saved_r12;
+        parent->user_saved_r13 = pc->user_saved_r13;
+        parent->user_saved_r14 = pc->user_saved_r14;
+        parent->user_saved_r15 = pc->user_saved_r15;
+        parent->user_saved_r11 = pc->user_saved_r11;
+    }
     task_t*child=task_fork(parent); if(!child) return -ENOMEM;
     serial_printf("[SYSCALL] fork: parent pid=%u → child pid=%u\n",
                   parent->pid,child->pid);
@@ -155,9 +168,30 @@ retry:;
     if (!zombie) {
         if (flags & WNOHANG) return 0;
         percpu_t*pc2=get_percpu();
-        if(pc2) parent->user_rsp=pc2->syscall_user_rsp;
+        if(pc2) {
+            parent->user_rsp       = pc2->syscall_user_rsp;
+            parent->user_saved_rip = pc2->user_saved_rip;
+            parent->user_saved_rbp = pc2->user_saved_rbp;
+            parent->user_saved_rbx = pc2->user_saved_rbx;
+            parent->user_saved_r12 = pc2->user_saved_r12;
+            parent->user_saved_r13 = pc2->user_saved_r13;
+            parent->user_saved_r14 = pc2->user_saved_r14;
+            parent->user_saved_r15 = pc2->user_saved_r15;
+            parent->user_saved_r11 = pc2->user_saved_r11;
+        }
         parent->wait_for_pid=(pid_arg==(uint64_t)-1)?(uint32_t)-1:(uint32_t)pid_arg;
         parent->runnable=false; parent->state=TASK_BLOCKED;
+        if (pid_arg != (uint64_t)-1)
+            task_set_foreground((uint32_t)pid_arg);
+
+        if (parent->rsp != 0 && parent->stack_base != 0) {
+            uintptr_t lo = parent->stack_base;
+            uintptr_t hi = parent->stack_base + 32768;
+            if (parent->rsp < lo || parent->rsp >= hi) {
+                serial_printf("[WAIT-BUG] pid=%u rsp=0x%llx OUTSIDE stack [0x%llx..0x%llx]!\n",
+                              parent->pid, parent->rsp, lo, hi);
+            }
+        }
         serial_printf("[WAIT] pid=%u blocking: user_rsp=0x%llx task_rsp=0x%llx\n",
                       parent->pid,parent->user_rsp,parent->rsp);
         sched_reschedule(); goto retry;
@@ -180,7 +214,13 @@ retry:;
 
     serial_printf("[SYSCALL] wait: parent pid=%u reaped child pid=%u\n",
                   parent->pid,zpid);
+
+    if (g_foreground_pid == zpid)
+        task_set_foreground(0);
     task_destroy(zombie);
+    serial_printf("[SYSCALL] wait: task_destroy done, returning %u\n", zpid);
+    serial_printf("[WAIT-RET] parent pid=%u user_saved_rip=0x%llx user_rsp=0x%llx\n",
+                  parent->pid, parent->user_saved_rip, parent->user_rsp);
     return (int64_t)zpid;
 }
 
@@ -198,10 +238,14 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
     size_t str_total = 0;
     for (int i = 0; i < argc; i++) str_total += strlen(argv[i]) + 1;
 
-    size_t auxv_bytes = 7 * 2 * 8;
-    size_t ptr_bytes  = (size_t)(argc + 2) * 8;
-    size_t frame_size = str_total + auxv_bytes + ptr_bytes + 64;
-    size_t frame_pages= (frame_size + 0xFFFULL) >> 12;
+    size_t n_auxv   = 6;
+    size_t ptr_count = 1
+                     + (size_t)argc
+                     + 1
+                     + 1
+                     + (n_auxv * 2);
+    size_t frame_size = str_total + ptr_count * 8 + 64;
+    size_t frame_pages = (frame_size + 0xFFFULL) >> 12;
 
     uint8_t *kbuf = (uint8_t*)malloc(frame_pages * 0x1000);
     if (!kbuf) return 0;
@@ -217,10 +261,14 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
         argv_user[i] = frame_base + str_off;
         str_off += slen;
     }
-    argv_user[argc] = 0;
 
     uint64_t frame[256];
-    int fi = 0;
+    size_t fi = 0;
+
+    frame[fi++] = (uint64_t)argc;
+    for (int i = 0; i < argc; i++) frame[fi++] = argv_user[i];
+    frame[fi++] = 0;
+    frame[fi++] = 0;
 
     frame[fi++] = AT_PHDR;   frame[fi++] = elf->load_base + 0x40;
     frame[fi++] = AT_PHENT;  frame[fi++] = 56;
@@ -228,36 +276,32 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
     frame[fi++] = AT_ENTRY;  frame[fi++] = elf->entry;
     frame[fi++] = AT_PAGESZ; frame[fi++] = 4096;
     frame[fi++] = AT_NULL;   frame[fi++] = 0;
-    frame[fi++] = 0;
-    for (int i = argc - 1; i >= 0; i--) frame[fi++] = argv_user[i];
-    frame[fi++] = (uint64_t)argc;
 
-    for (int i = 0; i < fi / 2; i++) {
-        uint64_t tmp = frame[i]; frame[i] = frame[fi-1-i]; frame[fi-1-i] = tmp;
-    }
-
-    size_t frame_bytes = (size_t)fi * 8;
+    size_t frame_bytes = fi * 8;
     size_t rsp_offset  = (frame_pages * 0x1000 - frame_bytes) & ~0xFULL;
     memcpy(kbuf + rsp_offset, frame, frame_bytes);
-
     uintptr_t new_rsp = frame_base + rsp_offset;
 
     for (size_t pi = 0; pi < frame_pages; pi++) {
         uintptr_t virt = frame_base + pi * 0x1000;
-        uintptr_t phys;
-        uint64_t  pf = 0;
+        uintptr_t phys = 0;
+        uint64_t  pf   = 0;
 
         if (!vmm_get_page_flags(map, virt, &pf) || !(pf & VMM_PRESENT)) {
             void *pg = pmm_alloc_zero(1);
             if (!pg) { free(kbuf); return 0; }
             phys = pmm_virt_to_phys(pg);
-            vmm_map_page(map, virt, phys,
-                         VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC);
+            if (!vmm_map_page(map, virt, phys,
+                              VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC)) {
+                pmm_free(pg, 1);
+                free(kbuf);
+                return 0;
+            }
         } else {
-            if (!vmm_virt_to_phys(map, virt, (void*)&phys))
+            if (!vmm_virt_to_phys(map, virt, &phys))
                 { free(kbuf); return 0; }
         }
-        memcpy(pmm_phys_to_virt((uintptr_t)phys), kbuf + pi * 0x1000, 0x1000);
+        memcpy(pmm_phys_to_virt(phys), kbuf + pi * 0x1000, 0x1000);
     }
 
     serial_printf("[EXECVE] stack built: frame_base=0x%llx rsp=0x%llx argc=%d envc=0\n",
@@ -332,7 +376,6 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
     t->pagemap    = elf.pagemap;
     t->cr3        = (uint64_t)pmm_virt_to_phys(elf.pagemap->pml4);
     t->flags     |= TASK_FLAG_OWN_PAGEMAP;
-    asm volatile("mov %0, %%cr3" :: "r"(t->cr3) : "memory");
     t->flags     &= ~TASK_FLAG_FORK;
     t->brk_start = t->brk_current = elf.load_end;
     t->brk_max   = 0x0000700000000000ULL;
@@ -357,6 +400,7 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
         pc->user_saved_r11 = 0x200;
     }
 
+    asm volatile("mfence" ::: "memory");
     vmm_switch_pagemap(t->pagemap);
     serial_printf("[EXECVE] exec ok: entry=0x%llx rsp=0x%llx name='%s'\n",
                   elf.entry, new_rsp, t->name);
@@ -773,11 +817,34 @@ static int64_t sys_munmap(uint64_t addr, uint64_t length) {
     return 0;
 }
 
-static int64_t sys_uptime(void)     { return 0; }
-static int64_t sys_sleep_ns(uint64_t ns) { (void)ns; task_yield(); return 0; }
+static int64_t sys_uptime(void)     { return (int64_t)hpet_elapsed_ns(); }
+static int64_t sys_sleep_ns(uint64_t ns) {
+    if (ns == 0) return 0;
+    if (!hpet_is_available()) {
+        task_yield();
+        return 0;
+    }
+    task_t *me = cur_task();
+    if (!me) return -ESRCH;
+
+    serial_printf("[SLEEP] pid=%u sleeping %llu ns\n", me->pid, ns);
+
+    uint64_t now = hpet_elapsed_ns();
+    me->wakeup_time_ns = now + ns;
+    me->runnable = false;
+    me->state    = TASK_BLOCKED;
+
+    sched_reschedule();
+
+    serial_printf("[SLEEP] pid=%u woke up\n", me ? me->pid : 0);
+    return 0;
+}
 static int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr) {
     (void)id; if (!ts_ptr) return -EINVAL;
-    cervus_timespec_t ts = {0,0};
+    uint64_t ns = hpet_elapsed_ns();
+    cervus_timespec_t ts;
+    ts.tv_sec  = (int64_t)(ns / 1000000000ULL);
+    ts.tv_nsec = (int64_t)(ns % 1000000000ULL);
     return copy_to_user((void*)ts_ptr, &ts, sizeof(ts));
 }
 
@@ -887,6 +954,32 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_IOPORT_WRITE] = _sys_ioport_write,
 };
 
+__attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval) {
+    task_t *t = cur_task();
+    serial_printf("[SYSRET-PANIC] Non-canonical user RIP=0x%llx before SYSRET!\n"
+                  "  syscall retval=0x%llx task=%s pid=%u\n"
+                  "  user_saved_rip=0x%llx user_rsp=0x%llx cr3=0x%llx\n",
+                  bad_rip, retval,
+                  t ? t->name : "?", t ? t->pid : 0,
+                  t ? t->user_saved_rip : 0,
+                  t ? t->user_rsp : 0,
+                  t ? t->cr3 : 0);
+    kernel_panic("SYSRET: non-canonical user RIP — would have caused triple fault");
+}
+
+__attribute__((noreturn)) void sysret_bad_rsp_panic(uint64_t bad_rsp, uint64_t user_rip) {
+    task_t *t = cur_task();
+    serial_printf("[SYSRET-PANIC] Non-canonical user RSP=0x%llx before SYSRET!\n"
+                  "  user_rip=0x%llx task=%s pid=%u\n"
+                  "  user_saved_rip=0x%llx user_rsp=0x%llx cr3=0x%llx\n",
+                  bad_rsp, user_rip,
+                  t ? t->name : "?", t ? t->pid : 0,
+                  t ? t->user_saved_rip : 0,
+                  t ? t->user_rsp : 0,
+                  t ? t->cr3 : 0);
+    kernel_panic("SYSRET: non-canonical user RSP — would have caused triple fault");
+}
+
 int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t user_rip) {
     (void)user_rip;
     task_t *t = cur_task();
@@ -908,7 +1001,15 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, ui
         serial_printf("[SYSCALL] unknown nr=%llu\n", nr);
         return -ENOSYS;
     }
-    return syscall_table[nr](a1, a2, a3, a4, a5, 0);
+
+    int64_t ret = syscall_table[nr](a1, a2, a3, a4, a5, 0);
+
+    task_t *me = cur_task();
+    if (me && me->pending_kill) {
+        me->pending_kill = false;
+        task_exit();
+    }
+    return ret;
 }
 
 void syscall_init(void) {

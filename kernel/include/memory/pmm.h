@@ -17,6 +17,8 @@
 #define SLAB_MAX_SIZE      4096
 #define SLAB_NUM_CACHES    10
 
+#define PMM_FREE_MIN_PHYS 0x100000ULL
+
 typedef struct pmm_block {
     struct pmm_block *next;
     struct pmm_block *prev;
@@ -63,6 +65,7 @@ void *pmm_alloc(size_t pages);
 void *pmm_alloc_zero(size_t pages);
 void *pmm_alloc_aligned(size_t pages, size_t alignment);
 void  pmm_free(void *addr, size_t pages);
+void  pmm_free_single(void *addr);
 
 void     *pmm_phys_to_virt(uintptr_t phys);
 uintptr_t pmm_virt_to_phys(void *vaddr);
