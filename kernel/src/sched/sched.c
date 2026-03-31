@@ -1,5 +1,5 @@
-#include "../include/sched/sched.h"
 #include "../include/sched/capabilities.h"
+#include "../include/sched/sched.h"
 #include "../include/sched/spinlock.h"
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
@@ -19,7 +19,6 @@
 task_t* ready_queues[MAX_PRIORITY + 1] = {0};
 task_t* current_task[MAX_CPUS] = {0};
 
-static task_t* percpu_ready_queues[MAX_CPUS][MAX_PRIORITY + 1] = {0};
 static task_t  idle_tasks[MAX_CPUS];
 static task_t  bootstrap_tasks[MAX_CPUS];
 static volatile uint64_t reschedule_calls = 0;
@@ -27,6 +26,8 @@ static spinlock_t ready_queue_lock = SPINLOCK_INIT;
 static task_t*    pid_table[MAX_PIDS] = {0};
 static uint32_t   next_pid = 1;
 static spinlock_t pid_lock = SPINLOCK_INIT;
+
+spinlock_t children_lock = SPINLOCK_INIT;
 
 extern tss_t* tss[MAX_CPUS];
 
@@ -74,7 +75,6 @@ static void pid_unregister(task_t* t) {
 static void idle_loop(void* arg);
 
 #define STACK_CANARY_VALUE  0xDEADC0DEDEADC0DEULL
-#define STACK_CANARY_PAGES  1
 
 static uint64_t alloc_and_init_stack(task_t* t) {
     uintptr_t stack_virt = (uintptr_t)pmm_alloc_zero(KERNEL_STACK_PAGES);
@@ -125,6 +125,15 @@ void __attribute__((used)) ctx_rsp_corruption_detected(task_t* old, uint64_t sav
     kernel_panic("context_switch: saved invalid RSP into task->rsp");
 }
 
+static void process_deferred_free(void) {
+    percpu_t* pc = get_percpu();
+    if (!pc) return;
+    task_t* dead = (task_t*)pc->deferred_free_task;
+    if (!dead) return;
+    pc->deferred_free_task = NULL;
+    task_destroy(dead);
+}
+
 void sched_init(void) {
     memset(pid_table, 0, sizeof(pid_table));
     memset(bootstrap_tasks, 0, sizeof(bootstrap_tasks));
@@ -154,8 +163,6 @@ void sched_init(void) {
             kernel_panic("SCHED: failed to allocate idle stack");
         }
         current_task[i] = NULL;
-        for (int p = 0; p <= MAX_PRIORITY; p++)
-            percpu_ready_queues[i][p] = NULL;
     }
     serial_writestring("Scheduler initialized (PREEMPTIVE SMP MODE)\n");
 }
@@ -292,22 +299,21 @@ task_t* task_fork(task_t* parent) {
     if (parent->fd_table)
         child->fd_table = fd_table_clone(parent->fd_table);
 
-    child->state   = TASK_READY;
+    child->state    = TASK_READY;
     child->runnable = true;
-    child->parent  = parent;
-    child->sibling = parent->children;
-    parent->children = child;
+    child->parent   = parent;
+
+    {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        child->sibling   = parent->children;
+        parent->children = child;
+        spinlock_release_irqrestore(&children_lock, _cf);
+    }
+
     pid_register(child);
 
     serial_printf("[FORK-CHK] child=%p rsp=0x%llx stk=0x%llx rip=0x%llx\n",
                   (void*)child, child->rsp, child->stack_base, child->user_saved_rip);
-    if ((uintptr_t)child < 0xffff800000000000ULL) {
-        kernel_panic("FORK: child task_t ptr is physical (not HHDM)");
-    }
-    if (child->rsp < child->stack_base ||
-        child->rsp > child->stack_base + KERNEL_STACK_SIZE) {
-        kernel_panic("FORK: child rsp outside kernel stack bounds");
-    }
 
     serial_printf("[SCHED] fork: parent='%s' pid=%u -> child pid=%u rip=0x%llx\n",
                   parent->name, parent->pid, child->pid, child->user_saved_rip);
@@ -318,33 +324,35 @@ task_t* task_fork(task_t* parent) {
 
 void task_destroy(task_t* task) {
     if (!task) return;
+
+    uint32_t old_flags = __atomic_fetch_or(&task->flags, TASK_FLAG_DESTROYED, __ATOMIC_ACQ_REL);
+    if (old_flags & TASK_FLAG_DESTROYED) return;
+
     serial_printf("[DESTROY] pid=%u flags=0x%x on_cpu=%d\n",
-                  task->pid, task->flags, (int)task->on_cpu._val);
+                  task->pid, task->flags, (int)atomic_load_bool_acq(&task->on_cpu));
+
     pid_unregister(task);
+
     if (task->fpu_state) {
         pmm_free(task->fpu_state, 1);
         task->fpu_state = NULL;
     }
 
     if (task->stack_base) {
-        while (atomic_load_bool_acq(&task->on_cpu)) {
-            asm volatile("pause" ::: "memory");
-        }
         pmm_free((void*)task->stack_base, KERNEL_STACK_PAGES);
         task->stack_base = 0;
     }
 
-    serial_printf("[DESTROY] pagemap\n");
     if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
         vmm_free_pagemap(task->pagemap);
         task->pagemap = NULL;
     }
-    serial_printf("[DESTROY] fd_table\n");
+
     if (task->fd_table) {
         fd_table_destroy(task->fd_table);
         task->fd_table = NULL;
     }
-    serial_printf("[DESTROY] free\n");
+
     free(task);
 }
 
@@ -357,86 +365,70 @@ void task_reparent(task_t* child, task_t* new_parent) {
 }
 
 void task_wakeup_waiters(uint32_t pid) {
-    uint64_t _irqf;
-    _irqf = spinlock_acquire_irqsave(&pid_lock);
-    for (uint32_t i = 1; i < MAX_PIDS; i++) {
+    task_t* to_wake[64];
+    int wake_count = 0;
+
+    uint64_t _irqf = spinlock_acquire_irqsave(&pid_lock);
+    for (uint32_t i = 1; i < MAX_PIDS && wake_count < 64; i++) {
         task_t* t = pid_table[i];
         if (!t) continue;
         if (t->state != TASK_BLOCKED) continue;
         if (t->wait_for_pid != pid && t->wait_for_pid != (uint32_t)-1) continue;
-        serial_printf("[SCHED] wakeup_waiters: waking pid=%u (waited for pid=%u) on_cpu=%d\n",
-                      t->pid, pid, (int)t->on_cpu._val);
+
+        serial_printf("[SCHED] wakeup_waiters: waking pid=%u (waited for pid=%u)\n", t->pid, pid);
+
         t->wait_for_pid = 0;
-        t->runnable     = true;
-        t->state        = TASK_READY;
-        spinlock_release_irqrestore(&pid_lock, _irqf);
-        enqueue_global(t);
-        _irqf = spinlock_acquire_irqsave(&pid_lock);
+        t->runnable = true;
+        t->state = TASK_READY;
+
+        to_wake[wake_count++] = t;
     }
     spinlock_release_irqrestore(&pid_lock, _irqf);
+
+    for (int i = 0; i < wake_count; i++)
+        enqueue_global(to_wake[i]);
 }
 
-__attribute__((noreturn)) void task_exit(void) {
-    uint32_t cpu = lapic_get_id();
+__attribute__((noreturn)) void task_exit(void)
+{
     asm volatile("cli");
-
+    uint32_t cpu = lapic_get_id();
     percpu_t* pc = get_percpu();
     task_t* me = pc ? (task_t*)pc->current_task : current_task[cpu];
 
-    if (pc) fix_gs_base(pc);
+    if (!me) kernel_panic("task_exit: no current task");
 
-    serial_printf("[EXIT] task_exit called cpu=%u me=%p\n", cpu, (void*)me);
+    serial_printf("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
-    if (!me) {
-        uint64_t gs_base = 0;
-        uint64_t kgs_base_lo = 0, kgs_base_hi = 0;
-        asm volatile("rdgsbase %0" : "=r"(gs_base));
-        asm volatile("mov $0xC0000102, %%ecx; rdmsr"
-                     : "=a"(kgs_base_lo), "=d"(kgs_base_hi)
-                     :: "ecx");
-        uint64_t kgs_base = kgs_base_lo | ((uint64_t)kgs_base_hi << 32);
-
-        serial_printf("[SCHED] task_exit: spurious call on cpu=%u (no current task)\n"
-                      "  pc=0x%llx gs_base=0x%llx kgs_base=0x%llx\n"
-                      "  current_task[%u]=%p gs:current_task=%p\n",
-                      cpu,
-                      (uint64_t)pc, gs_base, kgs_base,
-                      cpu, current_task[cpu],
-                      pc ? (void*)pc->current_task : (void*)0xDEAD);
-
-        sched_reschedule();
-        kernel_panic("task_exit: called with no current task");
-    }
-
-    task_t* init  = task_find_by_pid(1);
-    task_t* child = me->children;
-    me->children = NULL;
-    while (child) {
-        task_t* sib = child->sibling;
-        if (init && init != me)
+    task_t* init = task_find_by_pid(1);
+    if (init && init != me) {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        task_t* child = me->children;
+        me->children = NULL;
+        while (child) {
+            task_t* sib = child->sibling;
             task_reparent(child, init);
-        child = sib;
+            child = sib;
+        }
+        spinlock_release_irqrestore(&children_lock, _cf);
     }
-
-    serial_printf("[SCHED] task_exit: '%s' pid=%u exit=%d cpu=%u\n",
-                  me->name, me->pid, me->exit_code, cpu);
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
     me->runnable = false;
-    me->state    = TASK_ZOMBIE;
+    me->state = TASK_ZOMBIE;
+    me->cr3 = 0;
 
     task_wakeup_waiters(me->pid);
 
-
-
     sched_reschedule();
-    kernel_panic("task_exit: reschedule returned (should never happen)");
+
+    kernel_panic("task_exit: returned from sched_reschedule (should never happen)");
 }
 
 void task_kill(task_t* target) {
     if (!target) return;
-    if (target->state == TASK_ZOMBIE) return;
+    if (target->state == TASK_ZOMBIE || target->state == TASK_DEAD) return;
 
     serial_printf("[KILL] task_kill pid=%u state=%d cpu=%u\n",
                   target->pid, (int)target->state, lapic_get_id());
@@ -449,8 +441,6 @@ void task_kill(task_t* target) {
     }
 
     if (!(target->flags & TASK_FLAG_STARTED)) {
-        serial_printf("[KILL] pid=%u not yet started — skip IPI, pending_kill will be checked on first run\n",
-                      target->pid);
         return;
     }
 
@@ -472,7 +462,7 @@ task_t* task_find_foreground(void) {
     uint32_t fpid = g_foreground_pid;
     if (fpid == 0) return NULL;
     task_t *t = task_find_by_pid(fpid);
-    if (!t || t->state == TASK_ZOMBIE) {
+    if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) {
         g_foreground_pid = 0;
         return NULL;
     }
@@ -481,50 +471,41 @@ task_t* task_find_foreground(void) {
 
 static task_t* sched_pick_next(uint32_t cpu) {
     uint64_t _irqf;
-    for (int p = MAX_PRIORITY; p >= 0; p--) {
-        task_t** head = &percpu_ready_queues[cpu][p];
-        task_t*  t    = *head;
-        while (t) {
-            if (t->runnable) {
-                bool expected = false;
-                if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
-                    *head   = t->next;
-                    t->next = NULL;
-                    return t;
-                }
-            }
-            head = &t->next;
-            t    = *head;
-        }
-    }
 
     _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
     task_t* found = NULL;
-    for (int p = MAX_PRIORITY; p >= 0; p--) {
+    for (int p = MAX_PRIORITY; p >= 0 && !found; p--) {
         task_t** head = &ready_queues[p];
         task_t*  t    = *head;
         while (t) {
-            if (t->runnable) {
+            if (t->runnable && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) {
                 bool expected = false;
                 if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
                     *head   = t->next;
                     t->next = NULL;
                     found   = t;
-                    goto done_global;
+                    break;
+                }
+            } else {
+                if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD || !t->runnable) {
+                    *head = t->next;
+                    t->next = NULL;
+                    t = *head;
+                    continue;
                 }
             }
             head = &t->next;
             t    = *head;
         }
     }
-done_global:
     spinlock_release_irqrestore(&ready_queue_lock, _irqf);
     return found ? found : &idle_tasks[cpu];
 }
 
 void sched_reschedule(void) {
-    uint64_t _irqf;
     asm volatile("cli");
+
+    process_deferred_free();
 
     reschedule_calls++;
     uint32_t cpu  = lapic_get_id();
@@ -534,32 +515,13 @@ void sched_reschedule(void) {
 
     if (!next) { asm volatile("sti"); return; }
 
-
-
     if (old == next) {
         if (old == &idle_tasks[cpu]) {
-            _irqf = spinlock_acquire_irqsave(&ready_queue_lock);
-            task_t* found = NULL;
-            for (int p = MAX_PRIORITY; p >= 0 && !found; p--) {
-                task_t** head = &ready_queues[p];
-                task_t*  t    = *head;
-                while (t) {
-                    if (t->runnable) {
-                        bool expected = false;
-                        if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
-                            *head   = t->next;
-                            t->next = NULL;
-                            found   = t;
-                            break;
-                        }
-                    }
-                    head = &t->next;
-                    t    = *head;
-                }
+            next = sched_pick_next(cpu);
+            if (next == &idle_tasks[cpu]) {
+                asm volatile("sti");
+                return;
             }
-            spinlock_release_irqrestore(&ready_queue_lock, _irqf);
-            if (found) next = found;
-            else        { asm volatile("sti"); return; }
         } else {
             old->time_slice = old->time_slice_init;
             asm volatile("sti");
@@ -567,18 +529,20 @@ void sched_reschedule(void) {
         }
     }
 
-    if (old && old->fpu_state && old->state != TASK_ZOMBIE) {
+    if (old && old->fpu_state && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
         fpu_save(old->fpu_state);
         old->fpu_used = true;
     }
 
     if (old && old != &idle_tasks[cpu]) {
-        if (old->runnable) {
+        if (old->state == TASK_ZOMBIE) {
+            percpu_t* pc = get_percpu();
+            if (pc) pc->deferred_free_task = old;
+        } else if (old->runnable && old->state != TASK_DEAD) {
             old->time_slice = old->time_slice_init;
             old->last_cpu   = cpu;
             old->state      = TASK_READY;
-            old->next = percpu_ready_queues[cpu][old->priority];
-            percpu_ready_queues[cpu][old->priority] = old;
+            enqueue_global(old);
         }
     }
 
@@ -619,7 +583,9 @@ void sched_reschedule(void) {
         next->flags |= TASK_FLAG_STARTED;
         current_task[cpu] = next;
         if (next->cr3) {
-        serial_printf("[SCHED] CR3 switch cpu=%u old=0x%llx -> new=0x%llx (pid %u->%u)\n", cpu, old ? old->cr3 : 0ULL, switch_cr3, old ? old->pid : 0, next->pid);
+            serial_printf("[SCHED] CR3 switch cpu=%u old=0x%llx -> new=0x%llx (pid %u->%u)\n",
+                          cpu, old ? old->cr3 : 0ULL, switch_cr3,
+                          old ? old->pid : 0, next->pid);
             asm volatile("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
             switch_cr3 = 0;
         } else {
@@ -632,50 +598,10 @@ void sched_reschedule(void) {
         }
     }
 
-    {
-        if ((uintptr_t)next < 0xffff800000000000ULL) {
-            kernel_panic("SCHED: next task_t ptr is physical (not HHDM)");
-        }
-        if (next->stack_base && next->rsp != 0 &&
-            (next->rsp < next->stack_base || next->rsp >= next->stack_base + KERNEL_STACK_SIZE)) {
-            kernel_panic("SCHED: stack corruption — rsp outside kernel stack bounds");
-        }
-        if (old && old != &idle_tasks[cpu] && old != &bootstrap_tasks[cpu] &&
-            old->stack_base && old->state != TASK_ZOMBIE) {
-            uint64_t* canary = (uint64_t*)old->stack_base;
-            for (int _ci = 0; _ci < 8; _ci++) {
-                if (canary[_ci] != STACK_CANARY_VALUE) {
-                    serial_printf("[CANARY] STACK OVERFLOW detected! pid=%u cpu=%u "
-                                  "stack_base=0x%llx canary[%d]=0x%llx\n",
-                                  old->pid, cpu, old->stack_base, _ci, canary[_ci]);
-                    kernel_panic("SCHED: kernel stack overflow (canary corrupted)");
-                }
-            }
-        }
-        if (next->stack_base && (next->flags & TASK_FLAG_STARTED)) {
-            uint64_t* canary = (uint64_t*)next->stack_base;
-            for (int _ci = 0; _ci < 8; _ci++) {
-                if (canary[_ci] != STACK_CANARY_VALUE) {
-                    serial_printf("[CANARY] next task STACK CORRUPT! pid=%u cpu=%u "
-                                  "stack_base=0x%llx canary[%d]=0x%llx\n",
-                                  next->pid, cpu, next->stack_base, _ci, canary[_ci]);
-                    kernel_panic("SCHED: next task kernel stack corrupted (canary)");
-                }
-            }
-        }
-    }
-    if (old && old->stack_base && old->rsp != 0) {
-        uintptr_t lo = old->stack_base;
-        uintptr_t hi = old->stack_base + KERNEL_STACK_SIZE;
-        if (old->rsp < lo || old->rsp >= hi) {
-            serial_printf("[CTX-BUG] BEFORE switch: old pid=%u rsp=0x%llx OUTSIDE [0x%llx..0x%llx]!\n",
-                          old->pid, old->rsp, lo, hi);
-        }
-    }
-
-
     if (old) context_switch(old, next, &current_task[cpu], switch_cr3);
     else     context_switch(&bootstrap_tasks[cpu], next, &current_task[cpu], switch_cr3);
+
+    process_deferred_free();
 
     asm volatile("sti");
 }
@@ -704,11 +630,11 @@ void task_unblock(task_t* t) {
 }
 
 void sched_wakeup_sleepers(uint64_t now_ns) {
-    task_t* to_wake[MAX_PIDS];
+    task_t* to_wake[64];
     int     wake_count = 0;
 
     uint64_t _irqf = spinlock_acquire_irqsave(&pid_lock);
-    for (uint32_t i = 1; i < MAX_PIDS; i++) {
+    for (uint32_t i = 1; i < MAX_PIDS && wake_count < 64; i++) {
         task_t *t = pid_table[i];
         if (!t) continue;
         if (t->state != TASK_BLOCKED) continue;
@@ -731,5 +657,8 @@ static void idle_loop(void* arg) {
     (void)arg;
     uint32_t cpu = lapic_get_id();
     serial_printf("[IDLE] CPU %u entering idle loop\n", cpu);
-    while (1) asm volatile("sti; hlt");
+    while (1) {
+        process_deferred_free();
+        asm volatile("sti; hlt");
+    }
 }

@@ -32,25 +32,9 @@ context_switch:
     push r14
     push r15
 
-    mov rax, [rdi + 136]
-    test rax, rax
-    jz .save_rsp
-    mov r11, rsp
-    sub r11, rax
-    cmp r11, 32768
-    ja .skip_save_rsp
-.save_rsp:
     mov [rdi], rsp
-.skip_save_rsp:
 
-    mfence
-
-    mov byte [rdi + TASK_ON_CPU_OFFSET], 0
-
-    test rdx, rdx
-    jz .skip_global
     mov [rdx], rsi
-.skip_global:
     mov [gs:PERCPU_CURRENT_TASK], rsi
 
     mov rsp, [rsi]
@@ -59,6 +43,10 @@ context_switch:
     jz .skip_cr3
     mov cr3, rcx
 .skip_cr3:
+
+    mfence
+    mov byte [rdi + TASK_ON_CPU_OFFSET], 0
+
     pop r15
     pop r14
     pop r13

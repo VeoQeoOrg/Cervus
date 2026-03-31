@@ -134,6 +134,7 @@ typedef struct task {
 #define TASK_FLAG_STARTED        (1 << 3)
 #define TASK_FLAG_OWN_PAGEMAP    (1 << 4)
 #define TASK_FLAG_STACK_DEFERRED (1 << 5)
+#define TASK_FLAG_DESTROYED      (1U << 31)
 
 _Static_assert(offsetof(task_t, rsp)            ==   0, "task_t: rsp");
 _Static_assert(offsetof(task_t, entry)          == 120, "task_t: entry — update TASK_ENTRY_OFFSET");

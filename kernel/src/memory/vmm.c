@@ -96,7 +96,7 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
     }
 
-    if (phys) {
+    if (phys >= PMM_FREE_MIN_PHYS) {
         pmm_free(pmm_phys_to_virt(phys), 1);
     }
 }
@@ -226,11 +226,13 @@ vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src) {
     return dst;
 }
 
-void vmm_free_pagemap(vmm_pagemap_t* map) {
-    if (!map) return;
+void vmm_free_pagemap(vmm_pagemap_t* map)
+{
+    if (!map || !map->pml4) return;
 
     for (size_t pml4_i = 0; pml4_i < 256; pml4_i++) {
         if (!(map->pml4[pml4_i] & VMM_PRESENT)) continue;
+
         vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
 
         for (size_t pdpt_i = 0; pdpt_i < 512; pdpt_i++) {
@@ -239,12 +241,14 @@ void vmm_free_pagemap(vmm_pagemap_t* map) {
 
             for (size_t pd_i = 0; pd_i < 512; pd_i++) {
                 if (!(pd[pd_i] & VMM_PRESENT)) continue;
+
                 if (pd[pd_i] & VMM_PSE) {
                     uintptr_t hp_phys = pd[pd_i] & PTE_PHYS_MASK & ~0x1FFFFFULL;
                     if (hp_phys >= PMM_FREE_MIN_PHYS)
                         pmm_free(pmm_phys_to_virt(hp_phys), 512);
                     continue;
                 }
+
                 vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
 
                 for (size_t pt_i = 0; pt_i < 512; pt_i++) {
@@ -258,10 +262,12 @@ void vmm_free_pagemap(vmm_pagemap_t* map) {
                 if (pt_phys >= PMM_FREE_MIN_PHYS)
                     pmm_free(pt, 1);
             }
+
             uintptr_t pd_phys = pdpt[pdpt_i] & PTE_PHYS_MASK;
             if (pd_phys >= PMM_FREE_MIN_PHYS)
                 pmm_free(pd, 1);
         }
+
         uintptr_t pdpt_phys = map->pml4[pml4_i] & PTE_PHYS_MASK;
         if (pdpt_phys >= PMM_FREE_MIN_PHYS)
             pmm_free(pdpt, 1);
@@ -270,7 +276,6 @@ void vmm_free_pagemap(vmm_pagemap_t* map) {
     pmm_free(map->pml4, 1);
     pmm_free(map, 1);
 }
-
 uintptr_t kernel_pml4_phys;
 
 void vmm_init(void) {

@@ -143,3 +143,4 @@ syscall_entry:
     call sysret_bad_rsp_panic
     cli
     hlt
+

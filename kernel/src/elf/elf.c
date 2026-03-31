@@ -26,19 +26,6 @@ static uint64_t phdr_flags_to_vmm(uint32_t pf) {
     return flags;
 }
 
-static void inherit_kernel_pml4(vmm_pagemap_t* dst) {
-    vmm_pagemap_t* kmap     = vmm_get_kernel_pagemap();
-    vmm_pte_t*     src_pml4 = kmap->pml4;
-    vmm_pte_t*     dst_pml4 = dst->pml4;
-
-    for (int i = PML4_KERNEL_START; i < PML4_ENTRIES; i++) {
-        dst_pml4[i] = src_pml4[i];
-    }
-
-    serial_printf("[ELF] Kernel PML4[%d..%d] inherited\n",
-                  PML4_KERNEL_START, PML4_ENTRIES - 1);
-}
-
 static elf_error_t elf_validate(const elf64_ehdr_t* hdr, size_t size) {
     if (size < sizeof(elf64_ehdr_t))          return ELF_ERR_TOO_SMALL;
 
@@ -83,10 +70,9 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
     for (size_t i = 0; i < page_count; i++) {
         void* page = pmm_alloc_zero(1);
         if (!page) {
-            serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n",
-                          i, virt_start);
+            serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n", i, virt_start);
             for (size_t j = 0; j < i; j++)
-                vmm_unmap_page(map, page_start + j * PAGE_SIZE);
+                vmm_unmap_page_noflush(map, page_start + j * PAGE_SIZE);
             return ELF_ERR_NO_MEM;
         }
 
@@ -112,7 +98,7 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
             serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
             pmm_free(page, 1);
             for (size_t j = 0; j < i; j++)
-                vmm_unmap_page(map, page_start + j * PAGE_SIZE);
+                vmm_unmap_page_noflush(map, page_start + j * PAGE_SIZE);
             return ELF_ERR_MAP_FAIL;
         }
     }
@@ -137,7 +123,7 @@ static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
         if (!page) {
             serial_printf("[ELF] Stack alloc failed at page %zu\n", i);
             for (size_t j = 0; j < i; j++)
-                vmm_unmap_page(map, stack_bottom + j * PAGE_SIZE);
+                vmm_unmap_page_noflush(map, stack_bottom + j * PAGE_SIZE);
             return 0;
         }
         if (!vmm_map_page(map, stack_bottom + i * PAGE_SIZE,
@@ -145,7 +131,7 @@ static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
             serial_printf("[ELF] Stack map failed at page %zu\n", i);
             pmm_free(page, 1);
             for (size_t j = 0; j < i; j++)
-                vmm_unmap_page(map, stack_bottom + j * PAGE_SIZE);
+                vmm_unmap_page_noflush(map, stack_bottom + j * PAGE_SIZE);
             return 0;
         }
     }
@@ -180,7 +166,7 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
     }
     result.pagemap = map;
 
-    inherit_kernel_pml4(map);
+    serial_printf("[ELF] Kernel PML4[256..511] inherited via vmm_create_pagemap\n");
 
     const uint8_t*      bytes = (const uint8_t*)data;
     const elf64_phdr_t* phdrs = (const elf64_phdr_t*)(bytes + ehdr->e_phoff);
@@ -198,7 +184,10 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
                      ph->p_filesz, ph->p_memsz, ph->p_flags);
 
         elf_error_t err = load_segment(map, bytes, size, ph, load_bias);
-        if (err != ELF_OK) { result.error = err; return result; }
+        if (err != ELF_OK) {
+            result.error = err;
+            return result;
+        }
 
         uintptr_t seg_end = ph->p_vaddr + load_bias + ph->p_memsz;
         if (seg_end > max_vaddr) max_vaddr = seg_end;

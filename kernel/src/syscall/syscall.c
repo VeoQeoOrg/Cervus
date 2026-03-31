@@ -12,8 +12,6 @@
 #include "../../include/io/serial.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/elf/elf.h"
-#include "../../include/apic/apic.h"
-#include "../../include/memory/pmm.h"
 #include "../../include/panic/panic.h"
 #include <stdint.h>
 #include <string.h>
@@ -40,6 +38,21 @@ static inline void wrmsr(uint32_t msr, uint64_t val) {
 static inline task_t* cur_task(void) {
     percpu_t* pc = get_percpu();
     return pc ? (task_t*)pc->current_task : NULL;
+}
+
+static void save_user_regs(task_t* t) {
+    if (!t) return;
+    percpu_t* pc = get_percpu();
+    if (!pc) return;
+    t->user_rsp       = pc->syscall_user_rsp;
+    t->user_saved_rip = pc->user_saved_rip;
+    t->user_saved_rbp = pc->user_saved_rbp;
+    t->user_saved_rbx = pc->user_saved_rbx;
+    t->user_saved_r12 = pc->user_saved_r12;
+    t->user_saved_r13 = pc->user_saved_r13;
+    t->user_saved_r14 = pc->user_saved_r14;
+    t->user_saved_r15 = pc->user_saved_r15;
+    t->user_saved_r11 = pc->user_saved_r11;
 }
 
 static bool uptr_validate(const void* ptr, size_t len) {
@@ -136,18 +149,7 @@ static int64_t sys_task_kill(uint64_t pid_arg) {
 
 static int64_t sys_fork(void) {
     task_t*parent=cur_task(); if(!parent) return -ESRCH;
-    percpu_t*pc=get_percpu();
-    if(pc) {
-        parent->user_rsp       = pc->syscall_user_rsp;
-        parent->user_saved_rip = pc->user_saved_rip;
-        parent->user_saved_rbp = pc->user_saved_rbp;
-        parent->user_saved_rbx = pc->user_saved_rbx;
-        parent->user_saved_r12 = pc->user_saved_r12;
-        parent->user_saved_r13 = pc->user_saved_r13;
-        parent->user_saved_r14 = pc->user_saved_r14;
-        parent->user_saved_r15 = pc->user_saved_r15;
-        parent->user_saved_r11 = pc->user_saved_r11;
-    }
+    save_user_regs(parent);
     task_t*child=task_fork(parent); if(!child) return -ENOMEM;
     serial_printf("[SYSCALL] fork: parent pid=%u → child pid=%u\n",
                   parent->pid,child->pid);
@@ -159,58 +161,53 @@ static int64_t sys_yield(void) { task_yield(); return 0; }
 static int64_t sys_wait(uint64_t pid_arg, uint64_t status_ptr, uint64_t flags) {
     task_t*parent=cur_task(); if(!parent) return -ESRCH;
 retry:;
-    task_t*zombie=NULL, *child=parent->children;
-    while (child) {
-        bool match=(pid_arg==(uint64_t)-1)||(child->pid==(uint32_t)pid_arg);
-        if (match && child->state==TASK_ZOMBIE) { zombie=child; break; }
-        child=child->sibling;
+    task_t*zombie=NULL;
+    {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        task_t*child=parent->children;
+        bool has_children = (child != NULL);
+        while (child) {
+            bool match=(pid_arg==(uint64_t)-1)||(child->pid==(uint32_t)pid_arg);
+            if (match && child->state==TASK_ZOMBIE) { zombie=child; break; }
+            child=child->sibling;
+        }
+        spinlock_release_irqrestore(&children_lock, _cf);
+
+        (void)has_children;
     }
+
     if (!zombie) {
         if (flags & WNOHANG) return 0;
-        percpu_t*pc2=get_percpu();
-        if(pc2) {
-            parent->user_rsp       = pc2->syscall_user_rsp;
-            parent->user_saved_rip = pc2->user_saved_rip;
-            parent->user_saved_rbp = pc2->user_saved_rbp;
-            parent->user_saved_rbx = pc2->user_saved_rbx;
-            parent->user_saved_r12 = pc2->user_saved_r12;
-            parent->user_saved_r13 = pc2->user_saved_r13;
-            parent->user_saved_r14 = pc2->user_saved_r14;
-            parent->user_saved_r15 = pc2->user_saved_r15;
-            parent->user_saved_r11 = pc2->user_saved_r11;
-        }
+        save_user_regs(parent);
         parent->wait_for_pid=(pid_arg==(uint64_t)-1)?(uint32_t)-1:(uint32_t)pid_arg;
         parent->runnable=false; parent->state=TASK_BLOCKED;
         if (pid_arg != (uint64_t)-1)
             task_set_foreground((uint32_t)pid_arg);
 
-        if (parent->rsp != 0 && parent->stack_base != 0) {
-            uintptr_t lo = parent->stack_base;
-            uintptr_t hi = parent->stack_base + 32768;
-            if (parent->rsp < lo || parent->rsp >= hi) {
-                serial_printf("[WAIT-BUG] pid=%u rsp=0x%llx OUTSIDE stack [0x%llx..0x%llx]!\n",
-                              parent->pid, parent->rsp, lo, hi);
-            }
-        }
         serial_printf("[WAIT] pid=%u blocking: user_rsp=0x%llx task_rsp=0x%llx\n",
                       parent->pid,parent->user_rsp,parent->rsp);
         sched_reschedule(); goto retry;
     }
+
     if (status_ptr) {
         int status=(zombie->exit_code&0xFF)<<8;
         if (copy_to_user((void*)status_ptr,&status,sizeof(int))<0) return -EFAULT;
     }
     uint32_t zpid=zombie->pid;
 
-    if (parent->children == zombie) {
-        parent->children = zombie->sibling;
-    } else {
-        task_t *prev = parent->children;
-        while (prev && prev->sibling != zombie) prev = prev->sibling;
-        if (prev) prev->sibling = zombie->sibling;
+    {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        if (parent->children == zombie) {
+            parent->children = zombie->sibling;
+        } else {
+            task_t *prev = parent->children;
+            while (prev && prev->sibling != zombie) prev = prev->sibling;
+            if (prev) prev->sibling = zombie->sibling;
+        }
+        zombie->sibling = NULL;
+        zombie->parent  = NULL;
+        spinlock_release_irqrestore(&children_lock, _cf);
     }
-    zombie->sibling = NULL;
-    zombie->parent  = NULL;
 
     serial_printf("[SYSCALL] wait: parent pid=%u reaped child pid=%u\n",
                   parent->pid,zpid);
@@ -370,8 +367,9 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
     if (t->fd_table) fd_table_cloexec(t->fd_table);
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
-    if (t->pagemap && (t->flags & (TASK_FLAG_OWN_PAGEMAP|TASK_FLAG_FORK)))
-        vmm_free_pagemap(t->pagemap);
+
+    vmm_pagemap_t* old_pagemap = t->pagemap;
+    uint32_t old_flags = t->flags;
 
     t->pagemap    = elf.pagemap;
     t->cr3        = (uint64_t)pmm_virt_to_phys(elf.pagemap->pml4);
@@ -399,6 +397,9 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
         pc->user_saved_r15 = 0;
         pc->user_saved_r11 = 0x200;
     }
+
+    if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP|TASK_FLAG_FORK)))
+        vmm_free_pagemap(old_pagemap);
 
     asm volatile("mfence" ::: "memory");
     vmm_switch_pagemap(t->pagemap);
@@ -579,6 +580,7 @@ typedef struct {
     uint32_t head, tail;
     int      readers, writers;
     uint32_t reader_waiting_pid;
+    spinlock_t lock;
 } pipe_shared_t;
 
 typedef struct {
@@ -599,12 +601,14 @@ static int64_t pipe_read_op(vnode_t *n, void *buf, size_t len, uint64_t off) {
 
             task_t *me = cur_task();
             if (me) {
+                save_user_regs(me);
                 ps->reader_waiting_pid = me->pid;
                 me->runnable = false;
                 me->state    = TASK_BLOCKED;
             }
             sched_reschedule();
             if (me) ps->reader_waiting_pid = 0;
+            if (me && me->pending_kill) return got > 0 ? (int64_t)got : -EINTR;
             continue;
         }
         dst[got++] = ps->buf[ps->head];
@@ -621,18 +625,25 @@ static int64_t pipe_write_op(vnode_t *n, const void *buf, size_t len, uint64_t o
     const char *src = (const char*)buf;
     for (size_t i = 0; i < len; i++) {
         uint32_t next = (ps->tail + 1) % PIPE_BUFSZ;
+        int spins = 0;
         while (next == ps->head) {
-            if (ps->readers == 0) return -EPIPE;
+            if (ps->readers == 0) return (i > 0) ? (int64_t)i : -EPIPE;
+            task_t *me = cur_task();
+            if (me) save_user_regs(me);
             task_yield();
+            if (me && me->pending_kill) return (i > 0) ? (int64_t)i : -EINTR;
             next = (ps->tail + 1) % PIPE_BUFSZ;
+            spins++;
+            if (spins > 10000) break;
+        }
+        if (next == ps->head) {
+            return (i > 0) ? (int64_t)i : -EAGAIN;
         }
         ps->buf[ps->tail] = src[i];
         ps->tail = next;
         if (ps->reader_waiting_pid) {
             task_t *reader = task_find_by_pid(ps->reader_waiting_pid);
             if (reader && !reader->runnable) {
-                reader->runnable = true;
-                reader->state    = TASK_READY;
                 task_unblock(reader);
             }
         }
@@ -658,17 +669,18 @@ static void pipe_unref_op(vnode_t *n) {
         if (ps->reader_waiting_pid) {
             task_t *reader = task_find_by_pid(ps->reader_waiting_pid);
             if (reader && !reader->runnable) {
-                reader->runnable = true;
-                reader->state    = TASK_READY;
                 task_unblock(reader);
             }
             ps->reader_waiting_pid = 0;
         }
     }
 
+    int r = ps->readers;
+    int w = ps->writers;
+
     free(vd); free(n);
 
-    if (ps->readers <= 0 && ps->writers <= 0)
+    if (r <= 0 && w <= 0)
         free(ps);
 }
 
@@ -827,6 +839,8 @@ static int64_t sys_sleep_ns(uint64_t ns) {
     task_t *me = cur_task();
     if (!me) return -ESRCH;
 
+    save_user_regs(me);
+
     serial_printf("[SLEEP] pid=%u sleeping %llu ns\n", me->pid, ns);
 
     uint64_t now = hpet_elapsed_ns();
@@ -984,18 +998,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, ui
     (void)user_rip;
     task_t *t = cur_task();
     if (t) {
-        percpu_t *pc = get_percpu();
-        if (pc) {
-            t->user_rsp       = pc->syscall_user_rsp;
-            t->user_saved_rip = pc->user_saved_rip;
-            t->user_saved_rbp = pc->user_saved_rbp;
-            t->user_saved_rbx = pc->user_saved_rbx;
-            t->user_saved_r12 = pc->user_saved_r12;
-            t->user_saved_r13 = pc->user_saved_r13;
-            t->user_saved_r14 = pc->user_saved_r14;
-            t->user_saved_r15 = pc->user_saved_r15;
-            t->user_saved_r11 = pc->user_saved_r11;
-        }
+        save_user_regs(t);
     }
     if (nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
         serial_printf("[SYSCALL] unknown nr=%llu\n", nr);
@@ -1007,6 +1010,8 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3, ui
     task_t *me = cur_task();
     if (me && me->pending_kill) {
         me->pending_kill = false;
+        me->exit_code = 130;
+        vmm_switch_pagemap(vmm_get_kernel_pagemap());
         task_exit();
     }
     return ret;

@@ -30,6 +30,80 @@ void registers_dump(struct int_frame_t *regs) {
     serial_printf("\nInt:%d (%s)\n", regs->interrupt, exception_names[regs->interrupt]);
 }
 
+static void dump_rip_bytes_safe(uint64_t rip) {
+    uintptr_t hhdm = (uintptr_t)pmm_phys_to_virt(0);
+    uint64_t vpage = rip & ~0xFFFULL;
+    uintptr_t off  = rip & 0xFFF;
+
+    if (off > PAGE_SIZE - 8) {
+        serial_printf("[ISR-UD] RIP=0x%llx near page boundary, skipping byte dump\n", rip);
+        return;
+    }
+
+    uint64_t cr3_val = 0;
+    asm volatile("mov %%cr3, %0" : "=r"(cr3_val));
+
+    volatile uint64_t *pml4v = (volatile uint64_t*)(hhdm + (cr3_val & ~0xFFFULL));
+    uint64_t e4 = pml4v[(vpage >> 39) & 0x1FF];
+    if (!(e4 & 1)) {
+        serial_printf("[ISR-UD] RIP=0x%llx: PML4 not present\n", rip);
+        return;
+    }
+
+    volatile uint64_t *pdpt = (volatile uint64_t*)(hhdm + (e4 & ~0xFFFULL));
+    uint64_t e3 = pdpt[(vpage >> 30) & 0x1FF];
+    if (!(e3 & 1)) {
+        serial_printf("[ISR-UD] RIP=0x%llx: PDPT not present\n", rip);
+        return;
+    }
+
+    volatile uint64_t *pd = (volatile uint64_t*)(hhdm + (e3 & ~0xFFFULL));
+    uint64_t e2 = pd[(vpage >> 21) & 0x1FF];
+    if (!(e2 & 1)) {
+        serial_printf("[ISR-UD] RIP=0x%llx: PD not present\n", rip);
+        return;
+    }
+
+    if (e2 & (1ULL << 7)) {
+        uintptr_t hp_phys = (e2 & ~0x1FFFFFULL) + (vpage & 0x1FFFFFULL);
+        volatile uint8_t *bytes = (volatile uint8_t*)(hhdm + hp_phys + off);
+        serial_printf("[ISR-UD] RIP=0x%llx (huge page) bytes: "
+                      "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                      rip,
+                      (unsigned)bytes[0], (unsigned)bytes[1],
+                      (unsigned)bytes[2], (unsigned)bytes[3],
+                      (unsigned)bytes[4], (unsigned)bytes[5],
+                      (unsigned)bytes[6], (unsigned)bytes[7]);
+        return;
+    }
+
+    volatile uint64_t *pt = (volatile uint64_t*)(hhdm + (e2 & ~0xFFFULL));
+    uint64_t pte = pt[(vpage >> 12) & 0x1FF];
+    if (!(pte & 1)) {
+        serial_printf("[ISR-UD] RIP=0x%llx: PT not present (pte=0x%llx)\n", rip, pte);
+        return;
+    }
+
+    uintptr_t phys_page = pte & ~0xFFFULL;
+    volatile uint8_t *bytes = (volatile uint8_t*)(hhdm + phys_page + off);
+
+    serial_printf("[ISR-UD] RIP=0x%llx phys=0x%llx flags=0x%03llx bytes: "
+                  "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                  rip, phys_page, pte & 0xFFFULL,
+                  (unsigned)bytes[0], (unsigned)bytes[1],
+                  (unsigned)bytes[2], (unsigned)bytes[3],
+                  (unsigned)bytes[4], (unsigned)bytes[5],
+                  (unsigned)bytes[6], (unsigned)bytes[7]);
+}
+
+static __attribute__((noreturn)) void kill_current_task(int exit_code) {
+    percpu_t *pc = get_percpu();
+    task_t   *me = pc ? (task_t *)pc->current_task : NULL;
+    if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
+    if (me) me->exit_code = exit_code;
+    vmm_switch_pagemap(vmm_get_kernel_pagemap());
+    task_exit();
+}
 
 void handle_intercpu_interrupt(struct int_frame_t *regs)
 {
@@ -52,65 +126,14 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         case EXCEPTION_X87_FPU_ERROR:
             if ((regs->cs & 3) == 3) {
                 if (regs->interrupt == EXCEPTION_INVALID_OPCODE) {
-                    volatile uint8_t *ip = (volatile uint8_t *)regs->rip;
-                    serial_printf("[ISR-UD] RIP=0x%llx bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                                  regs->rip,
-                                  (unsigned)ip[0], (unsigned)ip[1],
-                                  (unsigned)ip[2], (unsigned)ip[3],
-                                  (unsigned)ip[4], (unsigned)ip[5],
-                                  (unsigned)ip[6], (unsigned)ip[7]);
+                    dump_rip_bytes_safe(regs->rip);
+
                     serial_printf("[ISR-UD] RBP=0x%llx RSP=0x%llx\n",
                                   regs->rbp, regs->rsp);
-                    volatile uint64_t *sp = (volatile uint64_t *)regs->rsp;
-                    serial_printf("[ISR-UD] Stack: [0]=%llx [1]=%llx [2]=%llx [3]=%llx\n",
-                                  sp[0], sp[1], sp[2], sp[3]);
-                    serial_printf("[ISR-UD] Stack: [4]=%llx [5]=%llx [6]=%llx [7]=%llx\n",
-                                  sp[4], sp[5], sp[6], sp[7]);
-                    {
-                        uint64_t cr3_val = 0;
-                        asm volatile("mov %%cr3, %0" : "=r"(cr3_val));
-                        uintptr_t hhdm = (uintptr_t)pmm_phys_to_virt(0);
-                        uint64_t vpage = regs->rip & ~0xFFFULL;
-                        volatile uint64_t *pml4v = (volatile uint64_t*)(hhdm + (cr3_val & ~0xFFFULL));
-                        uint64_t e4 = pml4v[(vpage >> 39) & 0x1FF];
-                        if (e4 & 1) {
-                            volatile uint64_t *pdpt = (volatile uint64_t*)(hhdm + (e4 & ~0xFFFULL));
-                            uint64_t e3 = pdpt[(vpage >> 30) & 0x1FF];
-                            if (e3 & 1) {
-                                volatile uint64_t *pd = (volatile uint64_t*)(hhdm + (e3 & ~0xFFFULL));
-                                uint64_t e2 = pd[(vpage >> 21) & 0x1FF];
-                                if (e2 & 1) {
-                                    volatile uint64_t *pt = (volatile uint64_t*)(hhdm + (e2 & ~0xFFFULL));
-                                    uint64_t pte = pt[(vpage >> 12) & 0x1FF];
-                                    serial_printf("[ISR-UD] PTE virt=0x%llx: 0x%llx (phys=0x%llx flags=0x%03llx)\n",
-                                                  vpage, pte, pte & ~0xFFFULL, pte & 0xFFFULL);
-                                    uintptr_t phys_page = pte & ~0xFFFULL;
-                                    uintptr_t off = regs->rip & 0xFFF;
-                                    volatile uint8_t *hhdm_bytes = (volatile uint8_t*)(hhdm + phys_page + off);
-                                    serial_printf("[ISR-UD] HHDM bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                                                  (unsigned)hhdm_bytes[0], (unsigned)hhdm_bytes[1],
-                                                  (unsigned)hhdm_bytes[2], (unsigned)hhdm_bytes[3],
-                                                  (unsigned)hhdm_bytes[4], (unsigned)hhdm_bytes[5],
-                                                  (unsigned)hhdm_bytes[6], (unsigned)hhdm_bytes[7]);
-                                    volatile uint8_t *hhdm_page = (volatile uint8_t*)(hhdm + phys_page);
-                                    serial_printf("[ISR-UD] HHDM page start: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                                                  (unsigned)hhdm_page[0], (unsigned)hhdm_page[1],
-                                                  (unsigned)hhdm_page[2], (unsigned)hhdm_page[3],
-                                                  (unsigned)hhdm_page[4], (unsigned)hhdm_page[5],
-                                                  (unsigned)hhdm_page[6], (unsigned)hhdm_page[7]);
-                                }
-                            }
-                        }
-                    }
                 }
                 serial_printf("[ISR] %s in userspace at RIP=0x%llx — killing task\n",
                               exception_names[regs->interrupt], regs->rip);
-                percpu_t *pc = get_percpu();
-                task_t   *me = pc ? (task_t *)pc->current_task : NULL;
-                if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
-                if (me) me->exit_code = 139;
-                vmm_switch_pagemap(vmm_get_kernel_pagemap());
-                task_exit();
+                kill_current_task(139);
             }
             kernel_panic_regs(exception_names[regs->interrupt], regs);
 
@@ -126,12 +149,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
             if ((regs->cs & 3) == 3) {
                 serial_printf("[ISR] GPF in userspace at RIP=0x%llx — killing task\n",
                               regs->rip);
-                percpu_t *pc = get_percpu();
-                task_t   *me = pc ? (task_t *)pc->current_task : NULL;
-                if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
-                if (me) me->exit_code = 139;
-                vmm_switch_pagemap(vmm_get_kernel_pagemap());
-                task_exit();
+                kill_current_task(139);
             }
             kernel_panic_regs("General Protection Fault (kernel)", regs);
 
@@ -145,9 +163,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                 serial_printf("[ISR] Page Fault in userspace: RIP=0x%llx CR2=0x%llx ERR=0x%llx task='%s' pid=%u\n",
                               regs->rip, cr2val, regs->error,
                               me ? me->name : "?", me ? me->pid : 0);
-                if (me) me->exit_code = 139;
-                vmm_switch_pagemap(vmm_get_kernel_pagemap());
-                task_exit();
+                kill_current_task(139);
             }
             kernel_panic_regs("Page Fault (kernel)", regs);
         }
