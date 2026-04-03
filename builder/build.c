@@ -18,6 +18,11 @@
 #define VERSION      "v0.0.1"
 #define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on "
 
+#define LIMINE_CONF_PATH       "/boot/limine/limine.conf"
+#define LIMINE_CONF_BACKUP     "/boot/limine/limine.conf.cervus-backup"
+#define CERVUS_BOOT_DIR        "/boot/cervus"
+#define CERVUS_MARKER          "# --- CERVUS OS ENTRY ---"
+
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
 
@@ -75,6 +80,7 @@ bool ARG_NO_CLEAN       = false;
 bool ARG_TREE           = false;
 bool ARG_STRUCTURE_ONLY = false;
 bool ARG_NO_INITRAMFS   = false;
+bool ARG_RESET_HW_CONF  = false;
 
 char **TREE_FILES       = NULL;
 int    TREE_FILES_COUNT = 0;
@@ -441,7 +447,7 @@ bool build_initramfs(void) {
             "Cervus OS v0.0.1\n"
             "================\n"
             "\n"
-            "This is Cervus — a hobby x86_64 OS written in C.\n"
+            "This is Cervus - a hobby x86_64 OS written in C.\n"
             "With Limine Bootloader.\n"
             "\n"
             "Shell commands:\n"
@@ -917,21 +923,286 @@ void do_generate_tree(void) {
     print_color(COLOR_GREEN, "Tree generated to OS-TREE.txt");
 }
 
+static bool limine_conf_has_cervus(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, CERVUS_MARKER)) { fclose(f); return true; }
+    }
+    fclose(f);
+    return false;
+}
+
+static bool copy_file_raw(const char *src, const char *dst) {
+    FILE *in = fopen(src, "r");
+    if (!in) return false;
+    FILE *out = fopen(dst, "w");
+    if (!out) { fclose(in); return false; }
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
+        fwrite(buf, 1, n, out);
+    fclose(in);
+    fclose(out);
+    return true;
+}
+
+static bool ask_yes_no(const char *question) {
+    printf("%s%s [y/n]: %s", COLOR_YELLOW, question, COLOR_RESET);
+    fflush(stdout);
+    char buf[16];
+    if (!fgets(buf, sizeof(buf), stdin)) return false;
+    return (buf[0] == 'y' || buf[0] == 'Y');
+}
+
+void reset_hardware_conf(void) {
+    check_sudo();
+
+    if (!file_exists(LIMINE_CONF_BACKUP)) {
+        print_color(COLOR_RED, "No backup found at %s", LIMINE_CONF_BACKUP);
+        print_color(COLOR_RED, "Nothing to restore. Was hardwaretest ever run?");
+        return;
+    }
+
+    print_color(COLOR_CYAN, "Restoring original Limine configuration...");
+
+    if (cmd_run(true, "cp %s %s", LIMINE_CONF_BACKUP, LIMINE_CONF_PATH) != 0) {
+        print_color(COLOR_RED, "Failed to restore %s", LIMINE_CONF_PATH);
+        return;
+    }
+
+    print_color(COLOR_GREEN, "Original limine.conf restored from backup");
+
+    if (file_exists(CERVUS_BOOT_DIR)) {
+        print_color(COLOR_CYAN, "Removing %s ...", CERVUS_BOOT_DIR);
+        cmd_run(true, "rm -rf %s", CERVUS_BOOT_DIR);
+    }
+
+    print_color(COLOR_GREEN, "Hardware configuration reset complete");
+    print_color(COLOR_CYAN, "--- Current limine.conf ---");
+    cmd_run(false, "cat %s", LIMINE_CONF_PATH);
+    print_color(COLOR_CYAN, "---------------------------");
+
+    if (ask_yes_no("Reboot now?")) {
+        print_color(COLOR_YELLOW, "Rebooting...");
+        cmd_run(false, "reboot");
+    }
+}
+
+void hardware_test(void) {
+    check_sudo();
+
+    if (!file_exists(LIMINE_CONF_PATH)) {
+        print_color(COLOR_RED, "Limine config not found at %s", LIMINE_CONF_PATH);
+        print_color(COLOR_RED, "Is Limine installed as your bootloader?");
+        print_color(COLOR_YELLOW, "Expected path: %s", LIMINE_CONF_PATH);
+        print_color(COLOR_YELLOW, "Install Limine first: https://github.com/limine-bootloader/limine");
+        return;
+    }
+
+    print_color(COLOR_GREEN, "=== Cervus Hardware Test Setup ===");
+    print_color(COLOR_CYAN, "Limine config found: %s", LIMINE_CONF_PATH);
+
+    print_color(COLOR_CYAN, "Step 1: Building Cervus...");
+
+    if (!compile_kernel()) {
+        print_color(COLOR_RED, "Kernel compilation failed");
+        return;
+    }
+
+    if (!build_initramfs()) {
+        print_color(COLOR_RED, "initramfs build failed");
+        return;
+    }
+
+    if (!file_exists("bin/kernel")) {
+        print_color(COLOR_RED, "bin/kernel not found after build!");
+        return;
+    }
+
+    print_color(COLOR_CYAN, "Step 2: Checking Limine configuration...");
+
+    bool already_has_cervus = limine_conf_has_cervus(LIMINE_CONF_PATH);
+
+    if (already_has_cervus) {
+        print_color(COLOR_GREEN, "Cervus entry already present in limine.conf");
+        print_color(COLOR_CYAN, "Updating boot files only...");
+    } else {
+        print_color(COLOR_CYAN, "No Cervus entry found, will add one");
+
+        if (!file_exists(LIMINE_CONF_BACKUP)) {
+            print_color(COLOR_YELLOW, "Step 2a: Backing up original limine.conf...");
+            if (cmd_run(true, "cp %s %s", LIMINE_CONF_PATH, LIMINE_CONF_BACKUP) != 0) {
+                print_color(COLOR_RED, "Failed to backup limine.conf!");
+                return;
+            }
+            print_color(COLOR_GREEN, "Backup saved: %s", LIMINE_CONF_BACKUP);
+            print_color(COLOR_YELLOW, "To restore later: ./build --resethardwareconf");
+        } else {
+            print_color(COLOR_GREEN, "Backup already exists: %s", LIMINE_CONF_BACKUP);
+        }
+    }
+
+    print_color(COLOR_CYAN, "Step 3: Copying Cervus files to /boot...");
+
+    cmd_run(true, "mkdir -p %s", CERVUS_BOOT_DIR);
+
+    if (cmd_run(true, "cp bin/kernel %s/kernel", CERVUS_BOOT_DIR) != 0) {
+        print_color(COLOR_RED, "Failed to copy kernel");
+        return;
+    }
+    print_color(COLOR_GREEN, "  kernel -> %s/kernel", CERVUS_BOOT_DIR);
+
+    if (file_exists(SHELL_ELF)) {
+        cmd_run(true, "cp %s %s/shell.elf", SHELL_ELF, CERVUS_BOOT_DIR);
+        print_color(COLOR_GREEN, "  shell.elf -> %s/shell.elf", CERVUS_BOOT_DIR);
+    }
+
+    if (file_exists(INITRAMFS_TAR)) {
+        cmd_run(true, "cp %s %s/initramfs.tar", INITRAMFS_TAR, CERVUS_BOOT_DIR);
+        print_color(COLOR_GREEN, "  initramfs.tar -> %s/initramfs.tar", CERVUS_BOOT_DIR);
+    }
+
+    if (file_exists(WALLPAPER_SRC)) {
+        cmd_run(true, "cp %s %s/wallpaper.png", WALLPAPER_SRC, CERVUS_BOOT_DIR);
+        print_color(COLOR_GREEN, "  wallpaper -> %s/wallpaper.png", CERVUS_BOOT_DIR);
+    }
+
+    if (!already_has_cervus) {
+        print_color(COLOR_CYAN, "Step 4: Adding Cervus entry to limine.conf...");
+
+        FILE *f = fopen(LIMINE_CONF_PATH, "a");
+        if (!f) {
+            print_color(COLOR_RED, "Cannot open %s for writing", LIMINE_CONF_PATH);
+            return;
+        }
+
+        fprintf(f, "\n%s\n", CERVUS_MARKER);
+
+        if (file_exists(WALLPAPER_SRC))
+            fprintf(f, "wallpaper: boot():/cervus/wallpaper.png\n");
+
+        fprintf(f,
+            "/%s %s (Hardware Test)\n"
+            "    protocol: limine\n"
+            "    path: boot():/cervus/kernel\n",
+            IMAGE_NAME, VERSION);
+
+        if (file_exists(SHELL_ELF)) {
+            fprintf(f,
+                "    module_path: boot():/cervus/shell.elf\n"
+                "    module_cmdline: init\n");
+        }
+
+        if (file_exists(INITRAMFS_TAR)) {
+            fprintf(f,
+                "    module_path: boot():/cervus/initramfs.tar\n"
+                "    module_cmdline: initramfs\n");
+        }
+
+        fprintf(f, "%s\n", "# --- END CERVUS ---");
+
+        fclose(f);
+        print_color(COLOR_GREEN, "Cervus boot entry added to limine.conf");
+    } else {
+        print_color(COLOR_CYAN, "Step 4: Updating Cervus entry in limine.conf...");
+
+        FILE *orig = fopen(LIMINE_CONF_PATH, "r");
+        if (!orig) {
+            print_color(COLOR_RED, "Cannot read %s", LIMINE_CONF_PATH);
+            return;
+        }
+
+        char tmppath[PATH_MAX];
+        snprintf(tmppath, sizeof(tmppath), "%s.tmp", LIMINE_CONF_PATH);
+        FILE *tmp = fopen(tmppath, "w");
+        if (!tmp) { fclose(orig); print_color(COLOR_RED, "Cannot create temp file"); return; }
+
+        char line[1024];
+        bool in_cervus = false;
+        while (fgets(line, sizeof(line), orig)) {
+            if (strstr(line, CERVUS_MARKER)) {
+                in_cervus = true;
+                continue;
+            }
+            if (in_cervus && strstr(line, "# --- END CERVUS ---")) {
+                in_cervus = false;
+                continue;
+            }
+            if (!in_cervus) {
+                fputs(line, tmp);
+            }
+        }
+        fclose(orig);
+
+        fprintf(tmp, "\n%s\n", CERVUS_MARKER);
+
+        if (file_exists(WALLPAPER_SRC))
+            fprintf(tmp, "wallpaper: boot():/cervus/wallpaper.png\n");
+
+        fprintf(tmp,
+            "/%s %s (Hardware Test)\n"
+            "    protocol: limine\n"
+            "    path: boot():/cervus/kernel\n",
+            IMAGE_NAME, VERSION);
+
+        if (file_exists(SHELL_ELF)) {
+            fprintf(tmp,
+                "    module_path: boot():/cervus/shell.elf\n"
+                "    module_cmdline: init\n");
+        }
+
+        if (file_exists(INITRAMFS_TAR)) {
+            fprintf(tmp,
+                "    module_path: boot():/cervus/initramfs.tar\n"
+                "    module_cmdline: initramfs\n");
+        }
+
+        fprintf(tmp, "%s\n", "# --- END CERVUS ---");
+        fclose(tmp);
+
+        cmd_run(false, "mv %s %s", tmppath, LIMINE_CONF_PATH);
+        print_color(COLOR_GREEN, "Cervus entry updated in limine.conf");
+    }
+
+    print_color(COLOR_GREEN, "\n=== Setup Complete ===");
+    print_color(COLOR_CYAN, "--- Current limine.conf ---");
+    cmd_run(false, "cat %s", LIMINE_CONF_PATH);
+    print_color(COLOR_CYAN, "---------------------------");
+
+    print_color(COLOR_GREEN, "\nCervus will appear in your Limine boot menu.");
+    print_color(COLOR_YELLOW, "Select '%s %s (Hardware Test)' at boot.", IMAGE_NAME, VERSION);
+    print_color(COLOR_YELLOW, "To restore original config: sudo ./build --resethardwareconf");
+
+    if (ask_yes_no("\nReboot now to test on real hardware?")) {
+        print_color(COLOR_YELLOW, "Rebooting...");
+        cmd_run(false, "reboot");
+    } else {
+        print_color(COLOR_GREEN, "OK. Reboot manually when ready.");
+    }
+}
+
 static void print_help(void) {
     printf("%sCervus OS build system%s\n\n", COLOR_BOLD, COLOR_RESET);
     printf("Usage: ./build [command] [options]\n\n");
     printf("Commands:\n");
-    printf("  run            Build kernel + initramfs + ISO, then launch QEMU\n");
-    printf("  flash          Flash latest ISO to USB device (requires sudo)\n");
-    printf("  clean          Remove all build artifacts\n");
-    printf("  cleaniso       Remove only ISO images in demo_iso/\n");
-    printf("  gitclean       Same as clean (for git commit prep)\n");
-    printf("  help           Show this message\n\n");
+    printf("  run              Build kernel + initramfs + ISO, then launch QEMU\n");
+    printf("  hardwaretest     Build & install Cervus into Limine boot menu (requires sudo)\n");
+    printf("  flash            Flash latest ISO to USB device (requires sudo)\n");
+    printf("  clean            Remove all build artifacts\n");
+    printf("  cleaniso         Remove only ISO images in demo_iso/\n");
+    printf("  gitclean         Same as clean (for git commit prep)\n");
+    printf("  help             Show this message\n\n");
     printf("Options:\n");
-    printf("  --tree [files] Generate OS-TREE.txt (optional: only list files)\n");
-    printf("  --structure-only  Generate tree without file contents\n");
-    printf("  --no-clean     Keep obj/ and bin/ after run\n");
-    printf("  --no-initramfs Skip initramfs.tar creation\n\n");
+    printf("  --tree [files]         Generate OS-TREE.txt (optional: only list files)\n");
+    printf("  --structure-only       Generate tree without file contents\n");
+    printf("  --no-clean             Keep obj/ and bin/ after run\n");
+    printf("  --no-initramfs         Skip initramfs.tar creation\n");
+    printf("  --resethardwareconf    Restore original Limine config (requires sudo)\n\n");
+    printf("Hardware test workflow:\n");
+    printf("  sudo ./build hardwaretest        # build, install to /boot, add boot entry\n");
+    printf("  sudo ./build --resethardwareconf # restore original bootloader config\n\n");
     printf("Examples:\n");
     printf("  ./build run\n");
     printf("  ./build run --no-initramfs\n");
@@ -954,12 +1225,19 @@ int main(int argc, char **argv) {
             ARG_NO_CLEAN = true;
         } else if (strcmp(argv[i], "--no-initramfs") == 0) {
             ARG_NO_INITRAMFS = true;
+        } else if (strcmp(argv[i], "--resethardwareconf") == 0) {
+            ARG_RESET_HW_CONF = true;
         } else if (argv[i][0] != '-') {
             command = argv[i];
         }
     }
 
     if (ARG_TREE && !command) { do_generate_tree(); return 0; }
+
+    if (ARG_RESET_HW_CONF) {
+        reset_hardware_conf();
+        return 0;
+    }
 
     if (!command || strcmp(command, "help") == 0) {
         print_help();
@@ -984,6 +1262,11 @@ int main(int argc, char **argv) {
 
     if (strcmp(command, "flash") == 0) {
         flash_iso();
+        return 0;
+    }
+
+    if (strcmp(command, "hardwaretest") == 0) {
+        hardware_test();
         return 0;
     }
 

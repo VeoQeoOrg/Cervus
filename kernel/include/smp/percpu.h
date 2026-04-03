@@ -44,6 +44,7 @@ _Static_assert(__builtin_offsetof(percpu_t, user_saved_rip) == 104, "percpu: sav
 
 extern percpu_t percpu;
 extern percpu_t* percpu_regions[MAX_CPUS];
+extern bool g_has_fsgsbase;
 
 percpu_t* get_percpu(void);
 percpu_t* get_percpu_mut(void);

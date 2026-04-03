@@ -51,5 +51,8 @@ void fb_fill_rect(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_
 void fb_clear(struct limine_framebuffer *fb, uint32_t color);
 void fb_draw_char(struct limine_framebuffer *fb, char c, uint32_t x, uint32_t y, uint32_t color);
 void fb_draw_string(struct limine_framebuffer *fb, const char *str, uint32_t x, uint32_t y, uint32_t color);
+void fb_init_backbuffer(struct limine_framebuffer *fb);
+void fb_flush(struct limine_framebuffer *fb);
+void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_end);
 
 #endif

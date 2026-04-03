@@ -12,6 +12,7 @@ extern struct limine_framebuffer *global_framebuffer;
 static int  cursor_visible  = 1;
 static int  scroll_buffer_index = 0;
 static int  total_scroll_lines  = 0;
+static int  flush_inhibit = 0;
 
 uint32_t get_screen_width(void) {
     if (!global_framebuffer) return 1024;
@@ -22,35 +23,70 @@ uint32_t get_screen_height(void) {
     return global_framebuffer->height;
 }
 
+static void flush_all(void) {
+    if (!flush_inhibit && global_framebuffer)
+        fb_flush(global_framebuffer);
+}
+
+static void flush_region(uint32_t y_start, uint32_t h) {
+    if (!flush_inhibit && global_framebuffer)
+        fb_flush_lines(global_framebuffer, y_start, y_start + h);
+}
+
 void scroll_screen(int lines) {
     if (!global_framebuffer || lines <= 0) return;
-    uint32_t sw = get_screen_width();
     uint32_t sh = get_screen_height();
     uint32_t sp = (uint32_t)(lines * 16);
-    if (sp >= sh) { fb_clear(global_framebuffer, bg_color); return; }
-    uint32_t *fb = (uint32_t *)global_framebuffer->address;
-    uint32_t  pitch = global_framebuffer->pitch / 4;
-    for (uint32_t y = sp; y < sh; y++)
-        memcpy(fb + (y - sp) * pitch, fb + y * pitch, sw * sizeof(uint32_t));
-    for (uint32_t y = sh - sp; y < sh; y++)
-        for (uint32_t x = 0; x < sw; x++)
-            fb_draw_pixel(global_framebuffer, x, y, bg_color);
+    if (sp >= sh) { fb_clear(global_framebuffer, bg_color); flush_all(); return; }
+
+    uint32_t *buf = (uint32_t *)global_framebuffer->address;
+    extern uint32_t *g_backbuf;
+    extern uint32_t  g_bb_pitch;
+    uint32_t pitch;
+    uint32_t *target;
+    if (g_backbuf) {
+        target = g_backbuf;
+        pitch = g_bb_pitch;
+    } else {
+        target = buf;
+        pitch = global_framebuffer->pitch / 4;
+    }
+
+    uint32_t rows_to_move = sh - sp;
+    memmove(target, target + sp * pitch, rows_to_move * pitch * sizeof(uint32_t));
+    memset(target + rows_to_move * pitch, 0, sp * pitch * sizeof(uint32_t));
+
+    if (bg_color != 0) {
+        uint32_t sw = get_screen_width();
+        uint32_t *clear_start = target + rows_to_move * pitch;
+        for (uint32_t y = 0; y < sp; y++) {
+            uint32_t *row = clear_start + y * pitch;
+            for (uint32_t x = 0; x < sw; x++)
+                row[x] = bg_color;
+        }
+    }
+
+    flush_all();
 }
 
 static void draw_cursor_at(uint32_t x, uint32_t y) {
     if (!global_framebuffer || !cursor_visible) return;
+    if (x + 8 > global_framebuffer->width || y + 16 > global_framebuffer->height) return;
     for (uint32_t col = 0; col < 8; col++) {
         fb_draw_pixel(global_framebuffer, x + col, y + 14, text_color);
         fb_draw_pixel(global_framebuffer, x + col, y + 15, text_color);
     }
+    flush_region(y + 14, 2);
 }
 
 static void erase_cursor_at(uint32_t x, uint32_t y) {
     if (!global_framebuffer) return;
+    if (x + 8 > global_framebuffer->width || y + 16 > global_framebuffer->height) return;
     for (uint32_t col = 0; col < 8; col++) {
         fb_draw_pixel(global_framebuffer, x + col, y + 14, bg_color);
         fb_draw_pixel(global_framebuffer, x + col, y + 15, bg_color);
     }
+    flush_region(y + 14, 2);
 }
 
 void draw_cursor(void)  { draw_cursor_at(cursor_x, cursor_y); }
@@ -112,13 +148,9 @@ static void handle_sgr(void) {
 static void erase_to_eol(void) {
     if (!global_framebuffer) return;
     uint32_t sw = get_screen_width();
-    uint32_t x  = cursor_x;
-    while (x + 8 <= sw) {
-        for (uint32_t row = 0; row < 16; row++)
-            for (uint32_t col = 0; col < 8; col++)
-                fb_draw_pixel(global_framebuffer, x + col, cursor_y + row, bg_color);
-        x += 8;
-    }
+    if (cursor_x >= sw) return;
+    fb_fill_rect(global_framebuffer, cursor_x, cursor_y, sw - cursor_x, 16, bg_color);
+    flush_region(cursor_y, 16);
 }
 
 static void cursor_move_right(int n) {
@@ -136,9 +168,7 @@ static uint32_t saved_cx = 0, saved_cy = 0;
 
 static void clear_cell(uint32_t x, uint32_t y) {
     if (!global_framebuffer) return;
-    for (uint32_t row = 0; row < 16; row++)
-        for (uint32_t col = 0; col < 8; col++)
-            fb_draw_pixel(global_framebuffer, x + col, y + row, bg_color);
+    fb_fill_rect(global_framebuffer, x, y, 8, 16, bg_color);
 }
 
 static void draw_and_advance(char c) {
@@ -147,6 +177,7 @@ static void draw_and_advance(char c) {
     uint32_t sw = get_screen_width();
     clear_cell(cursor_x, cursor_y);
     fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
+    flush_region(cursor_y, 16);
     cursor_x += 8;
     if (cursor_x + 8 > sw) { cursor_x = 0; cursor_y += 16; }
     if (cursor_y + 16 > sh) { scroll_screen(1); cursor_y = sh - 16; }
@@ -172,7 +203,8 @@ int putchar(int c) {
         case '\b':
             if (cursor_x >= 8) {
                 cursor_x -= 8;
-                fb_draw_char(global_framebuffer, ' ', cursor_x, cursor_y, text_color);
+                clear_cell(cursor_x, cursor_y);
+                flush_region(cursor_y, 16);
             }
             break;
         default:
@@ -216,6 +248,7 @@ int putchar(int c) {
                 if (mode == 2 || mode == 3) {
                     fb_clear(global_framebuffer, bg_color);
                     cursor_x = 0; cursor_y = 0;
+                    flush_all();
                 }
                 break;
             }
@@ -261,6 +294,7 @@ void clear_screen_with_scroll(void) {
         fb_clear(global_framebuffer, bg_color);
         cursor_x = 0; cursor_y = 0;
         scroll_buffer_index = 0; total_scroll_lines = 0;
+        flush_all();
     }
 }
 void get_cursor_position(uint32_t *x, uint32_t *y) {
