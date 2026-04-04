@@ -9,9 +9,15 @@
 #include "../../include/drivers/ps2.h"
 #include "../../include/sched/sched.h"
 #include "../../include/apic/apic.h"
+#include "../../include/smp/percpu.h"
 
 extern void draw_cursor(void);
 extern void erase_cursor(void);
+
+static inline task_t* devfs_cur_task(void) {
+    percpu_t* pc = get_percpu();
+    return pc ? (task_t*)pc->current_task : NULL;
+}
 
 static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
@@ -26,6 +32,12 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     draw_cursor();
 
     while (kb_buf_empty()) {
+        task_t *me = devfs_cur_task();
+        if (me && me->pending_kill) {
+            erase_cursor();
+            return -EINTR;
+        }
+
         if (half_tick) {
             uint64_t now = hpet_read_counter();
             if (now >= next_blink) {
@@ -39,12 +51,24 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
 
     erase_cursor();
 
-    dst[0] = kb_buf_getc();
+    task_t *me = devfs_cur_task();
+    if (me && me->pending_kill) {
+        kb_buf_consume_ctrlc();
+        return -EINTR;
+    }
+
+    char first = kb_buf_getc();
+    if (first == 0x03) {
+        return -EINTR;
+    }
+
+    dst[0] = first;
     size_t got = 1;
 
     while (got < len) {
         char c;
         if (!kb_buf_try_getc(&c)) break;
+        if (c == 0x03) break;
         dst[got++] = c;
         if (c == '\n') break;
     }
