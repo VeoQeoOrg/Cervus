@@ -1,19 +1,7 @@
-#include "cervus_user.h"
-
-__attribute__((naked)) void _start(void) {
-    asm volatile("mov %%rsp,%%rdi\nand $-16,%%rsp\ncall _start_main\nud2\n":::"memory");
-}
-
-static void ws(const char *s){size_t n=0;while(s[n])n++;write(1,s,n);}
-static void wn(void){write(1,"\n",1);}
-
-static void print_u64(uint64_t v){
-    if(!v){write(1,"0",1);return;}
-    char t[22];int i=21;t[i]='\0';
-    while(v){t[--i]='0'+v%10;v/=10;}ws(t+i);}
+#include "../apps/cervus_user.h"
 
 static void print_pad2(int v){
-    if(v<10)write(1," ",1);
+    if(v<10) write(1," ",1);
     print_u64(v);}
 
 static const char *MNAME[12]={
@@ -31,8 +19,7 @@ static int first_dow(int y, int m){
     int md[12]={31,28,31,30,31,30,31,31,30,31,30,31};
     md[1]=is_leap(y)?29:28;
     for(int mo=0;mo<m-1;mo++) days+=md[mo];
-    return (int)((days+4)%7);
-}
+    return (int)((days+4)%7);}
 
 static void print_month(int y, int m){
     const char *mn=MNAME[m-1];
@@ -40,34 +27,25 @@ static void print_month(int y, int m){
     int pad=(20-mnlen-5)/2;
     for(int i=0;i<pad;i++) write(1," ",1);
     ws(mn); write(1," ",1); print_u64(y); wn();
-
     ws(" Su Mo Tu We Th Fr Sa\n");
-
     int mdays=MDAYS[m-1];
     if(m==2&&is_leap(y)) mdays=29;
-
     int dow=first_dow(y,m);
     for(int i=0;i<dow;i++) ws("   ");
-
     for(int d=1;d<=mdays;d++){
         write(1," ",1);
         print_pad2(d);
         dow++;
         if(dow==7){ wn(); dow=0; }
     }
-    if(dow!=0) wn();
-}
+    if(dow!=0) wn();}
 
 static uint64_t parse_uint(const char *s){
     uint64_t v=0;
     while(*s>='0'&&*s<='9'){v=v*10+(*s-'0');s++;}
     return v;}
 
-void _start_main(uint64_t *sp){
-    (void)sp;
-    int argc=(int)sp[0];
-    char **argv=(char**)(sp+1);
-
+CERVUS_MAIN(cal_main) {
     int year=2025, month=1;
     cervus_timespec_t ts;
     if(clock_gettime(0,&ts)==0 && ts.tv_sec>0){
@@ -81,7 +59,6 @@ void _start_main(uint64_t *sp){
         while(mo<12){if(days<md[mo])break;days-=md[mo];mo++;}
         year=y; month=mo+1;
     }
-
     if(argc==3){
         month=(int)parse_uint(argv[1]);
         year =(int)parse_uint(argv[2]);
@@ -96,7 +73,6 @@ void _start_main(uint64_t *sp){
         }
         exit(0);
     }
-
     if(month<1||month>12){ ws("cal: invalid month\n"); exit(1); }
     wn();
     print_month(year,month);

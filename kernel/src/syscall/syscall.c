@@ -830,6 +830,17 @@ static int64_t sys_munmap(uint64_t addr, uint64_t length) {
 }
 
 static int64_t sys_uptime(void)     { return (int64_t)hpet_elapsed_ns(); }
+
+static int64_t sys_meminfo(uint64_t buf_ptr) {
+    if (!buf_ptr) return -EINVAL;
+    cervus_meminfo_t info;
+    info.total_bytes  = (uint64_t)pmm_get_usable_pages() * PAGE_SIZE;
+    info.free_bytes   = (uint64_t)pmm_get_free_pages()   * PAGE_SIZE;
+    info.used_bytes   = (uint64_t)pmm_get_used_pages()   * PAGE_SIZE;
+    info.usable_bytes = info.total_bytes;
+    info.page_size    = PAGE_SIZE;
+    return copy_to_user((void*)buf_ptr, &info, sizeof(info));
+}
 static int64_t sys_sleep_ns(uint64_t ns) {
     if (ns == 0) return 0;
     if (!hpet_is_available()) {
@@ -921,7 +932,7 @@ W3(sys_fcntl)
 W2(sys_readdir)
 W1(sys_brk)         W6(sys_mmap)
 W2(sys_munmap)
-W2(sys_clock_get)   W1(sys_sleep_ns)   W0(sys_uptime)
+W2(sys_clock_get)   W1(sys_sleep_ns)   W0(sys_uptime)   W1(sys_meminfo)
 W2(sys_dbg_print)
 W2(sys_ioport_read) W3(sys_ioport_write)
 
@@ -963,6 +974,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_CLOCK_GET]    = _sys_clock_get,
     [SYS_SLEEP_NS]     = _sys_sleep_ns,
     [SYS_UPTIME]       = _sys_uptime,
+    [SYS_MEMINFO]      = _sys_meminfo,
     [SYS_DBG_PRINT]    = _sys_dbg_print,
     [SYS_IOPORT_READ]  = _sys_ioport_read,
     [SYS_IOPORT_WRITE] = _sys_ioport_write,

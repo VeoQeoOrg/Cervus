@@ -1,11 +1,4 @@
-#include "cervus_user.h"
-
-__attribute__((naked)) void _start(void) {
-    asm volatile("mov %%rsp,%%rdi\nand $-16,%%rsp\ncall _start_main\nud2\n":::"memory");
-}
-
-static void ws(const char *s){size_t n=0;while(s[n])n++;write(1,s,n);}
-static void wn(void){write(1,"\n",1);}
+#include "../apps/cervus_user.h"
 
 static double d_abs(double v){ return v < 0.0 ? -v : v; }
 
@@ -316,10 +309,7 @@ static int readline_edit(char *buf, int max){
     }
 }
 
-void _start_main(uint64_t *sp){
-    (void)sp;
-    int argc = (int)sp[0];
-    char **argv = (char**)(sp+1);
+CERVUS_MAIN(calc_main) {
 
     if(argc >= 2){
         build_expr(argc, argv);

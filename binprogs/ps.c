@@ -1,30 +1,12 @@
-#include "cervus_user.h"
-
-__attribute__((naked)) void _start(void) {
-    asm volatile("mov %%rsp,%%rdi\nand $-16,%%rsp\ncall _start_main\nud2\n":::"memory");
-}
-
-static void ws(const char *s){size_t n=0;while(s[n])n++;write(1,s,n);}
-static void wn(void){write(1,"\n",1);}
-
-static void print_u64(uint64_t v){
-    if(!v){write(1,"0",1);return;}
-    char t[22];int i=21;t[i]='\0';
-    while(v){t[--i]='0'+v%10;v/=10;}
-    ws(t+i);}
+#include "../apps/cervus_user.h"
 
 static void print_padded(uint64_t v, int width){
-    char t[22];int i=21;t[i]='\0';
-    if(!v){t[--i]='0';}
-    else{while(v){t[--i]='0'+v%10;v/=10;}}
+    char t[22]; int i=21; t[i]='\0';
+    if(!v){ t[--i]='0'; }
+    else{ while(v){ t[--i]='0'+v%10; v/=10; } }
     int len=21-i;
     for(int p=len;p<width;p++) write(1," ",1);
     ws(t+i);}
-
-static void print_str_padded(const char *s, int width){
-    int len=0;while(s[len])len++;
-    ws(s);
-    for(int p=len;p<width;p++) write(1," ",1);}
 
 static const char *state_str(uint32_t s){
     switch(s){
@@ -33,11 +15,10 @@ static const char *state_str(uint32_t s){
         case 2: return "BLOCKED ";
         case 3: return "ZOMBIE  ";
         default:return "UNKNOWN ";
-    }
-}
+    }}
 
-void _start_main(uint64_t *sp){
-    (void)sp;
+CERVUS_MAIN(ps_main) {
+    (void)argc; (void)argv;
     ws("  PID  PPID  UID  STATE    PRIO  NAME\n");
     ws("  ---  ----  ---  -------  ----  ----------------\n");
     uint32_t seen[512]; int nseen=0;

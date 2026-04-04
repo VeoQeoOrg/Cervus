@@ -39,6 +39,7 @@
 #define SYS_CLOCK_GET    60
 #define SYS_SLEEP_NS     61
 #define SYS_UPTIME       62
+#define SYS_MEMINFO      63
 
 #define SYS_FUTEX_WAIT   80
 #define SYS_FUTEX_WAKE   81
@@ -90,5 +91,13 @@ typedef struct {
     int64_t  tv_sec;
     int64_t  tv_nsec;
 } cervus_timespec_t;
+
+typedef struct {
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+    uint64_t used_bytes;
+    uint64_t usable_bytes;
+    uint64_t page_size;
+} cervus_meminfo_t;
 
 #endif

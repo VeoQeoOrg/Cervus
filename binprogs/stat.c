@@ -1,24 +1,4 @@
-#include "cervus_user.h"
-
-__attribute__((naked)) void _start(void) {
-    asm volatile("mov %%rsp,%%rdi\nand $-16,%%rsp\ncall _start_main\nud2\n":::"memory");
-}
-
-static void ws(const char *s){size_t n=0;while(s[n])n++;write(1,s,n);}
-static void wn(void){write(1,"\n",1);}
-
-static void print_u64(uint64_t v){
-    if(!v){write(1,"0",1);return;}
-    char t[22];int i=21;t[i]='\0';
-    while(v){t[--i]='0'+v%10;v/=10;}
-    ws(t+i);}
-
-static void print_hex(uint64_t v){
-    static const char h[]="0123456789abcdef";
-    if(!v){ws("0x0");return;}
-    char t[19];t[0]='0';t[1]='x';int i=18;t[18]='\0';
-    while(v){t[--i]=h[v&0xF];v>>=4;}
-    ws(t+i);}
+#include "../apps/cervus_user.h"
 
 static const char *type_str(uint32_t t){
     switch(t){
@@ -29,19 +9,13 @@ static const char *type_str(uint32_t t){
         case 4: return "symlink";
         case 5: return "pipe";
         default:return "unknown";
-    }
-}
+    }}
 
-void _start_main(uint64_t *sp){
-    (void)sp;
-    int argc=(int)sp[0];
-    char **argv=(char**)(sp+1);
-
+CERVUS_MAIN(stat_main) {
     if(argc<2){
         ws("Usage: stat <file>\n");
         exit(1);
     }
-
     for(int i=1;i<argc;i++){
         cervus_stat_t st;
         char resolved[512];

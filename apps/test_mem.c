@@ -1,15 +1,11 @@
-#include "cervus_user.h"
-
-__attribute__((naked)) void _start(void) {
-    asm volatile("mov %%rsp,%%rdi; and $-16,%%rsp; call test_main; ud2":::  "memory");
-}
+#include "../apps/cervus_user.h"
 
 static int failed = 0;
 static void ok(const char *s)   { printf("  [OK]  %s\n", s); }
 static void fail(const char *s) { printf("  [FAIL] %s\n", s); failed = 1; }
 
-void test_main(uint64_t *sp) {
-    (void)sp;
+CERVUS_MAIN(test_mem_main) {
+    (void)argc; (void)argv;
     puts("--- test_mem ---");
 
     void *brk0 = sbrk(0);

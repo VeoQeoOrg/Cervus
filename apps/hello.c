@@ -1,4 +1,4 @@
-#include "cervus_user.h"
+#include "../apps/cervus_user.h"
 
 static void print_ok  (const char *s) { printf("  [OK]  %s\n", s); }
 static void print_fail(const char *s) { printf("  [FAIL] %s\n", s); }
@@ -76,18 +76,8 @@ static void run_all_tests(void) {
     puts("========================================");
 }
 
-__attribute__((naked)) void _start(void) {
-    asm volatile(
-        "mov  %%rsp, %%rdi\n\t"
-        "and  $-16, %%rsp\n\t"
-        "call _start_main\n\t"
-        "ud2\n\t"
-        ::: "memory"
-    );
-}
-
-void _start_main(uint64_t *initial_rsp) {
-    (void)initial_rsp;
+CERVUS_MAIN(hello_main) {
+    (void)argc; (void)argv;
     run_all_tests();
     exit(0);
 }

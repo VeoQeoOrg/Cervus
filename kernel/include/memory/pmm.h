@@ -72,6 +72,7 @@ uintptr_t pmm_virt_to_phys(void *vaddr);
 uint64_t  pmm_get_hhdm_offset(void);
 
 size_t pmm_get_total_pages(void);
+size_t pmm_get_usable_pages(void);
 size_t pmm_get_free_pages(void);
 size_t pmm_get_used_pages(void);
 void   pmm_print_stats(void);

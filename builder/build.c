@@ -26,9 +26,10 @@
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
 
-#define APPS_DIR   "apps"
-#define SHELL_SRC  "apps/shell.c"
-#define SHELL_ELF  "apps/shell.elf"
+#define APPS_DIR     "apps"
+#define BIN_APPS_DIR "binprogs"
+#define SHELL_SRC    "apps/shell.c"
+#define SHELL_ELF    "apps/shell.elf"
 
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
@@ -344,6 +345,94 @@ void clean_apps_elfs(void) {
     closedir(d);
 }
 
+static app_entry_t g_bin_apps[MAX_APPS];
+static int         g_nbin = 0;
+
+static int scan_bin_apps(void) {
+    g_nbin = 0;
+    DIR *d = opendir(BIN_APPS_DIR);
+    if (!d) {
+        print_color(COLOR_YELLOW, "[bin] No '%s' directory found, skipping", BIN_APPS_DIR);
+        return 0;
+    }
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL && g_nbin < MAX_APPS) {
+        const char *nm = de->d_name;
+        size_t nlen = strlen(nm);
+        if (nlen < 3) continue;
+        if (nm[0] == '.') continue;
+        if (strcmp(nm + nlen - 2, ".c") != 0) continue;
+
+        app_entry_t *e = &g_bin_apps[g_nbin];
+        snprintf(e->src,  sizeof(e->src),  "%s/%s",       BIN_APPS_DIR, nm);
+        snprintf(e->elf,  sizeof(e->elf),  "%s/%.*s.elf", BIN_APPS_DIR, (int)(nlen-2), nm);
+        snprintf(e->name, sizeof(e->name), "%.*s",         (int)(nlen-2), nm);
+        g_nbin++;
+    }
+    closedir(d);
+    for (int i = 1; i < g_nbin; i++) {
+        app_entry_t tmp = g_bin_apps[i]; int j = i-1;
+        while (j >= 0 && strcmp(g_bin_apps[j].name, tmp.name) > 0) {
+            g_bin_apps[j+1] = g_bin_apps[j]; j--;
+        }
+        g_bin_apps[j+1] = tmp;
+    }
+    return g_nbin;
+}
+
+static bool build_one_bin_app(const app_entry_t *e) {
+    if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
+        print_color(COLOR_GREEN, "[bin] %s is up to date", e->elf);
+        return true;
+    }
+    print_color(COLOR_CYAN, "[bin] Compiling %s -> %s", e->src, e->elf);
+
+    int ret = cmd_run(false,
+        "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
+        " -O0 -g -I" APPS_DIR
+        " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2"
+        " -mno-red-zone"
+        " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
+        " -o %s %s",
+        e->elf, e->src);
+    if (ret != 0) {
+        print_color(COLOR_RED, "[bin] Failed to compile %s", e->src);
+        return false;
+    }
+    print_color(COLOR_GREEN, "[bin] %s built successfully", e->elf);
+    return true;
+}
+
+bool build_all_bin_apps(void) {
+    scan_bin_apps();
+    if (g_nbin == 0) {
+        print_color(COLOR_YELLOW, "[bin] No .c files found in '%s'", BIN_APPS_DIR);
+        return true;
+    }
+    print_color(COLOR_CYAN, "[bin] Found %d program(s) in '%s'", g_nbin, BIN_APPS_DIR);
+    for (int i = 0; i < g_nbin; i++) {
+        if (!build_one_bin_app(&g_bin_apps[i])) return false;
+    }
+    return true;
+}
+
+void clean_bin_elfs(void) {
+    DIR *d = opendir(BIN_APPS_DIR);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t nlen = strlen(nm);
+        if (nlen < 5) continue;
+        if (strcmp(nm + nlen - 4, ".elf") != 0) continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", BIN_APPS_DIR, nm);
+        remove(path);
+        print_color(COLOR_YELLOW, "[clean] removed %s", path);
+    }
+    closedir(d);
+}
+
 
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
@@ -361,6 +450,15 @@ bool build_initramfs(void) {
             if (file_exists(g_apps[i].elf) &&
                 get_mtime(g_apps[i].elf) > get_mtime(INITRAMFS_TAR)) {
                 any_newer = true; break;
+            }
+        }
+        if (!any_newer) {
+            scan_bin_apps();
+            for (int i = 0; i < g_nbin; i++) {
+                if (file_exists(g_bin_apps[i].elf) &&
+                    get_mtime(g_bin_apps[i].elf) > get_mtime(INITRAMFS_TAR)) {
+                    any_newer = true; break;
+                }
             }
         }
     }
@@ -426,6 +524,23 @@ bool build_initramfs(void) {
         if (stub) fclose(stub);
     }
 
+    scan_bin_apps();
+    print_color(COLOR_CYAN, "[initramfs] Copying %d bin program(s) -> rootfs/bin/", g_nbin);
+    for (int i = 0; i < g_nbin; i++) {
+        if (!file_exists(g_bin_apps[i].elf)) {
+            print_color(COLOR_YELLOW, "[initramfs] %s not built, skipping", g_bin_apps[i].src);
+            continue;
+        }
+        char dst[512];
+        snprintf(dst, sizeof(dst), "%s/bin/%s", INITRAMFS_ROOTFS, g_bin_apps[i].name);
+        if (cmd_run(false, "cp %s %s", g_bin_apps[i].elf, dst) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy %s", g_bin_apps[i].elf);
+        } else {
+            print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/%s",
+                        g_bin_apps[i].elf, g_bin_apps[i].name);
+        }
+    }
+
     ensure_dir(INITRAMFS_ROOTFS "/apps");
     scan_apps();
     for (int i = 0; i < g_naps; i++) {
@@ -450,9 +565,15 @@ bool build_initramfs(void) {
             "This is Cervus - a hobby x86_64 OS written in C.\n"
             "With Limine Bootloader.\n"
             "\n"
-            "Shell commands:\n"
-            "  help, ls, cat, cd, pwd\n"
-            "  meminfo, cpuinfo, uname, clear, echo\n"
+            "Built-in shell commands:\n"
+            "  help, cd, exit\n"
+            "\n"
+            "Programs in /bin (always available):\n"
+            "  ls, cat, echo, pwd, clear, uname, meminfo, cpuinfo\n"
+            "\n"
+            "Programs in /apps (run from /apps dir):\n"
+            "  hello, calc, cal, date, ps, uptime, find, stat,\n"
+            "  hexdump, kill, wc, yes, sleep, ...\n"
             "\n"
             "Source: https://github.com/VeoQeo/Cervus\n"
         );
@@ -541,6 +662,7 @@ bool compile_kernel(void) {
     if (!setup_dependencies()) return false;
 
     if (!build_all_apps()) return false;
+    if (!build_all_bin_apps()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -1247,6 +1369,7 @@ int main(int argc, char **argv) {
     if (strcmp(command, "clean") == 0 || strcmp(command, "gitclean") == 0) {
         for (int i = 0; DIRS_TO_CLEAN[i];  i++) rm_rf(DIRS_TO_CLEAN[i]);
         clean_apps_elfs();
+        clean_bin_elfs();
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
         cmd_run(false, "rm -f temp_* 2>/dev/null");
@@ -1309,6 +1432,7 @@ int main(int argc, char **argv) {
                 print_color(COLOR_GREEN, "[post-run] removed %s", INITRAMFS_TAR);
             }
             clean_apps_elfs();
+            clean_bin_elfs();
             print_color(COLOR_GREEN, "[post-run] Done.");
         }
         return 0;

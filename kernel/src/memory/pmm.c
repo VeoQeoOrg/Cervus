@@ -297,8 +297,10 @@ void     *pmm_phys_to_virt(uintptr_t phys)  { return (void *)(phys + g_buddy.hhd
 uintptr_t pmm_virt_to_phys(void *vaddr)      { return (uintptr_t)vaddr - g_buddy.hhdm_offset; }
 uint64_t  pmm_get_hhdm_offset(void)          { return g_buddy.hhdm_offset; }
 size_t    pmm_get_total_pages(void)           { return g_buddy.total_pages; }
+size_t    pmm_get_usable_pages(void)          { return g_buddy.usable_pages; }
 size_t    pmm_get_free_pages(void)            { return g_buddy.free_pages; }
-size_t    pmm_get_used_pages(void)            { return g_buddy.total_pages - g_buddy.free_pages; }
+size_t    pmm_get_used_pages(void)            { return g_buddy.usable_pages > g_buddy.free_pages
+                                                       ? g_buddy.usable_pages - g_buddy.free_pages : 0; }
 
 static void _print_size(size_t bytes, const char *label) {
     uint64_t v = (uint64_t)bytes;
