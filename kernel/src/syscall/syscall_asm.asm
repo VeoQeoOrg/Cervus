@@ -90,7 +90,7 @@ syscall_entry:
     extern serial_printf
     mov  rdi, rax
     mov  rsi, [rax + 168]
-    and  rsi, 0xFFFFFFFF
+    mov  esi, esi
     mov  rdx, [rax + 272]
     mov  rcx, [rax + 144]
     lea  rdi, [rel .fmt_zero_rip]
@@ -143,4 +143,3 @@ syscall_entry:
     call sysret_bad_rsp_panic
     cli
     hlt
-

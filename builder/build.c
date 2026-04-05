@@ -1056,7 +1056,7 @@ static bool limine_conf_has_cervus(const char *path) {
     return false;
 }
 
-static bool copy_file_raw(const char *src, const char *dst) {
+static bool __attribute__((unused)) copy_file_raw(const char *src, const char *dst) {
     FILE *in = fopen(src, "r");
     if (!in) return false;
     FILE *out = fopen(dst, "w");
