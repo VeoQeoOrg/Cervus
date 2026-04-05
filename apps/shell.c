@@ -94,8 +94,8 @@ static void vt_goto(int row, int col) {
     write(1, b, i);
 }
 
-#define HIST_MAX 64
-#define LINE_MAX 1024
+#define HIST_MAX  64
+#define LINE_MAX  4096
 
 static char history[HIST_MAX][LINE_MAX];
 static int hist_count = 0, hist_head = 0;
@@ -114,6 +114,88 @@ static void hist_push(const char *l) {
 static const char *hist_get(int n) {
     if (n < 1 || n > hist_count) return (void *)0;
     return history[(hist_head + hist_count - n) % HIST_MAX];
+}
+
+#define ENV_MAX_VARS  128
+#define ENV_NAME_MAX   64
+#define ENV_VAL_MAX   512
+
+typedef struct {
+    char name[ENV_NAME_MAX];
+    char value[ENV_VAL_MAX];
+} env_var_t;
+
+static env_var_t g_env[ENV_MAX_VARS];
+static int       g_env_count = 0;
+
+static int env_find(const char *name) {
+    for (int i = 0; i < g_env_count; i++)
+        if (seq(g_env[i].name, name)) return i;
+    return -1;
+}
+
+static const char *env_get(const char *name) {
+    int i = env_find(name);
+    return (i >= 0) ? g_env[i].value : "";
+}
+
+static void env_set(const char *name, const char *value) {
+    int i = env_find(name);
+    if (i >= 0) {
+        scpy(g_env[i].value, value, ENV_VAL_MAX);
+        return;
+    }
+    if (g_env_count >= ENV_MAX_VARS) return;
+    scpy(g_env[g_env_count].name,  name,  ENV_NAME_MAX);
+    scpy(g_env[g_env_count].value, value, ENV_VAL_MAX);
+    g_env_count++;
+}
+
+static void env_unset(const char *name) {
+    int i = env_find(name);
+    if (i < 0) return;
+    g_env[i] = g_env[--g_env_count];
+}
+
+static int g_last_rc = 0;
+
+static void expand_vars(const char *src, char *dst, size_t dsz) {
+    size_t di = 0;
+    for (const char *p = src; *p && di + 1 < dsz; ) {
+        if (*p != '$') { dst[di++] = *p++; continue; }
+        p++;
+        if (*p == '?') {
+            char tmp[12]; int ti = 0;
+            int v = g_last_rc;
+            if (v == 0) { tmp[ti++] = '0'; }
+            else {
+                char rev[12]; int ri = 0;
+                while (v > 0) { rev[ri++] = '0' + v % 10; v /= 10; }
+                for (int x = ri - 1; x >= 0; x--) tmp[ti++] = rev[x];
+            }
+            for (int x = 0; x < ti && di + 1 < dsz; x++) dst[di++] = tmp[x];
+            p++;
+            continue;
+        }
+        int braced = (*p == '{');
+        if (braced) p++;
+        char name[ENV_NAME_MAX]; int ni = 0;
+        while (*p && ni + 1 < (int)ENV_NAME_MAX) {
+            char c = *p;
+            if (braced) {
+                if (c == '}') { p++; break; }
+            } else {
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '_')) break;
+            }
+            name[ni++] = c; p++;
+        }
+        name[ni] = '\0';
+        if (ni == 0) { dst[di++] = '$'; continue; }
+        const char *val = env_get(name);
+        for (; *val && di + 1 < dsz; val++) dst[di++] = *val;
+    }
+    dst[di] = '\0';
 }
 
 static char cwd[VFS_MAX_PATH];
@@ -205,7 +287,7 @@ static int readline_edit(char *buf, int maxlen) {
     int len  = 0;
     int pos  = 0;
     int hidx = 0;
-    char saved[LINE_MAX];
+    static char saved[LINE_MAX];
     saved[0] = '\0';
     buf[0]   = '\0';
 
@@ -448,6 +530,9 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "help" C_RESET "          show this message\n");
     ws("  " C_BOLD "cd" C_RESET " <dir>      change directory\n");
+    ws("  " C_BOLD "export" C_RESET " N=V    set variable N to value V\n");
+    ws("  " C_BOLD "unset" C_RESET " N       delete variable N\n");
+    ws("  " C_BOLD "env" C_RESET "           list variables (external program)\n");
     ws("  " C_BOLD "exit" C_RESET "          quit shell\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  Programs in " C_BOLD "/bin" C_RESET ":\n");
@@ -457,6 +542,7 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");
+    ws("  " C_BOLD "Variables:" C_RESET "  $VAR, ${VAR}, $?\n");
     ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n");
     ws("  " C_BOLD "Ctrl+A/E" C_RESET "  начало/конец строки\n");
     ws("  " C_BOLD "Ctrl+K" C_RESET "    удалить до конца\n");
@@ -483,17 +569,78 @@ static int cmd_cd(const char *path) {
     return 0;
 }
 
+static int cmd_export(int argc, char *argv[]) {
+    if (argc < 2) {
+        ws(C_RED "export: usage: export NAME=VALUE\n" C_RESET);
+        return 1;
+    }
+    for (int i = 1; i < argc; i++) {
+        char *eq = argv[i];
+        while (*eq && *eq != '=') eq++;
+        if (*eq == '=') {
+            *eq = '\0';
+            env_set(argv[i], eq + 1);
+            *eq = '=';
+        } else {
+            env_set(argv[i], "");
+        }
+    }
+    return 0;
+}
+
+static int cmd_unset(int argc, char *argv[]) {
+    if (argc < 2) {
+        ws(C_RED "unset: usage: unset NAME\n" C_RESET);
+        return 1;
+    }
+    for (int i = 1; i < argc; i++)
+        env_unset(argv[i]);
+    return 0;
+}
+
+static int find_in_path(const char *cmd, char *out, size_t outsz) {
+    const char *pathvar = env_get("PATH");
+    if (!pathvar || !pathvar[0]) {
+        path_join_s("/bin", cmd, out, outsz);
+        cervus_stat_t st;
+        return (stat(out, &st) == 0 && st.st_type != 1);
+    }
+
+    char tmp[ENV_VAL_MAX];
+    scpy(tmp, pathvar, sizeof(tmp));
+    char *p = tmp;
+    while (*p) {
+        char *seg = p;
+        while (*p && *p != ':') p++;
+        if (*p == ':') *p++ = '\0';
+        if (!seg[0]) continue;
+        char candidate[VFS_MAX_PATH];
+        path_join_s(seg, cmd, candidate, sizeof(candidate));
+        cervus_stat_t st;
+        if (stat(candidate, &st) == 0 && st.st_type != 1) {
+            scpy(out, candidate, outsz);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int run_single(char *line) {
+    char expanded[LINE_MAX];
+    expand_vars(line, expanded, sizeof(expanded));
+
     char buf[LINE_MAX];
-    scpy(buf, line, LINE_MAX);
+    scpy(buf, expanded, LINE_MAX);
     char *argv[MAX_ARGS];
     int argc = tokenize(buf, argv, MAX_ARGS);
     if (!argc) return 0;
     const char *cmd = argv[0];
 
-    if (seq(cmd, "help"))  { cmd_help(); return 0; }
-    if (seq(cmd, "exit"))  { ws("Goodbye!\n"); exit(0); }
-    if (seq(cmd, "cd"))    { return cmd_cd(argc > 1 ? argv[1] : (void *)0); }
+    if (seq(cmd, "help"))   { cmd_help(); return 0; }
+    if (seq(cmd, "exit"))   { ws("Goodbye!\n"); exit(0); }
+    if (seq(cmd, "cd"))     { return cmd_cd(argc > 1 ? argv[1] : (void *)0); }
+    if (seq(cmd, "export")) { return cmd_export(argc, argv); }
+    if (seq(cmd, "unset"))  { return cmd_unset(argc, argv); }
 
     char binpath[VFS_MAX_PATH];
     cervus_stat_t st;
@@ -501,62 +648,69 @@ static int run_single(char *line) {
     if (cmd[0] == '/' || cmd[0] == '.') {
         scpy(binpath, cmd, sizeof(binpath));
     } else {
-        char t_bin[VFS_MAX_PATH];
-        path_join_s("/bin", cmd, t_bin, sizeof(t_bin));
+        if (!find_in_path(cmd, binpath, sizeof(binpath))) {
+            int cwd_in_apps = (cwd[0] == '/' && cwd[1] == 'a' && cwd[2] == 'p' &&
+                               cwd[3] == 'p' && cwd[4] == 's' &&
+                               (cwd[5] == '\0' || cwd[5] == '/'));
+            char t_cwd[VFS_MAX_PATH];
+            path_join_s(cwd, cmd, t_cwd, sizeof(t_cwd));
+            path_norm_s(t_cwd);
 
-        int cwd_in_apps = (cwd[0] == '/' && cwd[1] == 'a' && cwd[2] == 'p' &&
-                           cwd[3] == 'p' && cwd[4] == 's' &&
-                           (cwd[5] == '\0' || cwd[5] == '/'));
-        char t_cwd[VFS_MAX_PATH];
-        path_join_s(cwd, cmd, t_cwd, sizeof(t_cwd));
-        path_norm_s(t_cwd);
-
-        if (stat(t_bin, &st) == 0 && st.st_type != 1) {
-            scpy(binpath, t_bin, sizeof(binpath));
-        } else if (cwd_in_apps && stat(t_cwd, &st) == 0 && st.st_type != 1) {
-            scpy(binpath, t_cwd, sizeof(binpath));
-        } else {
-            ws(C_RED "not found: " C_RESET); ws(cmd); wn(); return 127;
+            if (cwd_in_apps && stat(t_cwd, &st) == 0 && st.st_type != 1) {
+                scpy(binpath, t_cwd, sizeof(binpath));
+            } else {
+                ws(C_RED "not found: " C_RESET); ws(cmd); wn(); return 127;
+            }
         }
     }
-
-    char *real_argv[MAX_ARGS + 1];
-    real_argv[0] = binpath;
 
     static const char *cwd_as_arg[] = {"pwd", "ls", NULL};
-    static const char *cwd_as_env[] = {"cat", "find", "stat", "wc", "hexdump", NULL};
-    int _inject_cwd_arg = 0, _inject_cwd_env = 0;
+    int _inject_cwd_arg = 0;
     for (int _k = 0; cwd_as_arg[_k]; _k++)
         if (seq(cmd, cwd_as_arg[_k])) { _inject_cwd_arg = 1; break; }
-    for (int _k = 0; cwd_as_env[_k]; _k++)
-        if (seq(cmd, cwd_as_env[_k])) { _inject_cwd_env = 1; break; }
 
-    static char _cwd_flag[VFS_MAX_PATH + 6];
-    int real_argc = argc;
-    if (_inject_cwd_arg) {
-        if (argc < 2) {
-            real_argv[1] = cwd; real_argv[2] = (void *)0; real_argc = 2;
-        } else {
-            for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
-            real_argv[argc] = (void *)0;
-        }
-    } else if (_inject_cwd_env) {
-        _cwd_flag[0]='-'; _cwd_flag[1]='-'; _cwd_flag[2]='c';
-        _cwd_flag[3]='w'; _cwd_flag[4]='d'; _cwd_flag[5]='=';
-        scpy(_cwd_flag + 6, cwd, sizeof(_cwd_flag) - 6);
-        for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
-        real_argv[argc] = _cwd_flag; real_argv[argc + 1] = (void *)0;
-        real_argc = argc + 1;
+#define REAL_ARGV_MAX (MAX_ARGS + ENV_MAX_VARS + 4)
+    char *real_argv_buf[REAL_ARGV_MAX];
+    static char _cwd_flag[VFS_MAX_PATH + 8];
+    static char _env_flags[ENV_MAX_VARS][ENV_NAME_MAX + ENV_VAL_MAX + 8];
+
+    int ri = 0;
+    real_argv_buf[ri++] = binpath;
+
+    if (_inject_cwd_arg && argc < 2) {
+        real_argv_buf[ri++] = cwd;
     } else {
-        for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
-        real_argv[argc] = (void *)0;
+        for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
     }
-    (void)real_argc;
+
+    _cwd_flag[0]='-'; _cwd_flag[1]='-'; _cwd_flag[2]='c';
+    _cwd_flag[3]='w'; _cwd_flag[4]='d'; _cwd_flag[5]='=';
+    scpy(_cwd_flag + 6, cwd, sizeof(_cwd_flag) - 6);
+    real_argv_buf[ri++] = _cwd_flag;
+
+    for (int ei = 0; ei < g_env_count && ri < REAL_ARGV_MAX - 1; ei++) {
+        char *buf = _env_flags[ei];
+        buf[0]='-'; buf[1]='-'; buf[2]='e';
+        buf[3]='n'; buf[4]='v'; buf[5]=':';
+        size_t ni = 0;
+        const char *n = g_env[ei].name;
+        while (*n && ni + 7 < ENV_NAME_MAX + ENV_VAL_MAX + 7)
+            buf[6 + ni++] = *n++;
+        buf[6 + ni++] = '=';
+        size_t vi = 0;
+        const char *v = g_env[ei].value;
+        while (*v && ni + vi + 7 < (size_t)(ENV_NAME_MAX + ENV_VAL_MAX + 7))
+            buf[6 + ni + vi++] = *v++;
+        buf[6 + ni + vi] = '\0';
+        real_argv_buf[ri++] = buf;
+    }
+
+    real_argv_buf[ri] = (void *)0;
 
     pid_t child = fork();
     if (child < 0) { ws(C_RED "fork failed" C_RESET "\n"); return 1; }
     if (child == 0) {
-        execve(binpath, (const char **)real_argv, (void *)0);
+        execve(binpath, (const char **)real_argv_buf, (void *)0);
         ws(C_RED "exec failed: " C_RESET); ws(binpath); wn(); exit(127);
     }
     int status = 0;
@@ -602,6 +756,7 @@ static void run_command(char *line) {
         }
         rc = run_single(s);
     }
+    g_last_rc = rc;
 }
 
 static void print_motd(void) {
@@ -630,6 +785,11 @@ __attribute__((naked)) void _start(void) {
 __attribute__((noreturn)) void _start_main(uint64_t *initial_rsp) {
     (void)initial_rsp;
     scpy(cwd, "/", sizeof(cwd));
+
+    env_set("PATH", "/bin:/apps");
+    env_set("HOME", "/");
+    env_set("SHELL", "/apps/shell");
+
     print_motd();
 
     char line[LINE_MAX];

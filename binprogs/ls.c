@@ -1,7 +1,12 @@
 #include "../apps/cervus_user.h"
 
 CERVUS_MAIN(ls_main) {
-    const char *path = (argc > 1) ? argv[1] : "/";
+    const char *cwd = get_cwd_flag(argc, argv);
+    const char *path = cwd;
+    for (int i = 1; i < argc; i++) {
+        if (is_shell_flag(argv[i])) continue;
+        path = argv[i]; break;
+    }
     int fd = open(path, O_RDONLY | O_DIRECTORY, 0);
     if (fd < 0) {
         ws(C_RED "ls: cannot open: " C_RESET); ws(path); wn();

@@ -6,11 +6,13 @@ static uint64_t parse_uint(const char *s){
     return v;}
 
 CERVUS_MAIN(sleep_main) {
-    if(argc<2){
-        ws("Usage: sleep <seconds>\n");
-        exit(1);
+    const char *secs_arg = (void*)0;
+    for (int i = 1; i < argc; i++) {
+        if (is_shell_flag(argv[i])) continue;
+        secs_arg = argv[i]; break;
     }
-    uint64_t secs=parse_uint(argv[1]);
+    if (!secs_arg) { ws("Usage: sleep <seconds>\n"); exit(1); }
+    uint64_t secs=parse_uint(secs_arg);
     nanosleep_simple(secs * 1000000000ULL);
     exit(0);
 }

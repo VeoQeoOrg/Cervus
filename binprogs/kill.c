@@ -11,7 +11,13 @@ CERVUS_MAIN(kill_main) {
         ws("Usage: kill <pid>\n");
         exit(1);
     }
-    int64_t pid=parse_int(argv[1]);
+    const char *pid_arg = (void*)0;
+    for (int i = 1; i < argc; i++) {
+        if (is_shell_flag(argv[i])) continue;
+        pid_arg = argv[i]; break;
+    }
+    if (!pid_arg) { ws("Usage: kill <pid>\n"); exit(1); }
+    int64_t pid=parse_int(pid_arg);
     if(pid<=0){
         ws("kill: invalid pid\n");
         exit(1);

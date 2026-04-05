@@ -718,6 +718,31 @@ static inline void resolve_path(const char *cwd, const char *path, char *out, si
     path_norm(out);
 }
 
+static inline int is_shell_flag(const char *a) {
+    if (!a) return 0;
+    if (a[0]=='-' && a[1]=='-' && a[2]=='c' && a[3]=='w' && a[4]=='d' && a[5]=='=')
+        return 1;
+    if (a[0]=='-' && a[1]=='-' && a[2]=='e' && a[3]=='n' && a[4]=='v' && a[5]==':')
+        return 1;
+    return 0;
+}
+
+static inline const char *getenv_argv(int argc, char **argv,
+                                      const char *name, const char *def) {
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (a[0]=='-' && a[1]=='-' && a[2]=='e' && a[3]=='n' &&
+            a[4]=='v' && a[5]==':') {
+            const char *kv = a + 6;
+            const char *n  = name;
+            while (*n && *kv == *n) { kv++; n++; }
+            if (*n == '\0' && *kv == '=')
+                return kv + 1;
+        }
+    }
+    return def;
+}
+
 #define CERVUS_MAIN(fn)                                               \
     static void fn(int argc, char **argv);                            \
     __attribute__((naked)) void _start(void) {                        \
