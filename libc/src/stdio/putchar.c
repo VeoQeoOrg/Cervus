@@ -9,10 +9,10 @@ uint32_t bg_color   = COLOR_BLACK;
 
 extern struct limine_framebuffer *global_framebuffer;
 
-static int  cursor_visible  = 1;
+static int  cursor_visible      = 1;
 static int  scroll_buffer_index = 0;
 static int  total_scroll_lines  = 0;
-static int  flush_inhibit = 0;
+static int  flush_inhibit       = 0;
 
 uint32_t get_screen_width(void) {
     if (!global_framebuffer) return 1024;
@@ -22,6 +22,9 @@ uint32_t get_screen_height(void) {
     if (!global_framebuffer) return 768;
     return global_framebuffer->height;
 }
+
+uint32_t get_cursor_row(void) { return cursor_y / 16; }
+uint32_t get_cursor_col(void) { return cursor_x / 8;  }
 
 static void flush_all(void) {
     if (!flush_inhibit && global_framebuffer)
@@ -46,10 +49,10 @@ void scroll_screen(int lines) {
     uint32_t *target;
     if (g_backbuf) {
         target = g_backbuf;
-        pitch = g_bb_pitch;
+        pitch  = g_bb_pitch;
     } else {
         target = buf;
-        pitch = global_framebuffer->pitch / 4;
+        pitch  = global_framebuffer->pitch / 4;
     }
 
     uint32_t rows_to_move = sh - sp;
@@ -216,7 +219,7 @@ int putchar(int c) {
     case PS_ESC:
         if      (ch == '[') { ps_state = PS_CSI; ps_reset_params(); }
         else if (ch == ' ') { ps_state = PS_ESC_SP; }
-        else                { ps_state = PS_NORMAL; }
+        else                 { ps_state = PS_NORMAL; }
         break;
 
     case PS_ESC_SP:

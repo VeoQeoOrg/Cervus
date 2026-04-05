@@ -14,6 +14,26 @@
 extern void draw_cursor(void);
 extern void erase_cursor(void);
 
+extern uint32_t get_screen_width(void);
+extern uint32_t get_screen_height(void);
+extern uint32_t get_cursor_row(void);
+extern uint32_t get_cursor_col(void);
+
+#define TIOCGWINSZ   0x5413
+#define TIOCGCURSOR  0x5480
+
+struct cervus_winsize {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+};
+
+struct cervus_cursor_pos {
+    uint32_t row;
+    uint32_t col;
+};
+
 static inline task_t* devfs_cur_task(void) {
     percpu_t* pc = get_percpu();
     return pc ? (task_t*)pc->current_task : NULL;
@@ -83,7 +103,28 @@ static int64_t tty_write(vnode_t *node, const void *buf, size_t len, uint64_t of
 }
 
 static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
-    (void)node; (void)req; (void)arg;
+    (void)node;
+
+    if (req == TIOCGWINSZ) {
+        if (!arg) return -EFAULT;
+        struct cervus_winsize *ws = (struct cervus_winsize *)arg;
+        uint32_t w = get_screen_width();
+        uint32_t h = get_screen_height();
+        ws->ws_col    = (uint16_t)(w / 8);
+        ws->ws_row    = (uint16_t)(h / 16);
+        ws->ws_xpixel = (uint16_t)w;
+        ws->ws_ypixel = (uint16_t)h;
+        return 0;
+    }
+
+    if (req == TIOCGCURSOR) {
+        if (!arg) return -EFAULT;
+        struct cervus_cursor_pos *cp = (struct cervus_cursor_pos *)arg;
+        cp->row = get_cursor_row();
+        cp->col = get_cursor_col();
+        return 0;
+    }
+
     return -ENOTTY;
 }
 
@@ -204,11 +245,11 @@ static void devfs_register(const char *name, vnode_t *node) {
 }
 
 vnode_t *devfs_create_root(void) {
-    memset(&g_devdir,   0, sizeof(g_devdir));
-    memset(&g_devroot,  0, sizeof(g_devroot));
-    memset(&g_tty_node, 0, sizeof(g_tty_node));
-    memset(&g_null_node,0, sizeof(g_null_node));
-    memset(&g_zero_node,0, sizeof(g_zero_node));
+    memset(&g_devdir,    0, sizeof(g_devdir));
+    memset(&g_devroot,   0, sizeof(g_devroot));
+    memset(&g_tty_node,  0, sizeof(g_tty_node));
+    memset(&g_null_node, 0, sizeof(g_null_node));
+    memset(&g_zero_node, 0, sizeof(g_zero_node));
 
     g_devroot.type     = VFS_NODE_DIR;
     g_devroot.mode     = 0755;

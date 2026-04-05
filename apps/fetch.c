@@ -92,7 +92,7 @@ CERVUS_MAIN(fetch_main) {
 				cpu();
 				break;
 			case 4:
-				ws(C_RESET "shell: Cervus Shell");
+				ws(C_RESET "shell: CSH");
 				break;
 			case 5:
 				mem();

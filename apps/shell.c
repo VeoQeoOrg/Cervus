@@ -1,297 +1,403 @@
 #include "../apps/cervus_user.h"
 
 #ifndef VFS_MAX_PATH
-#define VFS_MAX_PATH 512
+#define VFS_MAX_PATH 1024
 #endif
 
 static int seq(const char *a, const char *b) {
-    while (*a && *a == *b) {
-        a++;
-        b++;
-    }
+    while (*a && *a == *b) { a++; b++; }
     return (unsigned char)*a == (unsigned char)*b;
 }
 static void scpy(char *d, const char *s, size_t max) {
     size_t i = 0;
-    while (i + 1 < max && s[i]) {
-        d[i] = s[i];
-        i++;
-    }
+    while (i + 1 < max && s[i]) { d[i] = s[i]; i++; }
     d[i] = '\0';
 }
 static size_t slen(const char *s) {
     size_t n = 0;
-    while (s[n])
-        n++;
+    while (s[n]) n++;
     return n;
 }
 
-static void vt_right(int n) {
-    if (n <= 0)
-        return;
-    char b[12];
-    b[0] = '\x1b';
-    b[1] = '[';
-    int i = 2;
-    if (n >= 100)
-        b[i++] = '0' + n / 100;
-    if (n >= 10)
-        b[i++] = '0' + (n / 10) % 10;
-    b[i++] = '0' + n % 10;
-    b[i++] = 'C';
-    write(1, b, i);
-}
-static void vt_left(int n) {
-    if (n <= 0)
-        return;
-    char b[12];
-    b[0] = '\x1b';
-    b[1] = '[';
-    int i = 2;
-    if (n >= 100)
-        b[i++] = '0' + n / 100;
-    if (n >= 10)
-        b[i++] = '0' + (n / 10) % 10;
-    b[i++] = '0' + n % 10;
-    b[i++] = 'D';
-    write(1, b, i);
-}
-static void vt_eol(void) {
-    ws("\x1b[K");
+#define TIOCGWINSZ  0x5413
+#define TIOCGCURSOR 0x5480
+
+typedef struct { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; } cervus_winsize_t;
+typedef struct { uint32_t row, col; } cervus_cursor_pos_t;
+
+static inline int ioctl(int fd, unsigned long req, void *arg) {
+    return (int)syscall3(SYS_IOCTL, fd, req, arg);
 }
 
-#define HIST_MAX 20
-#define LINE_MAX 512
+static int g_cols = 80;
+static int g_rows = 25;
+
+static void term_update_size(void) {
+    cervus_winsize_t ws;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 8 && ws.ws_row >= 2) {
+        g_cols = (int)ws.ws_col;
+        g_rows = (int)ws.ws_row;
+    }
+}
+
+static int term_get_cursor_row(void) {
+    cervus_cursor_pos_t cp;
+    if (ioctl(1, TIOCGCURSOR, &cp) == 0)
+        return (int)cp.row;
+    return 0;
+}
+
+static int itoa_buf(char *b, int n) {
+    if (n <= 0) { b[0] = '0'; return 1; }
+    int len = 0, tmp = n;
+    while (tmp) { tmp /= 10; len++; }
+    for (int i = len - 1; i >= 0; i--) { b[i] = '0' + n % 10; n /= 10; }
+    return len;
+}
+
+static void vt_up(int n) {
+    if (n <= 0) return;
+    char b[12] = "\x1b["; int i = 2;
+    i += itoa_buf(b + i, n); b[i++] = 'A';
+    write(1, b, i);
+}
+
+static void vt_down(int n) {
+    if (n <= 0) return;
+    char b[12] = "\x1b["; int i = 2;
+    i += itoa_buf(b + i, n); b[i++] = 'B';
+    write(1, b, i);
+}
+
+static void vt_right(int n) {
+    if (n <= 0) return;
+    char b[12] = "\x1b["; int i = 2;
+    i += itoa_buf(b + i, n); b[i++] = 'C';
+    write(1, b, i);
+}
+
+static void vt_left(int n) {
+    if (n <= 0) return;
+    char b[12] = "\x1b["; int i = 2;
+    i += itoa_buf(b + i, n); b[i++] = 'D';
+    write(1, b, i);
+}
+
+static void vt_eol(void) { ws("\x1b[K"); }
+
+static void vt_cr(void) { write(1, "\r", 1); }
+
+static void vt_goto(int row, int col) {
+    char b[24] = "\x1b["; int i = 2;
+    i += itoa_buf(b + i, row + 1); b[i++] = ';';
+    i += itoa_buf(b + i, col + 1); b[i++] = 'H';
+    write(1, b, i);
+}
+
+#define HIST_MAX 64
+#define LINE_MAX 1024
+
 static char history[HIST_MAX][LINE_MAX];
 static int hist_count = 0, hist_head = 0;
+
 static void hist_push(const char *l) {
-    if (!l[0])
-        return;
+    if (!l[0]) return;
     if (hist_count > 0) {
         int last = (hist_head + hist_count - 1) % HIST_MAX;
-        if (seq(history[last], l))
-            return;
+        if (seq(history[last], l)) return;
     }
     int idx = (hist_head + hist_count) % HIST_MAX;
     scpy(history[idx], l, LINE_MAX);
-    if (hist_count < HIST_MAX)
-        hist_count++;
-    else
-        hist_head = (hist_head + 1) % HIST_MAX;
+    if (hist_count < HIST_MAX) hist_count++;
+    else hist_head = (hist_head + 1) % HIST_MAX;
 }
 static const char *hist_get(int n) {
-    if (n < 1 || n > hist_count)
-        return (void *)0;
+    if (n < 1 || n > hist_count) return (void *)0;
     return history[(hist_head + hist_count - n) % HIST_MAX];
 }
 
 static char cwd[VFS_MAX_PATH];
-static int prompt_visible_len = 0;
+static int prompt_len = 0;
 
 static void print_prompt(void) {
     ws(C_GREEN "cervus" C_RESET ":" C_BLUE);
     ws(cwd);
     ws(C_RESET "$ ");
-    prompt_visible_len = 9 + (int)slen(cwd);
+    prompt_len = 9 + (int)slen(cwd);
 }
 
-static int get_max_input(void) {
-    int cols = 160, avail = cols - prompt_visible_len - 1;
-    if (avail < 20)
-        avail = 20;
-    if (avail > LINE_MAX - 1)
-        avail = LINE_MAX - 1;
-    return avail;
+static int g_start_row = 0;
+
+static void input_pos_to_screen(int pos, int *row, int *col) {
+    int abs = prompt_len + pos;
+    *row = g_start_row + abs / g_cols;
+    *col = abs % g_cols;
+}
+
+static void cursor_to(int pos) {
+    int row, col;
+    input_pos_to_screen(pos, &row, &col);
+    if (row >= g_rows) row = g_rows - 1;
+    vt_goto(row, col);
+}
+
+static int last_row_of(int len) {
+    int abs = prompt_len + len;
+    return g_start_row + (abs > 0 ? (abs - 1) : 0) / g_cols;
+}
+
+static void fix_start_row_after_write(int len) {
+    int abs_end  = prompt_len + len;
+    int need_row = g_start_row + (abs_end > 0 ? abs_end - 1 : 0) / g_cols;
+    if (need_row >= g_rows) {
+        int overflow = need_row - (g_rows - 1);
+        g_start_row -= overflow;
+        if (g_start_row < 0) g_start_row = 0;
+    }
+}
+
+static void redraw(const char *buf, int from, int new_len, int old_len, int pos) {
+    cursor_to(from);
+
+    if (new_len > from)
+        write(1, buf + from, new_len - from);
+
+    fix_start_row_after_write(new_len);
+
+    if (old_len > new_len) {
+        int old_last = last_row_of(old_len);
+        int new_last = last_row_of(new_len);
+
+        cursor_to(new_len);
+        vt_eol();
+
+        for (int r = new_last + 1; r <= old_last; r++) {
+            if (r >= g_rows) break;
+            vt_goto(r, 0);
+            vt_eol();
+        }
+    }
+    cursor_to(pos);
+}
+
+static void replace_line(char *buf, int *len, int *pos,
+                         const char *newtext, int newlen) {
+    int old_len = *len;
+
+    for (int i = 0; i < newlen; i++) buf[i] = newtext[i];
+    buf[newlen] = '\0';
+    *len = newlen;
+    *pos = newlen;
+
+    redraw(buf, 0, newlen, old_len, newlen);
 }
 
 static int readline_edit(char *buf, int maxlen) {
-    int limit = get_max_input();
-    if (limit > maxlen - 1)
-        limit = maxlen - 1;
-    int len = 0, pos = 0, hidx = 0;
+    term_update_size();
+
+    g_start_row = term_get_cursor_row();
+
+    {
+        int prompt_rows = prompt_len / g_cols;
+        (void)prompt_rows;
+    }
+
+    int len  = 0;
+    int pos  = 0;
+    int hidx = 0;
     char saved[LINE_MAX];
     saved[0] = '\0';
-    buf[0] = '\0';
+    buf[0]   = '\0';
+
     for (;;) {
         char c;
-        if (read(0, &c, 1) <= 0)
-            return -1;
+        if (read(0, &c, 1) <= 0) return -1;
+
         if (c == '\x1b') {
             char s[4];
-            if (read(0, &s[0], 1) <= 0)
-                continue;
-            if (s[0] != '[')
-                continue;
-            if (read(0, &s[1], 1) <= 0)
-                continue;
+            if (read(0, &s[0], 1) <= 0) continue;
+            if (s[0] != '[') continue;
+            if (read(0, &s[1], 1) <= 0) continue;
+
             if (s[1] == 'A') {
-                if (hidx == 0)
-                    scpy(saved, buf, LINE_MAX);
+                if (hidx == 0) scpy(saved, buf, LINE_MAX);
                 if (hidx < hist_count) {
                     hidx++;
                     const char *h = hist_get(hidx);
                     if (h) {
-                        vt_left(pos);
-                        vt_eol();
-                        int hl = slen(h);
-                        if (hl > limit)
-                            hl = limit;
-                        for (int i = 0; i < hl; i++)
-                            buf[i] = h[i];
-                        buf[hl] = '\0';
-                        len = hl;
-                        pos = len;
-                        write(1, buf, len);
+                        int hl = (int)slen(h);
+                        if (hl > maxlen - 1) hl = maxlen - 1;
+                        replace_line(buf, &len, &pos, h, hl);
                     }
                 }
                 continue;
             }
+
             if (s[1] == 'B') {
                 if (hidx > 0) {
                     hidx--;
                     const char *h = (hidx == 0) ? saved : hist_get(hidx);
-                    if (!h)
-                        h = "";
-                    vt_left(pos);
-                    vt_eol();
-                    int hl = slen(h);
-                    if (hl > limit)
-                        hl = limit;
-                    for (int i = 0; i < hl; i++)
-                        buf[i] = h[i];
-                    buf[hl] = '\0';
-                    len = hl;
-                    pos = len;
-                    write(1, buf, len);
+                    if (!h) h = "";
+                    int hl = (int)slen(h);
+                    if (hl > maxlen - 1) hl = maxlen - 1;
+                    replace_line(buf, &len, &pos, h, hl);
                 }
                 continue;
             }
+
             if (s[1] == 'C') {
-                if (pos < len) {
-                    vt_right(1);
-                    pos++;
-                }
+                if (pos < len) { pos++; cursor_to(pos); }
                 continue;
             }
+
             if (s[1] == 'D') {
-                if (pos > 0) {
-                    vt_left(1);
-                    pos--;
-                }
+                if (pos > 0) { pos--; cursor_to(pos); }
                 continue;
             }
+
             if (s[1] == 'H') {
-                if (pos > 0) {
-                    vt_left(pos);
-                    pos = 0;
-                }
+                pos = 0; cursor_to(0);
                 continue;
             }
+
             if (s[1] == 'F') {
-                if (pos < len) {
-                    vt_right(len - pos);
-                    pos = len;
-                }
+                pos = len; cursor_to(len);
                 continue;
             }
-            if (s[1] == '3') {
+
+            if (s[1] >= '1' && s[1] <= '6') {
                 char tilde;
                 read(0, &tilde, 1);
-                if (pos < len) {
-                    for (int i = pos; i < len - 1; i++)
-                        buf[i] = buf[i + 1];
-                    len--;
-                    buf[len] = '\0';
-                    write(1, buf + pos, len - pos);
-                    vt_eol();
-                    if (len > pos)
-                        vt_left(len - pos);
+                if (tilde != '~') continue;
+
+                if (s[1] == '3') {
+                    if (pos < len) {
+                        for (int i = pos; i < len - 1; i++) buf[i] = buf[i + 1];
+                        len--; buf[len] = '\0';
+                        redraw(buf, pos, len, len + 1, pos);
+                    }
+                }
+                else if (s[1] == '1') {
+                    pos = 0; cursor_to(0);
+                }
+                else if (s[1] == '4') {
+                    pos = len; cursor_to(len);
                 }
                 continue;
             }
             continue;
         }
+
         if (c == '\n' || c == '\r') {
             buf[len] = '\0';
-            if (pos < len)
-                vt_right(len - pos);
+            cursor_to(len);
             wn();
             return len;
         }
+
         if (c == 3) {
-            ws("^C");
-            wn();
+            ws("^C"); wn();
             buf[0] = '\0';
             return 0;
         }
+
         if (c == 4) {
-            if (len == 0)
-                return -1;
+            if (len == 0) return -1;
             continue;
         }
-        if (c == '\b' || c == 0x7F) {
-            if (pos > 0) {
-                for (int i = pos - 1; i < len - 1; i++)
-                    buf[i] = buf[i + 1];
-                len--;
-                pos--;
+
+        if (c == 1) {
+            pos = 0; cursor_to(0);
+            continue;
+        }
+
+        if (c == 5) {
+            pos = len; cursor_to(len);
+            continue;
+        }
+
+        if (c == 11) {
+            if (pos < len) {
+                int old_len = len;
+                len = pos;
                 buf[len] = '\0';
-                vt_left(1);
-                write(1, buf + pos, len - pos);
-                vt_eol();
-                if (len > pos)
-                    vt_left(len - pos);
+                redraw(buf, pos, len, old_len, pos);
             }
             continue;
         }
+
+        if (c == 21) {
+            if (pos > 0) {
+                int old_len = len;
+                int del = pos;
+                for (int i = 0; i < len - del; i++) buf[i] = buf[i + del];
+                len -= del; pos = 0; buf[len] = '\0';
+                redraw(buf, 0, len, old_len, 0);
+            }
+            continue;
+        }
+
+        if (c == 23) {
+            if (pos > 0) {
+                int p = pos;
+                while (p > 0 && buf[p - 1] == ' ') p--;
+                while (p > 0 && buf[p - 1] != ' ') p--;
+                int old_len = len;
+                int del = pos - p;
+                for (int i = p; i < len - del; i++) buf[i] = buf[i + del];
+                len -= del; pos = p; buf[len] = '\0';
+                redraw(buf, p, len, old_len, p);
+            }
+            continue;
+        }
+
+        if (c == '\b' || c == 0x7F) {
+            if (pos > 0) {
+                int old_len = len;
+                for (int i = pos - 1; i < len - 1; i++) buf[i] = buf[i + 1];
+                len--; pos--; buf[len] = '\0';
+                redraw(buf, pos, len, old_len, pos);
+            }
+            continue;
+        }
+
         if (c >= 0x20 && c < 0x7F) {
-            if (len >= limit)
-                continue;
-            for (int i = len; i > pos; i--)
-                buf[i] = buf[i - 1];
-            buf[pos] = c;
-            len++;
-            buf[len] = '\0';
+            if (len >= maxlen - 1) continue;
+
+            for (int i = len; i > pos; i--) buf[i] = buf[i - 1];
+            buf[pos] = c; len++; buf[len] = '\0';
+
+            cursor_to(pos);
             write(1, buf + pos, len - pos);
+            fix_start_row_after_write(len);
             pos++;
-            if (len > pos)
-                vt_left(len - pos);
+            cursor_to(pos);
             continue;
         }
     }
 }
 
 #define MAX_ARGS 32
+
 static int tokenize(char *line, char *argv[], int maxargs) {
     int argc = 0;
     char *p = line;
     while (*p) {
-        while (*p == ' ' || *p == '\t')
-            p++;
-        if (!*p)
-            break;
-        if (argc >= maxargs - 1)
-            break;
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        if (argc >= maxargs - 1) break;
         if (*p == '"') {
-            p++;
-            argv[argc++] = p;
-            while (*p && *p != '"')
-                p++;
-            if (*p)
-                *p++ = '\0';
+            p++; argv[argc++] = p;
+            while (*p && *p != '"') p++;
+            if (*p) *p++ = '\0';
         } else if (*p == '\'') {
-            p++;
-            argv[argc++] = p;
-            while (*p && *p != '\'')
-                p++;
-            if (*p)
-                *p++ = '\0';
+            p++; argv[argc++] = p;
+            while (*p && *p != '\'') p++;
+            if (*p) *p++ = '\0';
         } else {
             argv[argc++] = p;
-            while (*p && *p != ' ' && *p != '\t')
-                p++;
-            if (*p)
-                *p++ = '\0';
+            while (*p && *p != ' ' && *p != '\t') p++;
+            if (*p) *p++ = '\0';
         }
     }
     argv[argc] = (void *)0;
@@ -299,65 +405,40 @@ static int tokenize(char *line, char *argv[], int maxargs) {
 }
 
 static void path_join_s(const char *base, const char *name, char *out, size_t sz) {
-    if (!name || !name[0]) {
-        scpy(out, base, sz);
-        return;
-    }
-    if (name[0] == '/') {
-        scpy(out, name, sz);
-        return;
-    }
+    if (!name || !name[0]) { scpy(out, base, sz); return; }
+    if (name[0] == '/') { scpy(out, name, sz); return; }
     scpy(out, base, sz);
     size_t bl = slen(out);
     if (bl > 0 && out[bl - 1] != '/' && bl + 1 < sz) {
-        out[bl] = '/';
-        out[bl + 1] = '\0';
-        bl++;
+        out[bl] = '/'; out[bl + 1] = '\0'; bl++;
     }
     size_t nl = slen(name);
-    if (bl + nl + 1 < sz)
-        memcpy(out + bl, name, nl + 1);
+    if (bl + nl + 1 < sz) memcpy(out + bl, name, nl + 1);
 }
 
 static void path_norm_s(char *path) {
     char tmp[VFS_MAX_PATH];
     scpy(tmp, path, sizeof(tmp));
-    char *parts[64];
-    int np = 0;
+    char *parts[64]; int np = 0;
     char *p = tmp;
     while (*p) {
-        while (*p == '/')
-            p++;
-        if (!*p)
-            break;
+        while (*p == '/') p++;
+        if (!*p) break;
         char *s = p;
-        while (*p && *p != '/')
-            p++;
-        if (*p)
-            *p++ = '\0';
-        if (seq(s, "."))
-            continue;
-        if (seq(s, "..")) {
-            if (np > 0)
-                np--;
-            continue;
-        }
-        if (np < 64)
-            parts[np++] = s;
+        while (*p && *p != '/') p++;
+        if (*p) *p++ = '\0';
+        if (seq(s, ".")) continue;
+        if (seq(s, "..")) { if (np > 0) np--; continue; }
+        if (np < 64) parts[np++] = s;
     }
-    char out[VFS_MAX_PATH];
-    size_t ol = 0;
+    char out[VFS_MAX_PATH]; size_t ol = 0;
     for (int i = 0; i < np; i++) {
         out[ol++] = '/';
         size_t pl = slen(parts[i]);
-        memcpy(out + ol, parts[i], pl);
-        ol += pl;
+        memcpy(out + ol, parts[i], pl); ol += pl;
     }
     out[ol] = '\0';
-    if (ol == 0) {
-        out[0] = '/';
-        out[1] = '\0';
-    }
+    if (ol == 0) { out[0] = '/'; out[1] = '\0'; }
     scpy(path, out, VFS_MAX_PATH);
 }
 
@@ -376,32 +457,27 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");
-    ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt command\n");
+    ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n");
+    ws("  " C_BOLD "Ctrl+A/E" C_RESET "  начало/конец строки\n");
+    ws("  " C_BOLD "Ctrl+K" C_RESET "    удалить до конца\n");
+    ws("  " C_BOLD "Ctrl+U" C_RESET "    удалить до начала\n");
+    ws("  " C_BOLD "Ctrl+W" C_RESET "    удалить слово\n");
     ws("  " C_BOLD "Arrows" C_RESET "    cursor / history\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
-    ws("  Programs in " C_BOLD "/apps" C_RESET " run from that dir:\n");
-    ws("    cd /apps && hello\n");
     wn();
 }
 
 static int cmd_cd(const char *path) {
-    if (!path || !path[0])
-        path = "/";
+    if (!path || !path[0]) path = "/";
     char np[VFS_MAX_PATH];
     path_join_s(cwd, path, np, sizeof(np));
     path_norm_s(np);
     cervus_stat_t st;
     if (stat(np, &st) < 0) {
-        ws(C_RED "cd: not found: " C_RESET);
-        ws(path);
-        wn();
-        return 1;
+        ws(C_RED "cd: not found: " C_RESET); ws(path); wn(); return 1;
     }
     if (st.st_type != 1) {
-        ws(C_RED "cd: not a dir: " C_RESET);
-        ws(path);
-        wn();
-        return 1;
+        ws(C_RED "cd: not a dir: " C_RESET); ws(path); wn(); return 1;
     }
     scpy(cwd, np, sizeof(cwd));
     return 0;
@@ -412,37 +488,26 @@ static int run_single(char *line) {
     scpy(buf, line, LINE_MAX);
     char *argv[MAX_ARGS];
     int argc = tokenize(buf, argv, MAX_ARGS);
-    if (!argc)
-        return 0;
+    if (!argc) return 0;
     const char *cmd = argv[0];
 
-    if (seq(cmd, "help")) {
-        cmd_help();
-        return 0;
-    }
-    if (seq(cmd, "exit")) {
-        ws("Goodbye!\n");
-        exit(0);
-    }
-    if (seq(cmd, "cd")) {
-        return cmd_cd(argc > 1 ? argv[1] : (void *)0);
-    }
+    if (seq(cmd, "help"))  { cmd_help(); return 0; }
+    if (seq(cmd, "exit"))  { ws("Goodbye!\n"); exit(0); }
+    if (seq(cmd, "cd"))    { return cmd_cd(argc > 1 ? argv[1] : (void *)0); }
 
     char binpath[VFS_MAX_PATH];
     cervus_stat_t st;
 
     if (cmd[0] == '/' || cmd[0] == '.') {
-
         scpy(binpath, cmd, sizeof(binpath));
     } else {
-
         char t_bin[VFS_MAX_PATH];
         path_join_s("/bin", cmd, t_bin, sizeof(t_bin));
 
-        char t_cwd[VFS_MAX_PATH];
         int cwd_in_apps = (cwd[0] == '/' && cwd[1] == 'a' && cwd[2] == 'p' &&
                            cwd[3] == 'p' && cwd[4] == 's' &&
                            (cwd[5] == '\0' || cwd[5] == '/'));
+        char t_cwd[VFS_MAX_PATH];
         path_join_s(cwd, cmd, t_cwd, sizeof(t_cwd));
         path_norm_s(t_cwd);
 
@@ -451,156 +516,89 @@ static int run_single(char *line) {
         } else if (cwd_in_apps && stat(t_cwd, &st) == 0 && st.st_type != 1) {
             scpy(binpath, t_cwd, sizeof(binpath));
         } else {
-            ws(C_RED "not found: " C_RESET);
-            ws(cmd);
-            wn();
-            return 127;
+            ws(C_RED "not found: " C_RESET); ws(cmd); wn(); return 127;
         }
     }
 
     char *real_argv[MAX_ARGS + 1];
-    int real_argc = argc;
     real_argv[0] = binpath;
+
     static const char *cwd_as_arg[] = {"pwd", "ls", NULL};
     static const char *cwd_as_env[] = {"cat", "find", "stat", "wc", "hexdump", NULL};
     int _inject_cwd_arg = 0, _inject_cwd_env = 0;
     for (int _k = 0; cwd_as_arg[_k]; _k++)
-        if (seq(cmd, cwd_as_arg[_k])) {
-            _inject_cwd_arg = 1;
-            break;
-        }
+        if (seq(cmd, cwd_as_arg[_k])) { _inject_cwd_arg = 1; break; }
     for (int _k = 0; cwd_as_env[_k]; _k++)
-        if (seq(cmd, cwd_as_env[_k])) {
-            _inject_cwd_env = 1;
-            break;
-        }
+        if (seq(cmd, cwd_as_env[_k])) { _inject_cwd_env = 1; break; }
 
     static char _cwd_flag[VFS_MAX_PATH + 6];
+    int real_argc = argc;
     if (_inject_cwd_arg) {
         if (argc < 2) {
-            real_argv[1] = cwd;
-            real_argv[2] = (void *)0;
-            real_argc = 2;
+            real_argv[1] = cwd; real_argv[2] = (void *)0; real_argc = 2;
         } else {
-            for (int i = 1; i < argc; i++)
-                real_argv[i] = argv[i];
+            for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
             real_argv[argc] = (void *)0;
         }
     } else if (_inject_cwd_env) {
-        _cwd_flag[0] = '-';
-        _cwd_flag[1] = '-';
-        _cwd_flag[2] = 'c';
-        _cwd_flag[3] = 'w';
-        _cwd_flag[4] = 'd';
-        _cwd_flag[5] = '=';
+        _cwd_flag[0]='-'; _cwd_flag[1]='-'; _cwd_flag[2]='c';
+        _cwd_flag[3]='w'; _cwd_flag[4]='d'; _cwd_flag[5]='=';
         scpy(_cwd_flag + 6, cwd, sizeof(_cwd_flag) - 6);
-        for (int i = 1; i < argc; i++)
-            real_argv[i] = argv[i];
-        real_argv[argc] = _cwd_flag;
-        real_argv[argc + 1] = (void *)0;
+        for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
+        real_argv[argc] = _cwd_flag; real_argv[argc + 1] = (void *)0;
         real_argc = argc + 1;
     } else {
-        for (int i = 1; i < argc; i++)
-            real_argv[i] = argv[i];
+        for (int i = 1; i < argc; i++) real_argv[i] = argv[i];
         real_argv[argc] = (void *)0;
     }
+    (void)real_argc;
 
     pid_t child = fork();
-    if (child < 0) {
-        ws(C_RED "fork failed" C_RESET "\n");
-        return 1;
-    }
+    if (child < 0) { ws(C_RED "fork failed" C_RESET "\n"); return 1; }
     if (child == 0) {
         execve(binpath, (const char **)real_argv, (void *)0);
-        ws(C_RED "exec failed: " C_RESET);
-        ws(binpath);
-        wn();
-        exit(127);
+        ws(C_RED "exec failed: " C_RESET); ws(binpath); wn(); exit(127);
     }
     int status = 0;
     waitpid(child, &status, 0);
     return (status >> 8) & 0xFF;
 }
 
-typedef enum { CH_NONE = 0,
-               CH_SEQ,
-               CH_AND,
-               CH_OR } chain_t;
+typedef enum { CH_NONE = 0, CH_SEQ, CH_AND, CH_OR } chain_t;
 
 static void run_command(char *line) {
     char work[LINE_MAX];
     scpy(work, line, LINE_MAX);
-    char *segs[64];
-    chain_t ops[64];
-    int ns = 0;
-    segs[0] = work;
-    ops[0] = CH_NONE;
-    ns = 1;
+    char *segs[64]; chain_t ops[64]; int ns = 1;
+    segs[0] = work; ops[0] = CH_NONE;
     char *p = work;
     while (*p) {
-        if (*p == '"') {
-            p++;
-            while (*p && *p != '"')
-                p++;
-            if (*p)
-                p++;
-            continue;
+        if (*p == '"') { p++; while (*p && *p != '"') p++; if (*p) p++; continue; }
+        if (*p == '\'') { p++; while (*p && *p != '\'') p++; if (*p) p++; continue; }
+        if (*p == '&' && *(p+1) == '&') {
+            *p='\0'; p+=2; while(*p==' ')p++;
+            ops[ns]=CH_AND; segs[ns]=p; ns++; continue;
         }
-        if (*p == '\'') {
-            p++;
-            while (*p && *p != '\'')
-                p++;
-            if (*p)
-                p++;
-            continue;
-        }
-        if (*p == '&' && *(p + 1) == '&') {
-            *p = '\0';
-            p += 2;
-            while (*p == ' ')
-                p++;
-            ops[ns] = CH_AND;
-            segs[ns] = p;
-            ns++;
-            continue;
-        }
-        if (*p == '|' && *(p + 1) == '|') {
-            *p = '\0';
-            p += 2;
-            while (*p == ' ')
-                p++;
-            ops[ns] = CH_OR;
-            segs[ns] = p;
-            ns++;
-            continue;
+        if (*p == '|' && *(p+1) == '|') {
+            *p='\0'; p+=2; while(*p==' ')p++;
+            ops[ns]=CH_OR; segs[ns]=p; ns++; continue;
         }
         if (*p == ';') {
-            *p = '\0';
-            p++;
-            while (*p == ' ')
-                p++;
-            ops[ns] = CH_SEQ;
-            segs[ns] = p;
-            ns++;
-            continue;
+            *p='\0'; p++; while(*p==' ')p++;
+            ops[ns]=CH_SEQ; segs[ns]=p; ns++; continue;
         }
         p++;
     }
     int rc = 0;
     for (int i = 0; i < ns; i++) {
         char *s = segs[i];
-        while (*s == ' ' || *s == '\t')
-            s++;
+        while (*s == ' ' || *s == '\t') s++;
         size_t sl = slen(s);
-        while (sl > 0 && (s[sl - 1] == ' ' || s[sl - 1] == '\t'))
-            s[--sl] = '\0';
-        if (!s[0])
-            continue;
+        while (sl > 0 && (s[sl-1] == ' ' || s[sl-1] == '\t')) s[--sl] = '\0';
+        if (!s[0]) continue;
         if (i > 0) {
-            if (ops[i] == CH_AND && rc != 0)
-                continue;
-            if (ops[i] == CH_OR && rc == 0)
-                continue;
+            if (ops[i] == CH_AND && rc != 0) continue;
+            if (ops[i] == CH_OR  && rc == 0) continue;
         }
         rc = run_single(s);
     }
@@ -609,18 +607,12 @@ static void run_command(char *line) {
 static void print_motd(void) {
     int fd = open("/etc/motd", O_RDONLY, 0);
     if (fd < 0) {
-        wn();
-        ws("  Cervus OS v0.0.1\n  Type 'help' for commands.\n");
-        wn();
-        return;
+        wn(); ws("  Cervus OS v0.0.1\n  Type 'help' for commands.\n"); wn(); return;
     }
     char buf[1024];
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    if (n > 0) {
-        buf[n] = '\0';
-        write(1, buf, n);
-    }
+    if (n > 0) { buf[n] = '\0'; write(1, buf, n); }
 }
 
 __attribute__((naked)) void _start(void) {
@@ -639,6 +631,7 @@ __attribute__((noreturn)) void _start_main(uint64_t *initial_rsp) {
     (void)initial_rsp;
     scpy(cwd, "/", sizeof(cwd));
     print_motd();
+
     char line[LINE_MAX];
     for (;;) {
         print_prompt();
@@ -649,8 +642,8 @@ __attribute__((noreturn)) void _start_main(uint64_t *initial_rsp) {
             print_motd();
             continue;
         }
-        int len = slen(line);
-        while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t'))
+        int len = (int)slen(line);
+        while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t'))
             line[--len] = '\0';
         if (len > 0) {
             hist_push(line);

@@ -539,6 +539,46 @@ static int64_t sys_fstat(uint64_t fd, uint64_t stat_ptr) {
     return copy_to_user((void*)stat_ptr, &st, sizeof(st));
 }
 
+#define IOCTL_KBUF_MAX 64
+
+#define TIOCGWINSZ   0x5413
+#define TIOCGCURSOR  0x5480
+
+static size_t ioctl_out_size(uint64_t request) {
+    switch (request) {
+        case TIOCGWINSZ:  return 8;
+        case TIOCGCURSOR: return 8;
+        default:          return 0;
+    }
+}
+
+static int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr) {
+    task_t *t = cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f = fd_get(t->fd_table, (int)fd);
+    if (!f) return -EBADF;
+
+    size_t out_sz = ioctl_out_size(request);
+
+    if (arg_ptr) {
+        size_t validate_sz = out_sz ? out_sz : IOCTL_KBUF_MAX;
+        if (!uptr_validate((void *)arg_ptr, validate_sz))
+            return -EFAULT;
+    }
+
+    char kbuf[IOCTL_KBUF_MAX];
+    memset(kbuf, 0, sizeof(kbuf));
+
+    int64_t r = vfs_ioctl(f, request, arg_ptr ? (void *)kbuf : (void *)0);
+    if (r < 0) return r;
+
+    if (arg_ptr && out_sz > 0) {
+        if (copy_to_user((void *)arg_ptr, kbuf, out_sz) < 0)
+            return -EFAULT;
+    }
+    return r;
+}
+
 static int64_t sys_readdir(uint64_t fd, uint64_t dirent_ptr) {
     if (!dirent_ptr) return -EINVAL;
     task_t *t = cur_task();
@@ -946,6 +986,7 @@ W3(sys_seek)        W2(sys_stat)
 W2(sys_fstat)       W1(sys_dup)
 W2(sys_dup2)        W1(sys_pipe)
 W3(sys_fcntl)
+W3(sys_ioctl)
 W2(sys_readdir)
 W1(sys_brk)         W6(sys_mmap)
 W2(sys_munmap)
@@ -981,6 +1022,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SEEK]         = _sys_seek,
     [SYS_STAT]         = _sys_stat,
     [SYS_FSTAT]        = _sys_fstat,
+    [SYS_IOCTL]        = _sys_ioctl,
     [SYS_DUP]          = _sys_dup,
     [SYS_DUP2]         = _sys_dup2,
     [SYS_PIPE]         = _sys_pipe,
