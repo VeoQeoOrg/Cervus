@@ -461,9 +461,22 @@ static int run_single(char *line) {
     char *real_argv[MAX_ARGS + 1];
     int real_argc = argc;
     real_argv[0] = binpath;
-    int _cwd_cmd = seq(cmd, "pwd") || (slen(binpath) >= 3 && seq(binpath + slen(binpath) - 3, "pwd")) || seq(cmd, "ls") || (slen(binpath) >= 2 && seq(binpath + slen(binpath) - 2, "ls"));
-    if (_cwd_cmd) {
+    static const char *cwd_as_arg[] = {"pwd", "ls", NULL};
+    static const char *cwd_as_env[] = {"cat", "find", "stat", "wc", "hexdump", NULL};
+    int _inject_cwd_arg = 0, _inject_cwd_env = 0;
+    for (int _k = 0; cwd_as_arg[_k]; _k++)
+        if (seq(cmd, cwd_as_arg[_k])) {
+            _inject_cwd_arg = 1;
+            break;
+        }
+    for (int _k = 0; cwd_as_env[_k]; _k++)
+        if (seq(cmd, cwd_as_env[_k])) {
+            _inject_cwd_env = 1;
+            break;
+        }
 
+    static char _cwd_flag[VFS_MAX_PATH + 6];
+    if (_inject_cwd_arg) {
         if (argc < 2) {
             real_argv[1] = cwd;
             real_argv[2] = (void *)0;
@@ -473,6 +486,19 @@ static int run_single(char *line) {
                 real_argv[i] = argv[i];
             real_argv[argc] = (void *)0;
         }
+    } else if (_inject_cwd_env) {
+        _cwd_flag[0] = '-';
+        _cwd_flag[1] = '-';
+        _cwd_flag[2] = 'c';
+        _cwd_flag[3] = 'w';
+        _cwd_flag[4] = 'd';
+        _cwd_flag[5] = '=';
+        scpy(_cwd_flag + 6, cwd, sizeof(_cwd_flag) - 6);
+        for (int i = 1; i < argc; i++)
+            real_argv[i] = argv[i];
+        real_argv[argc] = _cwd_flag;
+        real_argv[argc + 1] = (void *)0;
+        real_argc = argc + 1;
     } else {
         for (int i = 1; i < argc; i++)
             real_argv[i] = argv[i];
