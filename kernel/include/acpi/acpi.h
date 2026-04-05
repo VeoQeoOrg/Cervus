@@ -45,6 +45,14 @@ typedef struct {
 } __attribute__((packed)) acpi_xsdt_t;
 
 typedef struct {
+    uint8_t  address_space_id;
+    uint8_t  register_bit_width;
+    uint8_t  register_bit_offset;
+    uint8_t  access_size;
+    uint64_t address;
+} __attribute__((packed)) acpi_gas_t;
+
+typedef struct {
     acpi_sdt_header_t header;
     uint32_t firmware_ctrl;
     uint32_t dsdt;
@@ -84,20 +92,20 @@ typedef struct {
     uint16_t boot_architecture_flags;
     uint8_t reserved2;
     uint32_t flags;
-    uint8_t reset_reg[12];
+    acpi_gas_t reset_reg;
     uint8_t reset_value;
     uint16_t arm_boot_architecture_flags;
     uint8_t fadt_minor_version;
     uint64_t x_firmware_ctrl;
     uint64_t x_dsdt;
-    uint8_t x_pm1a_event_block[12];
-    uint8_t x_pm1b_event_block[12];
-    uint8_t x_pm1a_control_block[12];
-    uint8_t x_pm1b_control_block[12];
-    uint8_t x_pm2_control_block[12];
-    uint8_t x_pm_timer_block[12];
-    uint8_t x_gpe0_block[12];
-    uint8_t x_gpe1_block[12];
+    acpi_gas_t x_pm1a_event_block;
+    acpi_gas_t x_pm1b_event_block;
+    acpi_gas_t x_pm1a_control_block;
+    acpi_gas_t x_pm1b_control_block;
+    acpi_gas_t x_pm2_control_block;
+    acpi_gas_t x_pm_timer_block;
+    acpi_gas_t x_gpe0_block;
+    acpi_gas_t x_gpe1_block;
 } __attribute__((packed)) acpi_fadt_t;
 
 typedef struct {
@@ -186,5 +194,6 @@ void acpi_print_tables(void);
 extern volatile struct limine_rsdp_request rsdp_request;
 
 void acpi_shutdown(void);
+void acpi_reboot(void);
 
 #endif

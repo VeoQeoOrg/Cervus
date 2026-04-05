@@ -57,8 +57,10 @@
 #define SYS_IPC_RECV          520
 #define SYS_IOPORT_READ       521
 #define SYS_IOPORT_WRITE      522
+#define SYS_SHUTDOWN          523
+#define SYS_REBOOT            524
 
-#define SYSCALL_TABLE_SIZE    523
+#define SYSCALL_TABLE_SIZE    525
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

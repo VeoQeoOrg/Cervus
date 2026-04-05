@@ -371,6 +371,8 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  Programs in " C_BOLD "/bin" C_RESET ":\n");
     ws("  ls, cat, echo, pwd, clear, uname, meminfo, cpuinfo\n");
+    ws("  ps, kill, find, stat, wc, yes, sleep\n");
+    ws("  " C_RED "shutdown" C_RESET ", " C_CYAN "reboot" C_RESET "\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");

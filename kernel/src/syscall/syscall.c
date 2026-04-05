@@ -1,6 +1,7 @@
 #include "../../include/syscall/syscall.h"
 #include "../../include/syscall/syscall_nums.h"
 #include "../../include/syscall/errno.h"
+#include "../../include/acpi/acpi.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/capabilities.h"
 #include "../../include/smp/smp.h"
@@ -908,6 +909,22 @@ static int64_t sys_ioport_write(uint64_t port, uint64_t width, uint64_t val) {
     return 0;
 }
 
+static int64_t sys_shutdown(void) {
+    task_t *t = cur_task();
+    if (t && t->uid != 0) return -EPERM;
+    serial_writestring("[SYSCALL] shutdown requested\n");
+    acpi_shutdown();
+    return 0;
+}
+
+static int64_t sys_reboot(void) {
+    task_t *t = cur_task();
+    if (t && t->uid != 0) return -EPERM;
+    serial_writestring("[SYSCALL] reboot requested\n");
+    acpi_reboot();
+    return 0;
+}
+
 typedef int64_t (*syscall_fn_t)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 
 #define W0(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return fn();}
@@ -935,6 +952,7 @@ W2(sys_munmap)
 W2(sys_clock_get)   W1(sys_sleep_ns)   W0(sys_uptime)   W1(sys_meminfo)
 W2(sys_dbg_print)
 W2(sys_ioport_read) W3(sys_ioport_write)
+W0(sys_shutdown) W0(sys_reboot)
 
 static int64_t _sys_execve(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_execve(a,b,c);}
 static int64_t _sys_wait  (uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_wait(a,b,c);}
@@ -978,6 +996,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_DBG_PRINT]    = _sys_dbg_print,
     [SYS_IOPORT_READ]  = _sys_ioport_read,
     [SYS_IOPORT_WRITE] = _sys_ioport_write,
+    [SYS_SHUTDOWN]     = _sys_shutdown,
+    [SYS_REBOOT]       = _sys_reboot,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval) {

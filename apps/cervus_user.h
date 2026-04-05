@@ -51,6 +51,8 @@ typedef int64_t  intptr_t;
 #define SYS_TASK_KILL    515
 #define SYS_IOPORT_READ  521
 #define SYS_IOPORT_WRITE 522
+#define SYS_SHUTDOWN     523
+#define SYS_REBOOT       524
 
 #define EPERM    1
 #define ENOENT   2
@@ -231,6 +233,9 @@ static inline uint64_t uptime_ns(void){return (uint64_t)syscall0(SYS_UPTIME);}
 static inline ssize_t dbg_print(const char *s,size_t n){return (ssize_t)syscall2(SYS_DBG_PRINT,s,n);}
 static inline uint32_t ioport_read(uint16_t p,int w)   {return (uint32_t)syscall2(SYS_IOPORT_READ,p,w);}
 static inline int ioport_write(uint16_t p,int w,uint32_t v){return (int)syscall3(SYS_IOPORT_WRITE,p,w,v);}
+
+static inline int cervus_shutdown(void) { return (int)syscall0(SYS_SHUTDOWN); }
+static inline int cervus_reboot(void)   { return (int)syscall0(SYS_REBOOT); }
 
 static inline size_t strlen(const char *s){
     size_t n=0;while(s[n])n++;return n;
