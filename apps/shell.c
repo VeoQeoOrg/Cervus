@@ -94,8 +94,8 @@ static void vt_goto(int row, int col) {
     write(1, b, i);
 }
 
-#define HIST_MAX  64
-#define LINE_MAX  4096
+#define HIST_MAX  1024
+#define LINE_MAX  1024
 
 static char history[HIST_MAX][LINE_MAX];
 static int hist_count = 0, hist_head = 0;
@@ -210,6 +210,14 @@ static void print_prompt(void) {
 
 static int g_start_row = 0;
 
+static void sync_start_row(int cur_logical_pos) {
+    int real_row = term_get_cursor_row();
+    int abs_pos = prompt_len + cur_logical_pos;
+    int row_offset = abs_pos / g_cols;
+    g_start_row = real_row - row_offset;
+    if (g_start_row < 0) g_start_row = 0;
+}
+
 static void input_pos_to_screen(int pos, int *row, int *col) {
     int abs = prompt_len + pos;
     *row = g_start_row + abs / g_cols;
@@ -220,6 +228,7 @@ static void cursor_to(int pos) {
     int row, col;
     input_pos_to_screen(pos, &row, &col);
     if (row >= g_rows) row = g_rows - 1;
+    if (row < 0) row = 0;
     vt_goto(row, col);
 }
 
@@ -228,23 +237,13 @@ static int last_row_of(int len) {
     return g_start_row + (abs > 0 ? (abs - 1) : 0) / g_cols;
 }
 
-static void fix_start_row_after_write(int len) {
-    int abs_end  = prompt_len + len;
-    int need_row = g_start_row + (abs_end > 0 ? abs_end - 1 : 0) / g_cols;
-    if (need_row >= g_rows) {
-        int overflow = need_row - (g_rows - 1);
-        g_start_row -= overflow;
-        if (g_start_row < 0) g_start_row = 0;
-    }
-}
-
 static void redraw(const char *buf, int from, int new_len, int old_len, int pos) {
     cursor_to(from);
 
     if (new_len > from)
         write(1, buf + from, new_len - from);
 
-    fix_start_row_after_write(new_len);
+    sync_start_row(new_len);
 
     if (old_len > new_len) {
         int old_last = last_row_of(old_len);
@@ -259,6 +258,7 @@ static void redraw(const char *buf, int from, int new_len, int old_len, int pos)
             vt_eol();
         }
     }
+
     cursor_to(pos);
 }
 
@@ -277,11 +277,11 @@ static void replace_line(char *buf, int *len, int *pos,
 static int readline_edit(char *buf, int maxlen) {
     term_update_size();
 
-    g_start_row = term_get_cursor_row();
-
     {
+        int real_row = term_get_cursor_row();
         int prompt_rows = prompt_len / g_cols;
-        (void)prompt_rows;
+        g_start_row = real_row - prompt_rows;
+        if (g_start_row < 0) g_start_row = 0;
     }
 
     int len  = 0;
@@ -451,7 +451,7 @@ static int readline_edit(char *buf, int maxlen) {
 
             cursor_to(pos);
             write(1, buf + pos, len - pos);
-            fix_start_row_after_write(len);
+            sync_start_row(len);
             pos++;
             cursor_to(pos);
             continue;
