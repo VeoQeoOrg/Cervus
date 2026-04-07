@@ -544,10 +544,10 @@ static void cmd_help(void) {
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");
     ws("  " C_BOLD "Variables:" C_RESET "  $VAR, ${VAR}, $?\n");
     ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n");
-    ws("  " C_BOLD "Ctrl+A/E" C_RESET "  начало/конец строки\n");
-    ws("  " C_BOLD "Ctrl+K" C_RESET "    удалить до конца\n");
-    ws("  " C_BOLD "Ctrl+U" C_RESET "    удалить до начала\n");
-    ws("  " C_BOLD "Ctrl+W" C_RESET "    удалить слово\n");
+    ws("  " C_BOLD "Ctrl+A/E" C_RESET "  beginning/end of line\n");
+    ws("  " C_BOLD "Ctrl+K" C_RESET "    delete to end\n");
+    ws("  " C_BOLD "Ctrl+U" C_RESET "    delete to beginning\n");
+    ws("  " C_BOLD "Ctrl+W" C_RESET "    delete word\n");
     ws("  " C_BOLD "Arrows" C_RESET "    cursor / history\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     wn();
