@@ -468,18 +468,28 @@ static int tokenize(char *line, char *argv[], int maxargs) {
         while (*p == ' ' || *p == '\t') p++;
         if (!*p) break;
         if (argc >= maxargs - 1) break;
-        if (*p == '"') {
-            p++; argv[argc++] = p;
-            while (*p && *p != '"') p++;
-            if (*p) *p++ = '\0';
-        } else if (*p == '\'') {
-            p++; argv[argc++] = p;
-            while (*p && *p != '\'') p++;
-            if (*p) *p++ = '\0';
-        } else {
-            argv[argc++] = p;
-            while (*p && *p != ' ' && *p != '\t') p++;
-            if (*p) *p++ = '\0';
+
+        char *out = p;
+        argv[argc++] = out;
+        int in_dquote = 0, in_squote = 0;
+        while (*p) {
+            if (in_dquote) {
+                if (*p == '"') { in_dquote = 0; p++; }
+                else           { *out++ = *p++; }
+            } else if (in_squote) {
+                if (*p == '\'') { in_squote = 0; p++; }
+                else            { *out++ = *p++; }
+            } else {
+                if (*p == '"')  { in_dquote = 1; p++; }
+                else if (*p == '\'') { in_squote = 1; p++; }
+                else if (*p == ' ' || *p == '\t') { p++; break; }
+                else { *out++ = *p++; }
+            }
+        }
+        *out = '\0';
+        if (in_dquote || in_squote) {
+            argv[argc] = (void *)0;
+            return -1;
         }
     }
     argv[argc] = (void *)0;
@@ -569,64 +579,67 @@ static int cmd_cd(const char *path) {
     return 0;
 }
 
+static int valid_varname(const char *s) {
+    if (!s || !*s) return 0;
+    char c = *s;
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'))
+        return 0;
+    for (s++; *s; s++) {
+        c = *s;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_'))
+            return 0;
+    }
+    return 1;
+}
+
 static int cmd_export(int argc, char *argv[]) {
     if (argc < 2) {
         ws(C_RED "export: usage: export NAME=VALUE\n" C_RESET);
         return 1;
     }
-    for (int i = 1; i < argc; i++) {
-        char *arg = argv[i];
-        char *eq_pos = arg;
-        while (*eq_pos && *eq_pos != '=') eq_pos++;
 
-        if (*eq_pos != '=') {
-            if (i + 1 < argc) {
-                char *next = argv[i + 1];
-                if (next[0] == '=') {
-                    ws(C_RED "export: bad assignment\n" C_RESET);
-                    return 1;
-                }
-            }
-            env_set(arg, "");
-            continue;
-        }
+    if (argc > 2) {
+        ws(C_RED "export: invalid syntax (unexpected tokens after assignment)\n" C_RESET);
+        ws(C_RED "       use: export NAME=VALUE or export NAME=\"multi word\"\n" C_RESET);
+        return 1;
+    }
 
-        if (*(eq_pos + 1) == '\0' && i + 1 < argc) {
-            ws(C_RED "export: bad assignment\n" C_RESET);
+    char *arg    = argv[1];
+    char *eq_pos = arg;
+    while (*eq_pos && *eq_pos != '=') eq_pos++;
+
+    if (*eq_pos != '=') {
+        if (!valid_varname(arg)) {
+            ws(C_RED "export: '"); ws(arg);
+            ws("': not a valid identifier\n" C_RESET);
             return 1;
         }
-        *eq_pos = '\0';
-        char *name = arg;
-        char *val  = eq_pos + 1;
-
-        char vbuf[ENV_VAL_MAX];
-        int  vi = 0;
-
-        char q = (*val == '"' || *val == '\'') ? *val : 0;
-        if (q) {
-            const char *src = val + 1;
-            int closed = 0;
-            while (!closed) {
-                while (*src) {
-                    if (*src == q) { closed = 1; src++; break; }
-                    if (vi + 1 < ENV_VAL_MAX) vbuf[vi++] = *src;
-                    src++;
-                }
-                if (!closed) {
-                    i++;
-                    if (i >= argc) break;
-                    if (vi + 1 < ENV_VAL_MAX) vbuf[vi++] = ' ';
-                    src = argv[i];
-                }
-            }
-            vbuf[vi] = '\0';
-            env_set(name, vbuf);
-        } else {
-            env_set(name, val);
-        }
-
-        *eq_pos = '=';
+        env_set(arg, "");
+        return 0;
     }
+
+    *eq_pos = '\0';
+    const char *name = arg;
+    const char *val  = eq_pos + 1;
+
+    if (!valid_varname(name)) {
+        ws(C_RED "export: '"); ws(name);
+        ws("': not a valid identifier\n" C_RESET);
+        *eq_pos = '=';
+        return 1;
+    }
+
+    if (*val == '\0') {
+        ws(C_RED "export: value is empty; use export ");
+        ws(name);
+        ws("=\"\" for an empty string\n" C_RESET);
+        *eq_pos = '=';
+        return 1;
+    }
+
+    env_set(name, val);
+    *eq_pos = '=';
     return 0;
 }
 
@@ -675,6 +688,10 @@ static int run_single(char *line) {
     scpy(buf, expanded, LINE_MAX);
     char *argv[MAX_ARGS];
     int argc = tokenize(buf, argv, MAX_ARGS);
+    if (argc < 0) {
+        ws(C_RED "syntax error: unclosed quote\n" C_RESET);
+        return 1;
+    }
     if (!argc) return 0;
     const char *cmd = argv[0];
 
