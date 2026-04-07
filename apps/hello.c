@@ -2,13 +2,12 @@
 
 static void print_ok  (const char *s) { printf("  [OK]  %s\n", s); }
 static void print_fail(const char *s) { printf("  [FAIL] %s\n", s); }
-static void print_skip(const char *s) { printf("  [SKIP] %s\n", s); }
 
 static int run_test(const char *path, const char *argv[]) {
     pid_t child = fork();
     if (child < 0) { printf("  fork failed (%d)\n", (int)child); return -1; }
     if (child == 0) {
-        execve(path, argv, 0);
+        execve(path, argv, NULL);
         printf("  [FATAL] execve(%s) failed\n", path);
         exit(127);
     }
@@ -19,56 +18,32 @@ static int run_test(const char *path, const char *argv[]) {
 
 static void run_all_tests(void) {
     int rc;
-
     puts("========================================");
     puts("  Cervus OS — Userspace Test Suite");
     puts("========================================\n");
 
     puts("=== Identity ===");
-    printf("  PID:  %d\n", (int)getpid());
-    printf("  PPID: %d\n", (int)getppid());
-    printf("  UID:  %d\n", (int)getuid());
-    printf("  GID:  %d\n", (int)getgid());
-    printf("  CAPS: %llx\n", cap_get());
+    printf("  PID:  %d\n",  (int)getpid());
+    printf("  PPID: %d\n",  (int)getppid());
+    printf("  UID:  %d\n",  (int)getuid());
+    printf("  GID:  %d\n",  (int)getgid());
+    printf("  CAPS: %llx\n", (unsigned long long)cap_get());
 
-    puts("\n=== test_process (/apps/test_process) ===");
-    {
-        const char *argv[] = { "/apps/test_process", NULL };
-        rc = run_test("/apps/test_process", argv);
-        if (rc == 0) print_ok("process test");
-        else { printf("  exit code = %d\n", rc); print_fail("process test"); }
-    }
+    static const struct { const char *name; const char *path; } tests[] = {
+        { "process test", "/apps/test_process" },
+        { "file I/O test", "/apps/test_files"  },
+        { "pipe test",     "/apps/test_pipe"    },
+        { "execve test",   "/apps/test_execve"  },
+        { "memory test",   "/apps/test_mem"     },
+    };
+    static const int ntests = 5;
 
-    puts("\n=== test_files (/apps/test_files) ===");
-    {
-        const char *argv[] = { "/apps/test_files", NULL };
-        rc = run_test("/apps/test_files", argv);
-        if (rc == 0) print_ok("file I/O test");
-        else { printf("  exit code = %d\n", rc); print_fail("file I/O test"); }
-    }
-
-    puts("\n=== test_pipe (/apps/test_pipe) ===");
-    {
-        const char *argv[] = { "/apps/test_pipe", NULL };
-        rc = run_test("/apps/test_pipe", argv);
-        if (rc == 0) print_ok("pipe test");
-        else { printf("  exit code = %d\n", rc); print_fail("pipe test"); }
-    }
-
-    puts("\n=== test_execve (/apps/test_execve) ===");
-    {
-        const char *argv[] = { "/apps/test_execve", NULL };
-        rc = run_test("/apps/test_execve", argv);
-        if (rc == 0) print_ok("execve test");
-        else { printf("  exit code = %d\n", rc); print_fail("execve test"); }
-    }
-
-    puts("\n=== test_mem (/apps/test_mem) ===");
-    {
-        const char *argv[] = { "/apps/test_mem", NULL };
-        rc = run_test("/apps/test_mem", argv);
-        if (rc == 0) print_ok("memory test");
-        else { printf("  exit code = %d\n", rc); print_fail("memory test"); }
+    for (int t = 0; t < ntests; t++) {
+        printf("\n=== %s (%s) ===\n", tests[t].name, tests[t].path);
+        const char *argv[] = { tests[t].path, NULL };
+        rc = run_test(tests[t].path, argv);
+        if (rc == 0) print_ok(tests[t].name);
+        else { printf("  exit code = %d\n", rc); print_fail(tests[t].name); }
     }
 
     puts("\n========================================");
