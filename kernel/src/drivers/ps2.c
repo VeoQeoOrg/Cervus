@@ -189,7 +189,7 @@ extern struct limine_framebuffer *global_framebuffer;
 extern void     get_cursor_position(uint32_t *x, uint32_t *y);
 extern uint32_t get_screen_width(void);
 
-static void mouse_print_status(void) {
+/*static void mouse_print_status(void) {
     const mouse_state_t *m = (const mouse_state_t *)&mouse_state;
     const char *scroll_str = "NONE";
     if (m->scroll == MOUSE_SCROLL_UP)   scroll_str = "UP  ";
@@ -214,7 +214,7 @@ static void mouse_print_status(void) {
 
     cursor_x = saved_x;
     cursor_y = saved_y;
-}
+}*/
 
 DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 {
@@ -332,7 +332,7 @@ DEFINE_IRQ(MOUSE_IRQ_VECTOR, ps2_mouse_handler)
         else            mouse_state.scroll = MOUSE_SCROLL_NONE;
     }
 
-    mouse_print_status();
+    //mouse_print_status();
     lapic_eoi();
 }
 

@@ -204,8 +204,11 @@ static char g_expr[512];
 
 static void build_expr(int argc, char **argv){
     int pos = 0;
+    int first = 1;
     for(int i = 1; i < argc && pos < 510; i++){
-        if(i > 1 && pos < 510) g_expr[pos++] = ' ';
+        if(is_shell_flag(argv[i])) continue;
+        if(!first && pos < 510) g_expr[pos++] = ' ';
+        first = 0;
         for(int j = 0; argv[i][j] && pos < 510; j++)
             g_expr[pos++] = argv[i][j];
     }
@@ -311,7 +314,11 @@ static int readline_edit(char *buf, int max){
 
 CERVUS_MAIN(calc_main) {
 
-    if(argc >= 2){
+    int real_argc = 0;
+    for(int i = 1; i < argc; i++)
+        if(!is_shell_flag(argv[i])) real_argc++;
+
+    if(real_argc >= 1){
         build_expr(argc, argv);
         g_pos = g_expr; g_err = 0;
         double result = parse_expr();
