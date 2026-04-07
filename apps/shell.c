@@ -542,7 +542,7 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");
-    ws("  " C_BOLD "Variables:" C_RESET "  $VAR, ${VAR}, $?\n");
+    ws("  " C_BOLD "Variables:" C_RESET "  $VAR, ${VAR}, $? " C_GRAY "(exit code of last command)" C_RESET "\n");
     ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n");
     ws("  " C_BOLD "Ctrl+A/E" C_RESET "  move cursor to beginning/end of line\n");
     ws("  " C_BOLD "Ctrl+K" C_RESET "    delete from cursor to end\n");
@@ -575,15 +575,44 @@ static int cmd_export(int argc, char *argv[]) {
         return 1;
     }
     for (int i = 1; i < argc; i++) {
-        char *eq = argv[i];
+        char *arg = argv[i];
+        char *eq = arg;
         while (*eq && *eq != '=') eq++;
-        if (*eq == '=') {
-            *eq = '\0';
-            env_set(argv[i], eq + 1);
-            *eq = '=';
-        } else {
-            env_set(argv[i], "");
+        if (*eq != '=') {
+            env_set(arg, "");
+            continue;
         }
+        *eq = '\0';
+        char *name = arg;
+        char *val  = eq + 1;
+
+        char vbuf[ENV_VAL_MAX];
+        int  vi = 0;
+
+        char q = (*val == '"' || *val == '\'') ? *val : 0;
+        if (q) {
+            const char *src = val + 1;
+            int closed = 0;
+            while (!closed) {
+                while (*src) {
+                    if (*src == q) { closed = 1; src++; break; }
+                    if (vi + 1 < ENV_VAL_MAX) vbuf[vi++] = *src;
+                    src++;
+                }
+                if (!closed) {
+                    i++;
+                    if (i >= argc) break;
+                    if (vi + 1 < ENV_VAL_MAX) vbuf[vi++] = ' ';
+                    src = argv[i];
+                }
+            }
+            vbuf[vi] = '\0';
+            env_set(name, vbuf);
+        } else {
+            env_set(name, val);
+        }
+
+        *eq = '=';
     }
     return 0;
 }
