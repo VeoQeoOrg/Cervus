@@ -125,12 +125,22 @@ typedef int64_t  intptr_t;
 #define CLOCK_REALTIME  0
 #define CLOCK_MONOTONIC 1
 
+#ifndef NULL
 #define NULL ((void*)0)
+#endif
 
+#ifndef INT64_MAX
 #define INT64_MAX  ((int64_t)0x7FFFFFFFFFFFFFFFLL)
+#endif
+#ifndef INT64_MIN
 #define INT64_MIN  ((int64_t)(-INT64_MAX - 1))
+#endif
+#ifndef UINT64_MAX
 #define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFULL)
+#endif
+#ifndef SIZE_MAX
 #define SIZE_MAX   UINT64_MAX
+#endif
 
 typedef struct {
     uint32_t pid, ppid, uid, gid;
