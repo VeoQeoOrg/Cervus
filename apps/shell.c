@@ -576,15 +576,28 @@ static int cmd_export(int argc, char *argv[]) {
     }
     for (int i = 1; i < argc; i++) {
         char *arg = argv[i];
-        char *eq = arg;
-        while (*eq && *eq != '=') eq++;
-        if (*eq != '=') {
+        char *eq_pos = arg;
+        while (*eq_pos && *eq_pos != '=') eq_pos++;
+
+        if (*eq_pos != '=') {
+            if (i + 1 < argc) {
+                char *next = argv[i + 1];
+                if (next[0] == '=') {
+                    ws(C_RED "export: bad assignment\n" C_RESET);
+                    return 1;
+                }
+            }
             env_set(arg, "");
             continue;
         }
-        *eq = '\0';
+
+        if (*(eq_pos + 1) == '\0' && i + 1 < argc) {
+            ws(C_RED "export: bad assignment\n" C_RESET);
+            return 1;
+        }
+        *eq_pos = '\0';
         char *name = arg;
-        char *val  = eq + 1;
+        char *val  = eq_pos + 1;
 
         char vbuf[ENV_VAL_MAX];
         int  vi = 0;
@@ -612,7 +625,7 @@ static int cmd_export(int argc, char *argv[]) {
             env_set(name, val);
         }
 
-        *eq = '=';
+        *eq_pos = '=';
     }
     return 0;
 }

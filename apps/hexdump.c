@@ -12,6 +12,18 @@ static void print_hex64(uint64_t v){
     write(1,b,16);}
 
 CERVUS_MAIN(hexdump_main) {
+    char *filt_argv[64];
+    int   filt_argc = 0;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0 && is_shell_flag(argv[i])) continue;
+        filt_argv[filt_argc++] = argv[i];
+    }
+    filt_argv[filt_argc] = (void *)0;
+    argc = filt_argc;
+    argv = filt_argv;
+
+    const char *cwd = get_cwd_flag(filt_argc, filt_argv);
+
     if(argc<2){
         ws("Usage: hexdump <file>\n");
         exit(1);
@@ -19,18 +31,31 @@ CERVUS_MAIN(hexdump_main) {
     char resolved[512];
     const char *path=argv[1];
     if(path[0]!='/'){
-        const char *search[]={"/apps/","/bin/","/etc/","/",0};
-        for(int s=0;search[s];s++){
-            const char *pfx=search[s];
-            int pl=0;while(pfx[pl])pl++;
-            int nl=0;while(path[nl])nl++;
-            if(pl+nl+1<(int)sizeof(resolved)){
-                int j=0;
-                for(int k=0;k<pl;k++)resolved[j++]=pfx[k];
-                for(int k=0;k<nl;k++)resolved[j++]=path[k];
-                resolved[j]='\0';
-                cervus_stat_t tmp;
-                if(stat(resolved,&tmp)==0){path=resolved;break;}
+        char cwd_path[512];
+        int cwdlen=0; while(cwd[cwdlen]) cwdlen++;
+        int nl=0; while(path[nl]) nl++;
+        if(cwdlen+nl+2<(int)sizeof(cwd_path)){
+            int j=0;
+            for(int k=0;k<cwdlen;k++) cwd_path[j++]=cwd[k];
+            if(j>0 && cwd_path[j-1]!='/') cwd_path[j++]='/';
+            for(int k=0;k<nl;k++) cwd_path[j++]=path[k];
+            cwd_path[j]='\0';
+            cervus_stat_t tmp;
+            if(stat(cwd_path,&tmp)==0){ path=cwd_path; }
+        }
+        if(path==argv[1]){
+            const char *search[]={"/apps/","/bin/","/etc/","/",0};
+            for(int s=0;search[s];s++){
+                const char *pfx=search[s];
+                int pl=0;while(pfx[pl])pl++;
+                if(pl+nl+1<(int)sizeof(resolved)){
+                    int j=0;
+                    for(int k=0;k<pl;k++)resolved[j++]=pfx[k];
+                    for(int k=0;k<nl;k++)resolved[j++]=path[k];
+                    resolved[j]='\0';
+                    cervus_stat_t tmp;
+                    if(stat(resolved,&tmp)==0){path=resolved;break;}
+                }
             }
         }
     }
