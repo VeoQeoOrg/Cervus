@@ -30,7 +30,6 @@ void fpu_init(void) {
 
 bool fpu_detect(void) {
     uint32_t edx;
-
     asm volatile(
         "mov $1, %%eax\n"
         "cpuid\n"
@@ -39,7 +38,6 @@ bool fpu_detect(void) {
         :
         : "eax", "ebx", "ecx", "edx"
     );
-
     return (edx & (1 << 0)) != 0;
 }
 
@@ -59,7 +57,6 @@ uint16_t fpu_get_control_word(void) {
 
 void fpu_set_status_word(uint16_t sw) {
     (void)sw;
-    // asm volatile("fnclex");
 }
 
 uint16_t fpu_get_status_word(void) {
@@ -82,9 +79,8 @@ uint16_t fpu_get_tag_word(void) {
         uint16_t fpu_opcode;
         uint16_t fpu_dp;
         uint16_t fpu_ds;
-        uint8_t st_registers[80];
-    } __attribute__((packed)) fpu_state;
+    } __attribute__((packed)) fpu_env;
 
-    asm volatile("fxsave %0" : "=m"(fpu_state));
-    return fpu_state.tag_word;
+    asm volatile("fstenv %0" : "=m"(fpu_env));
+    return fpu_env.tag_word;
 }

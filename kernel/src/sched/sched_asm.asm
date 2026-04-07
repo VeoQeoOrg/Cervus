@@ -44,7 +44,7 @@ context_switch:
     mov cr3, rcx
 .skip_cr3:
 
-    mfence
+    lock add dword [rsp], 0
     mov byte [rdi + TASK_ON_CPU_OFFSET], 0
 
     pop r15

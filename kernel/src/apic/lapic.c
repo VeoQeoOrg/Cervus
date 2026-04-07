@@ -168,7 +168,7 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
         __atomic_store_n(&q->pending, true, __ATOMIC_RELEASE);
     }
 
-    asm volatile ("mfence" ::: "memory");
+    asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
 
     uint32_t icr_low = IPI_TLB_SHOOTDOWN
                      | (0 << 8)
@@ -191,7 +191,7 @@ void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
     q->count = 1;
     __atomic_store_n(&q->pending, true, __ATOMIC_RELEASE);
 
-    asm volatile ("mfence" ::: "memory");
+    asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
 
     uint32_t icr_high = target_lapic_id << 24;
     uint32_t icr_low  = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14);

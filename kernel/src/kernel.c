@@ -149,8 +149,7 @@ void kernel_main(void) {
     fpu_init();
     sse_init();
     enable_fsgsbase();
-    serial_writestring("FSGSBASE [OK]\n");
-    serial_writestring("FPU/SSE [OK]\n");
+    serial_writestring("FPU/SSE/FSGSBASE [OK]\n");
 
     if (!framebuffer_request.response ||
         framebuffer_request.response->framebuffer_count < 1) {
@@ -212,7 +211,6 @@ void kernel_main(void) {
     printf("\nMemory Information:\n");
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
-    print_simd_cpuid();
     pmm_print_stats();
 
     smp_print_info_fb();

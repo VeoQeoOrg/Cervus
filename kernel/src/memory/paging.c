@@ -288,7 +288,7 @@ void paging_print_stats(vmm_pagemap_t* pagemap) {
     }
 
     serial_printf("Active regions: %zu\n", active);
-    serial_printf("Total pages: %zu (%.2f MB)\n", total_pages, total_bytes / (1024.0 * 1024.0));
+    serial_printf("Total pages: %zu (%zu KiB)\n", total_pages, total_bytes / 1024);
     serial_printf("Next alloc: 0x%llx\n", next_alloc_virt);
 
     serial_printf("\nReserved ranges:\n");
@@ -316,5 +316,5 @@ void paging_dump_range(vmm_pagemap_t* pagemap, uintptr_t virt_start, uintptr_t v
             serial_printf("]\n");
         }
     }
-    serial_printf("Mapped: %zu/%zu pages (%.1f%%)\n", mapped, total, (float)mapped / total * 100);
+    serial_printf("Mapped: %zu/%zu pages (%zu%%)\n", mapped, total, total ? mapped * 100 / total : 0);
 }

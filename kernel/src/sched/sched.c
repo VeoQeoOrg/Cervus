@@ -550,7 +550,7 @@ void sched_reschedule(void) {
     if (next->cr3 && (!old || old->cr3 != next->cr3)) {
         if (next->pagemap)
             vmm_sync_kernel_mappings(next->pagemap);
-        asm volatile("mfence" ::: "memory");
+        asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
         switch_cr3 = next->cr3;
     } else if (!next->cr3) {
         vmm_pagemap_t* kpm = vmm_get_kernel_pagemap();

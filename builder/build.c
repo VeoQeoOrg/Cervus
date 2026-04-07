@@ -60,8 +60,8 @@ const char *FILES_TO_CLEAN[] = {
 };
 
 const char *SSE_FILES[] = {
-    "sse.c", "fpu.c", "printf.c", "fabs.c", "pow.c", "pow10.c",
-    "serial.c", "pmm.c", "paging.c", "apic.c", "kernel.c", NULL
+    "sse.c", "fpu.c", "fabs.c", "pow.c", "pow10.c",
+    "serial.c", "snprintf.c", "printf.c", NULL
 };
 
 struct Dependency {
@@ -673,7 +673,14 @@ bool compile_kernel(void) {
         "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC "
         "-ffunction-sections -fdata-sections "
         "-m64 -march=x86-64 -mabi=sysv -mcmodel=kernel "
-        "-mno-red-zone -mgeneral-regs-only";
+        "-mno-red-zone -mgeneral-regs-only -fcf-protection=none";
+
+    const char *sse_base_cflags =
+        "-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding "
+        "-fno-stack-protector -fno-stack-check -fno-lto -fno-PIC "
+        "-ffunction-sections -fdata-sections "
+        "-m64 -march=x86-64 -mabi=sysv -mcmodel=kernel "
+        "-mno-red-zone -fcf-protection=none";
 
     const char *core_cflags = "-mno-sse -mno-sse2 -mno-mmx -mno-3dnow";
     const char *sse_cflags  = "-msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow";
@@ -708,7 +715,8 @@ bool compile_kernel(void) {
         snprintf(obj_path, sizeof(obj_path), "obj/%s/%s.o", category, flat);
         file_list_add(&objects, obj_path);
 
-        if (file_exists(obj_path) && get_mtime(src) <= get_mtime(obj_path)) continue;
+        if (file_exists(obj_path) && get_mtime(src) <= get_mtime(obj_path)
+            && get_mtime("builder/build.c") <= get_mtime(obj_path)) continue;
 
         const char *ext = strrchr(src, '.');
 
@@ -740,7 +748,8 @@ bool compile_kernel(void) {
         } else {
             bool sse = is_sse_file(src);
             char flags[1024];
-            snprintf(flags, sizeof(flags), "%s %s", base_cflags,
+            snprintf(flags, sizeof(flags), "%s %s",
+                     sse ? sse_base_cflags : base_cflags,
                      sse ? sse_cflags : core_cflags);
             print_color(sse ? COLOR_MAGENTA : COLOR_CYAN, "[%s] %s", category, src);
             if (cmd_run(false, "gcc %s %s -c %s -o %s",

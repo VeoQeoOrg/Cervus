@@ -402,7 +402,7 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
     if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP|TASK_FLAG_FORK)))
         vmm_free_pagemap(old_pagemap);
 
-    asm volatile("mfence" ::: "memory");
+    asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
     vmm_switch_pagemap(t->pagemap);
     serial_printf("[EXECVE] exec ok: entry=0x%llx rsp=0x%llx name='%s'\n",
                   elf.entry, new_rsp, t->name);

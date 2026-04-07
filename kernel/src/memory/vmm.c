@@ -50,9 +50,9 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     vmm_pte_t* pt   = get_table(pd,        pd_i,   flags);
     pt[pt_i] = (phys & PTE_PHYS_MASK) | (flags | VMM_PRESENT);
 
-    asm volatile ("mfence" ::: "memory");
+    asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
     invlpg((void*)virt);
-    asm volatile ("mfence" ::: "memory");
+    asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
 
     return true;
 }
@@ -90,7 +90,7 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     uintptr_t phys = pt[pt_i] & PTE_PHYS_MASK;
 
     pt[pt_i] = 0;
-    asm volatile ("mfence" ::: "memory");
+    asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
     invlpg((void*)virt);
     if (smp_get_cpu_count() > 1 && (virt >= 0xffff800000000000ULL)) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
