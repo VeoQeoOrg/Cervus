@@ -239,7 +239,6 @@ void kernel_main(void) {
     }
 
     timer_init();
-
     sched_init();
     sched_notify_ready();
     timer_sleep_ms(10);
