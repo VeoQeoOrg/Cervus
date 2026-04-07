@@ -96,8 +96,7 @@ static void load_elf_module(void) {
     }
 
     struct limine_file *mod = module_request.response->modules[0];
-    serial_printf("[ELF] Module: path='%s' size=%llu addr=%p\n",
-                  mod->path, mod->size, mod->address);
+    serial_printf("[ELF] Module: path='%s' size=%llu addr=%p\n", mod->path, mod->size, mod->address);
 
     elf_load_result_t r = elf_load(mod->address, (size_t)mod->size, 0);
     if (r.error != ELF_OK) {
@@ -105,8 +104,7 @@ static void load_elf_module(void) {
         return;
     }
 
-    serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n",
-                  r.entry, r.stack_top);
+    serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n", r.entry, r.stack_top);
 
     uint64_t cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
 
@@ -210,10 +208,7 @@ void kernel_main(void) {
     serial_writestring("All APs ready.\n");
 
     printf("Kernel initialized successfully!\n\n");
-    printf("Framebuffer: %dx%d, %d bpp\n",
-           global_framebuffer->width,
-           global_framebuffer->height,
-           global_framebuffer->bpp);
+    printf("Framebuffer: %dx%d, %d bpp\n", global_framebuffer->width, global_framebuffer->height, global_framebuffer->bpp);
     printf("\nMemory Information:\n");
     printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
     printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
@@ -227,8 +222,7 @@ void kernel_main(void) {
     if (module_request.response &&
         module_request.response->module_count >= 2) {
         struct limine_file *tar = module_request.response->modules[1];
-        serial_printf("[initramfs] module: '%s' size=%llu\n",
-                      tar->path, tar->size);
+        serial_printf("[initramfs] module: '%s' size=%llu\n", tar->path, tar->size);
         int r = initramfs_mount(tar->address, (size_t)tar->size);
         if (r == 0)
             serial_writestring("[initramfs] mounted OK\n");
