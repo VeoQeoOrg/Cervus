@@ -459,10 +459,6 @@ static int run_single(char *line) {
         }
     }
 
-    static const char *cwd_as_arg[] = {"pwd", "ls", NULL};
-    int inject_cwd = 0;
-    for (int k = 0; cwd_as_arg[k]; k++)
-        if (strcmp(cmd, cwd_as_arg[k]) == 0) { inject_cwd = 1; break; }
 
 #define REAL_ARGV_MAX (MAX_ARGS + ENV_MAX_VARS + 4)
     char *real_argv_buf[REAL_ARGV_MAX];
@@ -471,8 +467,7 @@ static int run_single(char *line) {
 
     int ri = 0;
     real_argv_buf[ri++] = binpath;
-    if (inject_cwd && argc < 2) real_argv_buf[ri++] = cwd;
-    else for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
+    for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
 
     snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", cwd);
     real_argv_buf[ri++] = _cwd_flag;
