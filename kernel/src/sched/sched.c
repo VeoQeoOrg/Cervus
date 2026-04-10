@@ -428,11 +428,16 @@ __attribute__((noreturn)) void task_exit(void)
 
 void task_kill(task_t* target) {
     if (!target) return;
+
+    if (target->pid == 0) return;
+    if (target->is_userspace == TASK_TYPE_KERNEL) return;
+
     if (target->state == TASK_ZOMBIE || target->state == TASK_DEAD) return;
+    if (target->pending_kill) return;
 
     serial_printf("[KILL] task_kill pid=%u state=%d cpu=%u\n",
                   target->pid, (int)target->state, lapic_get_id());
-    target->exit_code    = 130;
+    target->exit_code = 130;
     target->pending_kill = true;
 
     if (target->state == TASK_BLOCKED) {

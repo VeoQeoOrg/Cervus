@@ -43,14 +43,22 @@ static void do_find(const char *dir, const char *pat, int depth) {
 
 CERVUS_MAIN(find_main) {
     const char *cwd = get_cwd_flag(argc, argv);
+    if (!cwd || cwd[0] == '\0') cwd = "/";
+
     const char *dir = NULL;
     const char *pat = NULL;
+
     for (int i = 1; i < argc; i++) {
         if (is_shell_flag(argv[i])) continue;
-        if (strcmp(argv[i], "-name") == 0) { if (i + 1 < argc) pat = argv[++i]; }
-        else dir = argv[i];
+        if (strcmp(argv[i], "-name") == 0) {
+            if (i + 1 < argc) pat = argv[++i];
+        } else if (argv[i][0] == '/') {
+            dir = argv[i];
+        }
     }
+
     if (!dir) dir = cwd;
+
     ws(dir); wn();
     do_find(dir, pat, 0);
     exit(0);
