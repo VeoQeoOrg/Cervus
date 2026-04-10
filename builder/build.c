@@ -15,7 +15,7 @@
 #include <sys/wait.h>
 
 #define IMAGE_NAME   "Cervus"
-#define VERSION      "v0.0.1"
+#define VERSION      "v0.0.2"
 #define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on "
 
 #define LIMINE_CONF_PATH       "/boot/limine/limine.conf"
@@ -559,7 +559,7 @@ bool build_initramfs(void) {
     FILE *readme = fopen(INITRAMFS_ROOTFS "/etc/readme.txt", "w");
     if (readme) {
         fprintf(readme,
-            "Cervus OS v0.0.1\n"
+            "Cervus OS v0.0.2\n"
             "================\n"
             "\n"
             "This is Cervus - a hobby x86_64 OS written in C.\n"

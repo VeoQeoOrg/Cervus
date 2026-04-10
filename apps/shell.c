@@ -529,7 +529,7 @@ static void run_command(char *line) {
 
 static void print_motd(void) {
     int fd = open("/etc/motd", O_RDONLY, 0);
-    if (fd < 0) { wn(); ws("  Cervus OS v0.0.1\n  Type 'help' for commands.\n"); wn(); return; }
+    if (fd < 0) { wn(); ws("  Cervus OS v0.0.2\n  Type 'help' for commands.\n"); wn(); return; }
     char buf[1024];
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
