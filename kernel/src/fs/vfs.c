@@ -50,16 +50,47 @@ int vfs_mount(const char *path, vnode_t *fs_root) {
     if (slot < 0) return -ENOMEM;
 
     strncpy(g_mounts[slot].path, path, VFS_MAX_PATH - 1);
-    g_mounts[slot].root = fs_root;
-    g_mounts[slot].used = true;
+    g_mounts[slot].root     = fs_root;
+    g_mounts[slot].used     = true;
+    g_mounts[slot].fs_priv  = NULL;
+    g_mounts[slot].unmount  = NULL;
     vnode_ref(fs_root);
     serial_printf("[VFS] mounted '%s' at slot %d\n", path, slot);
     return 0;
 }
 
+int vfs_mount_fs(const char *path, vnode_t *fs_root,
+                 void *fs_priv, void (*unmount_fn)(void *),
+                 void (*sync_fn)(void *)) {
+    int ret = vfs_mount(path, fs_root);
+    if (ret < 0) return ret;
+
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (g_mounts[i].used && strcmp(g_mounts[i].path, path) == 0) {
+            g_mounts[i].fs_priv = fs_priv;
+            g_mounts[i].unmount = unmount_fn;
+            g_mounts[i].sync    = sync_fn;
+            break;
+        }
+    }
+    return 0;
+}
+
+void vfs_sync_all(void) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (g_mounts[i].used && g_mounts[i].fs_priv) {
+            serial_printf("[VFS] sync_all: flushing mount '%s'\n", g_mounts[i].path);
+            if (g_mounts[i].sync)
+                g_mounts[i].sync(g_mounts[i].fs_priv);
+        }
+    }
+}
+
 int vfs_umount(const char *path) {
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (g_mounts[i].used && strcmp(g_mounts[i].path, path) == 0) {
+            if (g_mounts[i].unmount && g_mounts[i].fs_priv)
+                g_mounts[i].unmount(g_mounts[i].fs_priv);
             vnode_unref(g_mounts[i].root);
             memset(&g_mounts[i], 0, sizeof(vfs_mount_t));
             return 0;

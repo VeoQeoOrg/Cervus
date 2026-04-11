@@ -60,7 +60,15 @@
 #define SYS_SHUTDOWN          523
 #define SYS_REBOOT            524
 
-#define SYSCALL_TABLE_SIZE    525
+#define SYS_DISK_MOUNT        530
+#define SYS_DISK_UMOUNT       531
+#define SYS_DISK_FORMAT       532
+#define SYS_DISK_INFO         533
+#define SYS_UNLINK            534
+#define SYS_RMDIR             535
+#define SYS_MKDIR             536
+#define SYS_RENAME            537
+#define SYSCALL_TABLE_SIZE    538
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

@@ -29,6 +29,10 @@
 #include "../include/fs/ramfs.h"
 #include "../include/fs/devfs.h"
 #include "../include/fs/initramfs.h"
+#include "../include/drivers/ata.h"
+#include "../include/drivers/blkdev.h"
+#include "../include/drivers/disk.h"
+#include "../include/fs/cervusfs.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -229,6 +233,25 @@ void kernel_main(void) {
     } else {
         serial_writestring("[initramfs] no TAR module (modules[1] missing)\n");
     }
+
+    disk_init();
+
+    if (ata_get_drive_count() > 0) {
+        vfs_mkdir("/mnt", 0755);
+        disk_mount("hda", "/mnt");
+
+        vnode_t *hcheck = NULL;
+        if (vfs_lookup("/mnt/home", &hcheck) == 0) {
+            vnode_unref(hcheck);
+        } else {
+            int hr = vfs_mkdir("/mnt/home", 0755);
+            if (hr == 0)
+                serial_writestring("[disk] created /mnt/home\n");
+            else if (hr != -EEXIST)
+                serial_printf("[disk] WARNING: /mnt/home creation failed: %d\n", hr);
+        }
+    }
+    serial_writestring("Disk subsystem [OK]\n");
 
     timer_init();
     sched_init();

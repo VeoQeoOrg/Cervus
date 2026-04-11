@@ -13,6 +13,9 @@
 #include "../../include/io/serial.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/elf/elf.h"
+#include "../../include/drivers/disk.h"
+#include "../../include/drivers/blkdev.h"
+#include "../../include/drivers/ata.h"
 #include "../../include/panic/panic.h"
 #include "../include/io/ports.h"
 #include <stdint.h>
@@ -1066,6 +1069,7 @@ static int64_t sys_shutdown(void) {
     task_t *t = cur_task();
     if (t && t->uid != 0) return -EPERM;
     serial_writestring("[SYSCALL] shutdown requested\n");
+    vfs_sync_all();
     acpi_shutdown();
     return 0;
 }
@@ -1074,6 +1078,7 @@ static int64_t sys_reboot(void) {
     task_t *t = cur_task();
     if (t && t->uid != 0) return -EPERM;
     serial_writestring("[SYSCALL] reboot requested\n");
+    vfs_sync_all();
     acpi_reboot();
     return 0;
 }
@@ -1107,6 +1112,15 @@ W2(sys_clock_get)   W1(sys_sleep_ns)   W0(sys_uptime)   W1(sys_meminfo)
 W2(sys_dbg_print)
 W2(sys_ioport_read) W3(sys_ioport_write)
 W0(sys_shutdown) W0(sys_reboot)
+
+extern int64_t sys_disk_mount(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_umount(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_format(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_info(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_unlink(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_rmdir(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_mkdir(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_rename(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 
 static int64_t _sys_execve(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_execve(a,b,c);}
 static int64_t _sys_wait  (uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_wait(a,b,c);}
@@ -1153,6 +1167,14 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_IOPORT_WRITE] = _sys_ioport_write,
     [SYS_SHUTDOWN]     = _sys_shutdown,
     [SYS_REBOOT]       = _sys_reboot,
+    [SYS_DISK_MOUNT]   = sys_disk_mount,
+    [SYS_DISK_UMOUNT]  = sys_disk_umount,
+    [SYS_DISK_FORMAT]  = sys_disk_format,
+    [SYS_DISK_INFO]    = sys_disk_info,
+    [SYS_UNLINK]       = sys_unlink,
+    [SYS_RMDIR]        = sys_rmdir,
+    [SYS_MKDIR]        = sys_mkdir,
+    [SYS_RENAME]       = sys_rename,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval) {

@@ -65,6 +65,8 @@ typedef struct vnode_ops {
     int     (*mkdir)   (vnode_t *dir, const char *name, uint32_t mode);
     int     (*create)  (vnode_t *dir, const char *name, uint32_t mode, vnode_t **out);
     int     (*unlink)  (vnode_t *dir, const char *name);
+    int     (*rename)  (vnode_t *src_dir, const char *src_name,
+                        vnode_t *dst_dir, const char *dst_name);
     int     (*stat)    (vnode_t *node, vfs_stat_t *out);
     void    (*ref)     (vnode_t *node);
     void    (*unref)   (vnode_t *node);
@@ -88,6 +90,9 @@ struct vfs_mount {
     char        path[VFS_MAX_PATH];
     vnode_t    *root;
     bool        used;
+    void       *fs_priv;
+    void      (*unmount)(void *fs_priv);
+    void      (*sync)(void *fs_priv);
 };
 
 typedef struct {
@@ -110,6 +115,11 @@ struct fd_table {
 
 void    vfs_init   (void);
 int     vfs_mount  (const char *path, vnode_t *fs_root);
+
+int     vfs_mount_fs(const char *path, vnode_t *fs_root,
+                     void *fs_priv, void (*unmount_fn)(void *),
+                     void (*sync_fn)(void *));
+
 int     vfs_umount (const char *path);
 int     vfs_lookup (const char *path, vnode_t **out);
 
@@ -140,7 +150,7 @@ int         fd_close    (fd_table_t *table, int fd);
 int         fd_dup2     (fd_table_t *table, int oldfd, int newfd);
 int         fd_set_flags(fd_table_t *table, int fd, int flags);
 int         fd_get_flags(const fd_table_t *table, int fd);
-
+void vfs_sync_all(void);
 int vfs_init_stdio(void *task_ptr);
 
 #endif

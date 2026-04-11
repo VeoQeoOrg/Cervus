@@ -16,7 +16,8 @@
 
 #define IMAGE_NAME   "Cervus"
 #define VERSION      "v0.0.2"
-#define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on "
+#define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on " \
+                     "-drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk "
 
 #define LIMINE_CONF_PATH       "/boot/limine/limine.conf"
 #define LIMINE_CONF_BACKUP     "/boot/limine/limine.conf.cervus-backup"
@@ -56,6 +57,7 @@ const char *FILES_TO_CLEAN[] = {
     "OS-TREE.txt", "log.txt",
     "apps/shell.elf",
     INITRAMFS_TAR,
+    "cervus_disk.img",
     NULL
 };
 
@@ -507,6 +509,10 @@ bool build_initramfs(void) {
             " Cervus OS " VERSION " (Alpha release)\n"
             "\n"
             " Type 'help' to see available commands.\n"
+            "\n"
+            " Your home directory is /mnt/home (persistent disk storage).\n"
+            " Files created here will survive reboots.\n"
+            " Files outside /mnt/ are in RAM and will be lost on reboot.\n"
             "\n");
         fclose(motd);
     }
@@ -1422,6 +1428,15 @@ int main(int argc, char **argv) {
 
         char iso_path[PATH_MAX];
         snprintf(iso_path, sizeof(iso_path), "demo_iso/%s.latest.iso", IMAGE_NAME);
+
+        if (!file_exists("cervus_disk.img")) {
+            print_color(COLOR_CYAN, "Creating virtual disk image (64MB)...");
+            cmd_run(false, "dd if=/dev/zero of=cervus_disk.img bs=1M count=64 2>/dev/null");
+            print_color(COLOR_GREEN, "Virtual disk created: cervus_disk.img (64MB)");
+        } else {
+            print_color(COLOR_GREEN, "Using existing cervus_disk.img (persistent data)");
+        }
+
         print_color(COLOR_GREEN, "Starting QEMU with %s ...", iso_path);
         cmd_run(false,
             "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"

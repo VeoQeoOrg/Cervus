@@ -185,7 +185,7 @@ static const vnode_ops_t zero_ops = {
     .unref  = devfs_unref,
 };
 
-#define DEVFS_MAX_ENTRIES 16
+#define DEVFS_MAX_ENTRIES 32
 
 typedef struct {
     char      name[VFS_MAX_NAME];
@@ -236,7 +236,7 @@ static const vnode_ops_t devfs_dir_ops = {
     .unref   = devfs_unref,
 };
 
-static void devfs_register(const char *name, vnode_t *node) {
+void devfs_register(const char *name, vnode_t *node) {
     if (g_devdir.count >= DEVFS_MAX_ENTRIES) return;
     devfs_entry_t *e = &g_devdir.entries[g_devdir.count++];
     strncpy(e->name, name, VFS_MAX_NAME - 1);

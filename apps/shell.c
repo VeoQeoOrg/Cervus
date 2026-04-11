@@ -128,11 +128,27 @@ static void expand_vars(const char *src, char *dst, size_t dsz) {
 static char cwd[VFS_MAX_PATH];
 static int  prompt_len = 0;
 
+static const char *display_path(void) {
+    static char dpbuf[VFS_MAX_PATH];
+    const char *home = env_get("HOME");
+    size_t hlen = home ? strlen(home) : 0;
+    if (hlen > 1 && strncmp(cwd, home, hlen) == 0 &&
+        (cwd[hlen] == '/' || cwd[hlen] == '\0')) {
+        dpbuf[0] = '~';
+        strncpy(dpbuf + 1, cwd + hlen, sizeof(dpbuf) - 2);
+        dpbuf[sizeof(dpbuf) - 1] = '\0';
+        if (dpbuf[1] == '\0') { dpbuf[0] = '~'; dpbuf[1] = '\0'; }
+        return dpbuf;
+    }
+    return cwd;
+}
+
 static void print_prompt(void) {
+    const char *dp = display_path();
     ws(C_GREEN "cervus" C_RESET ":" C_BLUE);
-    ws(cwd);
+    ws(dp);
     ws(C_RESET "$ ");
-    prompt_len = 9 + (int)strlen(cwd);
+    prompt_len = 9 + (int)strlen(dp);
 }
 
 static int g_start_row = 0;
@@ -186,6 +202,144 @@ static void replace_line(char *buf, int *len, int *pos, const char *newtext, int
     redraw(buf, 0, newlen, old_len, newlen);
 }
 
+static void insert_str(char *buf, int *len, int *pos, int maxlen, const char *s, int slen) {
+    if (*len + slen >= maxlen) return;
+    int old_len = *len;
+    for (int i = *len; i >= *pos; i--) buf[i + slen] = buf[i];
+    for (int i = 0; i < slen; i++) buf[*pos + i] = s[i];
+    *len += slen;
+    buf[*len] = '\0';
+    cursor_to(*pos);
+    write(1, buf + *pos, *len - *pos);
+    sync_start_row(*len);
+    *pos += slen;
+    cursor_to(*pos);
+}
+
+static int find_word_start(const char *buf, int pos) {
+    int p = pos;
+    while (p > 0 && buf[p - 1] != ' ') p--;
+    return p;
+}
+
+static void list_dir_matches(const char *dir, const char *prefix, int plen,
+                             char matches[][256], int *nmatch, int max) {
+    int fd = open(dir, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) return;
+    cervus_dirent_t de;
+    while (*nmatch < max && readdir(fd, &de) == 0) {
+        if (strncmp(de.d_name, prefix, plen) == 0) {
+            strncpy(matches[*nmatch], de.d_name, 255);
+            matches[*nmatch][255] = '\0';
+            (*nmatch)++;
+        }
+    }
+    close(fd);
+}
+
+static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
+    int ws_start = find_word_start(buf, *pos);
+    int wlen = *pos - ws_start;
+    if (wlen <= 0) return;
+    char word[256];
+    if (wlen > 255) wlen = 255;
+    memcpy(word, buf + ws_start, wlen);
+    word[wlen] = '\0';
+
+    int is_first_word = 1;
+    for (int i = 0; i < ws_start; i++) {
+        if (buf[i] != ' ') { is_first_word = 0; break; }
+    }
+
+    char matches[32][256];
+    int nmatch = 0;
+
+    if (is_first_word) {
+        const char *pathvar = env_get("PATH");
+        char ptmp[ENV_VAL_MAX];
+        strncpy(ptmp, pathvar, sizeof(ptmp) - 1);
+        char *p = ptmp;
+        while (*p && nmatch < 32) {
+            char *seg = p;
+            while (*p && *p != ':') p++;
+            if (*p == ':') *p++ = '\0';
+            if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, 32);
+        }
+        const char *builtins[] = {"help","exit","cd","export","unset",NULL};
+        for (int i = 0; builtins[i] && nmatch < 32; i++) {
+            if (strncmp(builtins[i], word, wlen) == 0) {
+                strncpy(matches[nmatch], builtins[i], 255);
+                nmatch++;
+            }
+        }
+    } else {
+        char dirp[VFS_MAX_PATH];
+        const char *prefix = word;
+        char *last_slash = NULL;
+        for (int i = 0; word[i]; i++) if (word[i] == '/') last_slash = &word[i];
+        if (last_slash) {
+            int dlen = (int)(last_slash - word);
+            char raw_dir[256];
+            memcpy(raw_dir, word, dlen);
+            raw_dir[dlen] = '\0';
+            if (raw_dir[0] == '\0') strcpy(raw_dir, "/");
+            resolve_path(cwd, raw_dir, dirp, sizeof(dirp));
+            prefix = last_slash + 1;
+        } else {
+            strncpy(dirp, cwd, sizeof(dirp) - 1);
+        }
+        int plen = (int)strlen(prefix);
+        list_dir_matches(dirp, prefix, plen, matches, &nmatch, 32);
+    }
+
+    if (nmatch == 0) return;
+    if (nmatch == 1) {
+        const char *m = matches[0];
+        int mlen = (int)strlen(m);
+        int tail = mlen - wlen;
+        if (tail > 0) {
+            const char *suffix = m + wlen;
+            if (is_first_word) {
+                int need = tail;
+                if (*len + need >= maxlen) return;
+                int old_len = *len;
+                for (int i = *len; i >= *pos; i--) buf[i + need] = buf[i];
+                for (int i = 0; i < tail; i++) buf[*pos + i] = suffix[i];
+                *len += need;
+                buf[*len] = '\0';
+                cursor_to(*pos);
+                write(1, buf + *pos, *len - *pos);
+                sync_start_row(*len);
+                *pos += need;
+                cursor_to(*pos);
+            } else {
+                insert_str(buf, len, pos, maxlen, suffix, tail);
+            }
+        }
+        return;
+    }
+    int common = (int)strlen(matches[0]);
+    for (int i = 1; i < nmatch; i++) {
+        int j = 0;
+        while (j < common && matches[0][j] == matches[i][j]) j++;
+        common = j;
+    }
+    int extra = common - wlen;
+    if (extra > 0) {
+        insert_str(buf, len, pos, maxlen, matches[0] + wlen, extra);
+        return;
+    }
+    wn();
+    for (int i = 0; i < nmatch; i++) {
+        ws("  "); ws(matches[i]);
+    }
+    wn();
+    print_prompt();
+    write(1, buf, *len);
+    sync_start_row(*len);
+    cursor_to(*pos);
+}
+
 static int readline_edit(char *buf, int maxlen) {
     term_update_size();
     {
@@ -206,7 +360,6 @@ static int readline_edit(char *buf, int maxlen) {
             if (read(0, &s[0], 1) <= 0) continue;
             if (s[0] != '[') continue;
             if (read(0, &s[1], 1) <= 0) continue;
-
             if (s[1] == 'A') {
                 if (hidx == 0) strncpy(saved, buf, LINE_MAX - 1);
                 if (hidx < hist_count) {
@@ -253,6 +406,14 @@ static int readline_edit(char *buf, int maxlen) {
         if (c == 4)  { if (len == 0) return -1; continue; }
         if (c == 1)  { pos = 0; cursor_to(0); continue; }
         if (c == 5)  { pos = len; cursor_to(len); continue; }
+        if (c == '\t') {
+            if (len > 0 && pos == len) {
+                do_tab_complete(buf, &len, &pos, maxlen);
+            } else {
+                insert_str(buf, &len, &pos, maxlen, "    ", 4);
+            }
+            continue;
+        }
         if (c == 11) {
             if (pos < len) { int old_len = len; len = pos; buf[len] = '\0'; redraw(buf, pos, len, old_len, pos); }
             continue;
@@ -339,7 +500,7 @@ static void cmd_help(void) {
     ws("  " C_BOLD "cd" C_RESET " <dir>      change directory\n");
     ws("  " C_BOLD "export" C_RESET " N=V    set variable N to value V\n");
     ws("  " C_BOLD "unset" C_RESET " N       delete variable N\n");
-    ws("  " C_BOLD "env" C_RESET "           list variables (external program)\n");
+    ws("  " C_BOLD "env" C_RESET "           list variables\n");
     ws("  " C_BOLD "exit" C_RESET "          quit shell\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  Programs in " C_BOLD "/bin" C_RESET ":\n");
@@ -349,11 +510,10 @@ static void cmd_help(void) {
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
     ws("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
        " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n");
-    ws("  " C_BOLD "Variables:" C_RESET "  $VAR, ${VAR}, $? " C_GRAY "(exit code of last command)" C_RESET "\n");
+    ws("  " C_BOLD "Tab" C_RESET "       auto-complete / 4 spaces\n");
     ws("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n");
-    ws("  " C_BOLD "Ctrl+A/E" C_RESET "  move cursor to beginning/end of line\n");
-    ws("  " C_BOLD "Ctrl+K" C_RESET "    delete from cursor to end\n");
-    ws("  " C_BOLD "Ctrl+U" C_RESET "    delete from cursor to beginning\n");
+    ws("  " C_BOLD "Ctrl+A/E" C_RESET "  beginning/end of line\n");
+    ws("  " C_BOLD "Ctrl+K/U" C_RESET "  delete to end/beginning\n");
     ws("  " C_BOLD "Ctrl+W" C_RESET "    delete word\n");
     ws("  " C_BOLD "Arrows" C_RESET "    cursor / history\n");
     ws("  " C_GRAY "-----------------------------------" C_RESET "\n");
@@ -361,7 +521,10 @@ static void cmd_help(void) {
 }
 
 static int cmd_cd(const char *path) {
-    if (!path || !path[0]) path = "/";
+    if (!path || !path[0] || strcmp(path, "~") == 0) {
+        const char *home = env_get("HOME");
+        path = (home && home[0]) ? home : "/";
+    }
     char np[VFS_MAX_PATH];
     resolve_path(cwd, path, np, sizeof(np));
     cervus_stat_t st;
@@ -459,7 +622,6 @@ static int run_single(char *line) {
         }
     }
 
-
 #define REAL_ARGV_MAX (MAX_ARGS + ENV_MAX_VARS + 4)
     char *real_argv_buf[REAL_ARGV_MAX];
     static char _cwd_flag[VFS_MAX_PATH + 8];
@@ -468,10 +630,8 @@ static int run_single(char *line) {
     int ri = 0;
     real_argv_buf[ri++] = binpath;
     for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
-
     snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", cwd);
     real_argv_buf[ri++] = _cwd_flag;
-
     for (int ei = 0; ei < g_env_count && ri < REAL_ARGV_MAX - 1; ei++) {
         snprintf(_env_flags[ei], sizeof(_env_flags[ei]), "--env:%s=%s",
                  g_env[ei].name, g_env[ei].value);
@@ -545,9 +705,17 @@ __attribute__((naked)) void _start(void) {
 
 __attribute__((noreturn)) void _start_main(uint64_t *initial_rsp) {
     (void)initial_rsp;
-    strncpy(cwd, "/", sizeof(cwd));
+
+    cervus_stat_t _st;
+    if (stat("/mnt/home", &_st) == 0 && _st.st_type == 1) {
+        strncpy(cwd, "/mnt/home", sizeof(cwd));
+        env_set("HOME", "/mnt/home");
+    } else {
+        strncpy(cwd, "/", sizeof(cwd));
+        env_set("HOME", "/");
+    }
+
     env_set("PATH", "/bin:/apps");
-    env_set("HOME", "/");
     env_set("SHELL", "/apps/shell");
     print_motd();
 
@@ -557,7 +725,8 @@ __attribute__((noreturn)) void _start_main(uint64_t *initial_rsp) {
         int n = readline_edit(line, LINE_MAX);
         if (n < 0) {
             ws("\nSession ended. Restarting shell...\n");
-            strncpy(cwd, "/", sizeof(cwd));
+            const char *h = env_get("HOME");
+            strncpy(cwd, (h && h[0]) ? h : "/", sizeof(cwd));
             print_motd();
             continue;
         }
