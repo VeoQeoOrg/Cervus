@@ -11,13 +11,17 @@ CERVUS_MAIN(touch_main) {
         char path[512];
         resolve_path(cwd_str, argv[i], path, sizeof(path));
 
-        int fd = open(path, O_RDONLY, 0);
-        if (fd >= 0) {
-            close(fd);
+        cervus_stat_t st;
+        if (stat(path, &st) == 0) {
+            if (st.st_type == DT_DIR) {
+                wse("touch: cannot touch '");
+                wse(argv[i]);
+                wse("': Is a directory\n");
+            }
             continue;
         }
 
-        fd = open(path, O_WRONLY | O_CREAT, 0644);
+        int fd = open(path, O_WRONLY | O_CREAT, 0644);
         if (fd < 0) {
             wse("touch: cannot create '");
             wse(argv[i]);

@@ -10,7 +10,7 @@
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/fs/vfs.h"
-#include "../../include/fs/cervusfs.h"
+#include "../../include/fs/ext2.h"
 #include <string.h>
 
 static inline task_t* disk_cur_task(void) {

@@ -32,7 +32,7 @@
 #include "../include/drivers/ata.h"
 #include "../include/drivers/blkdev.h"
 #include "../include/drivers/disk.h"
-#include "../include/fs/cervusfs.h"
+#include "../include/fs/ext2.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);

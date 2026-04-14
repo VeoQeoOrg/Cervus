@@ -25,6 +25,12 @@ CERVUS_MAIN(hexdump_main) {
     char resolved[512];
     resolve_path(cwd, path, resolved, sizeof(resolved));
 
+    cervus_stat_t st;
+    if (stat(resolved, &st) == 0 && st.st_type == DT_DIR) {
+        ws("hexdump: "); ws(path); ws(": Is a directory\n");
+        exit(1);
+    }
+
     int fd = open(resolved, O_RDONLY, 0);
     if (fd < 0) {
         ws("hexdump: cannot open: "); ws(path); wn();

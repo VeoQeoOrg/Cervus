@@ -26,6 +26,13 @@ CERVUS_MAIN(cat_main) {
         if (is_shell_flag(argv[i])) continue;
         char resolved[512];
         resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+
+        cervus_stat_t st;
+        if (stat(resolved, &st) == 0 && st.st_type == DT_DIR) {
+            fprintf(2, "cat: %s: Is a directory\n", argv[i]);
+            rc = 1; continue;
+        }
+
         int fd = open(resolved, O_RDONLY, 0);
         if (fd < 0) {
             fprintf(2, "cat: cannot open: %s\n", argv[i]);

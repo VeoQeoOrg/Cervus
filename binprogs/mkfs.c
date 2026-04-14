@@ -22,7 +22,7 @@ CERVUS_MAIN(main) {
     if (!devname) {
         ws("Usage: mkfs <device> [label]\n");
         ws("  e.g: mkfs hda mydisk\n");
-        ws("\nFormats /dev/<device> with CervusFS.\n");
+        ws("\nFormats /dev/<device> with Ext2.\n");
         ws("WARNING: all data on device will be lost!\n");
         exit(1);
     }
@@ -39,7 +39,7 @@ CERVUS_MAIN(main) {
         exit(1);
     }
 
-    ws("Done. CervusFS created on ");
+    ws("Done. Ext2 created on ");
     ws(devname);
     ws("\n");
 }

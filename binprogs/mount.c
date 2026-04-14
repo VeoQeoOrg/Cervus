@@ -17,7 +17,7 @@ CERVUS_MAIN(main) {
     if (real_argc < 3) {
         ws("Usage: mount <device> <mountpoint>\n");
         ws("  e.g: mount hda /mnt/disk\n");
-        ws("\nMounts /dev/<device> with CervusFS at <mountpoint>.\n");
+        ws("\nMounts /dev/<device> with Ext2 at <mountpoint>.\n");
         exit(1);
     }
 
