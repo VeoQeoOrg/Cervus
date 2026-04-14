@@ -218,7 +218,7 @@ void kernel_main(void) {
     pmm_print_stats();
 
     smp_print_info_fb();
-    printf("\nSystem: %u CPU cores detected\n", smp_get_cpu_count());
+    printf("\nSystem: %u CPU cores detected\n\n", smp_get_cpu_count());
     syscall_init();
 
     if (module_request.response &&

@@ -6,6 +6,7 @@
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/syscall/errno.h"
+#include <stdio.h>
 #include <string.h>
 
 static int ata_blk_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf) {
@@ -93,10 +94,16 @@ void disk_init(void) {
         devfs_register(names[i], vn);
         serial_printf("[disk] /dev/%s -> %s (%llu MB)\n",
                       names[i], drv->model, drv->size_bytes / (1024 * 1024));
+        printf("[disk] /dev/%s -> %s (%llu MB)\n",
+                      names[i], drv->model, drv->size_bytes / (1024 * 1024));
         count++;
     }
-    if (count == 0) serial_writestring("[disk] no disks available\n");
-    else serial_printf("[disk] %d disk(s) ready\n", count);
+    if (count == 0) {
+        serial_writestring("[disk] no disks available\n");
+    } else {
+        serial_printf("[disk] %d disk(s) ready\n", count);
+        printf("[disk] %d disk(s) ready\n", count);
+    }
 }
 
 static const char *strip_dev_prefix(const char *name) {
@@ -126,11 +133,13 @@ int disk_mount(const char *devname, const char *path) {
     blkdev_t *dev = blkdev_get_by_name(raw);
     if (!dev) {
         serial_printf("[disk] mount: device '%s' not found\n", devname);
+        printf("[disk] mount: device '%s' not found\n", devname);
         return -ENODEV;
     }
     vnode_t *root = ext2_mount(dev);
     if (!root) {
         serial_printf("[disk] mount: '%s' has no valid ext2, formatting...\n", raw);
+        printf("[disk] mount: '%s' has no valid ext2, formatting...\n", raw);
         int r = ext2_format(dev, raw);
         if (r < 0) return r;
         root = ext2_mount(dev);
@@ -150,10 +159,12 @@ int disk_mount(const char *devname, const char *path) {
     int r = vfs_mount_fs(cp, root, efs, disk_ext2_unmount_cb, disk_ext2_sync_cb);
     if (r < 0) {
         serial_printf("[disk] mount: vfs_mount_fs('%s') failed: %d\n", cp, r);
+        printf("[disk] mount: vfs_mount_fs('%s') failed: %d\n", cp, r);
         vnode_unref(root);
         return r;
     }
     serial_printf("[disk] mounted '%s' at '%s'\n", raw, cp);
+    printf("[disk] mounted '%s' at '%s'\n", raw, cp);
     return 0;
 }
 
