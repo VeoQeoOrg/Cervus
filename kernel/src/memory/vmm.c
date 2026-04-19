@@ -41,6 +41,12 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index, uint64_t flags) {
 }
 
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
+    if (!map || !map->pml4) {
+        serial_printf("[VMM_BUG] vmm_map_page: map=%p pml4=%p virt=0x%llx\n",
+                      (void*)map, map ? (void*)map->pml4 : NULL,
+                      (unsigned long long)virt);
+        return false;
+    }
     size_t pml4_i = (virt >> 39) & MASK;
     size_t pdpt_i = (virt >> 30) & MASK;
     size_t pd_i   = (virt >> 21) & MASK;
@@ -104,11 +110,16 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
 vmm_pagemap_t* vmm_create_pagemap(void) {
     vmm_pagemap_t* map = pmm_alloc_zero(1);
     if (!map) {
-        printf("VMM ERROR: cannot allocate pagemap\n");
-        for (;;) asm volatile ("hlt");
+        serial_printf("[VMM] vmm_create_pagemap: pmm_alloc_zero for map failed\n");
+        return NULL;
     }
 
     map->pml4 = alloc_table();
+    if (!map->pml4) {
+        serial_printf("[VMM] vmm_create_pagemap: alloc_table for pml4 failed\n");
+        pmm_free(map, 1);
+        return NULL;
+    }
 
     for (size_t i = 256; i < 512; i++) {
         map->pml4[i] = kernel_pagemap.pml4[i];

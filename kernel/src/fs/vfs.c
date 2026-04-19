@@ -300,6 +300,12 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
 }
 
 void vfs_close(vfs_file_t *file) {
+    if (file) {
+        int acc = file->flags & O_ACCMODE;
+        if (acc == O_WRONLY || acc == O_RDWR) {
+            vfs_sync_all();
+        }
+    }
     vfs_file_free(file);
 }
 
@@ -543,5 +549,69 @@ int vfs_init_stdio(void *task_ptr) {
     if (ret < 0) return ret;
     fd_alloc(t->fd_table, err, 2);
 
+    return 0;
+}
+
+int vfs_set_mount_info(const char *path, const char *device, const char *fstype) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (g_mounts[i].used && strcmp(g_mounts[i].path, path) == 0) {
+            if (device) {
+                strncpy(g_mounts[i].device, device, sizeof(g_mounts[i].device) - 1);
+                g_mounts[i].device[sizeof(g_mounts[i].device) - 1] = '\0';
+            }
+            if (fstype) {
+                strncpy(g_mounts[i].fstype, fstype, sizeof(g_mounts[i].fstype) - 1);
+                g_mounts[i].fstype[sizeof(g_mounts[i].fstype) - 1] = '\0';
+            }
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+int vfs_list_mounts(vfs_mount_info_t *out, int max) {
+    int n = 0;
+    for (int i = 0; i < VFS_MAX_MOUNTS && n < max; i++) {
+        if (!g_mounts[i].used) continue;
+        strncpy(out[n].path,   g_mounts[i].path,   VFS_MAX_PATH - 1);
+        out[n].path[VFS_MAX_PATH - 1] = '\0';
+        strncpy(out[n].device, g_mounts[i].device, sizeof(out[n].device) - 1);
+        out[n].device[sizeof(out[n].device) - 1] = '\0';
+        strncpy(out[n].fstype, g_mounts[i].fstype, sizeof(out[n].fstype) - 1);
+        out[n].fstype[sizeof(out[n].fstype) - 1] = '\0';
+        out[n].flags = 0;
+        n++;
+    }
+    return n;
+}
+
+extern int ext2_statvfs(vnode_t *root, vfs_statvfs_t *out);
+extern int fat32_statvfs(vnode_t *root, vfs_statvfs_t *out);
+
+int vfs_statvfs(const char *path, vfs_statvfs_t *out) {
+    if (!path || !out) return -EINVAL;
+    memset(out, 0, sizeof(*out));
+
+    vfs_mount_t *best = NULL;
+    size_t best_len = 0;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (!g_mounts[i].used) continue;
+        size_t mlen = strlen(g_mounts[i].path);
+        if (strncmp(path, g_mounts[i].path, mlen) == 0) {
+            if (path[mlen] == '/' || path[mlen] == '\0' || mlen == 1) {
+                if (mlen > best_len) { best = &g_mounts[i]; best_len = mlen; }
+            }
+        }
+    }
+    if (!best) return -ENOENT;
+
+    if (strcmp(best->fstype, "ext2") == 0) {
+        return ext2_statvfs(best->root, out);
+    }
+    if (strcmp(best->fstype, "fat32") == 0) {
+        return fat32_statvfs(best->root, out);
+    }
+    out->f_bsize   = 4096;
+    out->f_namemax = 255;
     return 0;
 }

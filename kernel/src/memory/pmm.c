@@ -53,10 +53,33 @@ static inline pmm_block_t *_fl_first(pmm_free_list_t *fl) {
     return (fl->head.next == &fl->head) ? NULL : fl->head.next;
 }
 
+static inline int _block_ptr_valid(pmm_free_list_t *fl, pmm_block_t *b) {
+    uintptr_t p = (uintptr_t)b;
+    if (p == (uintptr_t)&fl->head) return 1;
+    if (p < g_buddy.hhdm_offset) return 0;
+    uintptr_t phys = p - g_buddy.hhdm_offset;
+    if (phys < g_buddy.mem_start || phys >= g_buddy.mem_end) return 0;
+    if (phys & 0xFFFULL) return 0;
+    return 1;
+}
+
 static pmm_block_t *_fl_find(pmm_free_list_t *fl, uintptr_t phys) {
     size_t limit = g_buddy.total_pages + 16;
-    for (pmm_block_t *b = fl->head.next; b != &fl->head; b = b->next) {
+    pmm_block_t *b = fl->head.next;
+    while (b != &fl->head) {
+        if (!_block_ptr_valid(fl, b)) {
+            serial_printf("[PMM_FREELIST_CORRUPT] bad ptr=%p in freelist walk\n", (void*)b);
+            return NULL;
+        }
         if (_block_phys(b) == phys) return b;
+        pmm_block_t *next = b->next;
+        if (!_block_ptr_valid(fl, next)) {
+            serial_printf("[PMM_FREELIST_CORRUPT] bad next=%p at block=%p (phys=0x%llx)\n",
+                          (void*)next, (void*)b,
+                          (unsigned long long)_block_phys(b));
+            return NULL;
+        }
+        b = next;
         if (limit-- == 0) return NULL;
     }
     return NULL;
@@ -268,6 +291,7 @@ void pmm_free(void *addr, size_t pages) {
     }
 
     size_t free_before = g_buddy.free_pages;
+    memset(addr, 0, 64);
     _buddy_free_order(phys, order);
     size_t free_after = g_buddy.free_pages;
     __atomic_fetch_add(&g_pmm_free_count, (size_t)1 << order, __ATOMIC_RELAXED);

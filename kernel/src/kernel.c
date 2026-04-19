@@ -32,7 +32,9 @@
 #include "../include/drivers/ata.h"
 #include "../include/drivers/blkdev.h"
 #include "../include/drivers/disk.h"
+#include "../include/drivers/partition.h"
 #include "../include/fs/ext2.h"
+#include "../include/fs/fat32.h"
 
 __attribute__((used, section(".limine_requests")))
 static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
@@ -138,6 +140,41 @@ void ps2_task(void* arg) {
     ps2_init();
 }
 
+static bool detect_installed_system(void) {
+    blkdev_t *hda2 = blkdev_get_by_name("hda2");
+    if (hda2) {
+        uint16_t magic = 0;
+        if (blkdev_read(hda2, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
+            && magic == EXT2_SUPER_MAGIC) {
+            serial_writestring("[boot] ext2 on hda2 -> installed system\n");
+            return true;
+        }
+    }
+
+    blkdev_t *hda1 = blkdev_get_by_name("hda1");
+    if (hda1) {
+        uint8_t sector[512];
+        if (hda1->ops->read_sectors(hda1, 0, 1, sector) == 0) {
+            if (sector[510] == 0x55 && sector[511] == (uint8_t)0xAA
+                && memcmp(sector + 82, "FAT32", 5) == 0) {
+                serial_writestring("[boot] FAT32 on hda1 -> looks like installed system\n");
+                return true;
+            }
+        }
+    }
+
+    blkdev_t *hda = blkdev_get_by_name("hda");
+    if (hda) {
+        uint16_t magic = 0;
+        if (blkdev_read(hda, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
+            && magic == EXT2_SUPER_MAGIC) {
+            serial_writestring("[boot] legacy ext2-on-whole-disk detected\n");
+            return true;
+        }
+    }
+    return false;
+}
+
 void kernel_main(void) {
     serial_initialize(COM1, 115200);
     serial_writestring("\n=== SERIAL PORT INITIALIZED ===\n");
@@ -183,6 +220,7 @@ void kernel_main(void) {
 
     vnode_t *rootfs = ramfs_create_root();
     vfs_mount("/", rootfs);
+    vfs_set_mount_info("/", "ramfs", "ramfs");
     vnode_unref(rootfs);
     serial_writestring("rootfs [OK]\n");
 
@@ -191,9 +229,11 @@ void kernel_main(void) {
     vfs_mkdir("/etc",  0755);
     vfs_mkdir("/tmp",  0755);
     vfs_mkdir("/proc", 0755);
+    vfs_mkdir("/mnt",  0755);
 
     vnode_t *devroot = devfs_create_root();
     vfs_mount("/dev", devroot);
+    vfs_set_mount_info("/dev", "devfs", "devfs");
     serial_writestring("devfs [OK]\n");
     acpi_init();
     acpi_print_tables();
@@ -221,7 +261,17 @@ void kernel_main(void) {
     printf("\nSystem: %u CPU cores detected\n\n", smp_get_cpu_count());
     syscall_init();
 
-    if (module_request.response &&
+    disk_init();
+    serial_writestring("Disk subsystem [OK]\n");
+
+    bool skip_initramfs = detect_installed_system();
+    if (skip_initramfs) {
+        printf("[boot] installed Cervus detected on disk -- booting from disk\n");
+    } else {
+        serial_writestring("[boot] no installed system detected, using initramfs\n");
+    }
+
+    if (!skip_initramfs && module_request.response &&
         module_request.response->module_count >= 2) {
         struct limine_file *tar = module_request.response->modules[1];
         serial_printf("[initramfs] module: '%s' size=%llu\n", tar->path, tar->size);
@@ -230,28 +280,9 @@ void kernel_main(void) {
             serial_writestring("[initramfs] mounted OK\n");
         else
             serial_printf("[initramfs] mount FAILED: %d\n", r);
-    } else {
+    } else if (!skip_initramfs) {
         serial_writestring("[initramfs] no TAR module (modules[1] missing)\n");
     }
-
-    disk_init();
-
-    if (ata_get_drive_count() > 0) {
-        vfs_mkdir("/mnt", 0755);
-        disk_mount("hda", "/mnt");
-
-        vnode_t *hcheck = NULL;
-        if (vfs_lookup("/mnt/home", &hcheck) == 0) {
-            vnode_unref(hcheck);
-        } else {
-            int hr = vfs_mkdir("/mnt/home", 0755);
-            if (hr == 0)
-                serial_writestring("[disk] created /mnt/home\n");
-            else if (hr != -EEXIST)
-                serial_printf("[disk] WARNING: /mnt/home creation failed: %d\n", hr);
-        }
-    }
-    serial_writestring("Disk subsystem [OK]\n");
 
     timer_init();
     sched_init();

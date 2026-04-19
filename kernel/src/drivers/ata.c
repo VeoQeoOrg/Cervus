@@ -14,20 +14,27 @@ static void ata_io_wait(uint16_t ctrl) {
     inb(ctrl); inb(ctrl); inb(ctrl); inb(ctrl);
 }
 
+static inline void ata_cpu_relax(void) {
+    asm volatile("pause" ::: "memory");
+}
+
 static void ata_soft_reset(uint16_t ctrl) {
     outb(ctrl, 0x04);
     ata_io_wait(ctrl);
     outb(ctrl, 0x00);
     ata_io_wait(ctrl);
 
-    for (int i = 0; i < 200000; i++) {
+    for (int i = 0; i < 2000000; i++) {
         uint8_t s = inb(ctrl);
         if (!(s & ATA_SR_BSY)) return;
         ata_io_wait(ctrl);
+        ata_cpu_relax();
     }
 }
 
 static int ata_wait_ready(uint16_t io, uint16_t ctrl, int timeout_us) {
+    (void)io;
+    ata_io_wait(ctrl);
     for (int i = 0; i < timeout_us; i++) {
         uint8_t s = inb(ctrl + ATA_REG_ALT_STATUS);
         if (!(s & ATA_SR_BSY)) {
@@ -35,18 +42,22 @@ static int ata_wait_ready(uint16_t io, uint16_t ctrl, int timeout_us) {
             if (s & ATA_SR_DF)  return -EIO;
             return 0;
         }
-        (void)io;
+        ata_io_wait(ctrl);
+        ata_cpu_relax();
     }
     return -ETIMEDOUT;
 }
 
 static int ata_wait_drq(uint16_t io, uint16_t ctrl, int timeout_us) {
     (void)io;
+    ata_io_wait(ctrl);
     for (int i = 0; i < timeout_us; i++) {
         uint8_t s = inb(ctrl + ATA_REG_ALT_STATUS);
         if (s & ATA_SR_ERR) return -EIO;
         if (s & ATA_SR_DF)  return -EIO;
         if (!(s & ATA_SR_BSY) && (s & ATA_SR_DRQ)) return 0;
+        ata_io_wait(ctrl);
+        ata_cpu_relax();
     }
     return -ETIMEDOUT;
 }
@@ -81,9 +92,10 @@ static bool ata_identify_drive(uint16_t io, uint16_t ctrl, uint8_t drv_sel, ata_
     uint8_t status = inb(io + ATA_REG_STATUS);
     if (status == 0) return false;
 
-    for (int i = 0; i < 100000; i++) {
+    for (int i = 0; i < 1000000; i++) {
         status = inb(io + ATA_REG_STATUS);
         if (!(status & ATA_SR_BSY)) break;
+        ata_cpu_relax();
     }
     if (status & ATA_SR_BSY) return false;
 
@@ -100,10 +112,11 @@ static bool ata_identify_drive(uint16_t io, uint16_t ctrl, uint8_t drv_sel, ata_
         return false;
     }
 
-    for (int i = 0; i < 100000; i++) {
+    for (int i = 0; i < 1000000; i++) {
         status = inb(io + ATA_REG_STATUS);
         if (status & ATA_SR_ERR) return false;
         if (status & ATA_SR_DRQ) break;
+        ata_cpu_relax();
     }
     if (!(status & ATA_SR_DRQ)) return false;
 
@@ -176,15 +189,13 @@ int ata_get_drive_count(void) {
     return g_drive_count;
 }
 
-int ata_read_sectors(ata_drive_t *drive, uint64_t lba,
-                     uint32_t count, void *buffer)
+#define ATA_IO_TIMEOUT   20000000
+#define ATA_WRITE_TIMEOUT 40000000
+#define ATA_RETRY_COUNT   3
+
+static int ata_read_sectors_once(ata_drive_t *drive, uint64_t lba,
+                                 uint32_t count, void *buffer)
 {
-    if (!drive || !drive->present || !buffer) return -EINVAL;
-    if (count == 0) return 0;
-    if (lba + count > drive->sectors) return -EINVAL;
-
-    uint64_t flags = spinlock_acquire_irqsave(&g_ata_lock);
-
     uint16_t io   = drive->io_base;
     uint16_t ctrl = drive->ctrl_base;
     uint16_t *buf = (uint16_t *)buffer;
@@ -193,8 +204,8 @@ int ata_read_sectors(ata_drive_t *drive, uint64_t lba,
     outb(io + ATA_REG_DRIVE, drive->drive_select);
     ata_io_wait(ctrl);
     (void)inb(io + ATA_REG_STATUS);
-    ret = ata_wait_ready(io, ctrl, 2000000);
-    if (ret < 0) goto out;
+    ret = ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT);
+    if (ret < 0) return ret;
 
     if (drive->lba48 && (lba > 0x0FFFFFFF || count > 256)) {
         outb(io + ATA_REG_DRIVE, (drive->drive_select & 0xF0) | ATA_LBA_BIT);
@@ -222,22 +233,22 @@ int ata_read_sectors(ata_drive_t *drive, uint64_t lba,
         outb(io + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
     }
 
+    ata_io_wait(ctrl);
+
     for (uint32_t s = 0; s < count; s++) {
-        ret = ata_wait_drq(io, ctrl, 2000000);
-        if (ret < 0) goto out;
+        ret = ata_wait_drq(io, ctrl, ATA_IO_TIMEOUT);
+        if (ret < 0) return ret;
 
         for (int i = 0; i < 256; i++)
             *buf++ = inw(io + ATA_REG_DATA);
-    }
-    ret = 0;
 
-out:
-    spinlock_release_irqrestore(&g_ata_lock, flags);
-    return ret;
+        ata_io_wait(ctrl);
+    }
+    return 0;
 }
 
-int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
-                      uint32_t count, const void *buffer)
+int ata_read_sectors(ata_drive_t *drive, uint64_t lba,
+                     uint32_t count, void *buffer)
 {
     if (!drive || !drive->present || !buffer) return -EINVAL;
     if (count == 0) return 0;
@@ -245,6 +256,23 @@ int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
 
     uint64_t flags = spinlock_acquire_irqsave(&g_ata_lock);
 
+    int ret = -EIO;
+    for (int attempt = 0; attempt < ATA_RETRY_COUNT; attempt++) {
+        ret = ata_read_sectors_once(drive, lba, count, buffer);
+        if (ret == 0) break;
+        serial_printf("[ATA] read lba=%llu count=%u attempt %d failed: %d\n",
+                      lba, count, attempt + 1, ret);
+        ata_soft_reset(drive->ctrl_base);
+        for (volatile int k = 0; k < 100000; k++) ata_cpu_relax();
+    }
+
+    spinlock_release_irqrestore(&g_ata_lock, flags);
+    return ret;
+}
+
+static int ata_write_sectors_once(ata_drive_t *drive, uint64_t lba,
+                                  uint32_t count, const void *buffer)
+{
     uint16_t io   = drive->io_base;
     uint16_t ctrl = drive->ctrl_base;
     const uint16_t *buf = (const uint16_t *)buffer;
@@ -253,8 +281,8 @@ int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
     outb(io + ATA_REG_DRIVE, drive->drive_select);
     ata_io_wait(ctrl);
     (void)inb(io + ATA_REG_STATUS);
-    ret = ata_wait_ready(io, ctrl, 2000000);
-    if (ret < 0) goto out;
+    ret = ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT);
+    if (ret < 0) return ret;
 
     if (drive->lba48 && (lba > 0x0FFFFFFF || count > 256)) {
         outb(io + ATA_REG_DRIVE, (drive->drive_select & 0xF0) | ATA_LBA_BIT);
@@ -286,8 +314,8 @@ int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
     ata_io_wait(ctrl);
 
     for (uint32_t s = 0; s < count; s++) {
-        ret = ata_wait_drq(io, ctrl, 4000000);
-        if (ret < 0) goto out;
+        ret = ata_wait_drq(io, ctrl, ATA_WRITE_TIMEOUT);
+        if (ret < 0) return ret;
 
         for (int i = 0; i < 256; i++)
             outw(io + ATA_REG_DATA, *buf++);
@@ -295,22 +323,31 @@ int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
         ata_io_wait(ctrl);
     }
 
-    for (int _i = 0; _i < 2000000; _i++) {
-        uint8_t _s = inb(ctrl + ATA_REG_ALT_STATUS);
-        if (!(_s & ATA_SR_BSY)) break;
+    ret = ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT);
+    if (ret < 0) return ret;
+
+    return 0;
+}
+
+int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
+                      uint32_t count, const void *buffer)
+{
+    if (!drive || !drive->present || !buffer) return -EINVAL;
+    if (count == 0) return 0;
+    if (lba + count > drive->sectors) return -EINVAL;
+
+    uint64_t flags = spinlock_acquire_irqsave(&g_ata_lock);
+
+    int ret = -EIO;
+    for (int attempt = 0; attempt < ATA_RETRY_COUNT; attempt++) {
+        ret = ata_write_sectors_once(drive, lba, count, buffer);
+        if (ret == 0) break;
+        serial_printf("[ATA] write lba=%llu count=%u attempt %d failed: %d\n",
+                      lba, count, attempt + 1, ret);
+        ata_soft_reset(drive->ctrl_base);
+        for (volatile int k = 0; k < 100000; k++) ata_cpu_relax();
     }
 
-    outb(io + ATA_REG_DRIVE, drive->drive_select);
-    outb(io + ATA_REG_COMMAND,
-         drive->lba48 ? ATA_CMD_CACHE_FLUSH_EXT : ATA_CMD_CACHE_FLUSH);
-    for (int _i = 0; _i < 4000000; _i++) {
-        uint8_t _s = inb(ctrl + ATA_REG_ALT_STATUS);
-        if (!(_s & ATA_SR_BSY)) { ret = 0; break; }
-    }
-    (void)inb(io + ATA_REG_STATUS);
-    (void)inb(io + ATA_REG_STATUS);
-
-out:
     spinlock_release_irqrestore(&g_ata_lock, flags);
     return ret;
 }
@@ -327,7 +364,7 @@ int ata_flush(ata_drive_t *drive) {
     outb(io + ATA_REG_COMMAND,
          drive->lba48 ? ATA_CMD_CACHE_FLUSH_EXT : ATA_CMD_CACHE_FLUSH);
 
-    int ret = ata_wait_ready(io, ctrl, 1000000);
+    int ret = ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT);
 
     spinlock_release_irqrestore(&g_ata_lock, flags);
     return ret;

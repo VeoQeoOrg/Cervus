@@ -15,7 +15,6 @@ unsigned long long strtoull(const char * restrict s, char ** restrict end, int b
 static inline int  atoi(const char* s) { return (int)strtol (s, (char**)0, 10); }
 static inline long atol(const char* s) {      return strtol (s, (char**)0, 10); }
 
-void  malloc_init(void);
 void* malloc (size_t size);
 void* calloc (size_t nmemb, size_t size);
 void* realloc(void* ptr, size_t size);

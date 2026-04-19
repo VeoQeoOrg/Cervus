@@ -5,6 +5,7 @@
 #include "../../include/io/serial.h"
 #include "../../include/syscall/errno.h"
 #include <string.h>
+#include <stdio.h>
 
 static int block_read(ext2_t *fs, uint32_t block, void *buf) {
     return blkdev_read(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
@@ -773,6 +774,9 @@ int ext2_format(blkdev_t *dev, const char *label) {
     ext2_group_desc_t *gdt = kzalloc(gdt_blocks * block_size);
     if (!gdt) { kfree(zb); return -ENOMEM; }
     uint32_t used_total = first_data_block;
+    printf("       ext2: ");
+    uint32_t last_pct_ext2 = 999;
+    uint32_t spinner_ext2 = 0;
     for (uint32_t g = 0; g < groups_count; g++) {
         uint32_t gs = g * blocks_per_group + first_data_block;
         uint32_t cb = (g == 0) ? (gdt_block + gdt_blocks) : gs;
@@ -804,7 +808,17 @@ int ext2_format(blkdev_t *dev, const char *label) {
         for (uint32_t i = inodes_per_group; i < block_size * 8; i++) bmp_set(ibmp, i);
         blkdev_write(dev, (uint64_t)gdt[g].bg_inode_bitmap * block_size, ibmp, block_size);
         kfree(ibmp);
+
+        uint32_t pct = ((g + 1) * 100) / groups_count;
+        if (pct != last_pct_ext2) {
+            static const char glyphs[4] = { '|', '/', '-', '\\' };
+            printf("\r                                                                                \r       %c ext2: %u%% (group %u/%u)",
+                   glyphs[spinner_ext2 & 3], pct, g + 1, groups_count);
+            spinner_ext2++;
+            last_pct_ext2 = pct;
+        }
     }
+    printf("\r                                                                                \r       ext2: done\n");
     sb.s_free_blocks_count = total_blocks - used_total;
     sb.s_free_inodes_count = total_inodes - 11;
     int32_t root_blk = -1;
@@ -901,4 +915,21 @@ void ext2_unmount(ext2_t *fs) {
     ext2_sync(fs);
     if (fs->gdt) kfree(fs->gdt);
     kfree(fs);
+}
+
+int ext2_statvfs(vnode_t *root, vfs_statvfs_t *out) {
+    if (!root || !root->fs_data || !out) return -EINVAL;
+    ext2_vdata_t *vd = (ext2_vdata_t *)root->fs_data;
+    ext2_t *fs = vd->fs;
+    if (!fs) return -EINVAL;
+
+    out->f_bsize   = fs->block_size;
+    out->f_blocks  = fs->sb.s_blocks_count;
+    out->f_bfree   = fs->sb.s_free_blocks_count;
+    out->f_bavail  = fs->sb.s_free_blocks_count;
+    out->f_files   = fs->sb.s_inodes_count;
+    out->f_ffree   = fs->sb.s_free_inodes_count;
+    out->f_flag    = 0;
+    out->f_namemax = 255;
+    return 0;
 }

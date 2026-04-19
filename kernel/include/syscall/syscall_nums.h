@@ -68,7 +68,18 @@
 #define SYS_RMDIR             535
 #define SYS_MKDIR             536
 #define SYS_RENAME            537
-#define SYSCALL_TABLE_SIZE    538
+
+#define SYS_DISK_READ_RAW     540
+#define SYS_DISK_WRITE_RAW    541
+#define SYS_DISK_PARTITION    542
+#define SYS_DISK_MKFS_FAT32   543
+#define SYS_DISK_LIST_PARTS   544
+
+#define SYS_DISK_BIOS_INSTALL 545
+#define SYS_LIST_MOUNTS       546
+#define SYS_STATVFS           547
+
+#define SYSCALL_TABLE_SIZE    548
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
@@ -109,5 +120,23 @@ typedef struct {
     uint64_t usable_bytes;
     uint64_t page_size;
 } cervus_meminfo_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t  boot_flag;
+    uint8_t  type;
+    uint32_t lba_start;
+    uint32_t sector_count;
+} cervus_mbr_part_t;
+
+typedef struct __attribute__((packed)) {
+    char     disk_name[32];
+    char     part_name[32];
+    uint32_t part_num;
+    uint8_t  type;
+    uint8_t  bootable;
+    uint64_t lba_start;
+    uint64_t sector_count;
+    uint64_t size_bytes;
+} cervus_part_info_t;
 
 #endif

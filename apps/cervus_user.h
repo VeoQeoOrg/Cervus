@@ -61,6 +61,12 @@ typedef int64_t  intptr_t;
 #define SYS_RMDIR        535
 #define SYS_MKDIR        536
 #define SYS_RENAME       537
+#define SYS_DISK_READ_RAW     540
+#define SYS_DISK_WRITE_RAW    541
+#define SYS_DISK_PARTITION    542
+#define SYS_DISK_MKFS_FAT32   543
+#define SYS_DISK_LIST_PARTS   544
+#define SYS_DISK_BIOS_INSTALL 545
 
 #define EPERM   1
 #define ENOENT  2
@@ -211,6 +217,24 @@ __syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 #define syscall5(n,a,b,c,d,e)   __syscall((n),(uint64_t)(a),(uint64_t)(b),(uint64_t)(c),(uint64_t)(d),(uint64_t)(e),0)
 #define syscall6(n,a,b,c,d,e,f) __syscall((n),(uint64_t)(a),(uint64_t)(b),(uint64_t)(c),(uint64_t)(d),(uint64_t)(e),(uint64_t)(f))
 
+typedef struct __attribute__((packed)) {
+    uint8_t  boot_flag;
+    uint8_t  type;
+    uint32_t lba_start;
+    uint32_t sector_count;
+} cervus_mbr_part_t;
+
+typedef struct __attribute__((packed)) {
+    char     disk_name[32];
+    char     part_name[32];
+    uint32_t part_num;
+    uint8_t  type;
+    uint8_t  bootable;
+    uint64_t lba_start;
+    uint64_t sector_count;
+    uint64_t size_bytes;
+} cervus_part_info_t;
+
 static inline __attribute__((noreturn)) void exit(int c) {
     syscall1(SYS_EXIT, c);
     __builtin_unreachable();
@@ -285,7 +309,14 @@ static inline uint32_t ioport_read(uint16_t p, int w)               { return (ui
 static inline int      ioport_write(uint16_t p, int w, uint32_t v)  { return (int)syscall3(SYS_IOPORT_WRITE, p, w, v); }
 static inline int      cervus_shutdown(void) { return (int)syscall0(SYS_SHUTDOWN); }
 static inline int      cervus_reboot(void)   { return (int)syscall0(SYS_REBOOT); }
-
+static inline int cervus_mkfs_fat32(const char *dev, const char *label) { return (int)syscall2(SYS_DISK_MKFS_FAT32, dev, label); }
+static inline int cervus_partition(const char *dev, const void *specs, uint64_t n) { return (int)syscall3(SYS_DISK_PARTITION, dev, specs, n); }
+static inline int cervus_disk_read_raw(const char *dev, uint64_t lba, uint64_t count, void *buf) { return (int)syscall4(SYS_DISK_READ_RAW, dev, lba, count, buf); }
+static inline int cervus_disk_write_raw(const char *dev, uint64_t lba, uint64_t count, const void *buf) { return (int)syscall4(SYS_DISK_WRITE_RAW, dev, lba, count, buf); }
+static inline long disk_bios_install(const char *disk_name, const void *sys_data, uint32_t sys_size) {
+    return syscall3(SYS_DISK_BIOS_INSTALL,
+                    (long)disk_name, (long)sys_data, (long)sys_size);
+}
 static inline int sleep(unsigned int secs) {
     nanosleep_simple((uint64_t)secs * 1000000000ULL);
     return 0;
@@ -571,6 +602,15 @@ static inline void print_pad0(uint64_t v, int width) {
     ws(t + i);
 }
 
+static inline void print_hex_pad0(uint64_t v, int width) {
+    static const char h[] = "0123456789abcdef";
+    char t[17]; int i = 16; t[i] = '\0';
+    if (!v) t[--i] = '0'; else while (v) { t[--i] = h[v & 0xF]; v >>= 4; }
+    int len = 16 - i;
+    for (int p = len; p < width; p++) wc('0');
+    ws(t + i);
+}
+
 static inline void printf_fd(int fd, const char *fmt, ...) {
     __builtin_va_list ap;
     __builtin_va_start(ap, fmt);
@@ -812,5 +852,35 @@ static inline const char *getenv_argv(int argc, char **argv, const char *name, c
 #define C_BLUE   "\x1b[1;34m"
 #define C_CYAN   "\x1b[1;36m"
 #define C_GRAY   "\x1b[90m"
+
+#define SYS_LIST_MOUNTS 546
+
+typedef struct {
+    char path[512];
+    char device[32];
+    char fstype[16];
+    uint32_t flags;
+} cervus_mount_info_t;
+
+static inline long list_mounts(cervus_mount_info_t *out, int max) {
+    return syscall2(SYS_LIST_MOUNTS, (long)out, (long)max);
+}
+
+#define SYS_STATVFS 547
+
+typedef struct {
+    uint64_t f_bsize;
+    uint64_t f_blocks;
+    uint64_t f_bfree;
+    uint64_t f_bavail;
+    uint64_t f_files;
+    uint64_t f_ffree;
+    uint32_t f_flag;
+    uint32_t f_namemax;
+} cervus_statvfs_t;
+
+static inline long statvfs(const char *path, cervus_statvfs_t *out) {
+    return syscall2(SYS_STATVFS, (long)path, (long)out);
+}
 
 #endif

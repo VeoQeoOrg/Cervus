@@ -88,6 +88,8 @@ struct vnode {
 
 struct vfs_mount {
     char        path[VFS_MAX_PATH];
+    char        device[32];
+    char        fstype[16];
     vnode_t    *root;
     bool        used;
     void       *fs_priv;
@@ -152,5 +154,28 @@ int         fd_set_flags(fd_table_t *table, int fd, int flags);
 int         fd_get_flags(const fd_table_t *table, int fd);
 void vfs_sync_all(void);
 int vfs_init_stdio(void *task_ptr);
+
+typedef struct {
+    char path[VFS_MAX_PATH];
+    char device[32];
+    char fstype[16];
+    uint32_t flags;
+} vfs_mount_info_t;
+
+int vfs_set_mount_info(const char *path, const char *device, const char *fstype);
+int vfs_list_mounts(vfs_mount_info_t *out, int max);
+
+typedef struct {
+    uint64_t f_bsize;
+    uint64_t f_blocks;
+    uint64_t f_bfree;
+    uint64_t f_bavail;
+    uint64_t f_files;
+    uint64_t f_ffree;
+    uint32_t f_flag;
+    uint32_t f_namemax;
+} vfs_statvfs_t;
+
+int vfs_statvfs(const char *path, vfs_statvfs_t *out);
 
 #endif

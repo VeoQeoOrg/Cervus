@@ -351,12 +351,21 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
     int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
     if (vret < 0) { serial_printf("[EXECVE] open failed: %d\n",vret); free(kargv_store); return (int64_t)vret; }
     vfs_stat_t st;
-    if (vfs_fstat(vfile,&st)<0 || st.st_size==0) { vfs_close(vfile); free(kargv_store); return -EIO; }
+    if (vfs_fstat(vfile,&st)<0 || st.st_size==0) { serial_printf("[EXECVE] fstat/size failed: path='%s' size=%llu\n", kpath, (unsigned long long)st.st_size); vfs_close(vfile); free(kargv_store); return -EIO; }
     size_t fsize = (size_t)st.st_size;
     uint8_t *elf_data = malloc(fsize);
-    if (!elf_data) { vfs_close(vfile); free(kargv_store); return -ENOMEM; }
+    if (!elf_data) { serial_printf("[EXECVE] malloc(%zu) failed for path='%s'\n", fsize, kpath); vfs_close(vfile); free(kargv_store); return -ENOMEM; }
     int64_t nr = vfs_read(vfile, elf_data, fsize); vfs_close(vfile);
-    if (nr<0 || (size_t)nr!=fsize) { free(elf_data); free(kargv_store); return -EIO; }
+    if (nr<0 || (size_t)nr!=fsize) { serial_printf("[EXECVE] read failed: path='%s' expected=%zu got=%lld\n", kpath, fsize, (long long)nr); free(elf_data); free(kargv_store); return -EIO; }
+    if (fsize < 4 || elf_data[0] != 0x7F || elf_data[1] != 'E' || elf_data[2] != 'L' || elf_data[3] != 'F') {
+        serial_printf("[EXECVE] not an ELF: path='%s' magic=%02x%02x%02x%02x\n",
+            kpath,
+            fsize > 0 ? elf_data[0] : 0,
+            fsize > 1 ? elf_data[1] : 0,
+            fsize > 2 ? elf_data[2] : 0,
+            fsize > 3 ? elf_data[3] : 0);
+        free(elf_data); free(kargv_store); return -ENOEXEC;
+    }
 
     elf_load_result_t elf = elf_load(elf_data, fsize, 0); free(elf_data);
     if (elf.error != ELF_OK) {
@@ -1117,64 +1126,80 @@ extern int64_t sys_disk_mount(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint6
 extern int64_t sys_disk_umount(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_disk_format(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_disk_info(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_read_raw(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_write_raw(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_partition(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_mkfs_fat32(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_list_parts(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_disk_bios_install(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_unlink(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_rmdir(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_mkdir(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 extern int64_t sys_rename(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_list_mounts(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+extern int64_t sys_statvfs(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 
 static int64_t _sys_execve(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_execve(a,b,c);}
 static int64_t _sys_wait  (uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return sys_wait(a,b,c);}
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
-    [SYS_EXIT]         = _sys_exit,
-    [SYS_EXIT_GROUP]   = _sys_exit_group,
-    [SYS_GETPID]       = _sys_getpid,
-    [SYS_GETPPID]      = _sys_getppid,
-    [SYS_GETUID]       = _sys_getuid,
-    [SYS_GETGID]       = _sys_getgid,
-    [SYS_SETUID]       = _sys_setuid,
-    [SYS_SETGID]       = _sys_setgid,
-    [SYS_FORK]         = _sys_fork,
-    [SYS_EXECVE]       = _sys_execve,
-    [SYS_WAIT]         = _sys_wait,
-    [SYS_YIELD]        = _sys_yield,
-    [SYS_CAP_GET]      = _sys_cap_get,
-    [SYS_CAP_DROP]     = _sys_cap_drop,
-    [SYS_TASK_INFO]    = _sys_task_info,
-    [SYS_TASK_KILL]    = _sys_task_kill,
-    [SYS_READ]         = _sys_read,
-    [SYS_WRITE]        = _sys_write,
-    [SYS_OPEN]         = _sys_open,
-    [SYS_CLOSE]        = _sys_close,
-    [SYS_SEEK]         = _sys_seek,
-    [SYS_STAT]         = _sys_stat,
-    [SYS_FSTAT]        = _sys_fstat,
-    [SYS_IOCTL]        = _sys_ioctl,
-    [SYS_DUP]          = _sys_dup,
-    [SYS_DUP2]         = _sys_dup2,
-    [SYS_PIPE]         = _sys_pipe,
-    [SYS_FCNTL]        = _sys_fcntl,
-    [SYS_READDIR]      = _sys_readdir,
-    [SYS_BRK]          = _sys_brk,
-    [SYS_MMAP]         = _sys_mmap,
-    [SYS_MUNMAP]       = _sys_munmap,
-    [SYS_CLOCK_GET]    = _sys_clock_get,
-    [SYS_SLEEP_NS]     = _sys_sleep_ns,
-    [SYS_UPTIME]       = _sys_uptime,
-    [SYS_MEMINFO]      = _sys_meminfo,
-    [SYS_DBG_PRINT]    = _sys_dbg_print,
-    [SYS_IOPORT_READ]  = _sys_ioport_read,
-    [SYS_IOPORT_WRITE] = _sys_ioport_write,
-    [SYS_SHUTDOWN]     = _sys_shutdown,
-    [SYS_REBOOT]       = _sys_reboot,
-    [SYS_DISK_MOUNT]   = sys_disk_mount,
-    [SYS_DISK_UMOUNT]  = sys_disk_umount,
-    [SYS_DISK_FORMAT]  = sys_disk_format,
-    [SYS_DISK_INFO]    = sys_disk_info,
-    [SYS_UNLINK]       = sys_unlink,
-    [SYS_RMDIR]        = sys_rmdir,
-    [SYS_MKDIR]        = sys_mkdir,
-    [SYS_RENAME]       = sys_rename,
+    [SYS_EXIT]              = _sys_exit,
+    [SYS_EXIT_GROUP]        = _sys_exit_group,
+    [SYS_GETPID]            = _sys_getpid,
+    [SYS_GETPPID]           = _sys_getppid,
+    [SYS_GETUID]            = _sys_getuid,
+    [SYS_GETGID]            = _sys_getgid,
+    [SYS_SETUID]            = _sys_setuid,
+    [SYS_SETGID]            = _sys_setgid,
+    [SYS_FORK]              = _sys_fork,
+    [SYS_EXECVE]            = _sys_execve,
+    [SYS_WAIT]              = _sys_wait,
+    [SYS_YIELD]             = _sys_yield,
+    [SYS_CAP_GET]           = _sys_cap_get,
+    [SYS_CAP_DROP]          = _sys_cap_drop,
+    [SYS_TASK_INFO]         = _sys_task_info,
+    [SYS_TASK_KILL]         = _sys_task_kill,
+    [SYS_READ]              = _sys_read,
+    [SYS_WRITE]             = _sys_write,
+    [SYS_OPEN]              = _sys_open,
+    [SYS_CLOSE]             = _sys_close,
+    [SYS_SEEK]              = _sys_seek,
+    [SYS_STAT]              = _sys_stat,
+    [SYS_FSTAT]             = _sys_fstat,
+    [SYS_IOCTL]             = _sys_ioctl,
+    [SYS_DUP]               = _sys_dup,
+    [SYS_DUP2]              = _sys_dup2,
+    [SYS_PIPE]              = _sys_pipe,
+    [SYS_FCNTL]             = _sys_fcntl,
+    [SYS_READDIR]           = _sys_readdir,
+    [SYS_BRK]               = _sys_brk,
+    [SYS_MMAP]              = _sys_mmap,
+    [SYS_MUNMAP]            = _sys_munmap,
+    [SYS_CLOCK_GET]         = _sys_clock_get,
+    [SYS_SLEEP_NS]          = _sys_sleep_ns,
+    [SYS_UPTIME]            = _sys_uptime,
+    [SYS_MEMINFO]           = _sys_meminfo,
+    [SYS_DBG_PRINT]         = _sys_dbg_print,
+    [SYS_IOPORT_READ]       = _sys_ioport_read,
+    [SYS_IOPORT_WRITE]      = _sys_ioport_write,
+    [SYS_SHUTDOWN]          = _sys_shutdown,
+    [SYS_REBOOT]            = _sys_reboot,
+    [SYS_DISK_MOUNT]        = sys_disk_mount,
+    [SYS_DISK_UMOUNT]       = sys_disk_umount,
+    [SYS_DISK_FORMAT]       = sys_disk_format,
+    [SYS_DISK_INFO]         = sys_disk_info,
+    [SYS_UNLINK]            = sys_unlink,
+    [SYS_RMDIR]             = sys_rmdir,
+    [SYS_MKDIR]             = sys_mkdir,
+    [SYS_RENAME]            = sys_rename,
+    [SYS_DISK_READ_RAW]     = sys_disk_read_raw,
+    [SYS_DISK_WRITE_RAW]    = sys_disk_write_raw,
+    [SYS_DISK_PARTITION]    = sys_disk_partition,
+    [SYS_DISK_MKFS_FAT32]   = sys_disk_mkfs_fat32,
+    [SYS_DISK_LIST_PARTS]   = sys_disk_list_parts,
+    [SYS_DISK_BIOS_INSTALL] = sys_disk_bios_install,
+    [SYS_LIST_MOUNTS]       = sys_list_mounts,
+    [SYS_STATVFS]           = sys_statvfs,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval) {

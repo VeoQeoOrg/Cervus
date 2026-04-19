@@ -84,6 +84,8 @@ bool ARG_TREE           = false;
 bool ARG_STRUCTURE_ONLY = false;
 bool ARG_NO_INITRAMFS   = false;
 bool ARG_RESET_HW_CONF  = false;
+bool ARG_RESET_DISK     = false;
+bool ARG_LIVE           = false;
 
 char **TREE_FILES       = NULL;
 int    TREE_FILES_COUNT = 0;
@@ -168,9 +170,61 @@ bool setup_dependencies(void) {
     return true;
 }
 
+static bool extract_limine_hdd_bin(void) {
+    const char *src = "limine/limine-bios-hdd.h";
+    const char *dst = "limine/limine-bios-hdd.bin";
+
+    if (file_exists(dst) && file_exists(src) && get_mtime(src) <= get_mtime(dst)) {
+        return true;
+    }
+    if (!file_exists(src)) {
+        print_color(COLOR_RED, "limine-bios-hdd.h not found in limine/");
+        return false;
+    }
+
+    FILE *in = fopen(src, "r");
+    if (!in) {
+        print_color(COLOR_RED, "cannot open %s", src);
+        return false;
+    }
+    FILE *out = fopen(dst, "wb");
+    if (!out) {
+        fclose(in);
+        print_color(COLOR_RED, "cannot create %s", dst);
+        return false;
+    }
+
+    char line[4096];
+    size_t total = 0;
+    while (fgets(line, sizeof(line), in)) {
+        char *p = line;
+        while (*p) {
+            if (p[0] == '0' && p[1] == 'x') {
+                unsigned v = 0;
+                p += 2;
+                if (sscanf(p, "%2x", &v) == 1) {
+                    unsigned char b = (unsigned char)v;
+                    fwrite(&b, 1, 1, out);
+                    total++;
+                    p += 2;
+                } else {
+                    p++;
+                }
+            } else {
+                p++;
+            }
+        }
+    }
+    fclose(in);
+    fclose(out);
+    print_color(COLOR_GREEN, "Extracted limine-bios-hdd.bin (%zu bytes)", total);
+    return true;
+}
+
 bool build_limine(void) {
     if (file_exists("limine/limine")) {
         print_color(COLOR_GREEN, "Limine already built");
+        extract_limine_hdd_bin();
         return true;
     }
     print_color(COLOR_GREEN, "Building Limine...");
@@ -178,6 +232,7 @@ bool build_limine(void) {
     if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine "
                       "--branch=v11.2.1-binary --depth=1") != 0) return false;
     if (cmd_run(true, "make -C limine") != 0) return false;
+    if (!extract_limine_hdd_bin()) return false;
     return true;
 }
 
@@ -442,6 +497,10 @@ bool build_initramfs(void) {
         return true;
     }
 
+    if (!build_limine()) {
+        print_color(COLOR_YELLOW, "[initramfs] warning: limine not available yet, boot files will be incomplete");
+    }
+
     bool tar_exists = file_exists(INITRAMFS_TAR);
     bool any_newer = false;
     if (!tar_exists) {
@@ -475,6 +534,7 @@ bool build_initramfs(void) {
         INITRAMFS_ROOTFS "/bin",
         INITRAMFS_ROOTFS "/dev",
         INITRAMFS_ROOTFS "/etc",
+        INITRAMFS_ROOTFS "/home",
         INITRAMFS_ROOTFS "/tmp",
         INITRAMFS_ROOTFS "/proc",
         NULL
@@ -510,8 +570,8 @@ bool build_initramfs(void) {
             "\n"
             " Type 'help' to see available commands.\n"
             "\n"
-            " Your home directory is /mnt/home (persistent disk storage).\n"
-            " Files created here will survive reboots.\n"
+            " Your home directory is /mnt/home (persistent ext2 disk).\n"
+            " Files created in /mnt/ will survive reboots.\n"
             " Files outside /mnt/ are in RAM and will be lost on reboot.\n"
             "\n");
         fclose(motd);
@@ -525,7 +585,7 @@ bool build_initramfs(void) {
         cmd_run(false, "cp %s %s/bin/shell", SHELL_ELF, INITRAMFS_ROOTFS);
         print_color(COLOR_GREEN, "[initramfs] shell.elf -> /bin/init + /bin/shell");
     } else {
-        print_color(COLOR_RED, "[initramfs] shell.elf not found — boot will drop to nothing!");
+        print_color(COLOR_RED, "[initramfs] shell.elf not found - boot will drop to nothing!");
         FILE *stub = fopen(INITRAMFS_ROOTFS "/bin/.keep", "w");
         if (stub) fclose(stub);
     }
@@ -562,14 +622,14 @@ bool build_initramfs(void) {
         }
     }
 
-    FILE *readme = fopen(INITRAMFS_ROOTFS "/etc/readme.txt", "w");
+    FILE *readme = fopen(INITRAMFS_ROOTFS "/home/readme.txt", "w");
     if (readme) {
         fprintf(readme,
             "Cervus OS v0.0.2\n"
             "================\n"
             "\n"
-            "This is Cervus - a hobby x86_64 OS written in C.\n"
-            "With Limine Bootloader.\n"
+            "This is Cervus - an x86_64 OS written in C.\n"
+            "Bootloader: Limine | Filesystem: ext2\n"
             "\n"
             "Built-in shell commands:\n"
             "  help, cd, exit\n"
@@ -581,13 +641,18 @@ bool build_initramfs(void) {
             "  hello, calc, cal, date, ps, uptime, find, stat,\n"
             "  hexdump, kill, wc, yes, sleep, ...\n"
             "\n"
+            "Persistent storage:\n"
+            "  /mnt/home       - user home directory (ext2)\n"
+            "  /mnt/usr        - sysroot for libraries and headers\n"
+            "  /mnt/tmp        - temporary files (persistent)\n"
+            "\n"
             "Source: https://github.com/VeoQeo/Cervus\n"
         );
         fclose(readme);
-        print_color(COLOR_GREEN, "[initramfs] created /etc/readme.txt");
+        print_color(COLOR_GREEN, "[initramfs] created /home/readme.txt");
     }
 
-    FILE *welcome = fopen(INITRAMFS_ROOTFS "/etc/welcome.txt", "w");
+    FILE *welcome = fopen(INITRAMFS_ROOTFS "/home/welcome.txt", "w");
     if (welcome) {
         fprintf(welcome,
             "Welcome to Cervus Shell!\n"
@@ -599,7 +664,37 @@ bool build_initramfs(void) {
             "  - Binaries are in /bin and /apps\n"
         );
         fclose(welcome);
-        print_color(COLOR_GREEN, "[initramfs] created /etc/welcome.txt");
+        print_color(COLOR_GREEN, "[initramfs] created /home/welcome.txt");
+    }
+
+    ensure_dir(INITRAMFS_ROOTFS "/boot");
+
+    struct { const char *src; const char *dst; bool required; } boot_items[] = {
+        { "bin/kernel",                 INITRAMFS_ROOTFS "/boot/kernel",                true  },
+        { SHELL_ELF,                    INITRAMFS_ROOTFS "/boot/shell.elf",             true  },
+        { "limine/limine-bios.sys",     INITRAMFS_ROOTFS "/boot/limine-bios.sys",       false },
+        { "limine/limine-bios-hdd.bin", INITRAMFS_ROOTFS "/boot/limine-bios-hdd.bin",   false },
+        { "limine/BOOTX64.EFI",         INITRAMFS_ROOTFS "/boot/BOOTX64.EFI",           false },
+        { "limine/BOOTIA32.EFI",        INITRAMFS_ROOTFS "/boot/BOOTIA32.EFI",          false },
+        { WALLPAPER_SRC,                INITRAMFS_ROOTFS "/boot/wallpaper.png",         false },
+        { NULL, NULL, false }
+    };
+    for (int i = 0; boot_items[i].src; i++) {
+        if (!file_exists(boot_items[i].src)) {
+            if (boot_items[i].required) {
+                print_color(COLOR_RED, "[initramfs] missing required boot file: %s", boot_items[i].src);
+                return false;
+            }
+            print_color(COLOR_YELLOW, "[initramfs] skip (not built yet): %s", boot_items[i].src);
+            continue;
+        }
+        if (cmd_run(false, "cp %s %s", boot_items[i].src, boot_items[i].dst) != 0) {
+            print_color(COLOR_RED, "[initramfs] failed to copy %s", boot_items[i].src);
+            if (boot_items[i].required) return false;
+        } else {
+            print_color(COLOR_GREEN, "[initramfs] %s -> %s",
+                        boot_items[i].src, boot_items[i].dst);
+        }
     }
 
     print_color(COLOR_CYAN, "[initramfs] Packing %s...", INITRAMFS_TAR);
@@ -809,7 +904,7 @@ bool create_iso(void) {
         cmd_run(false, "cp %s iso_root/boot/shell.elf", SHELL_ELF);
         print_color(COLOR_GREEN, "[module 0] shell.elf -> iso_root/boot/shell.elf");
     } else {
-        print_color(COLOR_RED, "[module 0] shell.elf not found — boot will fail!");
+        print_color(COLOR_RED, "[module 0] shell.elf not found - boot will fail!");
     }
 
     bool has_initramfs = !ARG_NO_INITRAMFS && file_exists(INITRAMFS_TAR);
@@ -817,7 +912,7 @@ bool create_iso(void) {
         cmd_run(false, "cp %s iso_root/boot/initramfs.tar", INITRAMFS_TAR);
         print_color(COLOR_GREEN, "[module 1] initramfs.tar -> iso_root/boot/initramfs.tar");
     } else {
-        print_color(COLOR_YELLOW, "[module 1] initramfs.tar not found — booting without rootfs");
+        print_color(COLOR_YELLOW, "[module 1] initramfs.tar not found - booting without rootfs");
     }
 
     FILE *f = fopen("limine.conf", "w");
@@ -826,10 +921,10 @@ bool create_iso(void) {
     if (file_exists(WALLPAPER_SRC))
         fprintf(f, "wallpaper: %s\n", WALLPAPER_DST);
 
+    fprintf(f, "timeout: 5\n\n");
+
     fprintf(f,
-        "timeout: 3\n"
-        "\n"
-        "/%s %s\n"
+        "/%s %s (Install / Live)\n"
         "    protocol: limine\n"
         "    path: boot():/boot/kernel\n",
         IMAGE_NAME, VERSION);
@@ -838,14 +933,11 @@ bool create_iso(void) {
         fprintf(f,
             "    module_path: boot():/boot/shell.elf\n"
             "    module_cmdline: init\n");
-        print_color(COLOR_GREEN, "[limine.conf] module 0: shell.elf (init)");
     }
-
     if (has_initramfs) {
         fprintf(f,
             "    module_path: boot():/boot/initramfs.tar\n"
             "    module_cmdline: initramfs\n");
-        print_color(COLOR_GREEN, "[limine.conf] module 1: initramfs.tar");
     }
 
     fclose(f);
@@ -1026,20 +1118,20 @@ void generate_tree_recursive(const char *base_dir, FILE *out, int level) {
             free(namelist[i]); continue;
         }
 
-        for (int j = 0; j < level; j++) fprintf(out, "│   ");
+        for (int j = 0; j < level; j++) fprintf(out, "|   ");
 
         if (S_ISDIR(st.st_mode)) {
-            fprintf(out, "├── %s/\n", name);
+            fprintf(out, "+-- %s/\n", name);
             generate_tree_recursive(path, out, level + 1);
         } else {
-            fprintf(out, "├── %s (%ld bytes)\n", name, st.st_size);
+            fprintf(out, "+-- %s (%ld bytes)\n", name, st.st_size);
             if (!ARG_STRUCTURE_ONLY && should_print_content(name)) {
                 FILE *src = fopen(path, "r");
                 if (src) {
                     char line[4096]; int ln = 1;
                     while (fgets(line, sizeof(line), src) && ln <= 5000) {
-                        for (int j = 0; j <= level; j++) fprintf(out, "│   ");
-                        fprintf(out, "│ %4d: %s", ln++, line);
+                        for (int j = 0; j <= level; j++) fprintf(out, "|   ");
+                        fprintf(out, "| %4d: %s", ln++, line);
                     }
                     fclose(src);
                 }
@@ -1127,6 +1219,38 @@ void reset_hardware_conf(void) {
     }
 }
 
+static void write_cervus_entries(FILE *f, bool has_elf, bool has_initramfs) {
+    if (file_exists(WALLPAPER_SRC))
+        fprintf(f, "wallpaper: boot():/cervus/wallpaper.png\n");
+
+    fprintf(f,
+        "/%s %s (Install / Live)\n"
+        "    protocol: limine\n"
+        "    path: boot():/cervus/kernel\n",
+        IMAGE_NAME, VERSION);
+    if (has_elf) {
+        fprintf(f,
+            "    module_path: boot():/cervus/shell.elf\n"
+            "    module_cmdline: init\n");
+    }
+    if (has_initramfs) {
+        fprintf(f,
+            "    module_path: boot():/cervus/initramfs.tar\n"
+            "    module_cmdline: initramfs\n");
+    }
+
+    fprintf(f,
+        "/%s %s (Installed - boot from disk)\n"
+        "    protocol: limine\n"
+        "    path: boot():/cervus/kernel\n",
+        IMAGE_NAME, VERSION);
+    if (has_elf) {
+        fprintf(f,
+            "    module_path: boot():/cervus/shell.elf\n"
+            "    module_cmdline: init\n");
+    }
+}
+
 void hardware_test(void) {
     check_sudo();
 
@@ -1191,12 +1315,14 @@ void hardware_test(void) {
     }
     print_color(COLOR_GREEN, "  kernel -> %s/kernel", CERVUS_BOOT_DIR);
 
-    if (file_exists(SHELL_ELF)) {
+    bool has_elf = file_exists(SHELL_ELF);
+    if (has_elf) {
         cmd_run(true, "cp %s %s/shell.elf", SHELL_ELF, CERVUS_BOOT_DIR);
         print_color(COLOR_GREEN, "  shell.elf -> %s/shell.elf", CERVUS_BOOT_DIR);
     }
 
-    if (file_exists(INITRAMFS_TAR)) {
+    bool has_initramfs = file_exists(INITRAMFS_TAR);
+    if (has_initramfs) {
         cmd_run(true, "cp %s %s/initramfs.tar", INITRAMFS_TAR, CERVUS_BOOT_DIR);
         print_color(COLOR_GREEN, "  initramfs.tar -> %s/initramfs.tar", CERVUS_BOOT_DIR);
     }
@@ -1207,7 +1333,7 @@ void hardware_test(void) {
     }
 
     if (!already_has_cervus) {
-        print_color(COLOR_CYAN, "Step 4: Adding Cervus entry to limine.conf...");
+        print_color(COLOR_CYAN, "Step 4: Adding Cervus entries to limine.conf...");
 
         FILE *f = fopen(LIMINE_CONF_PATH, "a");
         if (!f) {
@@ -1216,34 +1342,13 @@ void hardware_test(void) {
         }
 
         fprintf(f, "\n%s\n", CERVUS_MARKER);
-
-        if (file_exists(WALLPAPER_SRC))
-            fprintf(f, "wallpaper: boot():/cervus/wallpaper.png\n");
-
-        fprintf(f,
-            "/%s %s (Hardware Test)\n"
-            "    protocol: limine\n"
-            "    path: boot():/cervus/kernel\n",
-            IMAGE_NAME, VERSION);
-
-        if (file_exists(SHELL_ELF)) {
-            fprintf(f,
-                "    module_path: boot():/cervus/shell.elf\n"
-                "    module_cmdline: init\n");
-        }
-
-        if (file_exists(INITRAMFS_TAR)) {
-            fprintf(f,
-                "    module_path: boot():/cervus/initramfs.tar\n"
-                "    module_cmdline: initramfs\n");
-        }
-
+        write_cervus_entries(f, has_elf, has_initramfs);
         fprintf(f, "%s\n", "# --- END CERVUS ---");
 
         fclose(f);
-        print_color(COLOR_GREEN, "Cervus boot entry added to limine.conf");
+        print_color(COLOR_GREEN, "Cervus boot entries added to limine.conf");
     } else {
-        print_color(COLOR_CYAN, "Step 4: Updating Cervus entry in limine.conf...");
+        print_color(COLOR_CYAN, "Step 4: Updating Cervus entries in limine.conf...");
 
         FILE *orig = fopen(LIMINE_CONF_PATH, "r");
         if (!orig) {
@@ -1274,33 +1379,12 @@ void hardware_test(void) {
         fclose(orig);
 
         fprintf(tmp, "\n%s\n", CERVUS_MARKER);
-
-        if (file_exists(WALLPAPER_SRC))
-            fprintf(tmp, "wallpaper: boot():/cervus/wallpaper.png\n");
-
-        fprintf(tmp,
-            "/%s %s (Hardware Test)\n"
-            "    protocol: limine\n"
-            "    path: boot():/cervus/kernel\n",
-            IMAGE_NAME, VERSION);
-
-        if (file_exists(SHELL_ELF)) {
-            fprintf(tmp,
-                "    module_path: boot():/cervus/shell.elf\n"
-                "    module_cmdline: init\n");
-        }
-
-        if (file_exists(INITRAMFS_TAR)) {
-            fprintf(tmp,
-                "    module_path: boot():/cervus/initramfs.tar\n"
-                "    module_cmdline: initramfs\n");
-        }
-
+        write_cervus_entries(tmp, has_elf, has_initramfs);
         fprintf(tmp, "%s\n", "# --- END CERVUS ---");
         fclose(tmp);
 
         cmd_run(false, "mv %s %s", tmppath, LIMINE_CONF_PATH);
-        print_color(COLOR_GREEN, "Cervus entry updated in limine.conf");
+        print_color(COLOR_GREEN, "Cervus entries updated in limine.conf");
     }
 
     print_color(COLOR_GREEN, "\n=== Setup Complete ===");
@@ -1309,7 +1393,8 @@ void hardware_test(void) {
     print_color(COLOR_CYAN, "---------------------------");
 
     print_color(COLOR_GREEN, "\nCervus will appear in your Limine boot menu.");
-    print_color(COLOR_YELLOW, "Select '%s %s (Hardware Test)' at boot.", IMAGE_NAME, VERSION);
+    print_color(COLOR_YELLOW, "First boot:    select '%s %s (Install / Live)'", IMAGE_NAME, VERSION);
+    print_color(COLOR_YELLOW, "After install: select '%s %s (Installed - boot from disk)'", IMAGE_NAME, VERSION);
     print_color(COLOR_YELLOW, "To restore original config: sudo ./build --resethardwareconf");
 
     if (ask_yes_no("\nReboot now to test on real hardware?")) {
@@ -1320,11 +1405,36 @@ void hardware_test(void) {
     }
 }
 
+static const char* find_ovmf(void) {
+    const char *ovmf_paths[] = {
+        "/usr/share/edk2/x64/OVMF.4m.fd",
+        "/usr/share/edk2/x64/OVMF_CODE.4m.fd",
+        "/usr/share/edk2/ovmf/OVMF.fd",
+        "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+        "/usr/share/ovmf/x64/OVMF.fd",
+        "/usr/share/ovmf/x64/OVMF_CODE.fd",
+        "/usr/share/ovmf/OVMF.fd",
+        "/usr/share/OVMF/OVMF.fd",
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/qemu/OVMF.fd",
+        NULL
+    };
+    for (int i = 0; ovmf_paths[i]; i++) {
+        if (file_exists(ovmf_paths[i])) return ovmf_paths[i];
+    }
+    return NULL;
+}
+
 static void print_help(void) {
     printf("%sCervus OS build system%s\n\n", COLOR_BOLD, COLOR_RESET);
     printf("Usage: ./build [command] [options]\n\n");
     printf("Commands:\n");
-    printf("  run              Build kernel + initramfs + ISO, then launch QEMU\n");
+    printf("  run              Build kernel + initramfs + ISO, then launch QEMU (BIOS, with disk)\n");
+    printf("  run-uefi         Build kernel + initramfs + ISO, then launch QEMU (UEFI, with disk)\n");
+    printf("  run-installed    Launch QEMU from cervus_disk.img only (BIOS, no ISO, real hardware sim)\n");
+    printf("  run-installed-uefi Launch QEMU from cervus_disk.img only (UEFI, no ISO)\n");
+    printf("  run-fresh        Wipe disk and run installer from ISO again (BIOS)\n");
+    printf("  run-fresh-uefi   Wipe disk and run installer from ISO again (UEFI)\n");
     printf("  hardwaretest     Build & install Cervus into Limine boot menu (requires sudo)\n");
     printf("  flash            Flash latest ISO to USB device (requires sudo)\n");
     printf("  clean            Remove all build artifacts\n");
@@ -1336,13 +1446,23 @@ static void print_help(void) {
     printf("  --structure-only       Generate tree without file contents\n");
     printf("  --no-clean             Keep obj/ and bin/ after run\n");
     printf("  --no-initramfs         Skip initramfs.tar creation\n");
+    printf("  --reset-disk           Re-create empty disk image\n");
+    printf("  --live                 Run without disk (Live Mode, BIOS only)\n");
     printf("  --resethardwareconf    Restore original Limine config (requires sudo)\n\n");
+    printf("Boot entries in Limine menu:\n");
+    printf("  Install / Live                  - first boot, runs installer, uses initramfs\n");
+    printf("  Installed - boot from disk      - after install, no initramfs, uses ext2 disk\n\n");
     printf("Hardware test workflow:\n");
-    printf("  sudo ./build hardwaretest        # build, install to /boot, add boot entry\n");
+    printf("  sudo ./build hardwaretest        # build, install to /boot, add boot entries\n");
     printf("  sudo ./build --resethardwareconf # restore original bootloader config\n\n");
+    printf("UEFI Requirements:\n");
+    printf("  Install OVMF: sudo apt install ovmf (Debian/Ubuntu) or equivalent\n\n");
     printf("Examples:\n");
-    printf("  ./build run\n");
-    printf("  ./build run --no-initramfs\n");
+    printf("  ./build run                      # normal boot with disk (BIOS)\n");
+    printf("  ./build run-uefi                 # normal boot with disk (UEFI)\n");
+    printf("  ./build run --live               # boot without disk (Live Mode, BIOS)\n");
+    printf("  ./build run-fresh-uefi           # fresh disk, boot installer (UEFI)\n");
+    printf("  ./build run --reset-disk         # fresh disk (BIOS)\n");
     printf("  ./build run --tree\n");
     printf("  ./build --tree kernel.c vfs.c\n");
 }
@@ -1364,6 +1484,10 @@ int main(int argc, char **argv) {
             ARG_NO_INITRAMFS = true;
         } else if (strcmp(argv[i], "--resethardwareconf") == 0) {
             ARG_RESET_HW_CONF = true;
+        } else if (strcmp(argv[i], "--reset-disk") == 0) {
+            ARG_RESET_DISK = true;
+        } else if (strcmp(argv[i], "--live") == 0) {
+            ARG_LIVE = true;
         } else if (argv[i][0] != '-') {
             command = argv[i];
         }
@@ -1408,7 +1532,58 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (strcmp(command, "run") == 0) {
+    if (strcmp(command, "run-installed-uefi") == 0) {
+        if (!file_exists("cervus_disk.img")) {
+            print_color(COLOR_RED, "cervus_disk.img not found. Run './build run' first.");
+            return 1;
+        }
+        const char *ovmf = find_ovmf();
+        if (!ovmf) {
+            print_color(COLOR_RED, "OVMF not found. Install: sudo apt install ovmf");
+            return 1;
+        }
+        print_color(COLOR_GREEN, "Starting QEMU with UEFI firmware from disk only...");
+        print_color(COLOR_GREEN, "Using OVMF: %s", ovmf);
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
+            " -bios %s"
+            " -drive file=cervus_disk.img,format=raw,if=ide"
+            " -serial stdio"
+            " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+            " 2>&1 | tee log.txt",
+            ovmf);
+        return 0;
+    }
+
+    if (strcmp(command, "run-installed") == 0) {
+        if (!file_exists("cervus_disk.img")) {
+            print_color(COLOR_RED, "cervus_disk.img not found. "
+                                   "Run './build run' first to build and install Cervus.");
+            return 1;
+        }
+        print_color(COLOR_CYAN, "Starting QEMU from disk only (no ISO, simulates real hardware)...");
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
+            " -drive file=cervus_disk.img,format=raw,if=ide"
+            " -serial stdio"
+            " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+            " 2>&1 | tee log.txt");
+        return 0;
+    }
+
+    if (strcmp(command, "run-fresh") == 0) {
+        ARG_RESET_DISK = true;
+        command = "run";
+    }
+
+    if (strcmp(command, "run-fresh-uefi") == 0) {
+        ARG_RESET_DISK = true;
+        command = "run-uefi";
+    }
+
+    if (strcmp(command, "run") == 0 || strcmp(command, "run-uefi") == 0) {
+        bool use_uefi = (strcmp(command, "run-uefi") == 0);
+
         if (!compile_kernel()) {
             print_color(COLOR_RED, "Kernel compilation failed");
             return 1;
@@ -1429,22 +1604,63 @@ int main(int argc, char **argv) {
         char iso_path[PATH_MAX];
         snprintf(iso_path, sizeof(iso_path), "demo_iso/%s.latest.iso", IMAGE_NAME);
 
-        if (!file_exists("cervus_disk.img")) {
-            print_color(COLOR_CYAN, "Creating virtual disk image (64MB)...");
-            cmd_run(false, "dd if=/dev/zero of=cervus_disk.img bs=1M count=64 2>/dev/null");
-            print_color(COLOR_GREEN, "Virtual disk created: cervus_disk.img (64MB)");
-        } else {
-            print_color(COLOR_GREEN, "Using existing cervus_disk.img (persistent data)");
+        if (use_uefi) {
+            const char *ovmf = find_ovmf();
+            if (!ovmf) {
+                print_color(COLOR_RED, "OVMF not found. Install: sudo apt install ovmf");
+                return 1;
+            }
+            print_color(COLOR_GREEN, "Using OVMF: %s", ovmf);
         }
 
-        print_color(COLOR_GREEN, "Starting QEMU with %s ...", iso_path);
-        cmd_run(false,
-            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-            " -cdrom %s -boot d"
-            " -serial stdio"
-            " %s"
-            " 2>&1 | tee log.txt",
-            iso_path, QEMUFLAGS);
+        if (ARG_LIVE && !use_uefi) {
+            print_color(COLOR_CYAN, "Starting QEMU in Live Mode (no disk, BIOS)...");
+            cmd_run(false,
+                "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
+                " -cdrom %s -boot d"
+                " -serial stdio"
+                " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+                " 2>&1 | tee log.txt",
+                iso_path);
+        } else if (ARG_LIVE && use_uefi) {
+            print_color(COLOR_RED, "Live mode (--live) is not supported in UEFI mode yet");
+            return 1;
+        } else {
+            if (!file_exists("cervus_disk.img") || ARG_RESET_DISK) {
+                if (ARG_RESET_DISK && file_exists("cervus_disk.img")) {
+                    print_color(COLOR_YELLOW, "[disk] --reset-disk: removing old disk image");
+                    remove("cervus_disk.img");
+                }
+                print_color(COLOR_CYAN, "Creating empty disk image (256MB)...");
+                cmd_run(false, "dd if=/dev/zero of=cervus_disk.img bs=1M count=256 2>/dev/null");
+                print_color(COLOR_GREEN, "Disk created (OS installer will format on first boot)");
+            } else {
+                print_color(COLOR_GREEN, "Using existing cervus_disk.img (persistent data)");
+            }
+
+            if (use_uefi) {
+                const char *ovmf = find_ovmf();
+                print_color(COLOR_GREEN, "Starting QEMU with UEFI firmware (IDE mode)...");
+                cmd_run(false,
+                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
+                    " -bios %s"
+                    " -cdrom %s -boot d"
+                    " -serial stdio"
+                    " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+                    " -drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk"
+                    " 2>&1 | tee log.txt",
+                    ovmf, iso_path);
+            } else {
+                print_color(COLOR_GREEN, "Starting QEMU with BIOS...");
+                cmd_run(false,
+                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
+                    " -cdrom %s -boot d"
+                    " -serial stdio"
+                    " %s"
+                    " 2>&1 | tee log.txt",
+                    iso_path, QEMUFLAGS);
+            }
+        }
 
         if (!ARG_NO_CLEAN) {
             print_color(COLOR_CYAN, "[post-run] Cleaning build artifacts...");

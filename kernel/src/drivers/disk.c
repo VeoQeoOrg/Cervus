@@ -1,7 +1,9 @@
 #include "../../include/drivers/disk.h"
 #include "../../include/drivers/ata.h"
 #include "../../include/drivers/blkdev.h"
+#include "../../include/drivers/partition.h"
 #include "../../include/fs/ext2.h"
+#include "../../include/fs/fat32.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
@@ -96,14 +98,12 @@ void disk_init(void) {
                       names[i], drv->model, drv->size_bytes / (1024 * 1024));
         printf("[disk] /dev/%s -> %s (%llu MB)\n",
                       names[i], drv->model, drv->size_bytes / (1024 * 1024));
+
+        partition_scan(bdev);
         count++;
     }
-    if (count == 0) {
-        serial_writestring("[disk] no disks available\n");
-    } else {
-        serial_printf("[disk] %d disk(s) ready\n", count);
-        printf("[disk] %d disk(s) ready\n", count);
-    }
+    if (count == 0) serial_writestring("[disk] no disks available\n");
+    else { serial_printf("[disk] %d disk(s) ready\n", count); printf("[disk] %d disk(s) ready\n", count); }
 }
 
 static const char *strip_dev_prefix(const char *name) {
@@ -118,53 +118,44 @@ int disk_format(const char *devname, const char *label) {
     return ext2_format(dev, label ? label : raw);
 }
 
-static void disk_ext2_unmount_cb(void *p) { ext2_unmount((ext2_t *)p); }
-static void disk_ext2_sync_cb(void *p)    { ext2_sync((ext2_t *)p); }
+static int detect_fs_type(blkdev_t *dev) {
+    uint8_t sec[512];
+    if (dev->ops->read_sectors(dev, 0, 1, sec) < 0) return -1;
+    if (sec[510] == 0x55 && sec[511] == (uint8_t)0xAA) {
+        if (memcmp(sec + 82, "FAT32", 5) == 0) return 1;
+        if (memcmp(sec + 54, "FAT", 3) == 0)   return 1;
+    }
+    uint16_t magic = 0;
+    if (blkdev_read(dev, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
+        && magic == EXT2_SUPER_MAGIC) return 2;
+    return 0;
+}
 
 int disk_mount(const char *devname, const char *path) {
-    if (!devname || !path) return -EINVAL;
     const char *raw = strip_dev_prefix(devname);
-    char cp[256];
-    strncpy(cp, path, sizeof(cp) - 1);
-    cp[sizeof(cp) - 1] = '\0';
-    size_t pl = strlen(cp);
-    while (pl > 1 && cp[pl - 1] == '/') cp[--pl] = '\0';
-
     blkdev_t *dev = blkdev_get_by_name(raw);
-    if (!dev) {
-        serial_printf("[disk] mount: device '%s' not found\n", devname);
-        printf("[disk] mount: device '%s' not found\n", devname);
-        return -ENODEV;
-    }
-    vnode_t *root = ext2_mount(dev);
-    if (!root) {
-        serial_printf("[disk] mount: '%s' has no valid ext2, formatting...\n", raw);
-        printf("[disk] mount: '%s' has no valid ext2, formatting...\n", raw);
-        int r = ext2_format(dev, raw);
-        if (r < 0) return r;
+    if (!dev) return -ENODEV;
+
+    int t = detect_fs_type(dev);
+    vnode_t *root = NULL;
+    if (t == 1) {
+        root = fat32_mount(dev);
+        serial_printf("[disk] mounting FAT32 %s -> %s\n", raw, path);
+    } else if (t == 2) {
         root = ext2_mount(dev);
-        if (!root) return -EIO;
-    }
-    ext2_t *efs = ((ext2_vdata_t *)root->fs_data)->fs;
-
-    vnode_t *check = NULL;
-    if (vfs_lookup(cp, &check) < 0) {
-        vfs_mkdir(cp, 0755);
+        serial_printf("[disk] mounting ext2 %s -> %s\n", raw, path);
     } else {
-        vnode_unref(check);
+        serial_printf("[disk] %s: no recognizable FS\n", raw);
+        return -EINVAL;
     }
+    if (!root) return -EIO;
+    int r = vfs_mount(path, root);
+    if (r < 0) { vnode_unref(root); return r; }
 
-    vfs_umount(cp);
-
-    int r = vfs_mount_fs(cp, root, efs, disk_ext2_unmount_cb, disk_ext2_sync_cb);
-    if (r < 0) {
-        serial_printf("[disk] mount: vfs_mount_fs('%s') failed: %d\n", cp, r);
-        printf("[disk] mount: vfs_mount_fs('%s') failed: %d\n", cp, r);
-        vnode_unref(root);
-        return r;
-    }
-    serial_printf("[disk] mounted '%s' at '%s'\n", raw, cp);
-    printf("[disk] mounted '%s' at '%s'\n", raw, cp);
+    const char *fsname = (t == 1) ? "fat32" : "ext2";
+    int si = vfs_set_mount_info(path, raw, fsname);
+    serial_printf("[disk_mount] set_mount_info path='%s' dev='%s' fs='%s' -> %d\n",
+                  path, raw, fsname, si);
     return 0;
 }
 
