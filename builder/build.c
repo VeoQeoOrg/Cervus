@@ -27,10 +27,17 @@
 #define WALLPAPER_SRC "wallpapers/cervus1280x720.png"
 #define WALLPAPER_DST "boot():/boot/wallpapers/cervus.png"
 
-#define APPS_DIR     "apps"
-#define BIN_APPS_DIR "binprogs"
-#define SHELL_SRC    "apps/shell.c"
-#define SHELL_ELF    "apps/shell.elf"
+#define APPS_DIR         "usr/apps"
+#define BIN_APPS_DIR     "usr/bin"
+#define INSTALLER_DIR    "usr/installer"
+#define SYSROOT_DIR      "usr/sysroot"
+#define SYSROOT_INC      "usr/sysroot/usr/include"
+#define SYSROOT_LIB      "usr/sysroot/usr/lib"
+#define LIBCERVUS_DIR    "usr/lib/libcervus"
+#define SHELL_SRC        "usr/apps/shell.c"
+#define SHELL_ELF        "usr/apps/shell.elf"
+#define INSTALLER_SRC    "usr/installer/install-on-disk.c"
+#define INSTALLER_ELF    "usr/installer/install-on-disk.elf"
 
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
@@ -55,7 +62,9 @@ const char *FILES_TO_CLEAN[] = {
     "kernel/.deps-obtained",
     "limine.conf",
     "OS-TREE.txt", "log.txt",
-    "apps/shell.elf",
+    SHELL_ELF, INSTALLER_ELF,
+    SYSROOT_LIB "/libcervus.a",
+    SYSROOT_LIB "/crt0.o",
     INITRAMFS_TAR,
     "cervus_disk.img",
     NULL
@@ -332,18 +341,6 @@ static int scan_apps(void) {
     return g_naps;
 }
 
-static const char *FPU_APPS[] = {
-    "calc.c", NULL
-};
-
-static bool app_needs_fpu(const char *src) {
-    const char *base = strrchr(src, '/');
-    base = base ? base + 1 : src;
-    for (int i = 0; FPU_APPS[i]; i++)
-        if (strcmp(base, FPU_APPS[i]) == 0) return true;
-    return false;
-}
-
 static bool build_one_app(const app_entry_t *e) {
     if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
         print_color(COLOR_GREEN, "[ELF] %s is up to date", e->elf);
@@ -351,19 +348,16 @@ static bool build_one_app(const app_entry_t *e) {
     }
     print_color(COLOR_CYAN, "[ELF] Compiling %s -> %s", e->src, e->elf);
 
-    bool fpu = app_needs_fpu(e->src);
-    const char *sse_flags = fpu
-        ? " -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2"
-        : " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2";
-
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
-        " -O0 -g -I" APPS_DIR
-        "%s"
+        " -fno-pie -fno-pic"
+        " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2"
         " -mno-red-zone"
-        " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
-        " -o %s %s",
-        sse_flags, e->elf, e->src);
+        " -O0 -g"
+        " -nostdinc -isystem " SYSROOT_INC
+        " -Wl,-Ttext-segment=0x401000"
+        " -o %s %s " SYSROOT_LIB "/crt0.o " SYSROOT_LIB "/libcervus.a",
+        e->elf, e->src);
     if (ret != 0) {
         print_color(COLOR_RED, "[ELF] Failed to compile %s", e->src);
         return false;
@@ -446,11 +440,13 @@ static bool build_one_bin_app(const app_entry_t *e) {
 
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
-        " -O0 -g -I" APPS_DIR
+        " -fno-pie -fno-pic"
         " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2"
         " -mno-red-zone"
-        " -Wl,-Ttext-segment=0x401000 -Wl,-e,_start"
-        " -o %s %s",
+        " -O0 -g"
+        " -nostdinc -isystem " SYSROOT_INC
+        " -Wl,-Ttext-segment=0x401000"
+        " -o %s %s " SYSROOT_LIB "/crt0.o " SYSROOT_LIB "/libcervus.a",
         e->elf, e->src);
     if (ret != 0) {
         print_color(COLOR_RED, "[bin] Failed to compile %s", e->src);
@@ -490,6 +486,50 @@ void clean_bin_elfs(void) {
     closedir(d);
 }
 
+bool build_libcervus(void) {
+    if (cmd_run(false, "command -v nasm >/dev/null 2>&1") != 0) {
+        print_color(COLOR_RED,
+            "[libcervus] 'nasm' is required to build crt0.o. Install it "
+            "(apt install nasm / dnf install nasm / pacman -S nasm).");
+        return false;
+    }
+    print_color(COLOR_CYAN, "[libcervus] Building libcervus.a and crt0.o...");
+    int r = cmd_run(true, "make -C " LIBCERVUS_DIR " install");
+    if (r != 0) {
+        print_color(COLOR_RED, "[libcervus] build failed");
+        return false;
+    }
+    print_color(COLOR_GREEN, "[libcervus] OK");
+    return true;
+}
+
+bool build_installer(void) {
+    DIR *d = opendir(INSTALLER_DIR);
+    if (!d) {
+        print_color(COLOR_YELLOW,
+            "[installer] directory '%s' not found, skipping", INSTALLER_DIR);
+        return true;
+    }
+    struct dirent *de;
+    int built = 0;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t nlen = strlen(nm);
+        if (nlen < 3 || nm[0] == '.') continue;
+        if (strcmp(nm + nlen - 2, ".c") != 0) continue;
+        app_entry_t e;
+        snprintf(e.src,  sizeof(e.src),  "%s/%s",       INSTALLER_DIR, nm);
+        snprintf(e.elf,  sizeof(e.elf),  "%s/%.*s.elf", INSTALLER_DIR, (int)(nlen-2), nm);
+        snprintf(e.name, sizeof(e.name), "%.*s",        (int)(nlen-2), nm);
+        if (!build_one_app(&e)) { closedir(d); return false; }
+        built++;
+    }
+    closedir(d);
+    if (built == 0)
+        print_color(COLOR_YELLOW, "[installer] no .c sources in '%s'", INSTALLER_DIR);
+    return true;
+}
+
 
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
@@ -521,6 +561,18 @@ bool build_initramfs(void) {
                     any_newer = true; break;
                 }
             }
+        }
+        if (!any_newer && file_exists(SHELL_ELF) &&
+            get_mtime(SHELL_ELF) > get_mtime(INITRAMFS_TAR)) {
+            any_newer = true;
+        }
+        if (!any_newer && file_exists(INSTALLER_ELF) &&
+            get_mtime(INSTALLER_ELF) > get_mtime(INITRAMFS_TAR)) {
+            any_newer = true;
+        }
+        if (!any_newer && file_exists(SYSROOT_LIB "/libcervus.a") &&
+            get_mtime(SYSROOT_LIB "/libcervus.a") > get_mtime(INITRAMFS_TAR)) {
+            any_newer = true;
         }
     }
     if (tar_exists && !any_newer) {
@@ -620,6 +672,31 @@ bool build_initramfs(void) {
             print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/apps/%s",
                         g_apps[i].elf, g_apps[i].name);
         }
+    }
+
+    if (file_exists(INSTALLER_ELF)) {
+        char dst[512];
+        snprintf(dst, sizeof(dst), "%s/bin/install-on-disk", INITRAMFS_ROOTFS);
+        if (cmd_run(false, "cp %s %s", INSTALLER_ELF, dst) == 0)
+            print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/install-on-disk",
+                        INSTALLER_ELF);
+        else
+            print_color(COLOR_RED, "[initramfs] failed to copy installer");
+    }
+
+    if (file_exists(SYSROOT_DIR "/usr")) {
+        print_color(COLOR_CYAN, "[initramfs] Copying sysroot -> rootfs/usr...");
+        ensure_dir(INITRAMFS_ROOTFS "/usr");
+        if (cmd_run(false, "cp -r " SYSROOT_DIR "/usr/. %s/usr/",
+                    INITRAMFS_ROOTFS) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy sysroot");
+            return false;
+        }
+        print_color(COLOR_GREEN, "[initramfs] sysroot installed into rootfs/usr/");
+    } else {
+        print_color(COLOR_YELLOW,
+            "[initramfs] " SYSROOT_DIR "/usr not found - skipping sysroot "
+            "(did libcervus.a build fail?)");
     }
 
     FILE *readme = fopen(INITRAMFS_ROOTFS "/home/readme.txt", "w");
@@ -762,8 +839,12 @@ bool compile_kernel(void) {
     ensure_linker_script();
     if (!setup_dependencies()) return false;
 
+    if (!build_libcervus()) return false;
+
     if (!build_all_apps()) return false;
     if (!build_all_bin_apps()) return false;
+
+    if (!build_installer()) return false;
 
     ensure_dir("bin");
     ensure_dir("obj/kernel");
@@ -1511,6 +1592,8 @@ int main(int argc, char **argv) {
         clean_bin_elfs();
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
+        cmd_run(false, "make -C " LIBCERVUS_DIR " clean >/dev/null 2>&1");
+        cmd_run(false, "rm -f " INSTALLER_DIR "/*.elf 2>/dev/null");
         cmd_run(false, "rm -f temp_* 2>/dev/null");
         print_color(COLOR_GREEN, "Cleanup complete");
         return 0;
