@@ -21,6 +21,17 @@ extern uint32_t get_cursor_col(void);
 
 #define TIOCGWINSZ   0x5413
 #define TIOCGCURSOR  0x5480
+#define TCGETS       0x5401
+#define TCSETS       0x5402
+#define TCSETSW      0x5403
+#define TCSETSF      0x5404
+#define TIOCSNONBLOCK 0x5481
+
+static int tty_nonblock = 0;
+
+#define T_ICANON  0x0002
+#define T_ECHO    0x0008
+#define T_ISIG    0x0001
 
 struct cervus_winsize {
     uint16_t ws_row;
@@ -33,6 +44,29 @@ struct cervus_cursor_pos {
     uint32_t row;
     uint32_t col;
 };
+
+struct cervus_termios {
+    uint32_t c_iflag;
+    uint32_t c_oflag;
+    uint32_t c_cflag;
+    uint32_t c_lflag;
+    uint8_t  c_cc[32];
+};
+
+static struct cervus_termios g_tty_termios = {
+    .c_iflag = 0,
+    .c_oflag = 0,
+    .c_cflag = 0,
+    .c_lflag = T_ICANON | T_ECHO | T_ISIG,
+    .c_cc    = {0},
+};
+
+static inline int tty_is_canonical(void) {
+    return (g_tty_termios.c_lflag & T_ICANON) != 0;
+}
+static inline int tty_has_isig(void) {
+    return (g_tty_termios.c_lflag & T_ISIG) != 0;
+}
 
 static inline task_t* devfs_cur_task(void) {
     percpu_t* pc = get_percpu();
@@ -49,6 +83,11 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     uint64_t half_tick = freq ? freq / 2 : 0;
     uint64_t next_blink = half_tick ? (hpet_read_counter() + half_tick) : 0;
     int      cursor_on  = 1;
+    int      canonical  = tty_is_canonical();
+    int      isig       = tty_has_isig();
+
+    if (tty_nonblock && kb_buf_empty()) return -EAGAIN;
+
     draw_cursor();
 
     while (kb_buf_empty()) {
@@ -78,17 +117,26 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     }
 
     char first = kb_buf_getc();
-    if (first == 0x03) {
+    if (isig && canonical && first == 0x03) {
         return -EINTR;
     }
 
     dst[0] = first;
     size_t got = 1;
 
+    if (!canonical) {
+        while (got < len) {
+            char c;
+            if (!kb_buf_try_getc(&c)) break;
+            dst[got++] = c;
+        }
+        return (int64_t)got;
+    }
+
     while (got < len) {
         char c;
         if (!kb_buf_try_getc(&c)) break;
-        if (c == 0x03) break;
+        if (isig && c == 0x03) break;
         dst[got++] = c;
         if (c == '\n') break;
     }
@@ -98,7 +146,8 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
 static int64_t tty_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
     serial_writebuf((const char *)buf, len);
-    printf("%.*s", (int)len, (const char *)buf);
+    const unsigned char *p = (const unsigned char *)buf;
+    for (size_t i = 0; i < len; i++) putchar((int)p[i]);
     return (int64_t)len;
 }
 
@@ -122,6 +171,24 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
         struct cervus_cursor_pos *cp = (struct cervus_cursor_pos *)arg;
         cp->row = get_cursor_row();
         cp->col = get_cursor_col();
+        return 0;
+    }
+
+    if (req == TIOCSNONBLOCK) {
+        if (!arg) return -EFAULT;
+        tty_nonblock = *((int *)arg) ? 1 : 0;
+        return 0;
+    }
+
+    if (req == TCGETS) {
+        if (!arg) return -EFAULT;
+        memcpy(arg, &g_tty_termios, sizeof(g_tty_termios));
+        return 0;
+    }
+
+    if (req == TCSETS || req == TCSETSW || req == TCSETSF) {
+        if (!arg) return -EFAULT;
+        memcpy(&g_tty_termios, arg, sizeof(g_tty_termios));
         return 0;
     }
 

@@ -49,7 +49,7 @@ Cervus is currently in the active development phase. The kernel implements core 
 To build Cervus, you need a cross-compilation toolchain and the following utilities:
 
 *   *Compiler:* `x86_64-elf-gcc`
-*   *Assemblers:* `nasm`, `gas`
+*   *Assemblers:* `nasm`
 *   *Emulation:* `qemu-system-x86_64`
 *   *ISO Tools:* `xorriso`, `mtools`
 

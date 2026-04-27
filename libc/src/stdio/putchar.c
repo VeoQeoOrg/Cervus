@@ -13,6 +13,7 @@ static int  cursor_visible      = 1;
 static int  scroll_buffer_index = 0;
 static int  total_scroll_lines  = 0;
 static int  flush_inhibit       = 0;
+static int  autowrap            = 1;
 
 uint32_t get_screen_width(void) {
     if (!global_framebuffer) return 1024;
@@ -136,15 +137,43 @@ static int ps_get(int i, int def) {
     return ps_params[i];
 }
 
+static int      ps_reverse = 0;
+
 static void handle_sgr(void) {
-    if (ps_nparams == 0) { text_color = COLOR_WHITE; ps_bold = 0; return; }
+    if (ps_nparams == 0) {
+        text_color = COLOR_WHITE; bg_color = COLOR_BLACK;
+        ps_bold = 0; ps_reverse = 0;
+        return;
+    }
     for (int i = 0; i < ps_nparams; i++) {
         int p = ps_params[i]; if (p < 0) p = 0;
-        if      (p == 0)             { text_color = COLOR_WHITE; ps_bold = 0; }
+        if      (p == 0)             { text_color = COLOR_WHITE; bg_color = COLOR_BLACK; ps_bold = 0; ps_reverse = 0; }
         else if (p == 1)             { ps_bold = 1; }
         else if (p == 22)            { ps_bold = 0; }
-        else if (p >= 30 && p <= 37) { text_color = ansi_color(p-30, ps_bold); }
-        else if (p >= 90 && p <= 97) { text_color = ansi_color(p-90, 1); }
+        else if (p == 7)             {
+            if (!ps_reverse) {
+                uint32_t tmp = text_color; text_color = bg_color; bg_color = tmp;
+                ps_reverse = 1;
+            }
+        }
+        else if (p == 27)            {
+            if (ps_reverse) {
+                uint32_t tmp = text_color; text_color = bg_color; bg_color = tmp;
+                ps_reverse = 0;
+            }
+        }
+        else if (p >= 30 && p <= 37) {
+            uint32_t c = ansi_color(p-30, ps_bold);
+            if (ps_reverse) bg_color = c; else text_color = c;
+        }
+        else if (p >= 90 && p <= 97) {
+            uint32_t c = ansi_color(p-90, 1);
+            if (ps_reverse) bg_color = c; else text_color = c;
+        }
+        else if (p >= 40 && p <= 47) {
+            uint32_t c = ansi_color(p-40, 0);
+            if (ps_reverse) text_color = c; else bg_color = c;
+        }
     }
 }
 
@@ -178,6 +207,12 @@ static void draw_and_advance(char c) {
     if (!global_framebuffer) return;
     uint32_t sh = get_screen_height();
     uint32_t sw = get_screen_width();
+    if (!autowrap && cursor_x + 8 >= sw) {
+        clear_cell(cursor_x, cursor_y);
+        fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
+        flush_region(cursor_y, 16);
+        return;
+    }
     clear_cell(cursor_x, cursor_y);
     fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
     flush_region(cursor_y, 16);
@@ -239,7 +274,20 @@ int putchar(int c) {
 
             if (ps_state == PS_CSI_PRIV) {
                 int p = ps_get(0, 0);
-                if (p == 25) cursor_visible = (ch == 'h') ? 1 : 0;
+                if (p == 25) {
+                    if (ch == 'l') {
+                        cursor_visible = 0;
+                        flush_inhibit  = 1;
+                    } else if (ch == 'h') {
+                        cursor_visible = 1;
+                        flush_inhibit  = 0;
+                        if (global_framebuffer)
+                            fb_flush(global_framebuffer);
+                    }
+                } else if (p == 7) {
+                    if      (ch == 'l') autowrap = 0;
+                    else if (ch == 'h') autowrap = 1;
+                }
                 ps_state = PS_NORMAL;
                 break;
             }
@@ -264,8 +312,14 @@ int putchar(int c) {
             case 'f': {
                 int row = ps_get(0, 1); if (row < 1) row = 1;
                 int col = ps_get(1, 1); if (col < 1) col = 1;
-                cursor_x = (uint32_t)((col - 1) * 8);
-                cursor_y = (uint32_t)((row - 1) * 16);
+                uint32_t cx = (uint32_t)((col - 1) * 8);
+                uint32_t cy = (uint32_t)((row - 1) * 16);
+                uint32_t sw = get_screen_width();
+                uint32_t sh = get_screen_height();
+                if (cx + 8 > sw) cx = (sw >= 8) ? sw - 8 : 0;
+                if (cy + 16 > sh) cy = (sh >= 16) ? sh - 16 : 0;
+                cursor_x = cx;
+                cursor_y = cy;
                 break;
             }
             case 'A': {

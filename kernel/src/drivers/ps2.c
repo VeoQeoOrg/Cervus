@@ -31,7 +31,7 @@ static volatile uint32_t mouse_lost_sync = 0;
 static volatile kb_buf_t kb_buf;
 
 static const char sc_lower[89] = {
-    0,    0,    '1',  '2',  '3',  '4',  '5',  '6',
+    0,    '\x1b','1',  '2',  '3',  '4',  '5',  '6',
     '7',  '8',  '9',  '0',  '-',  '=',  '\b', '\t',
     'q',  'w',  'e',  'r',  't',  'y',  'u',  'i',
     'o',  'p',  '[',  ']',  '\n', 0,    'a',  's',
@@ -45,7 +45,7 @@ static const char sc_lower[89] = {
 };
 
 static const char sc_upper[89] = {
-    0,    0,    '!',  '@',  '#',  '$',  '%',  '^',
+    0,    '\x1b','!',  '@',  '#',  '$',  '%',  '^',
     '&',  '*',  '(',  ')',  '_',  '+',  '\b', '\t',
     'Q',  'W',  'E',  'R',  'T',  'Y',  'U',  'I',
     'O',  'P',  '{',  '}',  '\n', 0,    'A',  'S',

@@ -145,6 +145,20 @@ char *strstr(const char *h, const char *n)
     }
     return NULL;
 }
+void *memmem(const void *haystack, size_t hlen,
+             const void *needle, size_t nlen)
+{
+    if (nlen == 0) return (void *)haystack;
+    if (hlen < nlen) return NULL;
+    const unsigned char *h = (const unsigned char *)haystack;
+    const unsigned char *n = (const unsigned char *)needle;
+    size_t last = hlen - nlen;
+    for (size_t i = 0; i <= last; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, nlen) == 0)
+            return (void *)(h + i);
+    }
+    return NULL;
+}
 size_t strspn(const char *s, const char *accept)
 {
     size_t n = 0;
@@ -383,13 +397,128 @@ pid_t    wait(int *s) { return waitpid(-1, s, 0); }
 
 ssize_t  cervus_dbg_print(const char *b, size_t n) { return (ssize_t)syscall2(SYS_DBG_PRINT, b, n); }
 
+typedef struct __mblock {
+    size_t size;
+    size_t prev_size;
+} __mblock_t;
+
+#define MB_HDR_SZ        (sizeof(__mblock_t))
+#define MB_ALIGN         16
+#define MB_MIN_TOTAL     32
+#define MB_FREE_BIT      ((size_t)1)
+#define MB_SIZE(b)       ((b)->size & ~MB_FREE_BIT)
+#define MB_IS_FREE(b)    (((b)->size & MB_FREE_BIT) != 0)
+#define MB_USER(b)       ((void *)((char *)(b) + MB_HDR_SZ))
+#define MB_FROM_USER(p)  ((__mblock_t *)((char *)(p) - MB_HDR_SZ))
+
+static __mblock_t *__heap_start = NULL;
+static __mblock_t *__heap_end   = NULL;
+
+static inline size_t __align_up(size_t n, size_t a) {
+    return (n + a - 1) & ~(a - 1);
+}
+
+static inline __mblock_t *__mb_next(__mblock_t *b) {
+    return (__mblock_t *)((char *)b + MB_SIZE(b));
+}
+
+static inline __mblock_t *__mb_prev(__mblock_t *b) {
+    if (b->prev_size == 0) return NULL;
+    return (__mblock_t *)((char *)b - b->prev_size);
+}
+
+static __mblock_t *__heap_grow(size_t need) {
+    size_t chunk = __align_up(need + MB_HDR_SZ, 65536);
+
+    if (!__heap_start) {
+        void *base = sbrk((intptr_t)chunk);
+        if (base == (void *)-1) return NULL;
+
+        uintptr_t addr = (uintptr_t)base;
+        uintptr_t aligned = (addr + MB_ALIGN - 1) & ~(uintptr_t)(MB_ALIGN - 1);
+        size_t lost = aligned - addr;
+        if (lost >= chunk - MB_MIN_TOTAL - MB_HDR_SZ) {
+            __cervus_errno = ENOMEM;
+            return NULL;
+        }
+
+        __heap_start = (__mblock_t *)aligned;
+        size_t usable = chunk - lost;
+
+        __mblock_t *first = __heap_start;
+        first->size      = (usable - MB_HDR_SZ) | MB_FREE_BIT;
+        first->prev_size = 0;
+
+        __heap_end = (__mblock_t *)((char *)first + MB_SIZE(first));
+        __heap_end->size      = 0;
+        __heap_end->prev_size = MB_SIZE(first);
+
+        return first;
+    }
+
+    void *p = sbrk((intptr_t)chunk);
+    if (p == (void *)-1) return NULL;
+    if ((uintptr_t)p != (uintptr_t)__heap_end) {
+        __cervus_errno = ENOMEM;
+        return NULL;
+    }
+
+    __mblock_t *new_block = __heap_end;
+    new_block->size = (chunk - MB_HDR_SZ) | MB_FREE_BIT;
+    __mblock_t *new_end = (__mblock_t *)((char *)new_block + MB_SIZE(new_block));
+    new_end->size      = 0;
+    new_end->prev_size = MB_SIZE(new_block);
+    __heap_end = new_end;
+
+    __mblock_t *prev = __mb_prev(new_block);
+    if (prev && MB_IS_FREE(prev)) {
+        size_t merged_sz = MB_SIZE(prev) + MB_SIZE(new_block);
+        prev->size = merged_sz | MB_FREE_BIT;
+        __heap_end->prev_size = merged_sz;
+        return prev;
+    }
+    return new_block;
+}
+
+static void __mb_split(__mblock_t *b, size_t need) {
+    size_t cur = MB_SIZE(b);
+    if (cur < need + MB_MIN_TOTAL) {
+        b->size = cur;
+        return;
+    }
+    b->size = need;
+
+    __mblock_t *rest = (__mblock_t *)((char *)b + need);
+    rest->size      = (cur - need) | MB_FREE_BIT;
+    rest->prev_size = need;
+
+    __mblock_t *after = __mb_next(rest);
+    if (after) after->prev_size = MB_SIZE(rest);
+}
+
 void *malloc(size_t n)
 {
     if (n == 0) n = 1;
-    n = (n + 15u) & ~(size_t)15u;
-    void *p = sbrk((intptr_t)n);
-    return (p == (void *)-1) ? NULL : p;
+    size_t need = __align_up(n + MB_HDR_SZ, MB_ALIGN);
+    if (need < MB_MIN_TOTAL) need = MB_MIN_TOTAL;
+
+    for (__mblock_t *b = __heap_start; b && b != __heap_end; b = __mb_next(b)) {
+        if (MB_IS_FREE(b) && MB_SIZE(b) >= need) {
+            __mb_split(b, need);
+            return MB_USER(b);
+        }
+    }
+
+    __mblock_t *grown = __heap_grow(need);
+    if (!grown) return NULL;
+    if (MB_SIZE(grown) < need) {
+        __cervus_errno = ENOMEM;
+        return NULL;
+    }
+    __mb_split(grown, need);
+    return MB_USER(grown);
 }
+
 void *calloc(size_t nm, size_t sz)
 {
     size_t t = nm * sz;
@@ -398,14 +527,83 @@ void *calloc(size_t nm, size_t sz)
     if (p) memset(p, 0, t);
     return p;
 }
+
+void free(void *p)
+{
+    if (!p) return;
+    __mblock_t *b = MB_FROM_USER(p);
+    b->size = MB_SIZE(b) | MB_FREE_BIT;
+
+    __mblock_t *next = __mb_next(b);
+    if (next != __heap_end && MB_IS_FREE(next)) {
+        size_t merged = MB_SIZE(b) + MB_SIZE(next);
+        b->size = merged | MB_FREE_BIT;
+        __mblock_t *after = __mb_next(b);
+        if (after) after->prev_size = merged;
+    }
+    __mblock_t *prev = __mb_prev(b);
+    if (prev && MB_IS_FREE(prev)) {
+        size_t merged = MB_SIZE(prev) + MB_SIZE(b);
+        prev->size = merged | MB_FREE_BIT;
+        __mblock_t *after = __mb_next(prev);
+        if (after) after->prev_size = merged;
+    }
+}
+
 void *realloc(void *p, size_t n)
 {
+    if (!p) return malloc(n);
+    if (n == 0) { free(p); return NULL; }
+
+    __mblock_t *b = MB_FROM_USER(p);
+    size_t cur_total = MB_SIZE(b);
+    size_t cur_user  = cur_total - MB_HDR_SZ;
+    size_t need      = __align_up(n + MB_HDR_SZ, MB_ALIGN);
+    if (need < MB_MIN_TOTAL) need = MB_MIN_TOTAL;
+
+    if (need <= cur_total) {
+        if (cur_total >= need + MB_MIN_TOTAL) {
+            b->size = need;
+            __mblock_t *rest = (__mblock_t *)((char *)b + need);
+            rest->size      = (cur_total - need) | MB_FREE_BIT;
+            rest->prev_size = need;
+            __mblock_t *after = __mb_next(rest);
+            if (after) after->prev_size = MB_SIZE(rest);
+            if (after != __heap_end && MB_IS_FREE(after)) {
+                size_t merged = MB_SIZE(rest) + MB_SIZE(after);
+                rest->size = merged | MB_FREE_BIT;
+                __mblock_t *aft2 = __mb_next(rest);
+                if (aft2) aft2->prev_size = merged;
+            }
+        }
+        return p;
+    }
+
+    __mblock_t *next = __mb_next(b);
+    if (next != __heap_end && MB_IS_FREE(next) &&
+        cur_total + MB_SIZE(next) >= need)
+    {
+        size_t combined = cur_total + MB_SIZE(next);
+        b->size = combined;
+        __mblock_t *after = __mb_next(b);
+        if (after) after->prev_size = combined;
+        if (combined >= need + MB_MIN_TOTAL) {
+            b->size = need;
+            __mblock_t *rest = (__mblock_t *)((char *)b + need);
+            rest->size      = (combined - need) | MB_FREE_BIT;
+            rest->prev_size = need;
+            __mblock_t *aft = __mb_next(rest);
+            if (aft) aft->prev_size = MB_SIZE(rest);
+        }
+        return p;
+    }
+
     void *np = malloc(n);
     if (!np) return NULL;
-    if (p && n) memcpy(np, p, n);
+    memcpy(np, p, cur_user);
+    free(p);
     return np;
 }
-void free(void *p) { (void)p; }
 
 #define ATEXIT_MAX 32
 static void (*__atexit_fns[ATEXIT_MAX])(void);
@@ -480,6 +678,151 @@ unsigned long long strtoull(const char *s, char **e, int b) { return (unsigned l
 int       atoi(const char *s)  { return (int)strtol(s, NULL, 10); }
 long      atol(const char *s)  { return strtol(s, NULL, 10); }
 long long atoll(const char *s) { return strtoll(s, NULL, 10); }
+
+uint64_t __cervus_strtod_bits(const char *s, char **endptr)
+{
+    if (!s) {
+        if (endptr) *endptr = (char *)s;
+        return 0;
+    }
+    const char *p = s;
+    while (*p == ' ' || *p == '\t' || *p == '\n' ||
+           *p == '\r' || *p == '\f' || *p == '\v') p++;
+
+    int sign = 0;
+    if (*p == '+') p++;
+    else if (*p == '-') { sign = 1; p++; }
+
+    if ((p[0] == 'i' || p[0] == 'I') &&
+        (p[1] == 'n' || p[1] == 'N') &&
+        (p[2] == 'f' || p[2] == 'F')) {
+        p += 3;
+        if ((p[0] == 'i' || p[0] == 'I') &&
+            (p[1] == 'n' || p[1] == 'N') &&
+            (p[2] == 'i' || p[2] == 'I') &&
+            (p[3] == 't' || p[3] == 'T') &&
+            (p[4] == 'y' || p[4] == 'Y')) p += 5;
+        if (endptr) *endptr = (char *)p;
+        return ((uint64_t)sign << 63) | 0x7FF0000000000000ULL;
+    }
+    if ((p[0] == 'n' || p[0] == 'N') &&
+        (p[1] == 'a' || p[1] == 'A') &&
+        (p[2] == 'n' || p[2] == 'N')) {
+        p += 3;
+        if (endptr) *endptr = (char *)p;
+        return 0x7FF8000000000000ULL;
+    }
+
+    uint64_t mant   = 0;
+    int      dec_exp = 0;
+    int      seen_digit = 0;
+    int      seen_dot   = 0;
+
+    while (*p >= '0' && *p <= '9') {
+        seen_digit = 1;
+        if (mant <= (UINT64_MAX - 9) / 10) {
+            mant = mant * 10 + (uint64_t)(*p - '0');
+        } else {
+            dec_exp++;
+        }
+        p++;
+    }
+    if (*p == '.') {
+        seen_dot = 1;
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            seen_digit = 1;
+            if (mant <= (UINT64_MAX - 9) / 10) {
+                mant = mant * 10 + (uint64_t)(*p - '0');
+                dec_exp--;
+            }
+            p++;
+        }
+    }
+    if (!seen_digit) {
+        if (endptr) *endptr = (char *)s;
+        return 0;
+    }
+
+    if (*p == 'e' || *p == 'E') {
+        const char *ep = p + 1;
+        int esign = 0;
+        if (*ep == '+') ep++;
+        else if (*ep == '-') { esign = 1; ep++; }
+        if (*ep >= '0' && *ep <= '9') {
+            int eval = 0;
+            while (*ep >= '0' && *ep <= '9') {
+                if (eval < 10000) eval = eval * 10 + (*ep - '0');
+                ep++;
+            }
+            dec_exp += esign ? -eval : eval;
+            p = ep;
+        }
+    }
+    (void)seen_dot;
+    if (endptr) *endptr = (char *)p;
+
+    if (mant == 0) {
+        return (uint64_t)sign << 63;
+    }
+    int bin_exp = 0;
+
+    while ((mant >> 63) == 0) {
+        mant <<= 1;
+        bin_exp--;
+    }
+    while (dec_exp > 0) {
+        uint64_t hi = (mant >> 32) * 10;
+        uint64_t lo = (mant & 0xFFFFFFFFULL) * 10;
+        uint64_t carry = (lo >> 32);
+        mant = (hi + carry) << 32 | (lo & 0xFFFFFFFFULL);
+        uint64_t check_hi = hi + carry;
+        if (check_hi >> 32) {
+            mant >>= 4;
+            mant |= (check_hi & 0xFULL) << 60;
+            bin_exp += 4;
+        }
+        while ((mant >> 63) == 0) {
+            mant <<= 1;
+            bin_exp--;
+        }
+        dec_exp--;
+    }
+    while (dec_exp < 0) {
+        uint64_t r = mant / 10;
+        while ((r >> 63) == 0 && bin_exp > -16384) {
+            r <<= 1;
+            bin_exp--;
+        }
+        mant = r;
+        dec_exp++;
+    }
+    int ieee_exp = bin_exp + 63 + 1023;
+
+    uint64_t frac;
+    uint64_t no_implicit = mant & 0x7FFFFFFFFFFFFFFFULL;
+    uint64_t round_bit = (no_implicit >> 10) & 1;
+    uint64_t sticky    = (no_implicit & 0x3FFULL) ? 1 : 0;
+    frac = no_implicit >> 11;
+    if (round_bit && (sticky || (frac & 1))) {
+        frac++;
+        if (frac == (1ULL << 52)) {
+            frac = 0;
+            ieee_exp++;
+        }
+    }
+
+    if (ieee_exp >= 0x7FF) {
+        return ((uint64_t)sign << 63) | 0x7FF0000000000000ULL;
+    }
+    if (ieee_exp <= 0) {
+        return (uint64_t)sign << 63;
+    }
+    return ((uint64_t)sign << 63) |
+           ((uint64_t)ieee_exp << 52) |
+           (frac & 0xFFFFFFFFFFFFFULL);
+}
+
 
 static unsigned long __rand_state = 1;
 int  rand(void)              { __rand_state = __rand_state * 1103515245UL + 12345UL; return (int)((__rand_state >> 16) & 0x7FFF); }
@@ -883,6 +1226,57 @@ int rename(const char *oldp, const char *newp)
     return (int)__sys_ret(syscall2(SYS_RENAME, oldp, newp));
 }
 
+int mkstemp(char *template)
+{
+    if (!template) { __cervus_errno = EINVAL; return -1; }
+    size_t len = strlen(template);
+    if (len < 6) { __cervus_errno = EINVAL; return -1; }
+    char *suf = template + len - 6;
+    for (int i = 0; i < 6; i++) {
+        if (suf[i] != 'X') { __cervus_errno = EINVAL; return -1; }
+    }
+    static uint64_t __mkstemp_seq = 0;
+    uint64_t pid = (uint64_t)getpid();
+    for (int attempt = 0; attempt < 100; attempt++) {
+        uint64_t seed = (cervus_uptime_ns() ^ (pid << 32)) + (__mkstemp_seq++);
+        const char *alpha = "0123456789abcdefghijklmnopqrstuvwxyz";
+        for (int i = 0; i < 6; i++) {
+            suf[i] = alpha[seed % 36];
+            seed /= 36;
+        }
+        struct stat st;
+        if (stat(template, &st) == 0) continue;
+        int fd = open(template, O_RDWR | O_CREAT, 0600);
+        if (fd >= 0) return fd;
+    }
+    __cervus_errno = EEXIST;
+    return -1;
+}
+
+FILE *tmpfile(void)
+{
+    char tmpl[64];
+    strcpy(tmpl, "/mnt/tmp/tmpXXXXXX");
+    int fd = mkstemp(tmpl);
+    if (fd < 0) {
+        strcpy(tmpl, "/tmp/tmpXXXXXX");
+        fd = mkstemp(tmpl);
+        if (fd < 0) return NULL;
+    }
+    unlink(tmpl);
+    FILE *f = (FILE *)malloc(sizeof(FILE));
+    if (!f) { close(fd); return NULL; }
+    f->fd = fd;
+    f->eof = 0;
+    f->err = 0;
+    f->flags = 1;
+    f->buf = NULL;
+    f->buf_size = 0;
+    f->buf_pos = 0;
+    return f;
+}
+
+
 typedef struct {
     uint64_t d_ino;
     uint8_t  d_type;
@@ -929,3 +1323,268 @@ void rewinddir(DIR *dirp)
     lseek(dirp->fd, 0, SEEK_SET);
 }
 int dirfd(DIR *dirp) { return dirp ? dirp->fd : -1; }
+
+#include <termios.h>
+#include <signal.h>
+#include <time.h>
+#include <sys/time.h>
+
+int tcgetattr(int fd, struct termios *t)
+{
+    if (!t) { __cervus_errno = EINVAL; return -1; }
+    return (int)__sys_ret(syscall3(SYS_IOCTL, fd, TCGETS, t));
+}
+
+int tcsetattr(int fd, int optional_actions, const struct termios *t)
+{
+    if (!t) { __cervus_errno = EINVAL; return -1; }
+    unsigned long req;
+    switch (optional_actions) {
+        case TCSADRAIN: req = TCSETSW; break;
+        case TCSAFLUSH: req = TCSETSF; break;
+        case TCSANOW:
+        default:        req = TCSETS;  break;
+    }
+    return (int)__sys_ret(syscall3(SYS_IOCTL, fd, req, t));
+}
+
+sighandler_t signal(int signum, sighandler_t handler)
+{
+    (void)signum;
+    (void)handler;
+    return SIG_DFL;
+}
+
+int raise(int sig)
+{
+    (void)sig;
+    return 0;
+}
+
+int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact)
+{
+    (void)sig; (void)act;
+    if (oldact) {
+        oldact->sa_handler = SIG_DFL;
+        memset(&oldact->sa_mask, 0, sizeof(oldact->sa_mask));
+        oldact->sa_flags = 0;
+    }
+    return 0;
+}
+
+int sigemptyset(sigset_t *set)             { if (set) memset(set, 0, sizeof(*set)); return 0; }
+int sigfillset(sigset_t *set)              { if (set) memset(set, 0xFF, sizeof(*set)); return 0; }
+int sigaddset(sigset_t *set, int sig)      { (void)set; (void)sig; return 0; }
+int sigdelset(sigset_t *set, int sig)      { (void)set; (void)sig; return 0; }
+int sigismember(const sigset_t *set, int sig) { (void)set; (void)sig; return 0; }
+int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    (void)how; (void)set;
+    if (oldset) memset(oldset, 0, sizeof(*oldset));
+    return 0;
+}
+
+typedef struct { int64_t tv_sec; int64_t tv_nsec; } __cervus_ts_raw_t;
+
+time_t time(time_t *t)
+{
+    __cervus_ts_raw_t ts = {0, 0};
+    syscall2(SYS_CLOCK_GET, 0, &ts);
+    time_t v = (time_t)ts.tv_sec;
+    if (t) *t = v;
+    return v;
+}
+
+int clock_gettime(int clk, struct timespec *tp)
+{
+    if (!tp) { __cervus_errno = EINVAL; return -1; }
+    __cervus_ts_raw_t ts = {0, 0};
+    long r = syscall2(SYS_CLOCK_GET, clk, &ts);
+    if (r < 0 && r > -4096) { __cervus_errno = (int)-r; return -1; }
+    tp->tv_sec  = (time_t)ts.tv_sec;
+    tp->tv_nsec = (long)ts.tv_nsec;
+    return 0;
+}
+
+clock_t clock(void)
+{
+    uint64_t up_ns = (uint64_t)syscall0(SYS_UPTIME);
+    return (clock_t)(up_ns / 1000ULL);
+}
+
+int gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+    (void)tz;
+    if (!tv) { __cervus_errno = EINVAL; return -1; }
+    __cervus_ts_raw_t ts = {0, 0};
+    syscall2(SYS_CLOCK_GET, 0, &ts);
+    tv->tv_sec  = (time_t)ts.tv_sec;
+    tv->tv_usec = (long)(ts.tv_nsec / 1000);
+    return 0;
+}
+
+int nanosleep(const struct timespec *req, struct timespec *rem)
+{
+    if (!req) { __cervus_errno = EINVAL; return -1; }
+    uint64_t ns = (uint64_t)req->tv_sec * 1000000000ULL + (uint64_t)req->tv_nsec;
+    long r = syscall1(SYS_SLEEP_NS, ns);
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    if (r < 0 && r > -4096) { __cervus_errno = (int)-r; return -1; }
+    return 0;
+}
+
+static int __is_leap(int y) {
+    return ((y % 4 == 0) && (y % 100 != 0)) || (y % 400 == 0);
+}
+
+static const int __days_in_mon[2][12] = {
+    {31,28,31,30,31,30,31,31,30,31,30,31},
+    {31,29,31,30,31,30,31,31,30,31,30,31},
+};
+
+static struct tm __tm_buf;
+
+struct tm *gmtime(const time_t *t)
+{
+    if (!t) return NULL;
+    long long sec = (long long)*t;
+    long days = (long)(sec / 86400);
+    long rem  = (long)(sec % 86400);
+    if (rem < 0) { rem += 86400; days--; }
+
+    __tm_buf.tm_hour = rem / 3600;
+    rem -= __tm_buf.tm_hour * 3600;
+    __tm_buf.tm_min  = rem / 60;
+    __tm_buf.tm_sec  = rem - __tm_buf.tm_min * 60;
+
+    __tm_buf.tm_wday = (int)((days + 4) % 7);
+    if (__tm_buf.tm_wday < 0) __tm_buf.tm_wday += 7;
+
+    int year = 1970;
+    while (1) {
+        int ly = __is_leap(year);
+        int dy = ly ? 366 : 365;
+        if (days >= dy) { days -= dy; year++; }
+        else if (days < 0) { year--; days += __is_leap(year) ? 366 : 365; }
+        else break;
+    }
+    __tm_buf.tm_year = year - 1900;
+    __tm_buf.tm_yday = (int)days;
+    int ly = __is_leap(year);
+    int m = 0;
+    while (m < 12 && days >= __days_in_mon[ly][m]) {
+        days -= __days_in_mon[ly][m];
+        m++;
+    }
+    __tm_buf.tm_mon  = m;
+    __tm_buf.tm_mday = (int)days + 1;
+    __tm_buf.tm_isdst = 0;
+    return &__tm_buf;
+}
+
+struct tm *localtime(const time_t *t) { return gmtime(t); }
+
+time_t mktime(struct tm *tm)
+{
+    if (!tm) return (time_t)-1;
+    int year = tm->tm_year + 1900;
+    int mon  = tm->tm_mon;
+    long days = 0;
+    for (int y = 1970; y < year; y++) days += __is_leap(y) ? 366 : 365;
+    int ly = __is_leap(year);
+    for (int m = 0; m < mon; m++) days += __days_in_mon[ly][m];
+    days += tm->tm_mday - 1;
+    long long sec = (long long)days * 86400LL
+                  + (long long)tm->tm_hour * 3600LL
+                  + (long long)tm->tm_min * 60LL
+                  + (long long)tm->tm_sec;
+    return (time_t)sec;
+}
+
+static const char *__wday_name[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+static const char *__mon_name[]  = {"Jan","Feb","Mar","Apr","May","Jun",
+                                    "Jul","Aug","Sep","Oct","Nov","Dec"};
+
+static char __asctime_buf[32];
+char *asctime(const struct tm *tm)
+{
+    if (!tm) return NULL;
+    int wday = tm->tm_wday; if (wday < 0 || wday > 6) wday = 0;
+    int mon  = tm->tm_mon;  if (mon  < 0 || mon  > 11) mon  = 0;
+    int y = tm->tm_year + 1900;
+    int pos = 0;
+    const char *w = __wday_name[wday];
+    const char *m = __mon_name[mon];
+    __asctime_buf[pos++] = w[0]; __asctime_buf[pos++] = w[1]; __asctime_buf[pos++] = w[2];
+    __asctime_buf[pos++] = ' ';
+    __asctime_buf[pos++] = m[0]; __asctime_buf[pos++] = m[1]; __asctime_buf[pos++] = m[2];
+    __asctime_buf[pos++] = ' ';
+    int md = tm->tm_mday;
+    __asctime_buf[pos++] = (char)('0' + (md/10 % 10));
+    __asctime_buf[pos++] = (char)('0' + (md % 10));
+    __asctime_buf[pos++] = ' ';
+    int hh = tm->tm_hour, mm = tm->tm_min, ss = tm->tm_sec;
+    __asctime_buf[pos++] = (char)('0' + (hh/10 % 10));
+    __asctime_buf[pos++] = (char)('0' + (hh % 10));
+    __asctime_buf[pos++] = ':';
+    __asctime_buf[pos++] = (char)('0' + (mm/10 % 10));
+    __asctime_buf[pos++] = (char)('0' + (mm % 10));
+    __asctime_buf[pos++] = ':';
+    __asctime_buf[pos++] = (char)('0' + (ss/10 % 10));
+    __asctime_buf[pos++] = (char)('0' + (ss % 10));
+    __asctime_buf[pos++] = ' ';
+    __asctime_buf[pos++] = (char)('0' + (y/1000 % 10));
+    __asctime_buf[pos++] = (char)('0' + (y/100 % 10));
+    __asctime_buf[pos++] = (char)('0' + (y/10 % 10));
+    __asctime_buf[pos++] = (char)('0' + (y % 10));
+    __asctime_buf[pos++] = '\n';
+    __asctime_buf[pos]   = '\0';
+    return __asctime_buf;
+}
+
+char *ctime(const time_t *t) { return asctime(gmtime(t)); }
+
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm)
+{
+    if (!s || !fmt || !tm || max == 0) return 0;
+    size_t i = 0;
+    while (*fmt && i + 1 < max) {
+        if (*fmt != '%') { s[i++] = *fmt++; continue; }
+        fmt++;
+        char tmp[16];
+        int n = 0;
+        switch (*fmt) {
+            case 'Y': {
+                int y = tm->tm_year + 1900;
+                n = 4;
+                tmp[0] = '0' + (y/1000)%10;
+                tmp[1] = '0' + (y/100)%10;
+                tmp[2] = '0' + (y/10)%10;
+                tmp[3] = '0' + y%10;
+                break;
+            }
+            case 'm': { int v=tm->tm_mon+1; tmp[0]='0'+v/10; tmp[1]='0'+v%10; n=2; break; }
+            case 'd': { int v=tm->tm_mday;  tmp[0]='0'+v/10; tmp[1]='0'+v%10; n=2; break; }
+            case 'H': { int v=tm->tm_hour;  tmp[0]='0'+v/10; tmp[1]='0'+v%10; n=2; break; }
+            case 'M': { int v=tm->tm_min;   tmp[0]='0'+v/10; tmp[1]='0'+v%10; n=2; break; }
+            case 'S': { int v=tm->tm_sec;   tmp[0]='0'+v/10; tmp[1]='0'+v%10; n=2; break; }
+            case '%': tmp[0]='%'; n=1; break;
+            default:  tmp[0]='%'; tmp[1]=*fmt; n = (*fmt ? 2 : 1); break;
+        }
+        for (int k = 0; k < n && i + 1 < max; k++) s[i++] = tmp[k];
+        if (*fmt) fmt++;
+    }
+    s[i] = '\0';
+    return i;
+}
+
+void __cervus_assert_fail(const char *expr, const char *file, int line, const char *func)
+{
+    printf("assertion failed: %s  (%s:%d, %s)\n",
+           expr ? expr : "(null)",
+           file ? file : "(null)",
+           line,
+           func ? func : "(null)");
+    syscall1(SYS_EXIT, 134);
+    for (;;) { }
+}

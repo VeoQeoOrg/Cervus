@@ -30,6 +30,7 @@ int vfprintf(FILE *stream, const char *fmt, va_list ap);
 int vprintf(const char *fmt, va_list ap);
 
 FILE  *fopen(const char *path, const char *mode);
+FILE  *tmpfile(void);
 int    fclose(FILE *stream);
 size_t fread(void *buf, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *stream);

@@ -16,7 +16,7 @@ CFLAGS  := -ffreestanding -nostdlib -static -fno-stack-protector \
 
 NASMFLAGS := -f elf64
 
-OBJS    := libcervus.o
+OBJS    := libcervus.o setjmp.o
 CRT     := crt0.o
 LIBNAME := libcervus.a
 
@@ -29,6 +29,9 @@ $(LIBNAME): $(OBJS)
 
 libcervus.o: libcervus.c
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+setjmp.o: setjmp.asm
+	$(NASM) $(NASMFLAGS) -o $@ $<
 
 crt0.o: crt0.asm
 	$(NASM) $(NASMFLAGS) -o $@ $<
