@@ -24,10 +24,14 @@ char *fgets(char *s, int n, FILE *stream);
 
 int printf(const char *fmt, ...);
 int fprintf(FILE *stream, const char *fmt, ...);
+int sprintf(char *buf, const char *fmt, ...);
 int snprintf(char *buf, size_t sz, const char *fmt, ...);
+int vsprintf(char *buf, const char *fmt, va_list ap);
 int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap);
 int vfprintf(FILE *stream, const char *fmt, va_list ap);
 int vprintf(const char *fmt, va_list ap);
+int sscanf(const char *str, const char *fmt, ...);
+int vsscanf(const char *str, const char *fmt, va_list ap);
 
 FILE  *fopen(const char *path, const char *mode);
 FILE  *tmpfile(void);

@@ -28,6 +28,29 @@ unsigned long long strtoull(const char *s, char **end, int base);
 #include <stdint.h>
 uint64_t __cervus_strtod_bits(const char *s, char **endptr);
 
+static __inline__ double strtod(const char *s, char **endp)
+{
+    uint64_t b = __cervus_strtod_bits(s, endp);
+    double d;
+    __builtin_memcpy(&d, &b, sizeof(d));
+    return d;
+}
+
+static __inline__ float strtof(const char *s, char **endp)
+{
+    return (float)strtod(s, endp);
+}
+
+static __inline__ long double strtold(const char *s, char **endp)
+{
+    return (long double)strtod(s, endp);
+}
+
+static __inline__ double atof(const char *s)
+{
+    return strtod(s, (char **)0);
+}
+
 int      abs(int x);
 long     labs(long x);
 long long llabs(long long x);

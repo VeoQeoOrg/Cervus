@@ -57,6 +57,7 @@ typedef struct {
     char       statusmsg[256];
     int        statusmsg_visible;
     int        quit_pending;
+    long       disk_size;
     struct termios orig_termios;
 } neo_t;
 
@@ -368,13 +369,15 @@ static void editor_open(const char *filename)
 
     int fd = open(full, O_RDONLY, 0);
     if (fd < 0) {
+        E.disk_size = -1;
         set_status("New file: %s", filename);
         return;
     }
 
     struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return; }
+    if (fstat(fd, &st) < 0) { close(fd); E.disk_size = -1; return; }
     size_t sz = (size_t)st.st_size;
+    E.disk_size = (long)sz;
     char *buf = malloc(sz + 1);
     if (!buf) { close(fd); die("out of memory"); }
 
@@ -416,12 +419,25 @@ static int editor_save(void)
             return -1;
         }
         E.filename = name;
+        E.disk_size = -1;
     }
-    int len = 0;
-    char *buf = rows_to_string(&len);
 
     char full[512];
     resolve_path(g_cwd, E.filename, full, sizeof(full));
+
+    if (E.disk_size >= 0) {
+        struct stat st;
+        if (stat(full, &st) == 0 && (long)st.st_size != E.disk_size) {
+            char *ans = prompt("File changed on disk! Overwrite? [y/N]: %s");
+            if (!ans) { set_status("Save cancelled"); return -1; }
+            int yes = (ans[0] == 'y' || ans[0] == 'Y');
+            free(ans);
+            if (!yes) { set_status("Save cancelled"); return -1; }
+        }
+    }
+
+    int len = 0;
+    char *buf = rows_to_string(&len);
 
     int fd = open(full, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
@@ -438,6 +454,7 @@ static int editor_save(void)
     close(fd);
     free(buf);
     E.dirty = 0;
+    E.disk_size = len;
     set_status("Saved %d bytes to %s", len, E.filename);
     return 0;
 }
@@ -543,7 +560,7 @@ static void draw_message(abuf_t *ab)
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, E.statusmsg, mlen);
     } else {
-        const char *hint = " ESC=exit  Ctrl-S=save  Ctrl-Q=quit  Ctrl-G=goto";
+        const char *hint = " ^S=save ^Q=quit ^F=find ^G=goto ^B=top ^E=end  ESC=exit";
         int mlen = strlen(hint);
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, hint, mlen);
@@ -581,7 +598,7 @@ static void set_status(const char *fmt, ...)
     E.statusmsg_visible = 1;
 }
 
-static char *prompt(const char *prompt_fmt)
+static char *prompt_cb(const char *prompt_fmt, void (*callback)(char *, int))
 {
     size_t bufcap = 128;
     size_t buflen = 0;
@@ -597,12 +614,14 @@ static char *prompt(const char *prompt_fmt)
         } else if (c == KEY_ESC) {
             set_status("");
             E.statusmsg_visible = 0;
+            if (callback) callback(buf, c);
             free(buf);
             return NULL;
         } else if (c == '\r' || c == '\n') {
-            if (buflen != 0) {
+            if (buflen != 0 || callback) {
                 set_status("");
                 E.statusmsg_visible = 0;
+                if (callback) callback(buf, c);
                 return buf;
             }
         } else if (!iscntrl(c) && c < 128) {
@@ -616,7 +635,13 @@ static char *prompt(const char *prompt_fmt)
             buf[buflen++] = (char)c;
             buf[buflen] = '\0';
         }
+        if (callback) callback(buf, c);
     }
+}
+
+static char *prompt(const char *prompt_fmt)
+{
+    return prompt_cb(prompt_fmt, NULL);
 }
 
 static void move_cursor(int key)
@@ -655,6 +680,86 @@ static void goto_line(void)
     E.cx = 0;
 }
 
+static int   __find_last_match = -1;
+static int   __find_direction  = 1;
+static int   __find_saved_cx, __find_saved_cy;
+static int   __find_saved_rowoff, __find_saved_coloff;
+static char *__find_last_query = NULL;
+
+static void editor_find_callback(char *query, int key)
+{
+    if (key == '\r' || key == '\n' || key == KEY_ESC) {
+        __find_last_match = -1;
+        __find_direction  = 1;
+        return;
+    }
+    if (key == KEY_ARROW_DOWN || key == KEY_ARROW_RIGHT) {
+        __find_direction = 1;
+    } else if (key == KEY_ARROW_UP || key == KEY_ARROW_LEFT) {
+        __find_direction = -1;
+    } else {
+        __find_last_match = -1;
+        __find_direction  = 1;
+    }
+    if (!query || !query[0]) return;
+
+    int current = __find_last_match;
+    if (current == -1) current = E.cy;
+    int qlen = (int)strlen(query);
+
+    for (int i = 0; i < E.numrows; i++) {
+        current += __find_direction;
+        if (current == -1)            current = E.numrows - 1;
+        else if (current == E.numrows) current = 0;
+
+        neo_row_t *row = &E.row[current];
+        char *match = strstr(row->render, query);
+        if (match) {
+            __find_last_match = current;
+            E.cy = current;
+            int rx = (int)(match - row->render);
+            E.cx = row_rx_to_cx(row, rx);
+            E.rowoff = E.numrows;
+            (void)qlen;
+            return;
+        }
+    }
+}
+
+static void editor_find(void)
+{
+    __find_saved_cx     = E.cx;
+    __find_saved_cy     = E.cy;
+    __find_saved_rowoff = E.rowoff;
+    __find_saved_coloff = E.coloff;
+    __find_last_match   = -1;
+    __find_direction    = 1;
+
+    char *query = prompt_cb(
+        "Search: %s (Up/Down=prev/next, Enter=keep, ESC=cancel)",
+        editor_find_callback);
+
+    if (query) {
+        if (query[0] == '\0' && __find_last_query) {
+            free(query);
+            query = strdup(__find_last_query);
+            if (query) {
+                editor_find_callback(query, 0);
+            }
+        }
+        if (query && query[0]) {
+            free(__find_last_query);
+            __find_last_query = strdup(query);
+        }
+        if (query) free(query);
+    } else {
+        E.cx     = __find_saved_cx;
+        E.cy     = __find_saved_cy;
+        E.rowoff = __find_saved_rowoff;
+        E.coloff = __find_saved_coloff;
+    }
+}
+
 static int process_key(void)
 {
     int c = read_key();
@@ -688,6 +793,23 @@ static int process_key(void)
 
         case KEY_CTRL('g'):
             goto_line();
+            break;
+
+        case KEY_CTRL('f'):
+            editor_find();
+            break;
+
+        case KEY_CTRL('b'):
+            E.cy = 0;
+            E.cx = 0;
+            E.rowoff = 0;
+            E.coloff = 0;
+            break;
+
+        case KEY_CTRL('e'):
+            E.cy = E.numrows == 0 ? 0 : E.numrows - 1;
+            if (E.cy < E.numrows) E.cx = E.row[E.cy].size;
+            else E.cx = 0;
             break;
 
         case KEY_HOME:
@@ -751,6 +873,7 @@ static void init_editor(void)
     E.statusmsg[0] = '\0';
     E.statusmsg_visible = 0;
     E.quit_pending = 0;
+    E.disk_size = -1;
     get_window_size();
 }
 

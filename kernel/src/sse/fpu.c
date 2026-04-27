@@ -25,6 +25,16 @@ void fpu_init(void) {
 
     fpu_set_control_word(0x037F);
 
+    uint64_t cr4;
+    asm volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ULL << 9);
+    cr4 |= (1ULL << 10);
+    asm volatile("mov %0, %%cr4" : : "r"(cr4));
+
+    uint32_t mxcsr = 0x1F80;
+    asm volatile("ldmxcsr %0" : : "m"(mxcsr));
+
+    serial_writestring("[FPU] SSE/SSE2 enabled (CR4.OSFXSR|OSXMMEXCPT)\n");
     serial_writestring("[FPU] FPU initialized successfully\n");
 }
 

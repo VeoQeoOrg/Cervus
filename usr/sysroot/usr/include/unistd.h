@@ -30,6 +30,8 @@ int     setuid(uid_t uid);
 int     setgid(gid_t gid);
 pid_t   fork(void);
 int     execve(const char *path, char *const argv[], char *const envp[]);
+int     execv(const char *path, char *const argv[]);
+int     execvp(const char *file, char *const argv[]);
 void    _exit(int status) __attribute__((noreturn));
 
 unsigned int sleep(unsigned int sec);
@@ -41,5 +43,13 @@ void *sbrk(intptr_t increment);
 int   brk(void *addr);
 
 void  sched_yield_cervus(void);
+
+int   isatty(int fd);
+
+extern char *optarg;
+extern int   optind;
+extern int   optopt;
+extern int   opterr;
+int          getopt(int argc, char *const argv[], const char *optstring);
 
 #endif
