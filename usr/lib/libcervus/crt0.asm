@@ -1,28 +1,36 @@
 BITS 64
 DEFAULT REL
 
-section .bss
-    global __cervus_argc
-    global __cervus_argv
-__cervus_argc:  resq 1
-__cervus_argv:  resq 1
-
 section .text
     global _start
     extern main
+    extern __cervus_argc
+    extern __cervus_argv
+    extern __cervus_filter_args
+    extern __cervus_filtered_argv
 
 _start:
+    xor     rbp, rbp
+
     mov     rdi, [rsp]
     lea     rsi, [rsp + 8]
 
-    mov     [__cervus_argc], rdi
-    mov     [__cervus_argv], rsi
+    lea     rax, [rel __cervus_argc]
+    mov     dword [rax], edi
+    lea     rax, [rel __cervus_argv]
+    mov     qword [rax], rsi
 
     and     rsp, -16
 
+    movsxd  rdi, dword [rel __cervus_argc]
+    mov     rsi, qword [rel __cervus_argv]
+    call    __cervus_filter_args
+
+    movsxd  rdi, eax
+    lea     rsi, [rel __cervus_filtered_argv]
     call    main
 
-    mov     rdi, rax
+    movsxd  rdi, eax
     xor     rax, rax
     syscall
 

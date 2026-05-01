@@ -240,38 +240,49 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
     size_t str_total = 0;
     for (int i = 0; i < argc; i++) str_total += strlen(argv[i]) + 1;
 
-    size_t n_auxv   = 6;
-    size_t ptr_count = 1
-                     + (size_t)argc
-                     + 1
-                     + 1
-                     + (n_auxv * 2);
-    size_t frame_size = str_total + ptr_count * 8 + 64;
-    size_t frame_pages = (frame_size + 0xFFFULL) >> 12;
+    size_t n_auxv      = 6;
+    size_t ptr_count   = 1 + (size_t)argc + 1 + 1 + (n_auxv * 2);
+    size_t frame_bytes = ptr_count * 8;
 
-    uint8_t *kbuf = (uint8_t*)malloc(frame_pages * 0x1000);
+    uintptr_t aligned_top  = stack_top & ~(uintptr_t)0xF;
+    uintptr_t strings_base = (aligned_top - str_total) & ~(uintptr_t)0xF;
+
+    uintptr_t candidate = strings_base - frame_bytes;
+    uintptr_t new_rsp   = ((candidate - 8) & ~(uintptr_t)0xF) + 8;
+
+    if (new_rsp + frame_bytes > strings_base) {
+        new_rsp -= 16;
+    }
+
+    uintptr_t page_base   = new_rsp & ~(uintptr_t)0xFFF;
+    uintptr_t page_end    = (stack_top + 0xFFFULL) & ~(uintptr_t)0xFFF;
+    size_t    total_pages = (page_end - page_base) >> 12;
+    size_t    kbuf_size   = total_pages * 0x1000;
+
+    if (new_rsp + frame_bytes > strings_base ||
+        strings_base + str_total > stack_top) {
+        return 0;
+    }
+
+    uint8_t *kbuf = (uint8_t*)malloc(kbuf_size);
     if (!kbuf) return 0;
-    memset(kbuf, 0, frame_pages * 0x1000);
-
-    uintptr_t frame_base = (stack_top - frame_pages * 0x1000) & ~0xFULL;
+    memset(kbuf, 0, kbuf_size);
 
     uint64_t argv_user[EXECVE_MAX_ARGS + 1];
-    size_t str_off = 0;
+    size_t   str_off = 0;
     for (int i = 0; i < argc; i++) {
         size_t slen = strlen(argv[i]) + 1;
-        memcpy(kbuf + str_off, argv[i], slen);
-        argv_user[i] = frame_base + str_off;
+        memcpy(kbuf + (strings_base + str_off - page_base), argv[i], slen);
+        argv_user[i] = strings_base + str_off;
         str_off += slen;
     }
 
     uint64_t frame[256];
     size_t fi = 0;
-
     frame[fi++] = (uint64_t)argc;
     for (int i = 0; i < argc; i++) frame[fi++] = argv_user[i];
     frame[fi++] = 0;
     frame[fi++] = 0;
-
     frame[fi++] = AT_PHDR;   frame[fi++] = elf->load_base + 0x40;
     frame[fi++] = AT_PHENT;  frame[fi++] = 56;
     frame[fi++] = AT_PHNUM;  frame[fi++] = 0;
@@ -279,13 +290,10 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
     frame[fi++] = AT_PAGESZ; frame[fi++] = 4096;
     frame[fi++] = AT_NULL;   frame[fi++] = 0;
 
-    size_t frame_bytes = fi * 8;
-    size_t rsp_offset  = (frame_pages * 0x1000 - frame_bytes) & ~0xFULL;
-    memcpy(kbuf + rsp_offset, frame, frame_bytes);
-    uintptr_t new_rsp = frame_base + rsp_offset;
+    memcpy(kbuf + (new_rsp - page_base), frame, fi * 8);
 
-    for (size_t pi = 0; pi < frame_pages; pi++) {
-        uintptr_t virt = frame_base + pi * 0x1000;
+    for (size_t pi = 0; pi < total_pages; pi++) {
+        uintptr_t virt = page_base + pi * 0x1000;
         uintptr_t phys = 0;
         uint64_t  pf   = 0;
 
@@ -302,12 +310,13 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top, con
         } else {
             if (!vmm_virt_to_phys(map, virt, &phys))
                 { free(kbuf); return 0; }
+            phys &= ~(uintptr_t)0xFFF;
         }
         memcpy(pmm_phys_to_virt(phys), kbuf + pi * 0x1000, 0x1000);
     }
 
-    serial_printf("[EXECVE] stack built: frame_base=0x%llx rsp=0x%llx argc=%d envc=0\n",
-                  frame_base, new_rsp, argc);
+    serial_printf("[EXECVE] stack built: page_base=0x%llx rsp=0x%llx argc=%d envc=0\n",
+                  (unsigned long long)page_base, (unsigned long long)new_rsp, argc);
     free(kbuf);
     return new_rsp;
 }

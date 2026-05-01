@@ -94,6 +94,49 @@ static void dump_rip_bytes_safe(uint64_t rip) {
                   (unsigned)bytes[2], (unsigned)bytes[3],
                   (unsigned)bytes[4], (unsigned)bytes[5],
                   (unsigned)bytes[6], (unsigned)bytes[7]);
+
+    if (off >= 16) {
+        volatile uint8_t *prev = (volatile uint8_t*)(hhdm + phys_page + off - 16);
+        serial_printf("[ISR-UD] RIP-16..RIP-1: "
+                      "%02x %02x %02x %02x %02x %02x %02x %02x "
+                      "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                      (unsigned)prev[0], (unsigned)prev[1],
+                      (unsigned)prev[2], (unsigned)prev[3],
+                      (unsigned)prev[4], (unsigned)prev[5],
+                      (unsigned)prev[6], (unsigned)prev[7],
+                      (unsigned)prev[8], (unsigned)prev[9],
+                      (unsigned)prev[10], (unsigned)prev[11],
+                      (unsigned)prev[12], (unsigned)prev[13],
+                      (unsigned)prev[14], (unsigned)prev[15]);
+    }
+}
+
+static void dump_user_qword_via_task(uint64_t uaddr, const char *label) {
+    percpu_t *pc = get_percpu();
+    task_t   *me = pc ? (task_t *)pc->current_task : NULL;
+    if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
+    if (!me || !me->pagemap) {
+        serial_printf("[ISR-PF] %s: no task/pagemap\n", label);
+        return;
+    }
+    if ((uaddr & 0x7) != 0) {
+        serial_printf("[ISR-PF] %s addr 0x%llx not 8-aligned\n", label, uaddr);
+        return;
+    }
+    uint64_t flags = 0;
+    if (!vmm_get_page_flags(me->pagemap, uaddr, &flags) || !(flags & 1)) {
+        serial_printf("[ISR-PF] %s addr 0x%llx not mapped (flags=0x%llx)\n",
+                      label, uaddr, flags);
+        return;
+    }
+    uintptr_t phys = 0;
+    if (!vmm_virt_to_phys(me->pagemap, uaddr, &phys)) {
+        serial_printf("[ISR-PF] %s virt_to_phys failed for 0x%llx\n", label, uaddr);
+        return;
+    }
+    volatile uint64_t *p = (volatile uint64_t *)pmm_phys_to_virt(phys & ~7ULL);
+    uint64_t v = *p;
+    serial_printf("[ISR-PF] %s [0x%llx] = 0x%llx\n", label, uaddr, v);
 }
 
 static __attribute__((noreturn)) void kill_current_task(int exit_code) {
@@ -163,6 +206,11 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                 serial_printf("[ISR] Page Fault in userspace: RIP=0x%llx CR2=0x%llx ERR=0x%llx task='%s' pid=%u\n",
                               regs->rip, cr2val, regs->error,
                               me ? me->name : "?", me ? me->pid : 0);
+                dump_rip_bytes_safe(regs->rip);
+                dump_user_qword_via_task(regs->rsp,        "[rsp]    ");
+                dump_user_qword_via_task(regs->rsp +  8,   "[rsp+8]  ");
+                dump_user_qword_via_task(regs->rsp + 16,   "[rsp+16] ");
+                dump_user_qword_via_task(regs->rsp + 24,   "[rsp+24] ");
                 kill_current_task(139);
             }
             kernel_panic_regs("Page Fault (kernel)", regs);

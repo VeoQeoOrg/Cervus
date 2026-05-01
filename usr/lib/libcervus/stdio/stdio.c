@@ -199,12 +199,14 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
             fmt++;
         }
         int width = 0;
-        while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
+        if (*fmt == '*') { width = va_arg(ap, int); if (width < 0) { left_align = 1; width = -width; } fmt++; }
+        else while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
         int prec = -1;
         if (*fmt == '.') {
             fmt++;
             prec = 0;
-            while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
+            if (*fmt == '*') { prec = va_arg(ap, int); if (prec < 0) prec = 0; fmt++; }
+            else while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
         }
         int is_long = 0, is_size_t = 0;
         while (*fmt == 'l') { is_long++; fmt++; }

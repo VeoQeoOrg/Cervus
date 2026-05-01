@@ -59,11 +59,18 @@ int      rand(void);
 void     srand(unsigned int seed);
 
 char    *getenv(const char *name);
+int      putenv(char *str);
+int      setenv(const char *name, const char *value, int overwrite);
+int      unsetenv(const char *name);
 
 void qsort(void *base, size_t nmemb, size_t size, int (*cmp)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+              int (*cmp)(const void *, const void *));
 
 int system(const char *cmd);
 
-int mkstemp(char *template);
+int    mkstemp(char *template);
+char  *mkdtemp(char *template);
+char  *realpath(const char *path, char *resolved);
 
 #endif

@@ -56,25 +56,26 @@ static __mblock_t *__heap_grow(size_t need)
         size_t usable = chunk - lost;
 
         __mblock_t *first = __heap_start;
-        first->size      = (usable - MB_HDR_SZ) | MB_FREE_BIT;
+        size_t first_sz = usable - MB_HDR_SZ;
+        first->size      = first_sz | MB_FREE_BIT;
         first->prev_size = 0;
 
-        __heap_end = (__mblock_t *)((char *)first + MB_SIZE(first));
+        __heap_end = (__mblock_t *)((char *)first + first_sz);
         __heap_end->size      = 0;
-        __heap_end->prev_size = MB_SIZE(first);
+        __heap_end->prev_size = first_sz;
 
         return first;
     }
 
     void *p = sbrk((intptr_t)chunk);
     if (p == (void *)-1) return NULL;
-    if ((uintptr_t)p != (uintptr_t)__heap_end) {
+    if ((uintptr_t)p != (uintptr_t)__heap_end + MB_HDR_SZ) {
         __cervus_errno = ENOMEM;
         return NULL;
     }
 
     __mblock_t *new_block = __heap_end;
-    new_block->size = (chunk - MB_HDR_SZ) | MB_FREE_BIT;
+    new_block->size = chunk | MB_FREE_BIT;
 
     __mblock_t *new_end = (__mblock_t *)((char *)new_block + MB_SIZE(new_block));
     new_end->size      = 0;

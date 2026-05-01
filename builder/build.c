@@ -42,6 +42,23 @@
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
 
+#define BIGPATH (PATH_MAX * 2)
+
+#define SHORTPATH 512
+
+static void path_join2(char *dst, size_t dst_size, const char *a, const char *b) {
+    if (dst_size == 0) return;
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    if (la >= dst_size) la = dst_size - 1;
+    memcpy(dst, a, la);
+    size_t off = la;
+    if (off + 1 < dst_size) dst[off++] = '/';
+    if (lb > dst_size - off - 1) lb = dst_size - off - 1;
+    memcpy(dst + off, b, lb);
+    dst[off + lb] = '\0';
+}
+
 #define COLOR_RESET   "\033[0m"
 #define COLOR_RED     "\033[91m"
 #define COLOR_GREEN   "\033[92m"
@@ -65,6 +82,8 @@ const char *FILES_TO_CLEAN[] = {
     SHELL_ELF, INSTALLER_ELF,
     SYSROOT_LIB "/libcervus.a",
     SYSROOT_LIB "/crt0.o",
+    SYSROOT_DIR "/usr/bin/tcc",
+    SYSROOT_LIB "/tcc/libtcc1.a",
     INITRAMFS_TAR,
     "cervus_disk.img",
     NULL
@@ -138,7 +157,8 @@ int cmd_run(bool verbose, const char *fmt, ...) {
 void ensure_dir(const char *path) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "mkdir -p %s", path);
-    system(tmp);
+    int r = system(tmp);
+    (void)r;
 }
 
 bool file_exists(const char *path) {
@@ -486,21 +506,716 @@ void clean_bin_elfs(void) {
     closedir(d);
 }
 
+#define LCV_CFLAGS_INT  "-ffreestanding -nostdlib -static -fno-stack-protector " \
+                        "-mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2 " \
+                        "-mno-red-zone -fno-pie -fno-pic " \
+                        "-O0 -g -Wall -Wextra"
+
+#define LCV_CFLAGS_FLT  "-ffreestanding -nostdlib -static -fno-stack-protector " \
+                        "-mno-red-zone -fno-pie -fno-pic " \
+                        "-O0 -g -Wall -Wextra"
+
+typedef struct {
+    const char *src;
+    const char *obj;
+    int         is_float;
+} libcervus_unit_t;
+
+static const libcervus_unit_t LCV_UNITS[] = {
+    { "libcervus.c",          "libcervus.o",         0 },
+    { "compat.c",             "compat.o",            0 },
+    { "ctype/ctype.c",        "ctype/ctype.o",       0 },
+    { "string/string.c",      "string/string.o",     0 },
+    { "memory/memory.c",      "memory/memory.o",     0 },
+    { "stdlib/stdlib.c",      "stdlib/stdlib.o",     0 },
+    { "stdlib/strtod.c",      "stdlib/strtod.o",     1 },
+    { "stdio/stdio.c",        "stdio/stdio.o",       1 },
+    { "stdio/scanf.c",        "stdio/scanf.o",       1 },
+    { "time/time.c",          "time/time.o",         0 },
+    { "signal/signal.c",      "signal/signal.o",     0 },
+    { "dirent/dirent.c",      "dirent/dirent.o",     0 },
+    { "math/abs.c",           "math/abs.o",          0 },
+    { "math/fabs.c",          "math/fabs.o",         1 },
+    { "math/isinf.c",         "math/isinf.o",        0 },
+    { "math/isnan.c",         "math/isnan.o",        0 },
+    { "math/pow.c",           "math/pow.o",          1 },
+    { "math/pow10.c",         "math/pow10.o",        1 },
+    { NULL, NULL, 0 }
+};
+
+static long get_mtime_safe(const char *p) {
+    struct stat st;
+    if (stat(p, &st) != 0) return 0;
+    return (long)st.st_mtime;
+}
+
+static bool need_rebuild(const char *src, const char *obj) {
+    if (!file_exists(obj)) return true;
+    return get_mtime_safe(src) > get_mtime_safe(obj);
+}
+
 bool build_libcervus(void) {
     if (cmd_run(false, "command -v nasm >/dev/null 2>&1") != 0) {
         print_color(COLOR_RED,
-            "[libcervus] 'nasm' is required to build crt0.o. Install it "
-            "(apt install nasm / dnf install nasm / pacman -S nasm).");
+            "[libcervus] 'nasm' is required to build crt0.o/setjmp.o. Install: "
+            "apt install nasm | dnf install nasm | pacman -S nasm");
         return false;
     }
-    print_color(COLOR_CYAN, "[libcervus] Building libcervus.a and crt0.o...");
-    int r = cmd_run(true, "make -C " LIBCERVUS_DIR " install");
-    if (r != 0) {
-        print_color(COLOR_RED, "[libcervus] build failed");
+    if (cmd_run(false, "command -v ar >/dev/null 2>&1") != 0) {
+        print_color(COLOR_RED, "[libcervus] 'ar' (binutils) is required");
         return false;
     }
-    print_color(COLOR_GREEN, "[libcervus] OK");
+
+    print_color(COLOR_CYAN, "[libcervus] Building libcervus.a and crt0.o (native)...");
+
+    char incdir[BIGPATH];
+    char libdir[BIGPATH];
+    char cwd_buf[PATH_MAX];
+    if (!getcwd(cwd_buf, sizeof(cwd_buf))) {
+        print_color(COLOR_RED, "[libcervus] getcwd failed");
+        return false;
+    }
+    path_join2(incdir, sizeof(incdir), cwd_buf, SYSROOT_INC);
+    path_join2(libdir, sizeof(libdir), cwd_buf, SYSROOT_LIB);
+
+    int rc = chdir(LIBCERVUS_DIR);
+    if (rc != 0) {
+        print_color(COLOR_RED, "[libcervus] cannot chdir to %s", LIBCERVUS_DIR);
+        return false;
+    }
+
+    bool any_changed = false;
+    int  built       = 0;
+    int  skipped     = 0;
+
+    for (int i = 0; LCV_UNITS[i].src; i++) {
+        const libcervus_unit_t *u = &LCV_UNITS[i];
+        if (!need_rebuild(u->src, u->obj)) { skipped++; continue; }
+        const char *cflags = u->is_float ? LCV_CFLAGS_FLT : LCV_CFLAGS_INT;
+        if (cmd_run(false, "gcc %s -nostdinc -isystem %s -c -o %s %s",
+                    cflags, incdir, u->obj, u->src) != 0) {
+            print_color(COLOR_RED, "[libcervus] failed to compile %s", u->src);
+            (void)!chdir(cwd_buf);
+            return false;
+        }
+        any_changed = true;
+        built++;
+    }
+
+    if (need_rebuild("setjmp.asm", "setjmp.o")) {
+        if (cmd_run(false, "nasm -f elf64 -o setjmp.o setjmp.asm") != 0) {
+            print_color(COLOR_RED, "[libcervus] nasm failed on setjmp.asm");
+            (void)!chdir(cwd_buf); return false;
+        }
+        any_changed = true; built++;
+    } else skipped++;
+
+    if (need_rebuild("crt0.asm", "crt0.o")) {
+        if (cmd_run(false, "nasm -f elf64 -o crt0.o crt0.asm") != 0) {
+            print_color(COLOR_RED, "[libcervus] nasm failed on crt0.asm");
+            (void)!chdir(cwd_buf); return false;
+        }
+        any_changed = true; built++;
+    } else skipped++;
+
+    bool need_ar = any_changed || !file_exists("libcervus.a");
+    if (need_ar) {
+        char ar_cmd[8192];
+        size_t pos = 0;
+        pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, "ar rcs libcervus.a");
+        for (int i = 0; LCV_UNITS[i].src; i++) {
+            pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, " %s", LCV_UNITS[i].obj);
+        }
+        pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, " setjmp.o");
+        if (cmd_run(false, "%s", ar_cmd) != 0) {
+            print_color(COLOR_RED, "[libcervus] ar failed");
+            (void)!chdir(cwd_buf); return false;
+        }
+    }
+
+    if (cmd_run(false, "mkdir -p %s", libdir) != 0 ||
+        cmd_run(false, "cp libcervus.a %s/", libdir) != 0 ||
+        cmd_run(false, "cp crt0.o %s/", libdir) != 0)
+    {
+        print_color(COLOR_RED, "[libcervus] install copy failed");
+        (void)!chdir(cwd_buf); return false;
+    }
+
+    (void)!chdir(cwd_buf);
+    print_color(COLOR_GREEN, "[libcervus] OK (compiled %d, skipped %d)", built, skipped);
     return true;
+}
+
+#define TCC_VERSION_STR    "0.9.27"
+#define TCC_TAR_FNAME      "tcc-0.9.27.tar.bz2"
+#define TCC_SRC_DIR        "tcc-0.9.27"
+#define TCC_DOWNLOAD_URL   "https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27.tar.bz2"
+#define TCC_DIR            "usr/tcc"
+
+typedef struct { char *data; size_t len; size_t cap; } dstr_t;
+
+static void dstr_init(dstr_t *s) { s->data = NULL; s->len = 0; s->cap = 0; }
+static void dstr_free(dstr_t *s) { free(s->data); s->data = NULL; s->len = s->cap = 0; }
+
+static bool dstr_reserve(dstr_t *s, size_t need) {
+    if (s->cap >= need) return true;
+    size_t nc = s->cap ? s->cap : 256;
+    while (nc < need) nc *= 2;
+    char *p = realloc(s->data, nc);
+    if (!p) return false;
+    s->data = p; s->cap = nc;
+    return true;
+}
+
+static bool read_file_dstr(const char *path, dstr_t *out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); return false; }
+    if (!dstr_reserve(out, (size_t)sz + 1)) { fclose(f); return false; }
+    if (sz > 0 && fread(out->data, 1, (size_t)sz, f) != (size_t)sz) {
+        fclose(f); return false;
+    }
+    out->len = (size_t)sz;
+    out->data[out->len] = '\0';
+    fclose(f);
+    return true;
+}
+
+static bool write_file_dstr(const char *path, const dstr_t *s) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return false;
+    if (s->len > 0 && fwrite(s->data, 1, s->len, f) != s->len) { fclose(f); return false; }
+    fclose(f);
+    return true;
+}
+
+static bool dstr_replace_once(dstr_t *s, const char *old_s, const char *new_s) {
+    size_t old_n = strlen(old_s);
+    size_t new_n = strlen(new_s);
+    if (old_n == 0 || s->len < old_n) return false;
+    char *p = memmem(s->data, s->len, old_s, old_n);
+    if (!p) return false;
+    size_t off = (size_t)(p - s->data);
+
+    if (new_n > old_n) {
+        if (!dstr_reserve(s, s->len + (new_n - old_n) + 1)) return false;
+        p = s->data + off;
+    }
+
+    memmove(p + new_n, p + old_n, s->len - off - old_n + 1 );
+    memcpy(p, new_s, new_n);
+    s->len += (new_n - old_n);
+    return true;
+}
+
+static bool dstr_guard_line_with(dstr_t *s, const char *marker, const char *guard_macro) {
+    char *p = memmem(s->data, s->len, marker, strlen(marker));
+    if (!p) return false;
+
+    char *line_start = p;
+    while (line_start > s->data && line_start[-1] != '\n') line_start--;
+
+    char *prev_line_start = line_start;
+    if (prev_line_start > s->data) prev_line_start--;
+    while (prev_line_start > s->data && prev_line_start[-1] != '\n') prev_line_start--;
+
+    char needle[160];
+    snprintf(needle, sizeof(needle), "#ifndef %s", guard_macro);
+    size_t pll = (size_t)(line_start - prev_line_start);
+    if (pll >= strlen(needle) &&
+        memcmp(prev_line_start, needle, strlen(needle)) == 0)
+    {
+        return false;
+    }
+
+    char *line_end = p;
+    while ((size_t)(line_end - s->data) < s->len && *line_end != '\n') line_end++;
+    if ((size_t)(line_end - s->data) < s->len && *line_end == '\n') line_end++;
+
+    char prefix[160], suffix[16];
+    snprintf(prefix, sizeof(prefix), "#ifndef %s\n", guard_macro);
+    snprintf(suffix, sizeof(suffix), "#endif\n");
+    size_t ins_pre = strlen(prefix), ins_suf = strlen(suffix);
+    size_t off_start = (size_t)(line_start - s->data);
+    size_t off_end   = (size_t)(line_end   - s->data);
+
+    if (!dstr_reserve(s, s->len + ins_pre + ins_suf + 1)) return false;
+    line_start = s->data + off_start;
+    line_end   = s->data + off_end;
+
+    memmove(line_end + ins_pre + ins_suf, line_end, s->len - off_end + 1);
+
+    memcpy(line_end + ins_pre, suffix, ins_suf);
+
+    memmove(line_start + ins_pre, line_start, off_end - off_start);
+
+    memcpy(line_start, prefix, ins_pre);
+    s->len += ins_pre + ins_suf;
+    return true;
+}
+
+static int dstr_guard_func_impls(dstr_t *s, const char *name, const char *guard_macro) {
+    int count = 0;
+    size_t cursor = 0;
+    size_t name_n = strlen(name);
+
+    while (cursor + name_n < s->len) {
+        char *p = memmem(s->data + cursor, s->len - cursor, name, name_n);
+        if (!p) break;
+        size_t pos = (size_t)(p - s->data);
+
+        size_t i = pos + name_n;
+        while (i < s->len && (s->data[i] == ' ' || s->data[i] == '\t')) i++;
+        if (i >= s->len || s->data[i] != '(') {
+            cursor = pos + 1; continue;
+        }
+
+        size_t j = i;
+        while (j < s->len && s->data[j] != '{' && s->data[j] != ';') j++;
+        if (j >= s->len) break;
+        if (s->data[j] == ';') { cursor = pos + 1; continue; }
+
+        int depth = 0;
+        size_t end = j;
+        for (; end < s->len; end++) {
+            if (s->data[end] == '{') depth++;
+            else if (s->data[end] == '}') { depth--; if (depth == 0) { end++; break; } }
+        }
+        if (depth != 0) break;
+        if (end < s->len && s->data[end] == '\n') end++;
+
+        size_t line_start = pos;
+        while (line_start > 0 && s->data[line_start - 1] != '\n') line_start--;
+
+        size_t look = line_start > 200 ? line_start - 200 : 0;
+        if (memmem(s->data + look, line_start - look,
+                   guard_macro, strlen(guard_macro))) {
+            cursor = end; continue;
+        }
+
+        char prefix[160], suffix[16];
+        snprintf(prefix, sizeof(prefix), "#ifndef %s\n", guard_macro);
+        snprintf(suffix, sizeof(suffix), "#endif\n");
+        size_t pre_n = strlen(prefix), suf_n = strlen(suffix);
+        if (!dstr_reserve(s, s->len + pre_n + suf_n + 1)) return count;
+
+        memmove(s->data + end + pre_n + suf_n,
+                s->data + end,
+                s->len - end + 1);
+        memcpy(s->data + end + pre_n, suffix, suf_n);
+        memmove(s->data + line_start + pre_n,
+                s->data + line_start,
+                end - line_start);
+        memcpy(s->data + line_start, prefix, pre_n);
+        s->len += pre_n + suf_n;
+        count++;
+        cursor = end + pre_n + suf_n;
+    }
+    return count;
+}
+
+static bool patch_file(const char *src_dir, const char *rel,
+                       int (*editor)(dstr_t *)) {
+    char path[SHORTPATH];
+    path_join2(path, sizeof(path), src_dir, rel);
+    dstr_t s; dstr_init(&s);
+    if (!read_file_dstr(path, &s)) {
+        print_color(COLOR_RED, "[tcc-patch] cannot read %s", path);
+        return false;
+    }
+    int changed = editor(&s);
+    if (changed > 0) {
+        if (!write_file_dstr(path, &s)) {
+            print_color(COLOR_RED, "[tcc-patch] cannot write %s", path);
+            dstr_free(&s); return false;
+        }
+        print_color(COLOR_GREEN, "[tcc-patch] %s: %d edit(s)", rel, changed);
+    } else {
+        print_color(COLOR_YELLOW, "[tcc-patch] %s: no changes (already patched?)", rel);
+    }
+    dstr_free(&s);
+    return true;
+}
+
+static int edit_tcc_h(dstr_t *s) {
+    int changed = 0;
+    if (dstr_guard_line_with(s, "#include <dlfcn.h>", "TCC_NO_DLOPEN")) changed++;
+
+    {
+        const char *needle = "#include <sys/utsname.h>";
+        char *p = memmem(s->data, s->len, needle, strlen(needle));
+        if (p && !memmem(s->data, s->len,
+                          "#include <sys/mman.h>",
+                          strlen("#include <sys/mman.h>"))) {
+            const char *ins = "#include <sys/mman.h>\n";
+            size_t off = (size_t)(p - s->data);
+            size_t ins_n = strlen(ins);
+            if (!dstr_reserve(s, s->len + ins_n + 1)) return changed;
+            memmove(s->data + off + ins_n, s->data + off, s->len - off + 1);
+            memcpy(s->data + off, ins, ins_n);
+            s->len += ins_n;
+            changed++;
+        }
+    }
+
+    if (dstr_guard_line_with(s, "enable bound checking code", "CONFIG_TCC_BCHECK")) changed++;
+    return changed;
+}
+
+static int edit_libtcc_c(dstr_t *s) {
+    int changed = 0;
+
+    if (dstr_replace_once(s,
+        "return dlopen(filename, RTLD_GLOBAL | RTLD_LAZY);\n",
+        "(void)filename;\n    return NULL;\n")) changed++;
+    if (dstr_replace_once(s,
+        "return dlopen(filename, RTLD_LOCAL | RTLD_LAZY);\n",
+        "(void)filename;\n    return NULL;\n")) changed++;
+    if (dstr_replace_once(s,
+        "return dlsym(handle, sym);\n",
+        "(void)handle; (void)sym;\n    return NULL;\n")) changed++;
+    if (dstr_replace_once(s,
+        "dlclose(handle);\n",
+        "(void)handle;\n")) changed++;
+
+    if (!memmem(s->data, s->len, "Cervus: no ld.so", 16)) {
+        if (dstr_replace_once(s,
+            "    s->alacarte_link = 1;",
+            "    s->alacarte_link = 1;\n    s->static_link = 1;  /* Cervus: no ld.so */"))
+            changed++;
+    }
+
+    if (dstr_replace_once(s,
+        "        if (output_type != TCC_OUTPUT_DLL)\n"
+        "            tcc_add_crt(s, \"crt1.o\");\n"
+        "        tcc_add_crt(s, \"crti.o\");",
+        "        if (output_type != TCC_OUTPUT_DLL)\n"
+        "            tcc_add_crt(s, \"crt0.o\");  /* Cervus: only crt0 */"))
+        changed++;
+    return changed;
+}
+
+static int edit_tccrun_c(dstr_t *s) {
+    int changed = 0;
+
+    if (dstr_guard_line_with(s, "<sys/ucontext.h>", "TCC_NO_BACKTRACE")) changed++;
+
+    if (!memmem(s->data, s->len, "typedef void *ucontext_t;",
+                strlen("typedef void *ucontext_t;")))
+    {
+
+        size_t scan = s->len < 4096 ? s->len : 4096;
+        size_t last_inc_end = 0;
+        for (size_t i = 0; i < scan; ) {
+            if (s->data[i] == '#' && i + 8 <= s->len &&
+                memcmp(s->data + i, "#include", 8) == 0)
+            {
+
+                size_t e = i;
+                while (e < s->len && s->data[e] != '\n') e++;
+                if (e < s->len) e++;
+                last_inc_end = e;
+                i = e; continue;
+            }
+            i++;
+        }
+        if (last_inc_end > 0) {
+            const char *stub = "\n#ifdef TCC_NO_BACKTRACE\n"
+                               "typedef void *ucontext_t;\n"
+                               "#endif\n";
+            size_t stub_n = strlen(stub);
+            if (dstr_reserve(s, s->len + stub_n + 1)) {
+                memmove(s->data + last_inc_end + stub_n,
+                        s->data + last_inc_end,
+                        s->len - last_inc_end + 1);
+                memcpy(s->data + last_inc_end, stub, stub_n);
+                s->len += stub_n;
+                changed++;
+            }
+        }
+    }
+
+    if (dstr_guard_line_with(s, "set_exception_handler();", "TCC_NO_BACKTRACE")) changed++;
+
+    const char *names[] = { "rt_error", "sig_error",
+                            "set_exception_handler", "rt_get_caller_pc", NULL };
+    for (int i = 0; names[i]; i++) {
+        int n = dstr_guard_func_impls(s, names[i], "TCC_NO_BACKTRACE");
+        if (n > 0) changed++;
+    }
+    return changed;
+}
+
+static int edit_tccelf_c(dstr_t *s) {
+    int changed = 0;
+
+    if (!memmem(s->data, s->len, "Cervus: -lcervus", 16)) {
+        if (dstr_replace_once(s,
+            "    if (!s1->nostdlib) {\n        tcc_add_library_err(s1, \"c\");",
+            "    if (!s1->nostdlib) {\n        tcc_add_library_err(s1, \"cervus\");  /* Cervus: -lcervus */"))
+            changed++;
+    }
+
+    if (dstr_replace_once(s,
+        "        if (s1->output_type != TCC_OUTPUT_MEMORY)\n"
+        "            tcc_add_crt(s1, \"crtn.o\");\n"
+        "    }\n",
+        "        /* Cervus: no crtn.o */\n    }\n"))
+        changed++;
+    return changed;
+}
+
+static bool write_tcc_config_h(const char *src_dir) {
+    char path[SHORTPATH];
+    path_join2(path, sizeof(path), src_dir, "config.h");
+    FILE *f = fopen(path, "w");
+    if (!f) return false;
+    fputs(
+        "#ifndef _CONFIG_H\n"
+        "#define _CONFIG_H\n\n"
+        "#define TCC_VERSION \"" TCC_VERSION_STR "\"\n\n"
+        "#define CONFIG_TCC_SYSROOT      \"\"\n"
+        "#define CONFIG_TCC_LIBPATHS     \"/usr/lib\"\n"
+        "#define CONFIG_TCC_CRTPREFIX    \"/usr/lib\"\n"
+        "#define CONFIG_TCC_ELFINTERP    \"\"\n"
+        "#define CONFIG_TCCDIR           \"/usr/lib/tcc\"\n\n"
+        "#define HOST_OS    \"Cervus\"\n"
+        "#define HOST_ARCH  \"x86_64\"\n\n"
+        "#define TCC_TARGET_X86_64 1\n\n"
+        "#define CONFIG_TCC_PREDEFS  1\n"
+        "#define CONFIG_TCC_STATIC   1\n\n"
+        "#define TCC_NO_DLOPEN    1\n"
+        "#define TCC_NO_BACKTRACE 1\n\n"
+        "#define CONFIG_TCC_BCHECK 0\n\n"
+        "#undef  CONFIG_WIN32\n"
+        "#undef  CONFIG_WIN64\n"
+        "#undef  TCC_TARGET_PE\n\n"
+        "#endif /* _CONFIG_H */\n",
+        f);
+    fclose(f);
+    return true;
+}
+
+static bool tcc_download(void) {
+    char tar_path[SHORTPATH];
+    path_join2(tar_path, sizeof(tar_path), TCC_DIR, TCC_TAR_FNAME);
+    if (file_exists(tar_path)) return true;
+    print_color(COLOR_CYAN, "[tcc] Downloading %s...", TCC_TAR_FNAME);
+    if (cmd_run(false, "command -v wget >/dev/null 2>&1") == 0) {
+        if (cmd_run(true, "wget -q -O %s %s", tar_path, TCC_DOWNLOAD_URL) == 0
+            && file_exists(tar_path)) return true;
+    }
+    if (cmd_run(false, "command -v curl >/dev/null 2>&1") == 0) {
+        if (cmd_run(true, "curl -fL -o %s %s", tar_path, TCC_DOWNLOAD_URL) == 0
+            && file_exists(tar_path)) return true;
+    }
+    print_color(COLOR_RED, "[tcc] cannot download (need wget or curl)");
+    return false;
+}
+
+static bool tcc_extract_and_patch(void) {
+    char src_dir_full[SHORTPATH];
+    path_join2(src_dir_full, sizeof(src_dir_full), TCC_DIR, TCC_SRC_DIR);
+
+    if (!file_exists(src_dir_full)) {
+        print_color(COLOR_CYAN, "[tcc] Extracting %s...", TCC_TAR_FNAME);
+        if (cmd_run(true, "tar -xjf %s/%s -C %s",
+                    TCC_DIR, TCC_TAR_FNAME, TCC_DIR) != 0) {
+            print_color(COLOR_RED, "[tcc] tar -xjf failed");
+            return false;
+        }
+    }
+
+    if (!write_tcc_config_h(src_dir_full)) {
+        print_color(COLOR_RED, "[tcc] cannot write config.h");
+        return false;
+    }
+
+    print_color(COLOR_CYAN, "[tcc] Applying Cervus patches (idempotent)...");
+    if (!patch_file(src_dir_full, "tcc.h",     edit_tcc_h))     return false;
+    if (!patch_file(src_dir_full, "libtcc.c",  edit_libtcc_c))  return false;
+    if (!patch_file(src_dir_full, "tccrun.c",  edit_tccrun_c))  return false;
+    if (!patch_file(src_dir_full, "tccelf.c",  edit_tccelf_c))  return false;
+    return true;
+}
+
+static bool tcc_build_and_install(void) {
+    char src_dir_full[SHORTPATH];
+    path_join2(src_dir_full, sizeof(src_dir_full), TCC_DIR, TCC_SRC_DIR);
+
+    char cwd_buf[PATH_MAX];
+    if (!getcwd(cwd_buf, sizeof(cwd_buf))) {
+        print_color(COLOR_RED, "[tcc] getcwd failed");
+        return false;
+    }
+    char incdir[BIGPATH], libdir[BIGPATH];
+    path_join2(incdir, sizeof(incdir), cwd_buf, SYSROOT_INC);
+    path_join2(libdir, sizeof(libdir), cwd_buf, SYSROOT_LIB);
+
+    char tcc_elf[SHORTPATH], libtcc1_a[SHORTPATH];
+    path_join2(tcc_elf,   sizeof(tcc_elf),   TCC_DIR, "tcc.elf");
+    path_join2(libtcc1_a, sizeof(libtcc1_a), TCC_DIR, "libtcc1.a");
+
+    char one_src[SHORTPATH];
+    path_join2(one_src, sizeof(one_src), src_dir_full, "tcc.c");
+
+    char one_hdr[SHORTPATH], one_libtcc[SHORTPATH];
+    path_join2(one_hdr,    sizeof(one_hdr),    src_dir_full, "tcc.h");
+    path_join2(one_libtcc, sizeof(one_libtcc), src_dir_full, "libtcc.c");
+
+    long elf_t = get_mtime_safe(tcc_elf);
+    bool need_tcc =
+        !file_exists(tcc_elf) ||
+        get_mtime_safe(one_src)    > elf_t ||
+        get_mtime_safe(one_hdr)    > elf_t ||
+        get_mtime_safe(one_libtcc) > elf_t;
+
+    if (need_tcc) {
+        print_color(COLOR_CYAN, "[tcc] Building tcc.elf for Cervus (x86_64)...");
+        char crt0[BIGPATH];
+        path_join2(crt0, sizeof(crt0), libdir, "crt0.o");
+        if (!file_exists(crt0)) {
+            print_color(COLOR_RED, "[tcc] %s missing (libcervus build failed?)", crt0);
+            return false;
+        }
+        int rc = cmd_run(true,
+            "gcc -ffreestanding -nostdlib -static -fno-stack-protector "
+            "-mno-red-zone -fno-pie -fno-pic -O2 -D__CERVUS__ "
+            "-nostdinc -isystem %s "
+            "-DTCC_TARGET_X86_64 -DONE_SOURCE=1 "
+            "-DCONFIG_TCC_PREDEFS=1 -DTCC_NO_DLOPEN=1 -DTCC_NO_BACKTRACE=1 "
+            "-DCONFIG_TCC_STATIC=1 "
+            "-I%s "
+            "-o %s %s/tcc.c %s "
+            "-nostdlib -static -L%s -lcervus",
+            incdir, src_dir_full, tcc_elf, src_dir_full, crt0, libdir);
+        if (rc != 0) {
+            print_color(COLOR_RED, "[tcc] tcc.elf build failed");
+            return false;
+        }
+    } else {
+        print_color(COLOR_GREEN, "[tcc] tcc.elf up to date");
+    }
+
+    char l1_o[SHORTPATH], al_o[SHORTPATH], va_o[SHORTPATH];
+    path_join2(l1_o, sizeof(l1_o), TCC_DIR, "libtcc1.o");
+    path_join2(al_o, sizeof(al_o), TCC_DIR, "alloca86_64.o");
+    path_join2(va_o, sizeof(va_o), TCC_DIR, "va_list.o");
+
+    bool need_libtcc1 = !file_exists(libtcc1_a);
+    if (need_libtcc1) {
+        print_color(COLOR_CYAN, "[tcc] Building libtcc1.a...");
+        const char *l1_flags =
+            "-ffreestanding -nostdlib -fno-stack-protector "
+            "-mno-red-zone -fno-pie -fno-pic -O2 -D__CERVUS__ "
+            "-DTCC_TARGET_X86_64";
+
+        char src_path[SHORTPATH];
+        char ar_cmd[2048];
+        size_t arpos = (size_t)snprintf(ar_cmd, sizeof(ar_cmd),
+                                        "ar rcs %s", libtcc1_a);
+
+        path_join2(src_path, sizeof(src_path), src_dir_full, "lib/libtcc1.c");
+        if (!file_exists(src_path)) {
+            print_color(COLOR_RED, "[tcc] missing %s", src_path);
+            return false;
+        }
+        if (cmd_run(true, "gcc %s -c %s -o %s", l1_flags, src_path, l1_o) != 0) {
+            print_color(COLOR_RED, "[tcc] libtcc1.c compile failed"); return false;
+        }
+        arpos += (size_t)snprintf(ar_cmd + arpos, sizeof(ar_cmd) - arpos, " %s", l1_o);
+
+        path_join2(src_path, sizeof(src_path), src_dir_full, "lib/alloca86_64.S");
+        if (file_exists(src_path)) {
+            if (cmd_run(true, "gcc %s -c %s -o %s", l1_flags, src_path, al_o) != 0) {
+                print_color(COLOR_RED, "[tcc] alloca86_64.S compile failed"); return false;
+            }
+            arpos += (size_t)snprintf(ar_cmd + arpos, sizeof(ar_cmd) - arpos, " %s", al_o);
+        }
+
+        path_join2(src_path, sizeof(src_path), src_dir_full, "lib/va_list.c");
+        if (file_exists(src_path)) {
+            if (cmd_run(true, "gcc %s -c %s -o %s", l1_flags, src_path, va_o) != 0) {
+                print_color(COLOR_RED, "[tcc] va_list.c compile failed"); return false;
+            }
+            arpos += (size_t)snprintf(ar_cmd + arpos, sizeof(ar_cmd) - arpos, " %s", va_o);
+        }
+
+        if (cmd_run(true, "%s", ar_cmd) != 0) {
+            print_color(COLOR_RED, "[tcc] ar failed"); return false;
+        }
+    } else {
+        print_color(COLOR_GREEN, "[tcc] libtcc1.a up to date");
+    }
+
+    print_color(COLOR_CYAN, "[tcc] Installing to sysroot...");
+    if (cmd_run(false, "mkdir -p %s/usr/bin %s/usr/lib/tcc/include",
+                SYSROOT_DIR, SYSROOT_DIR) != 0) {
+        print_color(COLOR_RED, "[tcc] mkdir failed");
+        return false;
+    }
+    if (cmd_run(false, "cp %s %s/usr/bin/tcc", tcc_elf, SYSROOT_DIR) != 0 ||
+        cmd_run(false, "cp %s %s/usr/lib/tcc/libtcc1.a", libtcc1_a, SYSROOT_DIR) != 0 ||
+        cmd_run(false, "cp %s/include/*.h %s/usr/lib/tcc/include/",
+                src_dir_full, SYSROOT_DIR) != 0)
+    {
+        print_color(COLOR_RED, "[tcc] install copy failed");
+        return false;
+    }
+
+    print_color(COLOR_GREEN, "[tcc] Installed to %s/usr/bin/tcc", SYSROOT_DIR);
+    return true;
+}
+
+bool build_tcc(void) {
+    if (!tcc_download())          return false;
+    if (!tcc_extract_and_patch()) return false;
+    if (!tcc_build_and_install()) return false;
+    return true;
+}
+
+void clean_tcc_build(bool deep) {
+    char tcc_elf[PATH_MAX], libtcc1_a[PATH_MAX];
+    path_join2(tcc_elf,   sizeof(tcc_elf),   TCC_DIR, "tcc.elf");
+    path_join2(libtcc1_a, sizeof(libtcc1_a), TCC_DIR, "libtcc1.a");
+
+    cmd_run(false, "rm -f %s/libtcc1.o %s/alloca86_64.o %s/va_list.o",
+            TCC_DIR, TCC_DIR, TCC_DIR);
+    if (file_exists(tcc_elf))   { remove(tcc_elf);   print_color(COLOR_YELLOW, "[clean] removed %s",   tcc_elf); }
+    if (file_exists(libtcc1_a)) { remove(libtcc1_a); print_color(COLOR_YELLOW, "[clean] removed %s",   libtcc1_a); }
+
+    cmd_run(false, "rm -f %s/usr/bin/tcc",          SYSROOT_DIR);
+    cmd_run(false, "rm -rf %s/usr/lib/tcc",         SYSROOT_DIR);
+    print_color(COLOR_YELLOW, "[clean] removed %s/usr/bin/tcc and %s/usr/lib/tcc/",
+                SYSROOT_DIR, SYSROOT_DIR);
+
+    if (deep) {
+        char src_dir[SHORTPATH], tar_path[SHORTPATH];
+        path_join2(src_dir,  sizeof(src_dir),  TCC_DIR, TCC_SRC_DIR);
+        path_join2(tar_path, sizeof(tar_path), TCC_DIR, TCC_TAR_FNAME);
+        if (file_exists(src_dir))  { rm_rf(src_dir);  print_color(COLOR_YELLOW, "[clean] removed %s",  src_dir); }
+        if (file_exists(tar_path)) { remove(tar_path); print_color(COLOR_YELLOW, "[clean] removed %s",  tar_path); }
+    }
+}
+
+void clean_libcervus_build(bool deep) {
+    char buf[PATH_MAX];
+    for (int i = 0; LCV_UNITS[i].src; i++) {
+        path_join2(buf, sizeof(buf), LIBCERVUS_DIR, LCV_UNITS[i].obj);
+        if (file_exists(buf)) remove(buf);
+    }
+    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "setjmp.o");
+    if (file_exists(buf)) remove(buf);
+    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "crt0.o");
+    if (file_exists(buf)) remove(buf);
+    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "libcervus.a");
+    if (file_exists(buf)) remove(buf);
+
+    cmd_run(false, "rm -f %s/libcervus.a %s/crt0.o", SYSROOT_LIB, SYSROOT_LIB);
+    (void)deep;
 }
 
 bool build_installer(void) {
@@ -529,7 +1244,6 @@ bool build_installer(void) {
         print_color(COLOR_YELLOW, "[installer] no .c sources in '%s'", INSTALLER_DIR);
     return true;
 }
-
 
 bool build_initramfs(void) {
     if (ARG_NO_INITRAMFS) {
@@ -601,7 +1315,7 @@ bool build_initramfs(void) {
 
     FILE *hostname = fopen(INITRAMFS_ROOTFS "/etc/hostname", "w");
     if (hostname) {
-        fprintf(hostname, "cervus\n");
+        fprintf(hostname, "cervus");
         fclose(hostname);
     }
 
@@ -840,6 +1554,7 @@ bool compile_kernel(void) {
     if (!setup_dependencies()) return false;
 
     if (!build_libcervus()) return false;
+    if (!build_tcc())       return false;
 
     if (!build_all_apps()) return false;
     if (!build_all_bin_apps()) return false;
@@ -1056,7 +1771,7 @@ bool create_iso(void) {
     char link[PATH_MAX];
     snprintf(link, sizeof(link), "demo_iso/%s.latest.iso", IMAGE_NAME);
     unlink(link);
-    symlink(strrchr(iso_name, '/') + 1, link);
+    (void)!symlink(strrchr(iso_name, '/') + 1, link);
 
     rm_rf("iso_root");
 
@@ -1135,7 +1850,8 @@ void flash_iso(void) {
     printf("\n%sWARNING: ALL DATA ON %s WILL BE ERASED!%s\n",
            COLOR_BOLD, devs.paths[dc - 1], COLOR_RESET);
     printf("Type 'YES' to confirm: ");
-    char confirm[10]; scanf("%s", confirm);
+    char confirm[10];
+    if (scanf("%9s", confirm) != 1) { printf("Aborted.\n"); return; }
     if (strcmp(confirm, "YES") != 0) { printf("Aborted.\n"); return; }
 
     print_color(COLOR_YELLOW, "Flashing %s -> %s ...", isos.paths[ic - 1], devs.paths[dc - 1]);
@@ -1522,6 +2238,9 @@ static void print_help(void) {
     printf("  cleaniso         Remove only ISO images in demo_iso/\n");
     printf("  gitclean         Same as clean (for git commit prep)\n");
     printf("  help             Show this message\n\n");
+    printf("Subcomponent build (debug):\n");
+    printf("  _libcervus       Build only libcervus.a + crt0.o into sysroot\n");
+    printf("  _tcc             Build only TCC (and libcervus first) into sysroot\n\n");
     printf("Options:\n");
     printf("  --tree [files]         Generate OS-TREE.txt (optional: only list files)\n");
     printf("  --structure-only       Generate tree without file contents\n");
@@ -1592,7 +2311,8 @@ int main(int argc, char **argv) {
         clean_bin_elfs();
         for (int i = 0; FILES_TO_CLEAN[i]; i++)
             if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
-        cmd_run(false, "make -C " LIBCERVUS_DIR " clean >/dev/null 2>&1");
+        clean_libcervus_build(true);
+        clean_tcc_build(true);
         cmd_run(false, "rm -f " INSTALLER_DIR "/*.elf 2>/dev/null");
         cmd_run(false, "rm -f temp_* 2>/dev/null");
         print_color(COLOR_GREEN, "Cleanup complete");
@@ -1613,6 +2333,14 @@ int main(int argc, char **argv) {
     if (strcmp(command, "hardwaretest") == 0) {
         hardware_test();
         return 0;
+    }
+
+    if (strcmp(command, "_libcervus") == 0) {
+        return build_libcervus() ? 0 : 1;
+    }
+    if (strcmp(command, "_tcc") == 0) {
+        if (!build_libcervus()) return 1;
+        return build_tcc() ? 0 : 1;
     }
 
     if (strcmp(command, "run-installed-uefi") == 0) {
@@ -1756,6 +2484,8 @@ int main(int argc, char **argv) {
             }
             clean_apps_elfs();
             clean_bin_elfs();
+            clean_libcervus_build(false);
+            clean_tcc_build(false);
             print_color(COLOR_GREEN, "[post-run] Done.");
         }
         return 0;

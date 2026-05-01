@@ -13,6 +13,16 @@
 #define PML4_KERNEL_START   256
 #define PML4_ENTRIES        512
 
+#ifndef SHF_WRITE
+#define SHF_WRITE           0x1
+#endif
+#ifndef SHF_ALLOC
+#define SHF_ALLOC           0x2
+#endif
+#ifndef SHF_EXECINSTR
+#define SHF_EXECINSTR       0x4
+#endif
+
 static inline uintptr_t page_align_down(uintptr_t addr) {
     return addr & ~(uintptr_t)(PAGE_SIZE - 1);
 }
@@ -43,7 +53,27 @@ static elf_error_t elf_validate(const elf64_ehdr_t* hdr, size_t size) {
     uint64_t pht_end = (uint64_t)hdr->e_phoff +
                        (uint64_t)hdr->e_phentsize * hdr->e_phnum;
     if (pht_end > size)                       return ELF_ERR_TOO_SMALL;
+
+    if (hdr->e_shnum && hdr->e_shoff) {
+        uint64_t sht_end = (uint64_t)hdr->e_shoff +
+                           (uint64_t)hdr->e_shentsize * hdr->e_shnum;
+        if (sht_end > size)                   return ELF_ERR_TOO_SMALL;
+    }
     return ELF_OK;
+}
+
+static bool ensure_page_mapped(vmm_pagemap_t* map, uintptr_t virt, uint64_t flags) {
+    uint64_t pf = 0;
+    if (vmm_get_page_flags(map, virt, &pf) && (pf & VMM_PRESENT)) {
+        return true;
+    }
+    void* page = pmm_alloc_zero(1);
+    if (!page) return false;
+    if (!vmm_map_page(map, virt, pmm_virt_to_phys(page), flags)) {
+        pmm_free(page, 1);
+        return false;
+    }
+    return true;
 }
 
 static elf_error_t load_segment(vmm_pagemap_t*      map,
@@ -68,38 +98,45 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
     uint64_t  vmm_flags  = phdr_flags_to_vmm(phdr->p_flags);
 
     for (size_t i = 0; i < page_count; i++) {
-        void* page = pmm_alloc_zero(1);
-        if (!page) {
-            serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n", i, virt_start);
-            for (size_t j = 0; j < i; j++)
-                vmm_unmap_page_noflush(map, page_start + j * PAGE_SIZE);
-            return ELF_ERR_NO_MEM;
+        uintptr_t virt = page_start + i * PAGE_SIZE;
+
+        uint64_t cur_flags = 0;
+        bool already_mapped =
+            vmm_get_page_flags(map, virt, &cur_flags) && (cur_flags & VMM_PRESENT);
+
+        if (!already_mapped) {
+            void* page = pmm_alloc_zero(1);
+            if (!page) {
+                serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n",
+                              i, virt_start);
+                return ELF_ERR_NO_MEM;
+            }
+            if (!vmm_map_page(map, virt, pmm_virt_to_phys(page), vmm_flags)) {
+                serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
+                pmm_free(page, 1);
+                return ELF_ERR_MAP_FAIL;
+            }
         }
 
         if (phdr->p_filesz > 0) {
-            uintptr_t pv_start = page_start + i * PAGE_SIZE;
+            uintptr_t pv_start = virt;
             uintptr_t pv_end   = pv_start + PAGE_SIZE;
             uintptr_t data_end = virt_start + phdr->p_filesz;
             uintptr_t cp_start = (pv_start > virt_start) ? pv_start : virt_start;
             uintptr_t cp_end   = (pv_end   < data_end)   ? pv_end   : data_end;
 
             if (cp_start < cp_end) {
+                uintptr_t phys = 0;
+                if (!vmm_virt_to_phys(map, cp_start, &phys)) {
+                    return ELF_ERR_MAP_FAIL;
+                }
+                phys &= ~(uintptr_t)0xFFF;
                 size_t dst_off = cp_start - pv_start;
                 size_t src_off = cp_start - virt_start;
-                memcpy((uint8_t*)page + dst_off,
+                memcpy((uint8_t*)pmm_phys_to_virt(phys) + dst_off,
                        data + phdr->p_offset + src_off,
                        cp_end - cp_start);
             }
-        }
-
-        uintptr_t phys = pmm_virt_to_phys(page);
-        uintptr_t virt = page_start + i * PAGE_SIZE;
-        if (!vmm_map_page(map, virt, phys, vmm_flags)) {
-            serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
-            pmm_free(page, 1);
-            for (size_t j = 0; j < i; j++)
-                vmm_unmap_page_noflush(map, page_start + j * PAGE_SIZE);
-            return ELF_ERR_MAP_FAIL;
         }
     }
 
@@ -111,6 +148,99 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
                  (phdr->p_flags & PF_X) ? "X" : "-",
                  page_count);
     return ELF_OK;
+}
+
+static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
+                                       const elf64_ehdr_t*  ehdr,
+                                       const uint8_t*       bytes,
+                                       size_t               file_size,
+                                       uintptr_t            load_bias,
+                                       uintptr_t            cur_load_end)
+{
+    if (!ehdr->e_shnum || !ehdr->e_shoff) {
+        serial_printf("[ELF] no section headers; skipping orphan-section pass\n");
+        return cur_load_end;
+    }
+    if (ehdr->e_shentsize < sizeof(elf64_shdr_t)) {
+        serial_printf("[ELF] e_shentsize=%u too small; skipping orphan-section pass\n",
+                      (unsigned)ehdr->e_shentsize);
+        return cur_load_end;
+    }
+    uint64_t sht_end = (uint64_t)ehdr->e_shoff +
+                       (uint64_t)ehdr->e_shentsize * ehdr->e_shnum;
+    if (sht_end > file_size) {
+        serial_printf("[ELF] section table out of file bounds; skip\n");
+        return cur_load_end;
+    }
+
+    serial_printf("[ELF] section scan: e_shnum=%u\n", (unsigned)ehdr->e_shnum);
+
+    uintptr_t new_end = cur_load_end;
+
+    for (uint16_t i = 0; i < ehdr->e_shnum; i++) {
+        const elf64_shdr_t* sh = (const elf64_shdr_t*)
+            (bytes + ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * i);
+
+        if (!(sh->sh_flags & SHF_ALLOC))                  continue;
+        if (sh->sh_size == 0)                             continue;
+        if (sh->sh_addr == 0)                             continue;
+
+        uintptr_t s_start = (uintptr_t)sh->sh_addr + load_bias;
+        uintptr_t s_end   = s_start + sh->sh_size;
+        uintptr_t p_start = page_align_down(s_start);
+        uintptr_t p_end   = page_align_up(s_end);
+
+        uint64_t  flags   = VMM_PRESENT | VMM_USER;
+        if (sh->sh_flags & SHF_WRITE)        flags |= VMM_WRITE;
+        if (!(sh->sh_flags & SHF_EXECINSTR)) flags |= VMM_NOEXEC;
+
+        size_t added_pages = 0;
+        for (uintptr_t p = p_start; p < p_end; p += PAGE_SIZE) {
+            uint64_t pf = 0;
+            if (vmm_get_page_flags(map, p, &pf) && (pf & VMM_PRESENT))
+                continue;
+            if (!ensure_page_mapped(map, p, flags)) {
+                serial_printf("[ELF] orphan-section: alloc/map failed at 0x%llx\n",
+                              (unsigned long long)p);
+                return new_end;
+            }
+            added_pages++;
+        }
+
+        if (added_pages > 0) {
+            serial_printf("[ELF] ORPHAN section #%u type=%u: virt=0x%llx-0x%llx "
+                          "added=%zu pages flags=%s%s%s\n",
+                          (unsigned)i, (unsigned)sh->sh_type,
+                          (unsigned long long)s_start,
+                          (unsigned long long)s_end,
+                          added_pages,
+                          (sh->sh_flags & SHF_ALLOC)     ? "A" : "-",
+                          (sh->sh_flags & SHF_WRITE)     ? "W" : "-",
+                          (sh->sh_flags & SHF_EXECINSTR) ? "X" : "-");
+
+            if (sh->sh_type != SHT_NOBITS && sh->sh_size > 0) {
+                if (sh->sh_offset + sh->sh_size <= file_size) {
+                    for (uintptr_t p = p_start; p < p_end; p += PAGE_SIZE) {
+                        uintptr_t pv_end   = p + PAGE_SIZE;
+                        uintptr_t cp_start = (p > s_start) ? p : s_start;
+                        uintptr_t cp_end   = (pv_end < s_end) ? pv_end : s_end;
+                        if (cp_start >= cp_end) continue;
+                        uintptr_t phys = 0;
+                        if (!vmm_virt_to_phys(map, cp_start, &phys)) continue;
+                        phys &= ~(uintptr_t)0xFFF;
+                        size_t dst_off = cp_start - p;
+                        size_t src_off = cp_start - s_start;
+                        memcpy((uint8_t*)pmm_phys_to_virt(phys) + dst_off,
+                               bytes + sh->sh_offset + src_off,
+                               cp_end - cp_start);
+                    }
+                }
+            }
+        }
+
+        if (p_end > new_end) new_end = p_end;
+    }
+    return new_end;
 }
 
 static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
@@ -195,9 +325,13 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
 
     if (!has_load) { result.error = ELF_ERR_NO_LOAD; return result; }
 
+    uintptr_t load_end = page_align_up(max_vaddr);
+
+    load_end = cover_orphan_sections(map, ehdr, bytes, size, load_bias, load_end);
+
     result.entry     = ehdr->e_entry + load_bias;
     result.load_base = load_bias;
-    result.load_end  = page_align_up(max_vaddr);
+    result.load_end  = load_end;
 
     serial_printf("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
                   result.entry, result.load_end);

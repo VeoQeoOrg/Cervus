@@ -17,6 +17,10 @@
 #include <time.h>
 #include <sys/time.h>
 #include <dirent.h>
+#include <cervus_util.h>
+
+int    __cervus_argc;
+char **__cervus_argv;
 
 int __cervus_errno = 0;
 
@@ -27,6 +31,33 @@ static long __sys_ret(long r)
         return -1;
     }
     return r;
+}
+
+#define CERVUS_PATH_MAX 512
+
+static char __cervus_cwd[CERVUS_PATH_MAX];
+static int  __cervus_cwd_inited = 0;
+
+static const char *__cervus_get_cwd(void)
+{
+    if (!__cervus_cwd_inited) {
+        const char *c = get_cwd_flag(__cervus_argc, __cervus_argv);
+        if (!c || !*c) c = "/";
+        size_t n = strlen(c);
+        if (n >= sizeof(__cervus_cwd)) n = sizeof(__cervus_cwd) - 1;
+        memcpy(__cervus_cwd, c, n);
+        __cervus_cwd[n] = '\0';
+        __cervus_cwd_inited = 1;
+    }
+    return __cervus_cwd;
+}
+
+static const char *__cervus_resolve(const char *path, char *buf, size_t bufsz)
+{
+    if (!path) return path;
+    if (path[0] == '/') return path;
+    resolve_path(__cervus_get_cwd(), path, buf, bufsz);
+    return buf;
 }
 
 ssize_t read(int fd, void *buf, size_t n)
@@ -80,10 +111,14 @@ int isatty(int fd)
 
 int unlink(const char *path)
 {
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall1(SYS_UNLINK, path));
 }
 int rmdir(const char *path)
 {
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall1(SYS_RMDIR, path));
 }
 
@@ -97,6 +132,8 @@ pid_t fork(void)    { return (pid_t)__sys_ret(syscall0(SYS_FORK)); }
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall3(SYS_EXECVE, path, argv, envp));
 }
 
@@ -155,9 +192,29 @@ void sched_yield_cervus(void) { syscall0(SYS_YIELD); }
 char *getcwd(char *buf, size_t size)
 {
     if (!buf || size < 2) { __cervus_errno = EINVAL; return NULL; }
-    buf[0] = '/';
-    buf[1] = '\0';
+    const char *c = __cervus_get_cwd();
+    size_t n = strlen(c);
+    if (n + 1 > size) { __cervus_errno = ERANGE; return NULL; }
+    memcpy(buf, c, n + 1);
     return buf;
+}
+
+int chdir(const char *path)
+{
+    if (!path || !*path) { __cervus_errno = ENOENT; return -1; }
+
+    char abs[CERVUS_PATH_MAX];
+    const char *p = __cervus_resolve(path, abs, sizeof(abs));
+
+    struct stat st;
+    if ((int)__sys_ret(syscall2(SYS_STAT, p, &st)) < 0) return -1;
+    if (!S_ISDIR(st.st_mode)) { __cervus_errno = ENOTDIR; return -1; }
+
+    size_t n = strlen(p);
+    if (n >= sizeof(__cervus_cwd)) { __cervus_errno = ENAMETOOLONG; return -1; }
+    memcpy(__cervus_cwd, p, n + 1);
+    __cervus_cwd_inited = 1;
+    return 0;
 }
 
 void *sbrk(intptr_t incr)
@@ -187,6 +244,8 @@ int open(const char *path, int flags, ...)
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall3(SYS_OPEN, path, flags, mode));
 }
 int creat(const char *path, mode_t mode)
@@ -204,6 +263,8 @@ int fcntl(int fd, int cmd, ...)
 
 int stat(const char *path, struct stat *out)
 {
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall2(SYS_STAT, path, out));
 }
 int fstat(int fd, struct stat *out)
@@ -212,6 +273,8 @@ int fstat(int fd, struct stat *out)
 }
 int mkdir(const char *path, mode_t mode)
 {
+    char abs[CERVUS_PATH_MAX];
+    path = __cervus_resolve(path, abs, sizeof(abs));
     return (int)__sys_ret(syscall2(SYS_MKDIR, path, mode));
 }
 int chmod(const char *path, mode_t mode)
@@ -221,6 +284,9 @@ int chmod(const char *path, mode_t mode)
 }
 int rename(const char *oldp, const char *newp)
 {
+    char absa[CERVUS_PATH_MAX], absb[CERVUS_PATH_MAX];
+    oldp = __cervus_resolve(oldp, absa, sizeof(absa));
+    newp = __cervus_resolve(newp, absb, sizeof(absb));
     return (int)__sys_ret(syscall2(SYS_RENAME, oldp, newp));
 }
 
@@ -373,4 +439,23 @@ void __cervus_assert_fail(const char *expr, const char *file, int line, const ch
            func ? func : "(null)");
     syscall1(SYS_EXIT, 134);
     for (;;) { }
+}
+
+#define _CERVUS_FILT_MAX 128
+char *__cervus_filtered_argv[_CERVUS_FILT_MAX + 1];
+
+int __cervus_filter_args(int argc, char **argv)
+{
+    int out = 0;
+    for (int i = 0; i < argc && out < _CERVUS_FILT_MAX; i++) {
+        const char *a = argv[i];
+        if (i > 0 && a && a[0] == '-' && a[1] == '-' &&
+            ((a[2]=='c' && a[3]=='w' && a[4]=='d' && a[5]=='=') ||
+             (a[2]=='e' && a[3]=='n' && a[4]=='v' && a[5]==':'))) {
+            continue;
+        }
+        __cervus_filtered_argv[out++] = (char *)a;
+    }
+    __cervus_filtered_argv[out] = NULL;
+    return out;
 }

@@ -583,6 +583,7 @@ static int cmd_cd(const char *path) {
     if (st.st_type != 1)   { fputs(C_RED "cd: not a dir: " C_RESET, stdout); fputs(path, stdout); putchar(10); return 1; }
     strncpy(cwd, np, sizeof(cwd) - 1);
     cwd[sizeof(cwd) - 1] = '\0';
+    chdir(np);
     return 0;
 }
 
@@ -717,8 +718,11 @@ static int run_single(char *line) {
     if (strcmp(cmd, "unset")  == 0) return cmd_unset(argc, argv);
 
     char binpath[VFS_MAX_PATH];
-    if (cmd[0] == '/' || cmd[0] == '.') {
+    if (cmd[0] == '/') {
         strncpy(binpath, cmd, sizeof(binpath) - 1);
+        binpath[sizeof(binpath) - 1] = '\0';
+    } else if (cmd[0] == '.') {
+        resolve_path(cwd, cmd, binpath, sizeof(binpath));
     } else {
         if (!find_in_path(cmd, binpath, sizeof(binpath))) {
             char t_cwd[VFS_MAX_PATH];
@@ -726,6 +730,7 @@ static int run_single(char *line) {
             struct stat st;
             if (stat(t_cwd, &st) == 0 && st.st_type != 1) {
                 strncpy(binpath, t_cwd, sizeof(binpath) - 1);
+                binpath[sizeof(binpath) - 1] = '\0';
             } else {
                 fputs(C_RED "not found: " C_RESET, stdout); fputs(cmd, stdout); putchar(10); return 127;
             }

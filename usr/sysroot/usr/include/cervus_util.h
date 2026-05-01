@@ -91,6 +91,9 @@ static inline void resolve_path(const char *cwd, const char *path,
     path_norm(out);
 }
 
+extern int    __cervus_argc;
+extern char **__cervus_argv;
+
 static inline int is_shell_flag(const char *a)
 {
     if (!a) return 0;
@@ -103,11 +106,12 @@ static inline int is_shell_flag(const char *a)
 
 static inline const char *get_cwd_flag(int argc, char **argv)
 {
-    for (int i = 1; i < argc; i++) {
-        if (argv[i] && argv[i][0] == '-' && argv[i][1] == '-' &&
-            argv[i][2] == 'c' && argv[i][3] == 'w' &&
-            argv[i][4] == 'd' && argv[i][5] == '=')
-            return argv[i] + 6;
+    (void)argc; (void)argv;
+    for (int i = 1; i < __cervus_argc; i++) {
+        char *a = __cervus_argv[i];
+        if (a && a[0] == '-' && a[1] == '-' &&
+            a[2] == 'c' && a[3] == 'w' && a[4] == 'd' && a[5] == '=')
+            return a + 6;
     }
     return "/";
 }
@@ -115,10 +119,11 @@ static inline const char *get_cwd_flag(int argc, char **argv)
 static inline const char *getenv_argv(int argc, char **argv,
                                       const char *name, const char *def)
 {
+    (void)argc; (void)argv;
     if (!name) return def;
     size_t nl = strlen(name);
-    for (int i = 1; i < argc; i++) {
-        const char *a = argv[i];
+    for (int i = 1; i < __cervus_argc; i++) {
+        const char *a = __cervus_argv[i];
         if (!a) continue;
         if (a[0] == '-' && a[1] == '-' &&
             a[2] == 'e' && a[3] == 'n' && a[4] == 'v' && a[5] == ':') {

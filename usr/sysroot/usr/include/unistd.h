@@ -12,6 +12,11 @@
 #define SEEK_CUR  1
 #define SEEK_END  2
 
+#define F_OK  0
+#define X_OK  1
+#define W_OK  2
+#define R_OK  4
+
 ssize_t read(int fd, void *buf, size_t n);
 ssize_t write(int fd, const void *buf, size_t n);
 int     close(int fd);
@@ -21,6 +26,13 @@ int     dup2(int oldfd, int newfd);
 int     pipe(int fds[2]);
 int     unlink(const char *path);
 int     rmdir(const char *path);
+int     access(const char *path, int mode);
+int     chdir(const char *path);
+int     fchdir(int fd);
+char   *getcwd(char *buf, size_t size);
+
+int     symlink(const char *target, const char *linkpath);
+ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 
 pid_t   getpid(void);
 pid_t   getppid(void);
@@ -37,14 +49,15 @@ void    _exit(int status) __attribute__((noreturn));
 unsigned int sleep(unsigned int sec);
 int          usleep(unsigned int usec);
 
-char *getcwd(char *buf, size_t size);
-
 void *sbrk(intptr_t increment);
 int   brk(void *addr);
 
 void  sched_yield_cervus(void);
+int   sched_yield(void);
 
 int   isatty(int fd);
+long  pathconf(const char *path, int name);
+long  fpathconf(int fd, int name);
 
 extern char *optarg;
 extern int   optind;

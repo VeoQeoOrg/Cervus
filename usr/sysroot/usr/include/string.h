@@ -14,6 +14,8 @@ size_t  strlen(const char *s);
 size_t  strnlen(const char *s, size_t max);
 int     strcmp(const char *a, const char *b);
 int     strncmp(const char *a, const char *b, size_t n);
+int     strcasecmp(const char *a, const char *b);
+int     strncasecmp(const char *a, const char *b, size_t n);
 char   *strcpy(char *dst, const char *src);
 char   *strncpy(char *dst, const char *src, size_t n);
 char   *strcat(char *dst, const char *src);
@@ -22,10 +24,13 @@ char   *strchr(const char *s, int c);
 char   *strrchr(const char *s, int c);
 char   *strstr(const char *hay, const char *needle);
 char   *strdup(const char *s);
+char   *strndup(const char *s, size_t n);
 size_t  strspn(const char *s, const char *accept);
 size_t  strcspn(const char *s, const char *reject);
+char   *strpbrk(const char *s, const char *accept);
 char   *strtok(char *str, const char *delim);
 char   *strtok_r(char *str, const char *delim, char **saveptr);
 char   *strerror(int errnum);
+char   *strsignal(int sig);
 
 #endif

@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <ctype.h>
 
 void *memset(void *d, int c, size_t n)
 {
@@ -76,6 +77,25 @@ int strncmp(const char *a, const char *b, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
         if (a[i] != b[i]) return (unsigned char)a[i] - (unsigned char)b[i];
+        if (!a[i]) return 0;
+    }
+    return 0;
+}
+
+int strcasecmp(const char *a, const char *b)
+{
+    while (*a && tolower((unsigned char)*a) == tolower((unsigned char)*b)) {
+        a++; b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        int ca = tolower((unsigned char)a[i]);
+        int cb = tolower((unsigned char)b[i]);
+        if (ca != cb) return ca - cb;
         if (!a[i]) return 0;
     }
     return 0;
@@ -161,12 +181,32 @@ size_t strcspn(const char *s, const char *reject)
     return n;
 }
 
+char *strpbrk(const char *s, const char *accept)
+{
+    while (*s) {
+        for (const char *a = accept; *a; a++)
+            if (*s == *a) return (char *)s;
+        s++;
+    }
+    return NULL;
+}
+
 char *strdup(const char *s)
 {
     size_t n = strlen(s) + 1;
     char *p = (char *)malloc(n);
     if (!p) return NULL;
     memcpy(p, s, n);
+    return p;
+}
+
+char *strndup(const char *s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char *p = (char *)malloc(len + 1);
+    if (!p) return NULL;
+    memcpy(p, s, len);
+    p[len] = '\0';
     return p;
 }
 
@@ -234,5 +274,23 @@ char *strerror(int err)
         case EPIPE:   return "Broken pipe";
         case ENOSYS:  return "Function not implemented";
         default:      return "Unknown error";
+    }
+}
+
+char *strsignal(int sig)
+{
+    switch (sig) {
+        case 1:  return "Hangup";
+        case 2:  return "Interrupt";
+        case 3:  return "Quit";
+        case 4:  return "Illegal instruction";
+        case 6:  return "Aborted";
+        case 8:  return "Floating point exception";
+        case 9:  return "Killed";
+        case 11: return "Segmentation fault";
+        case 13: return "Broken pipe";
+        case 14: return "Alarm clock";
+        case 15: return "Terminated";
+        default: return "Unknown signal";
     }
 }
