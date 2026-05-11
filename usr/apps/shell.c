@@ -890,27 +890,35 @@ int main(int argc, char **argv) {
     struct stat dev_st;
     int has_disk = (stat("/dev/hda", &dev_st) == 0);
     int has_hda2 = (stat("/dev/hda2", &dev_st) == 0);
-    int has_hda_legacy = 0;
 
+    struct stat root_usr_st;
+    int root_has_usr = (stat("/usr/bin", &root_usr_st) == 0);
     int disk_mounted = 0;
+    int rooted_on_disk = 0;
 
-    if (has_hda2) {
+    if (root_has_usr && has_hda2) {
+        struct stat home_st;
+        if (stat("/home", &home_st) == 0) {
+            rooted_on_disk = 1;
+            g_installed = 1;
+        }
+    }
+
+    if (!rooted_on_disk && has_hda2) {
         int mr = sys_disk_mount("hda2", "/mnt");
         if (mr == 0) {
             disk_mounted = 1;
             g_installed = 1;
         }
-    } else if (has_disk) {
+    } else if (!rooted_on_disk && has_disk) {
         int mr = sys_disk_mount("hda", "/mnt");
         if (mr == 0) {
             disk_mounted = 1;
             g_installed = 1;
-            has_hda_legacy = 1;
         }
     }
-    (void)has_hda_legacy;
 
-    if (!disk_mounted && has_disk) {
+    if (!rooted_on_disk && !disk_mounted && has_disk) {
         if (ask_install_or_live() == 1) {
             launch_installer();
             struct stat retry_st;
@@ -923,7 +931,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (disk_mounted) {
+    if (rooted_on_disk) {
+        strncpy(cwd, "/home", sizeof(cwd));
+        env_set("HOME", "/home");
+        env_set("PATH", "/bin:/apps:/usr/bin");
+        env_set("SHELL", "/bin/shell");
+    } else if (disk_mounted) {
         strncpy(cwd, "/mnt/home", sizeof(cwd));
         env_set("HOME", "/mnt/home");
         env_set("PATH", "/mnt/bin:/mnt/apps:/mnt/usr/bin");
@@ -935,9 +948,10 @@ int main(int argc, char **argv) {
         env_set("SHELL", "/bin/shell");
     }
 
-    if (!disk_mounted && has_disk)    env_set("MODE", "live");
-    else if (!has_disk)               env_set("MODE", "live");
-    else                              env_set("MODE", "installed");
+    if (rooted_on_disk)              env_set("MODE", "installed");
+    else if (disk_mounted)           env_set("MODE", "installed");
+    else if (!has_disk)              env_set("MODE", "live");
+    else                             env_set("MODE", "live");
 
     print_motd();
 
@@ -951,10 +965,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!has_disk) {
-        fputs(C_YELLOW " [Live Mode]" C_RESET " No disk detected. All changes are in RAM.\n\n", stdout);
-    } else if (!disk_mounted) {
-        fputs(C_YELLOW " [Live Mode]" C_RESET " Disk not mounted.\n\n", stdout);
+    if (!rooted_on_disk && !disk_mounted) {
+        if (!has_disk) {
+            fputs(C_YELLOW " [Live Mode]" C_RESET " No disk detected. All changes are in RAM.\n\n", stdout);
+        } else {
+            fputs(C_YELLOW " [Live Mode]" C_RESET " Disk not mounted.\n\n", stdout);
+        }
     }
 
     char line[LINE_MAX];

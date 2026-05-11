@@ -177,6 +177,85 @@ static void __u64_to_str(uint64_t v, char *out, int base, int upper)
     out[j] = 0;
 }
 
+static int __f_classify(double v)
+{
+    union { double d; uint64_t u; } x;
+    x.d = v;
+    uint64_t bits = x.u;
+    uint64_t exp  = (bits >> 52) & 0x7ffULL;
+    uint64_t frac =  bits & 0xfffffffffffffULL;
+    if (exp == 0x7ff) {
+        if (frac == 0) return 1;
+        return 2;
+    }
+    return 0;
+}
+
+static int __f_signbit(double v)
+{
+    union { double d; uint64_t u; } x;
+    x.d = v;
+    return (int)((x.u >> 63) & 1ULL);
+}
+
+static double __f_pow10(int n)
+{
+    double r = 1.0;
+    if (n >= 0) { while (n--) r *= 10.0; }
+    else        { while (n++) r /= 10.0; }
+    return r;
+}
+
+static void __f_to_str(double v, int prec, int upper, char *out)
+{
+    int cls = __f_classify(v);
+    int neg = __f_signbit(v);
+    if (cls == 2) {
+        const char *s = upper ? "NAN" : "nan";
+        int i = 0; while (s[i]) { out[i] = s[i]; i++; } out[i] = 0;
+        return;
+    }
+    if (cls == 1) {
+        int i = 0;
+        if (neg) out[i++] = '-';
+        const char *s = upper ? "INF" : "inf";
+        int k = 0; while (s[k]) out[i++] = s[k++];
+        out[i] = 0;
+        return;
+    }
+    if (prec < 0) prec = 6;
+    if (prec > 17) prec = 17;
+
+    double av = neg ? -v : v;
+    double scale = __f_pow10(prec);
+    double rounded = av * scale + 0.5;
+    uint64_t big;
+    if (rounded > 1.8446744073709551e19) big = 0xffffffffffffffffULL;
+    else big = (uint64_t)rounded;
+
+    uint64_t divp = 1;
+    for (int i = 0; i < prec; i++) divp *= 10ULL;
+    uint64_t ip = divp ? big / divp : big;
+    uint64_t fp = divp ? big % divp : 0;
+
+    char ibuf[32];
+    __u64_to_str(ip, ibuf, 10, 0);
+
+    int o = 0;
+    if (neg) out[o++] = '-';
+    int k = 0; while (ibuf[k]) out[o++] = ibuf[k++];
+
+    if (prec > 0) {
+        out[o++] = '.';
+        char fbuf[32];
+        __u64_to_str(fp, fbuf, 10, 0);
+        int flen = 0; while (fbuf[flen]) flen++;
+        for (int i = flen; i < prec; i++) out[o++] = '0';
+        int m = 0; while (fbuf[m]) out[o++] = fbuf[m++];
+    }
+    out[o] = 0;
+}
+
 int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
 {
     size_t pos = 0;
@@ -292,6 +371,22 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
             case 'c': {
                 char c = (char)va_arg(ap, int);
                 __PUT(&c, 1);
+                break;
+            }
+            case 'f': case 'F': case 'g': case 'G': case 'e': case 'E': {
+                double v = va_arg(ap, double);
+                int upper = (*fmt == 'F' || *fmt == 'G' || *fmt == 'E');
+                int eff_prec = prec;
+                if ((*fmt == 'g' || *fmt == 'G') && eff_prec < 0) eff_prec = 6;
+                if ((*fmt == 'g' || *fmt == 'G') && eff_prec == 0) eff_prec = 1;
+                char fbuf[64];
+                __f_to_str(v, eff_prec, upper, fbuf);
+                int numlen = (int)strlen(fbuf);
+                int pad = width > numlen ? width - numlen : 0;
+                if (!left_align && !pad_zero) for (int i = 0; i < pad; i++) __PUT(" ", 1);
+                if (!left_align && pad_zero) for (int i = 0; i < pad; i++) __PUT("0", 1);
+                __PUT(fbuf, (size_t)numlen);
+                if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }
             case '%': __PUT("%", 1); break;

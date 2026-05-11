@@ -433,20 +433,33 @@ static int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_pt
 
 static int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count) {
     if (count == 0) return 0;
-    if (count > 4096) count = 4096;
-
-    char kbuf[4097];
-    if (copy_from_user(kbuf, (const void*)buf_ptr, count) < 0) return -EFAULT;
-    kbuf[count] = '\0';
+    if (count > 65536) count = 65536;
 
     task_t *t = cur_task();
-    if (t && t->fd_table) {
-        vfs_file_t *file = fd_get(t->fd_table, (int)fd);
-        if (file)
-            return vfs_write(file, kbuf, count);
+    vfs_file_t *file = NULL;
+    if (t && t->fd_table) file = fd_get(t->fd_table, (int)fd);
+
+    char kbuf[4097];
+    if (file) {
+        size_t total = 0;
+        while (total < count) {
+            size_t chunk = count - total;
+            if (chunk > 4096) chunk = 4096;
+            if (copy_from_user(kbuf, (const char*)buf_ptr + total, chunk) < 0)
+                return total ? (int64_t)total : -EFAULT;
+            int64_t w = vfs_write(file, kbuf, chunk);
+            if (w < 0) return total ? (int64_t)total : w;
+            total += (size_t)w;
+            if ((size_t)w < chunk) break;
+        }
+        return (int64_t)total;
     }
 
     if (fd != 1 && fd != 2) return -EBADF;
+
+    if (count > 4096) count = 4096;
+    if (copy_from_user(kbuf, (const void*)buf_ptr, count) < 0) return -EFAULT;
+    kbuf[count] = '\0';
 
     {
         static bool at_line_start = true;
@@ -500,11 +513,18 @@ static int64_t sys_read(uint64_t fd, uint64_t buf_ptr, uint64_t count) {
     if (!file) return -EBADF;
 
     char kbuf[4096];
-    size_t chunk = count > 4096 ? 4096 : count;
-    int64_t r = vfs_read(file, kbuf, chunk);
-    if (r <= 0) return r;
-    memcpy((void*)buf_ptr, kbuf, (size_t)r);
-    return r;
+    size_t total = 0;
+    while (total < count) {
+        size_t chunk = count - total;
+        if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
+        int64_t r = vfs_read(file, kbuf, chunk);
+        if (r < 0) return total ? (int64_t)total : r;
+        if (r == 0) break;
+        memcpy((char*)buf_ptr + total, kbuf, (size_t)r);
+        total += (size_t)r;
+        if ((size_t)r < chunk) break;
+    }
+    return (int64_t)total;
 }
 
 static int64_t sys_open(uint64_t path_ptr, uint64_t flags, uint64_t mode) {

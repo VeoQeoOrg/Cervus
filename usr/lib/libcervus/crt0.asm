@@ -6,8 +6,6 @@ section .text
     extern main
     extern __cervus_argc
     extern __cervus_argv
-    extern __cervus_filter_args
-    extern __cervus_filtered_argv
 
 _start:
     xor     rbp, rbp
@@ -20,18 +18,68 @@ _start:
     lea     rax, [rel __cervus_argv]
     mov     qword [rax], rsi
 
+    sub     rsp, 8 + 8*130
+    mov     r10, rsp
+    add     r10, 8
+
+    xor     ecx, ecx
+    mov     edx, edi
+    xor     r8d, r8d
+
+.loop:
+    cmp     edx, ecx
+    je      .done
+    cmp     ecx, 128
+    jge     .done
+
+    mov     rax, [rsi + rcx*8]
+    test    ecx, ecx
+    jz      .keep
+    test    rax, rax
+    jz      .skip
+    cmp     byte [rax], '-'
+    jne     .keep
+    cmp     byte [rax+1], '-'
+    jne     .keep
+    cmp     byte [rax+2], 'c'
+    jne     .check_env
+    cmp     byte [rax+3], 'w'
+    jne     .keep
+    cmp     byte [rax+4], 'd'
+    jne     .keep
+    cmp     byte [rax+5], '='
+    jne     .keep
+    jmp     .skip
+
+.check_env:
+    cmp     byte [rax+2], 'e'
+    jne     .keep
+    cmp     byte [rax+3], 'n'
+    jne     .keep
+    cmp     byte [rax+4], 'v'
+    jne     .keep
+    cmp     byte [rax+5], ':'
+    jne     .keep
+    jmp     .skip
+
+.keep:
+    mov     [r10 + r8*8], rax
+    inc     r8d
+.skip:
+    inc     ecx
+    jmp     .loop
+
+.done:
+    mov     qword [r10 + r8*8], 0
+
     and     rsp, -16
 
-    movsxd  rdi, dword [rel __cervus_argc]
-    mov     rsi, qword [rel __cervus_argv]
-    call    __cervus_filter_args
-
-    movsxd  rdi, eax
-    lea     rsi, [rel __cervus_filtered_argv]
+    mov     edi, r8d
+    mov     rsi, r10
     call    main
 
     movsxd  rdi, eax
-    xor     rax, rax
+    xor     eax, eax
     syscall
 
 .hang:
