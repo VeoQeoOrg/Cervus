@@ -271,6 +271,36 @@ void kernel_main(void) {
         serial_writestring("[boot] no installed system detected, using initramfs\n");
     }
 
+    if (skip_initramfs) {
+        const char *root_dev = NULL;
+        if (blkdev_get_by_name("hda2")) root_dev = "hda2";
+        else if (blkdev_get_by_name("hda")) root_dev = "hda";
+
+        if (root_dev) {
+            int ur = vfs_umount("/");
+            serial_printf("[boot] umount(/) -> %d\n", ur);
+            int mr = disk_mount(root_dev, "/");
+            serial_printf("[boot] disk_mount(%s,/) -> %d\n", root_dev, mr);
+            if (mr == 0) {
+                vfs_mkdir("/dev",  0755);
+                vfs_mkdir("/tmp",  0755);
+                vfs_mkdir("/proc", 0755);
+                vfs_mkdir("/mnt",  0755);
+            } else {
+                vnode_t *fallback = ramfs_create_root();
+                vfs_mount("/", fallback);
+                vfs_set_mount_info("/", "ramfs", "ramfs");
+                vnode_unref(fallback);
+                vfs_mkdir("/dev",  0755);
+                vfs_mkdir("/bin",  0755);
+                vfs_mkdir("/etc",  0755);
+                vfs_mkdir("/tmp",  0755);
+                vfs_mkdir("/proc", 0755);
+                vfs_mkdir("/mnt",  0755);
+            }
+        }
+    }
+
     if (!skip_initramfs && module_request.response &&
         module_request.response->module_count >= 2) {
         struct limine_file *tar = module_request.response->modules[1];

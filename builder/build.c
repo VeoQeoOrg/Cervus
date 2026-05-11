@@ -881,10 +881,10 @@ static int edit_libtcc_c(dstr_t *s) {
         "dlclose(handle);\n",
         "(void)handle;\n")) changed++;
 
-    if (!memmem(s->data, s->len, "Cervus: no ld.so", 16)) {
+    if (!memmem(s->data, s->len, "s->alacarte_link = 1;\n    s->static_link = 1;", 45)) {
         if (dstr_replace_once(s,
             "    s->alacarte_link = 1;",
-            "    s->alacarte_link = 1;\n    s->static_link = 1;  /* Cervus: no ld.so */"))
+            "    s->alacarte_link = 1;\n    s->static_link = 1;"))
             changed++;
     }
 
@@ -893,8 +893,9 @@ static int edit_libtcc_c(dstr_t *s) {
         "            tcc_add_crt(s, \"crt1.o\");\n"
         "        tcc_add_crt(s, \"crti.o\");",
         "        if (output_type != TCC_OUTPUT_DLL)\n"
-        "            tcc_add_crt(s, \"crt0.o\");  /* Cervus: only crt0 */"))
+        "            tcc_add_crt(s, \"crt0.o\");"))
         changed++;
+
     return changed;
 }
 
@@ -952,10 +953,10 @@ static int edit_tccrun_c(dstr_t *s) {
 static int edit_tccelf_c(dstr_t *s) {
     int changed = 0;
 
-    if (!memmem(s->data, s->len, "Cervus: -lcervus", 16)) {
+    if (!memmem(s->data, s->len, "tcc_add_library_err(s1, \"cervus\")", 33)) {
         if (dstr_replace_once(s,
             "    if (!s1->nostdlib) {\n        tcc_add_library_err(s1, \"c\");",
-            "    if (!s1->nostdlib) {\n        tcc_add_library_err(s1, \"cervus\");  /* Cervus: -lcervus */"))
+            "    if (!s1->nostdlib) {\n        tcc_add_library_err(s1, \"cervus\");"))
             changed++;
     }
 
@@ -963,8 +964,28 @@ static int edit_tccelf_c(dstr_t *s) {
         "        if (s1->output_type != TCC_OUTPUT_MEMORY)\n"
         "            tcc_add_crt(s1, \"crtn.o\");\n"
         "    }\n",
-        "        /* Cervus: no crtn.o */\n    }\n"))
+        "    }\n"))
         changed++;
+
+    if (!memmem(s->data, s->len, "CERVUS_PLT_FOLD", 15)) {
+        if (dstr_replace_once(s,
+            "            if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&\n"
+            "                (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||\n"
+            "\t\t ELFW(ST_BIND)(sym->st_info) == STB_LOCAL)) {\n"
+            "                rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);\n"
+            "                continue;\n"
+            "            }",
+            "#define CERVUS_PLT_FOLD\n"
+            "            if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&\n"
+            "                (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||\n"
+            "\t\t ELFW(ST_BIND)(sym->st_info) == STB_LOCAL ||\n"
+            "\t\t (s1->static_link && sym->st_shndx != SHN_UNDEF))) {\n"
+            "                rel->r_info = ELFW(R_INFO)(sym_index, R_X86_64_PC32);\n"
+            "                continue;\n"
+            "            }"))
+            changed++;
+    }
+
     return changed;
 }
 
@@ -981,7 +1002,11 @@ static bool write_tcc_config_h(const char *src_dir) {
         "#define CONFIG_TCC_LIBPATHS     \"/usr/lib\"\n"
         "#define CONFIG_TCC_CRTPREFIX    \"/usr/lib\"\n"
         "#define CONFIG_TCC_ELFINTERP    \"\"\n"
-        "#define CONFIG_TCCDIR           \"/usr/lib/tcc\"\n\n"
+        "#define CONFIG_TCCDIR           \"/usr/lib/tcc\"\n"
+        "#define CONFIG_TCC_SYSINCLUDEPATHS "
+            "\"/usr/lib/tcc/include\" \":\" "
+            "\"/usr/local/include\" \":\" "
+            "\"/usr/include\"\n\n"
         "#define HOST_OS    \"Cervus\"\n"
         "#define HOST_ARCH  \"x86_64\"\n\n"
         "#define TCC_TARGET_X86_64 1\n\n"
@@ -993,7 +1018,7 @@ static bool write_tcc_config_h(const char *src_dir) {
         "#undef  CONFIG_WIN32\n"
         "#undef  CONFIG_WIN64\n"
         "#undef  TCC_TARGET_PE\n\n"
-        "#endif /* _CONFIG_H */\n",
+        "#endif\n",
         f);
     fclose(f);
     return true;
@@ -1066,12 +1091,27 @@ static bool tcc_build_and_install(void) {
     path_join2(one_hdr,    sizeof(one_hdr),    src_dir_full, "tcc.h");
     path_join2(one_libtcc, sizeof(one_libtcc), src_dir_full, "libtcc.c");
 
+    char one_tccelf[SHORTPATH], one_tccrun[SHORTPATH], one_tccgen[SHORTPATH];
+    char one_x86_64_link[SHORTPATH], one_x86_64_gen[SHORTPATH], one_tccpp[SHORTPATH];
+    path_join2(one_tccelf,       sizeof(one_tccelf),       src_dir_full, "tccelf.c");
+    path_join2(one_tccrun,       sizeof(one_tccrun),       src_dir_full, "tccrun.c");
+    path_join2(one_tccgen,       sizeof(one_tccgen),       src_dir_full, "tccgen.c");
+    path_join2(one_x86_64_link,  sizeof(one_x86_64_link),  src_dir_full, "x86_64-link.c");
+    path_join2(one_x86_64_gen,   sizeof(one_x86_64_gen),   src_dir_full, "x86_64-gen.c");
+    path_join2(one_tccpp,        sizeof(one_tccpp),        src_dir_full, "tccpp.c");
+
     long elf_t = get_mtime_safe(tcc_elf);
     bool need_tcc =
         !file_exists(tcc_elf) ||
-        get_mtime_safe(one_src)    > elf_t ||
-        get_mtime_safe(one_hdr)    > elf_t ||
-        get_mtime_safe(one_libtcc) > elf_t;
+        get_mtime_safe(one_src)         > elf_t ||
+        get_mtime_safe(one_hdr)         > elf_t ||
+        get_mtime_safe(one_libtcc)      > elf_t ||
+        get_mtime_safe(one_tccelf)      > elf_t ||
+        get_mtime_safe(one_tccrun)      > elf_t ||
+        get_mtime_safe(one_tccgen)      > elf_t ||
+        get_mtime_safe(one_x86_64_link) > elf_t ||
+        get_mtime_safe(one_x86_64_gen)  > elf_t ||
+        get_mtime_safe(one_tccpp)       > elf_t;
 
     if (need_tcc) {
         print_color(COLOR_CYAN, "[tcc] Building tcc.elf for Cervus (x86_64)...");

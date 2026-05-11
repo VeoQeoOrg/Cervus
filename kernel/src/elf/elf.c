@@ -194,6 +194,10 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
         if (sh->sh_flags & SHF_WRITE)        flags |= VMM_WRITE;
         if (!(sh->sh_flags & SHF_EXECINSTR)) flags |= VMM_NOEXEC;
 
+        uintptr_t added_lo = 0;
+        uintptr_t added_hi = 0;
+        bool      have_added_range = false;
+
         size_t added_pages = 0;
         for (uintptr_t p = p_start; p < p_end; p += PAGE_SIZE) {
             uint64_t pf = 0;
@@ -205,6 +209,14 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
                 return new_end;
             }
             added_pages++;
+            if (!have_added_range) {
+                added_lo = p;
+                added_hi = p + PAGE_SIZE;
+                have_added_range = true;
+            } else {
+                if (p              < added_lo) added_lo = p;
+                if (p + PAGE_SIZE  > added_hi) added_hi = p + PAGE_SIZE;
+            }
         }
 
         if (added_pages > 0) {
@@ -218,9 +230,9 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
                           (sh->sh_flags & SHF_WRITE)     ? "W" : "-",
                           (sh->sh_flags & SHF_EXECINSTR) ? "X" : "-");
 
-            if (sh->sh_type != SHT_NOBITS && sh->sh_size > 0) {
+            if (sh->sh_type != SHT_NOBITS && sh->sh_size > 0 && have_added_range) {
                 if (sh->sh_offset + sh->sh_size <= file_size) {
-                    for (uintptr_t p = p_start; p < p_end; p += PAGE_SIZE) {
+                    for (uintptr_t p = added_lo; p < added_hi; p += PAGE_SIZE) {
                         uintptr_t pv_end   = p + PAGE_SIZE;
                         uintptr_t cp_start = (p > s_start) ? p : s_start;
                         uintptr_t cp_end   = (pv_end < s_end) ? pv_end : s_end;
