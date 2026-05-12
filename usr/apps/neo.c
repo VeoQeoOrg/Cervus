@@ -58,6 +58,11 @@ typedef struct {
     int        statusmsg_visible;
     int        quit_pending;
     long       disk_size;
+    int        show_lineno;
+    int        lineno_width;
+    char      *clipboard;
+    int        clipboard_len;
+    int        clipboard_was_line;
     struct termios orig_termios;
 } neo_t;
 
@@ -338,6 +343,74 @@ static void editor_delete_char(void)
     }
 }
 
+static void editor_delete_char_forward(void)
+{
+    if (E.cy == E.numrows) return;
+    neo_row_t *r = &E.row[E.cy];
+    if (E.cx < r->size) {
+        row_delete_char(r, E.cx);
+    } else if (E.cy + 1 < E.numrows) {
+        neo_row_t *nx = &E.row[E.cy + 1];
+        row_append_string(r, nx->chars, nx->size);
+        row_delete_at(E.cy + 1);
+    }
+}
+
+static void editor_copy_line(void)
+{
+    if (E.cy >= E.numrows) return;
+    neo_row_t *r = &E.row[E.cy];
+    free(E.clipboard);
+    E.clipboard = malloc(r->size + 1);
+    if (!E.clipboard) { E.clipboard_len = 0; return; }
+    memcpy(E.clipboard, r->chars, r->size);
+    E.clipboard[r->size] = '\0';
+    E.clipboard_len = r->size;
+    E.clipboard_was_line = 1;
+}
+
+static void editor_cut_line(void)
+{
+    if (E.cy >= E.numrows) return;
+    editor_copy_line();
+    row_delete_at(E.cy);
+    if (E.cy >= E.numrows && E.cy > 0) E.cy--;
+    E.cx = 0;
+}
+
+static void editor_paste(void)
+{
+    if (!E.clipboard || E.clipboard_len == 0) return;
+    if (E.clipboard_was_line) {
+        row_insert_at(E.cy, E.clipboard, E.clipboard_len);
+        E.cy++;
+        E.cx = 0;
+    } else {
+        if (E.cy == E.numrows) row_insert_at(E.numrows, "", 0);
+        neo_row_t *r = &E.row[E.cy];
+        row_reserve(r, r->size + E.clipboard_len + 1);
+        memmove(&r->chars[E.cx + E.clipboard_len], &r->chars[E.cx], r->size - E.cx + 1);
+        memcpy(&r->chars[E.cx], E.clipboard, E.clipboard_len);
+        r->size += E.clipboard_len;
+        row_update(r);
+        E.cx += E.clipboard_len;
+        E.dirty = 1;
+    }
+}
+
+static void editor_duplicate_line(void)
+{
+    if (E.cy >= E.numrows) return;
+    neo_row_t *r = &E.row[E.cy];
+    char *copy = malloc(r->size + 1);
+    if (!copy) return;
+    memcpy(copy, r->chars, r->size);
+    copy[r->size] = '\0';
+    row_insert_at(E.cy + 1, copy, r->size);
+    free(copy);
+    E.cy++;
+}
+
 static char *rows_to_string(int *len)
 {
     int total = 0;
@@ -478,29 +551,57 @@ static void ab_append(abuf_t *ab, const char *s, int len)
 }
 static void ab_free(abuf_t *ab) { free(ab->b); ab->b = NULL; ab->len = 0; ab->cap = 0; }
 
+static void recompute_lineno_width(void)
+{
+    if (!E.show_lineno) { E.lineno_width = 0; return; }
+    int max = E.numrows > 0 ? E.numrows : 1;
+    int d = 1;
+    while (max >= 10) { max /= 10; d++; }
+    if (d < 3) d = 3;
+    E.lineno_width = d + 1;
+}
+
 static void scroll(void)
 {
     E.rx = 0;
     if (E.cy < E.numrows) E.rx = row_cx_to_rx(&E.row[E.cy], E.cx);
 
+    int text_cols = E.screencols - E.lineno_width;
+    if (text_cols < 1) text_cols = 1;
+
     if (E.cy < E.rowoff) E.rowoff = E.cy;
     if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
     if (E.rx < E.coloff) E.coloff = E.rx;
-    if (E.rx >= E.coloff + E.screencols) E.coloff = E.rx - E.screencols + 1;
+    if (E.rx >= E.coloff + text_cols) E.coloff = E.rx - text_cols + 1;
 }
 
 static void draw_rows(abuf_t *ab)
 {
     char pos[16];
-    int limit = E.screencols - 1;
+    int text_cols = E.screencols - E.lineno_width;
+    if (text_cols < 1) text_cols = 1;
+    int limit = text_cols - 1;
     if (limit < 1) limit = 1;
     for (int y = 0; y < E.screenrows; y++) {
         int n = snprintf(pos, sizeof(pos), "\x1b[%d;1H", y + 1);
         ab_append(ab, pos, n);
 
         int filerow = y + E.rowoff;
+
+        if (E.show_lineno) {
+            char lnbuf[16];
+            int ln;
+            if (filerow < E.numrows)
+                ln = snprintf(lnbuf, sizeof(lnbuf), "\x1b[90m%*d \x1b[m",
+                              E.lineno_width - 1, filerow + 1);
+            else
+                ln = snprintf(lnbuf, sizeof(lnbuf), "\x1b[90m%*s \x1b[m",
+                              E.lineno_width - 1, "~");
+            ab_append(ab, lnbuf, ln);
+        }
+
         if (filerow >= E.numrows) {
-            if (E.numrows == 0 && y == E.screenrows / 3) {
+            if (E.numrows == 0 && y == E.screenrows / 3 && !E.show_lineno) {
                 char welcome[80];
                 int wl = snprintf(welcome, sizeof(welcome),
                     "neo editor -- version %s -- press ESC to exit", NEO_VERSION);
@@ -509,7 +610,7 @@ static void draw_rows(abuf_t *ab)
                 if (padding > 0) { ab_append(ab, "~", 1); padding--; }
                 while (padding-- > 0) ab_append(ab, " ", 1);
                 ab_append(ab, welcome, wl);
-            } else {
+            } else if (!E.show_lineno) {
                 ab_append(ab, "~", 1);
             }
         } else {
@@ -532,8 +633,8 @@ static void draw_status(abuf_t *ab)
     int len = snprintf(status, sizeof(status), " %.40s%s ",
         E.filename ? E.filename : "[No Name]",
         E.dirty ? " [modified]" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d ",
-        E.cy + 1, E.numrows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "Ln %d, Col %d / %d lines ",
+        E.cy + 1, E.cx + 1, E.numrows);
 
     int limit = E.screencols - 1;
     if (limit < 1) limit = 1;
@@ -560,7 +661,7 @@ static void draw_message(abuf_t *ab)
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, E.statusmsg, mlen);
     } else {
-        const char *hint = " ^S=save ^Q=quit ^F=find ^G=goto ^B=top ^E=end  ESC=exit";
+        const char *hint = " ^S save  ^Q quit  ^X cut  ^C copy  ^V paste  ^D dup  ^F find  ^G goto  ^N lineno";
         int mlen = strlen(hint);
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, hint, mlen);
@@ -569,6 +670,7 @@ static void draw_message(abuf_t *ab)
 
 static void refresh_screen(void)
 {
+    recompute_lineno_width();
     scroll();
     abuf_t ab = {0};
     ab_append(&ab, "\x1b[?25l", 6);
@@ -577,7 +679,7 @@ static void refresh_screen(void)
     draw_message(&ab);
 
     int cursor_row = (E.cy - E.rowoff) + 1;
-    int cursor_col = (E.rx - E.coloff) + 1;
+    int cursor_col = (E.rx - E.coloff) + 1 + E.lineno_width;
 
     char curbuf[32];
     int n = snprintf(curbuf, sizeof(curbuf), "\x1b[%d;%dH", cursor_row, cursor_col);
@@ -812,6 +914,30 @@ static int process_key(void)
             else E.cx = 0;
             break;
 
+        case KEY_CTRL('x'):
+            editor_cut_line();
+            set_status("Line cut to clipboard");
+            break;
+
+        case KEY_CTRL('c'):
+            editor_copy_line();
+            set_status("Line copied to clipboard");
+            break;
+
+        case KEY_CTRL('v'):
+            editor_paste();
+            break;
+
+        case KEY_CTRL('d'):
+            editor_duplicate_line();
+            break;
+
+        case KEY_CTRL('n'):
+            E.show_lineno = !E.show_lineno;
+            recompute_lineno_width();
+            set_status(E.show_lineno ? "Line numbers ON" : "Line numbers OFF");
+            break;
+
         case KEY_HOME:
             E.cx = 0;
             break;
@@ -826,8 +952,7 @@ static int process_key(void)
             break;
 
         case KEY_DEL:
-            move_cursor(KEY_ARROW_RIGHT);
-            editor_delete_char();
+            editor_delete_char_forward();
             break;
 
         case KEY_PAGE_UP:
@@ -874,7 +999,13 @@ static void init_editor(void)
     E.statusmsg_visible = 0;
     E.quit_pending = 0;
     E.disk_size = -1;
+    E.show_lineno = 1;
+    E.lineno_width = 0;
+    E.clipboard = NULL;
+    E.clipboard_len = 0;
+    E.clipboard_was_line = 0;
     get_window_size();
+    recompute_lineno_width();
 }
 
 int main(int argc, char **argv)

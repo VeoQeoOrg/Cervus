@@ -67,11 +67,63 @@ static inline int tty_is_canonical(void) {
 static inline int tty_has_isig(void) {
     return (g_tty_termios.c_lflag & T_ISIG) != 0;
 }
+static inline int tty_has_echo(void) {
+    return (g_tty_termios.c_lflag & T_ECHO) != 0;
+}
+
+static void tty_echo_char(char c)
+{
+    if (c == '\b' || c == 0x7F) {
+        const char *s = "\b \b";
+        serial_writebuf(s, 3);
+        putchar('\b'); putchar(' '); putchar('\b');
+        return;
+    }
+    if (c == '\n' || c == '\r') {
+        serial_writebuf("\n", 1);
+        putchar('\n');
+        return;
+    }
+    if ((unsigned char)c < 0x20 || (unsigned char)c == 0x7F) return;
+    char b[1] = { c };
+    serial_writebuf(b, 1);
+    putchar((int)(unsigned char)c);
+}
 
 static inline task_t* devfs_cur_task(void) {
     percpu_t* pc = get_percpu();
     return pc ? (task_t*)pc->current_task : NULL;
 }
+
+static int wait_for_char(char *out, uint64_t half_tick, uint64_t *next_blink, int *cursor_on)
+{
+    while (kb_buf_empty()) {
+        task_t *me = devfs_cur_task();
+        if (me && me->pending_kill) {
+            if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
+            return -1;
+        }
+
+        if (half_tick) {
+            uint64_t now = hpet_read_counter();
+            if (now >= *next_blink) {
+                if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
+                else            { draw_cursor();  *cursor_on = 1; }
+                *next_blink = now + half_tick;
+            }
+        }
+        task_yield();
+    }
+    if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
+    *out = kb_buf_getc();
+    return 0;
+}
+
+#define TTY_LINE_MAX 4096
+static char g_tty_line[TTY_LINE_MAX];
+static size_t g_tty_line_len  = 0;
+static size_t g_tty_line_read = 0;
+static int    g_tty_line_eof  = 0;
 
 static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
@@ -85,62 +137,95 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     int      cursor_on  = 1;
     int      canonical  = tty_is_canonical();
     int      isig       = tty_has_isig();
+    int      echo       = canonical && tty_has_echo();
 
-    if (tty_nonblock && kb_buf_empty()) return -EAGAIN;
+    if (tty_nonblock && kb_buf_empty()
+        && (!canonical || g_tty_line_read >= g_tty_line_len))
+        return -EAGAIN;
 
     draw_cursor();
 
-    while (kb_buf_empty()) {
-        task_t *me = devfs_cur_task();
-        if (me && me->pending_kill) {
+    if (!canonical) {
+        char c;
+        if (wait_for_char(&c, half_tick, &next_blink, &cursor_on) < 0) {
             erase_cursor();
+            kb_buf_consume_ctrlc();
             return -EINTR;
         }
-
-        if (half_tick) {
-            uint64_t now = hpet_read_counter();
-            if (now >= next_blink) {
-                if (cursor_on) { erase_cursor(); cursor_on = 0; }
-                else           { draw_cursor();  cursor_on = 1; }
-                next_blink = now + half_tick;
-            }
-        }
-        task_yield();
-    }
-
-    erase_cursor();
-
-    task_t *me = devfs_cur_task();
-    if (me && me->pending_kill) {
-        kb_buf_consume_ctrlc();
-        return -EINTR;
-    }
-
-    char first = kb_buf_getc();
-    if (isig && canonical && first == 0x03) {
-        return -EINTR;
-    }
-
-    dst[0] = first;
-    size_t got = 1;
-
-    if (!canonical) {
+        erase_cursor();
+        if (isig && c == 0x03) { kb_buf_consume_ctrlc(); return -EINTR; }
+        dst[0] = c;
+        size_t got = 1;
         while (got < len) {
-            char c;
-            if (!kb_buf_try_getc(&c)) break;
-            dst[got++] = c;
+            char nc;
+            if (!kb_buf_try_getc(&nc)) break;
+            dst[got++] = nc;
         }
         return (int64_t)got;
     }
 
-    while (got < len) {
-        char c;
-        if (!kb_buf_try_getc(&c)) break;
-        if (isig && c == 0x03) break;
-        dst[got++] = c;
-        if (c == '\n') break;
+    erase_cursor();
+
+    if (g_tty_line_read >= g_tty_line_len) {
+        g_tty_line_len  = 0;
+        g_tty_line_read = 0;
+        g_tty_line_eof  = 0;
+
+        for (;;) {
+            char c;
+            if (wait_for_char(&c, half_tick, &next_blink, &cursor_on) < 0) {
+                kb_buf_consume_ctrlc();
+                return -EINTR;
+            }
+
+            if (isig && c == 0x03) {
+                kb_buf_consume_ctrlc();
+                if (echo) {
+                    const char *s = "^C\n";
+                    serial_writebuf(s, 3);
+                    putchar('^'); putchar('C'); putchar('\n');
+                }
+                g_tty_line_len  = 0;
+                g_tty_line_read = 0;
+                return -EINTR;
+            }
+
+            if (c == 0x04) {
+                g_tty_line_eof = 1;
+                break;
+            }
+
+            if (c == '\b' || c == 0x7F) {
+                if (g_tty_line_len > 0) {
+                    g_tty_line_len--;
+                    if (echo) tty_echo_char('\b');
+                }
+                continue;
+            }
+
+            if (c == '\r') c = '\n';
+
+            if (g_tty_line_len < TTY_LINE_MAX) {
+                g_tty_line[g_tty_line_len++] = c;
+                if (echo) tty_echo_char(c);
+            }
+
+            if (c == '\n') break;
+        }
     }
-    return (int64_t)got;
+
+    if (g_tty_line_len == 0 && g_tty_line_eof) {
+        g_tty_line_eof = 0;
+        return 0;
+    }
+
+    size_t avail = g_tty_line_len - g_tty_line_read;
+    size_t deliver = (avail < len) ? avail : len;
+    if (deliver > 0) {
+        memcpy(dst, g_tty_line + g_tty_line_read, deliver);
+        g_tty_line_read += deliver;
+    }
+    return (int64_t)deliver;
 }
 
 static int64_t tty_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
