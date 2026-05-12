@@ -1375,10 +1375,6 @@ bool build_initramfs(void) {
             " Cervus OS " VERSION " (Alpha release)\n"
             "\n"
             " Type 'help' to see available commands.\n"
-            "\n"
-            " Your home directory is /mnt/home (persistent ext2 disk).\n"
-            " Files created in /mnt/ will survive reboots.\n"
-            " Files outside /mnt/ are in RAM and will be lost on reboot.\n"
             "\n");
         fclose(motd);
     }
@@ -1490,7 +1486,10 @@ bool build_initramfs(void) {
             "\n"
             "Tips:\n"
             "  - Use arrow keys to move cursor within a command\n"
-            "  - Use Up/Down to browse command history (max 20)\n"
+            "  - Use Up/Down to browse command history (saved in ~/.history)\n"
+            "  - Press Tab to autocomplete commands and paths\n"
+            "  - Press Ctrl-D on an empty line to log out\n"
+            "  - Press Ctrl-C to cancel the current input\n"
             "  - Type 'ls' to list files, 'cat <file>' to read .txt files\n"
             "  - Binaries are in /bin and /apps\n"
         );

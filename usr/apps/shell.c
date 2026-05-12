@@ -5,10 +5,14 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <termios.h>
 #include <sys/stat.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
+
+static void term_set_shell_mode(void);
+static void term_set_cooked_mode(void);
 
 #ifndef VFS_MAX_PATH
 #define VFS_MAX_PATH 1024
@@ -108,6 +112,24 @@ static void hist_push(const char *l) {
 static const char *hist_get(int n) {
     if (n < 1 || n > hist_count) return NULL;
     return history[(hist_head + hist_count - n) % HIST_MAX];
+}
+
+static void hist_print(int limit) {
+    int start = 0;
+    if (limit > 0 && limit < hist_count) start = hist_count - limit;
+    for (int i = start; i < hist_count; i++) {
+        int idx = (hist_head + i) % HIST_MAX;
+        printf("%5d  %s\n", i + 1, history[idx]);
+    }
+}
+
+static void hist_clear(void) {
+    hist_count = 0;
+    hist_head = 0;
+    if (g_hist_file) {
+        int fd = open(g_hist_file, O_WRONLY | O_TRUNC, 0600);
+        if (fd >= 0) close(fd);
+    }
 }
 
 #define ENV_MAX_VARS 128
@@ -286,6 +308,21 @@ static void list_dir_matches(const char *dir, const char *prefix, int plen,
     closedir(d);
 }
 
+static int is_dir_path(const char *dir, const char *name) {
+    char full[VFS_MAX_PATH];
+    int dl = (int)strlen(dir);
+    int nl = (int)strlen(name);
+    if (dl + 1 + nl + 1 > (int)sizeof(full)) return 0;
+    int o = 0;
+    for (int i = 0; i < dl; i++) full[o++] = dir[i];
+    if (dl == 0 || dir[dl-1] != '/') full[o++] = '/';
+    for (int i = 0; i < nl; i++) full[o++] = name[i];
+    full[o] = '\0';
+    struct stat st;
+    if (stat(full, &st) != 0) return 0;
+    return st.st_type == 1 ? 1 : 0;
+}
+
 static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
     int ws_start = find_word_start(buf, *pos);
     int wlen = *pos - ws_start;
@@ -305,8 +342,14 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
 
     char matches[32][256];
     int nmatch = 0;
+    int match_dir_flags[32] = {0};
+    char dirp[VFS_MAX_PATH];
+    const char *prefix = word;
+    int plen = wlen;
+    int is_path_word = 0;
+    for (int i = 0; word[i]; i++) if (word[i] == '/') { is_path_word = 1; break; }
 
-    if (is_first_word) {
+    if (is_first_word && !is_path_word) {
         const char *pathvar = env_get("PATH");
         char ptmp[ENV_VAL_MAX];
         strncpy(ptmp, pathvar, sizeof(ptmp) - 1);
@@ -317,16 +360,15 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
             if (*p == ':') *p++ = '\0';
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, 32);
         }
-        const char *builtins[] = {"help","exit","cd","export","unset",NULL};
+        const char *builtins[] = {"help","exit","cd","export","unset","history","clear",NULL};
         for (int i = 0; builtins[i] && nmatch < 32; i++) {
             if (strncmp(builtins[i], word, wlen) == 0) {
                 strncpy(matches[nmatch], builtins[i], 255);
                 nmatch++;
             }
         }
+        dirp[0] = '\0';
     } else {
-        char dirp[VFS_MAX_PATH];
-        const char *prefix = word;
         char *last_slash = NULL;
         for (int i = 0; word[i]; i++) if (word[i] == '/') last_slash = &word[i];
         if (last_slash) {
@@ -339,9 +381,11 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
             prefix = last_slash + 1;
         } else {
             strncpy(dirp, cwd, sizeof(dirp) - 1);
+            dirp[sizeof(dirp) - 1] = '\0';
         }
-        int plen = (int)strlen(prefix);
+        plen = (int)strlen(prefix);
         list_dir_matches(dirp, prefix, plen, matches, &nmatch, 32);
+        for (int i = 0; i < nmatch; i++) match_dir_flags[i] = is_dir_path(dirp, matches[i]);
     }
 
     if (nmatch == 0) {
@@ -351,25 +395,14 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
     if (nmatch == 1) {
         const char *m = matches[0];
         int mlen = (int)strlen(m);
-        int tail = mlen - wlen;
+        int tail = mlen - plen;
         if (tail > 0) {
-            const char *suffix = m + wlen;
-            if (is_first_word) {
-                int need = tail;
-                if (*len + need >= maxlen) return;
-                int old_len = *len;
-                for (int i = *len; i >= *pos; i--) buf[i + need] = buf[i];
-                for (int i = 0; i < tail; i++) buf[*pos + i] = suffix[i];
-                *len += need;
-                buf[*len] = '\0';
-                cursor_to(*pos);
-                write(1, buf + *pos, *len - *pos);
-                sync_start_row(*len);
-                *pos += need;
-                cursor_to(*pos);
-            } else {
-                insert_str(buf, len, pos, maxlen, suffix, tail);
-            }
+            insert_str(buf, len, pos, maxlen, m + plen, tail);
+        }
+        if (match_dir_flags[0]) {
+            insert_str(buf, len, pos, maxlen, "/", 1);
+        } else if (tail >= 0) {
+            insert_str(buf, len, pos, maxlen, " ", 1);
         }
         return;
     }
@@ -379,14 +412,16 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
         while (j < common && matches[0][j] == matches[i][j]) j++;
         common = j;
     }
-    int extra = common - wlen;
+    int extra = common - plen;
     if (extra > 0) {
-        insert_str(buf, len, pos, maxlen, matches[0] + wlen, extra);
+        insert_str(buf, len, pos, maxlen, matches[0] + plen, extra);
         return;
     }
     putchar(10);
     for (int i = 0; i < nmatch; i++) {
-        fputs("  ", stdout); fputs(matches[i], stdout);
+        fputs("  ", stdout);
+        fputs(matches[i], stdout);
+        if (match_dir_flags[i]) putchar('/');
     }
     putchar(10);
     print_prompt();
@@ -458,7 +493,16 @@ static int readline_edit(char *buf, int maxlen) {
 
         if (c == '\n' || c == '\r') { buf[len] = '\0'; cursor_to(len); putchar(10); return len; }
         if (c == 3)  { fputs("^C", stdout); putchar(10); buf[0] = '\0'; return 0; }
-        if (c == 4)  { if (len == 0) return -1; continue; }
+        if (c == 4)  {
+            if (len == 0) { fputs("exit\n", stdout); return -1; }
+            if (pos < len) {
+                int old_len = len;
+                for (int i = pos; i < len - 1; i++) buf[i] = buf[i + 1];
+                len--; buf[len] = '\0';
+                redraw(buf, pos, len, old_len, pos);
+            }
+            continue;
+        }
         if (c == 1)  { pos = 0; cursor_to(0); continue; }
         if (c == 5)  { pos = len; cursor_to(len); continue; }
         if (c == '\t') {
@@ -545,28 +589,32 @@ static int tokenize(char *line, char *argv[], int maxargs) {
 
 static void cmd_help(void) {
     putchar(10);
-    fputs("  " C_CYAN "Cervus Shell" C_RESET " - commands\n", stdout);
+    fputs("  " C_CYAN "Cervus Shell" C_RESET " - builtin commands\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
-    fputs("  " C_BOLD "help" C_RESET "          show this message\n", stdout);
-    fputs("  " C_BOLD "cd" C_RESET " <dir>      change directory\n", stdout);
-    fputs("  " C_BOLD "export" C_RESET " N=V    set variable N to value V\n", stdout);
-    fputs("  " C_BOLD "unset" C_RESET " N       delete variable N\n", stdout);
-    fputs("  " C_BOLD "env" C_RESET "           list variables\n", stdout);
-    fputs("  " C_BOLD "exit" C_RESET "          quit shell\n", stdout);
+    fputs("  " C_BOLD "help" C_RESET "             show this message\n", stdout);
+    fputs("  " C_BOLD "cd" C_RESET " <dir>         change directory\n", stdout);
+    fputs("  " C_BOLD "export" C_RESET " N=V       set environment variable\n", stdout);
+    fputs("  " C_BOLD "unset" C_RESET " N          delete environment variable\n", stdout);
+    fputs("  " C_BOLD "history" C_RESET " [N|-c]   show last N entries or clear (-c)\n", stdout);
+    fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
-    fputs("  " C_BOLD "Programs:" C_RESET " ls, cat, echo, pwd, clear, uname\n", stdout);
-    fputs("  meminfo, cpuinfo, ps, kill, find, stat, wc, yes, sleep\n", stdout);
-    fputs("  mount, umount, mkfs, lsblk, mv, rm, mkdir, touch\n", stdout);
-    fputs("  " C_RED "shutdown" C_RESET ", " C_CYAN "reboot" C_RESET "\n", stdout);
+    fputs("  " C_BOLD "File programs:" C_RESET " ls cat cp mv rm mkdir touch stat find\n", stdout);
+    fputs("                 head tail grep wc sort uniq hexdump tee\n", stdout);
+    fputs("  " C_BOLD "Text & I/O:" C_RESET "    echo seq tee neo (editor)\n", stdout);
+    fputs("  " C_BOLD "System:" C_RESET "        pwd whoami env uname clear date uptime\n", stdout);
+    fputs("                 meminfo cpuinfo ps kill which basename dirname\n", stdout);
+    fputs("  " C_BOLD "Disk:" C_RESET "          mount umount mkfs lsblk diskinfo\n", stdout);
+    fputs("  " C_BOLD "Power:" C_RESET "         " C_RED "shutdown" C_RESET ", " C_CYAN "reboot" C_RESET "\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     fputs("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
-          " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "\n", stdout);
-    fputs("  " C_BOLD "Tab" C_RESET "       auto-complete / 4 spaces\n", stdout);
-    fputs("  " C_BOLD "Ctrl+C" C_RESET "    interrupt\n", stdout);
-    fputs("  " C_BOLD "Ctrl+A/E" C_RESET "  beginning/end of line\n", stdout);
-    fputs("  " C_BOLD "Ctrl+K/U" C_RESET "  delete to end/beginning\n", stdout);
-    fputs("  " C_BOLD "Ctrl+W" C_RESET "    delete word\n", stdout);
-    fputs("  " C_BOLD "Arrows" C_RESET "    cursor / history\n", stdout);
+          " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "   " C_YELLOW ">" C_RESET "   " C_YELLOW ">>" C_RESET "\n", stdout);
+    fputs("  " C_BOLD "Tab" C_RESET "          auto-complete commands and paths\n", stdout);
+    fputs("  " C_BOLD "Ctrl+C" C_RESET "       interrupt current input\n", stdout);
+    fputs("  " C_BOLD "Ctrl+D" C_RESET "       EOF (logout) / delete forward\n", stdout);
+    fputs("  " C_BOLD "Ctrl+A/E" C_RESET "     beginning/end of line\n", stdout);
+    fputs("  " C_BOLD "Ctrl+K/U" C_RESET "     delete to end/beginning\n", stdout);
+    fputs("  " C_BOLD "Ctrl+W" C_RESET "       delete previous word\n", stdout);
+    fputs("  " C_BOLD "Up/Down" C_RESET "      browse command history (saved on disk)\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     putchar(10);
 }
@@ -641,12 +689,67 @@ static int find_in_path(const char *cmd, char *out, size_t outsz) {
     return 0;
 }
 
-typedef enum { REDIR_NONE = 0, REDIR_OUT, REDIR_APPEND, REDIR_IN } redir_type_t;
+typedef enum { REDIR_NONE = 0, REDIR_OUT, REDIR_APPEND, REDIR_IN, REDIR_HEREDOC } redir_type_t;
 
 typedef struct {
     redir_type_t type;
     char path[VFS_MAX_PATH];
 } redir_t;
+
+static int g_heredoc_seq = 0;
+
+static int collect_heredoc(const char *marker, char *out_path, size_t out_sz)
+{
+    g_heredoc_seq++;
+    snprintf(out_path, out_sz, "/tmp/.heredoc-%d", g_heredoc_seq);
+    int fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fputs(C_RED "heredoc: cannot create temp file\n" C_RESET, stdout);
+        return -1;
+    }
+
+    term_set_cooked_mode();
+    fputs("> ", stdout);
+    char line[LINE_MAX];
+    int li = 0;
+    char c;
+    int mlen = (int)strlen(marker);
+    int rc = 0;
+    int eof_seen = 0;
+
+    while (1) {
+        ssize_t r = read(0, &c, 1);
+        if (r == 0) {
+            eof_seen = 1;
+            if (li > 0) {
+                line[li] = '\0';
+                if (li == mlen && strncmp(line, marker, (size_t)mlen) == 0) break;
+                write(fd, line, (size_t)li);
+                write(fd, "\n", 1);
+            }
+            break;
+        }
+        if (r < 0) { rc = -1; break; }
+        if (c == '\n') {
+            line[li] = '\0';
+            if (li == mlen && strncmp(line, marker, (size_t)mlen) == 0) break;
+            write(fd, line, (size_t)li);
+            write(fd, "\n", 1);
+            li = 0;
+            fputs("> ", stdout);
+        } else if (li < LINE_MAX - 1) {
+            line[li++] = c;
+        }
+    }
+    term_set_shell_mode();
+    close(fd);
+    if (eof_seen) {
+        fputs(C_YELLOW "heredoc: ended by EOF (expected '" C_RESET, stdout);
+        fputs(marker, stdout);
+        fputs(C_YELLOW "')\n" C_RESET, stdout);
+    }
+    return rc;
+}
 
 static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_redirs, int *nredirs) {
     *nredirs = 0;
@@ -656,7 +759,12 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
         redir_type_t rt = REDIR_NONE;
         const char *target = NULL;
 
-        if (strcmp(a, ">>") == 0) {
+        if (strcmp(a, "<<") == 0) {
+            rt = REDIR_HEREDOC;
+            if (i + 1 < *argc) target = argv[++i];
+        } else if (a[0] == '<' && a[1] == '<' && a[2] != '\0') {
+            rt = REDIR_HEREDOC; target = a + 2;
+        } else if (strcmp(a, ">>") == 0) {
             rt = REDIR_APPEND;
             if (i + 1 < *argc) target = argv[++i];
         } else if (strcmp(a, ">") == 0) {
@@ -669,7 +777,7 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
             rt = REDIR_APPEND; target = a + 2;
         } else if (a[0] == '>' && a[1] != '>' && a[1] != '\0') {
             rt = REDIR_OUT; target = a + 1;
-        } else if (a[0] == '<' && a[1] != '\0') {
+        } else if (a[0] == '<' && a[1] != '\0' && a[1] != '<') {
             rt = REDIR_IN; target = a + 1;
         } else {
             argv[new_argc++] = argv[i];
@@ -682,10 +790,16 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
         }
         if (*nredirs < max_redirs) {
             redirs[*nredirs].type = rt;
-            char resolved[VFS_MAX_PATH];
-            resolve_path(cwd, target, resolved, sizeof(resolved));
-            strncpy(redirs[*nredirs].path, resolved, VFS_MAX_PATH - 1);
-            redirs[*nredirs].path[VFS_MAX_PATH - 1] = '\0';
+            if (rt == REDIR_HEREDOC) {
+                if (collect_heredoc(target, redirs[*nredirs].path,
+                                    sizeof(redirs[*nredirs].path)) < 0)
+                    return -1;
+            } else {
+                char resolved[VFS_MAX_PATH];
+                resolve_path(cwd, target, resolved, sizeof(resolved));
+                strncpy(redirs[*nredirs].path, resolved, VFS_MAX_PATH - 1);
+                redirs[*nredirs].path[VFS_MAX_PATH - 1] = '\0';
+            }
             (*nredirs)++;
         }
     }
@@ -716,6 +830,12 @@ static int run_single(char *line) {
     if (strcmp(cmd, "cd")     == 0) return cmd_cd(argc > 1 ? argv[1] : NULL);
     if (strcmp(cmd, "export") == 0) return cmd_export(argc, argv);
     if (strcmp(cmd, "unset")  == 0) return cmd_unset(argc, argv);
+    if (strcmp(cmd, "history") == 0) {
+        if (argc > 1 && strcmp(argv[1], "-c") == 0) { hist_clear(); return 0; }
+        int limit = (argc > 1) ? atoi(argv[1]) : 0;
+        hist_print(limit);
+        return 0;
+    }
 
     char binpath[VFS_MAX_PATH];
     if (cmd[0] == '/') {
@@ -754,8 +874,9 @@ static int run_single(char *line) {
     }
     real_argv_buf[ri] = NULL;
 
+    term_set_cooked_mode();
     pid_t child = fork();
-    if (child < 0) { fputs(C_RED "fork failed" C_RESET "\n", stdout); return 1; }
+    if (child < 0) { fputs(C_RED "fork failed" C_RESET "\n", stdout); term_set_shell_mode(); return 1; }
     if (child == 0) {
         for (int i = 0; i < nredirs; i++) {
             int fd = -1;
@@ -766,7 +887,7 @@ static int run_single(char *line) {
             } else if (redirs[i].type == REDIR_APPEND) {
                 fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_APPEND, 0644);
                 target_fd = 1;
-            } else if (redirs[i].type == REDIR_IN) {
+            } else if (redirs[i].type == REDIR_IN || redirs[i].type == REDIR_HEREDOC) {
                 fd = open(redirs[i].path, O_RDONLY, 0);
                 target_fd = 0;
             }
@@ -784,6 +905,10 @@ static int run_single(char *line) {
     }
     int status = 0;
     waitpid(child, &status, 0);
+    term_set_shell_mode();
+    for (int i = 0; i < nredirs; i++) {
+        if (redirs[i].type == REDIR_HEREDOC) unlink(redirs[i].path);
+    }
     return (status >> 8) & 0xFF;
 }
 
@@ -850,9 +975,11 @@ static int launch_installer(void) {
     argv[2] = "--cwd=/";
     argv[3] = NULL;
 
+    term_set_cooked_mode();
     pid_t child = fork();
     if (child < 0) {
         fputs(C_RED "  fork failed\n" C_RESET, stdout);
+        term_set_shell_mode();
         return -1;
     }
     if (child == 0) {
@@ -862,7 +989,25 @@ static int launch_installer(void) {
     }
     int status = 0;
     waitpid(child, &status, 0);
+    term_set_shell_mode();
     return (status >> 8) & 0xFF;
+}
+
+static void term_set_shell_mode(void)
+{
+    struct termios t;
+    if (tcgetattr(0, &t) < 0) return;
+    t.c_lflag &= ~(ICANON | ECHO);
+    t.c_lflag |= ISIG;
+    tcsetattr(0, TCSANOW, &t);
+}
+
+static void term_set_cooked_mode(void)
+{
+    struct termios t;
+    if (tcgetattr(0, &t) < 0) return;
+    t.c_lflag |= ICANON | ECHO | ISIG;
+    tcsetattr(0, TCSANOW, &t);
 }
 
 static int ask_install_or_live(void) {
@@ -886,6 +1031,8 @@ static int ask_install_or_live(void) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+
+    term_set_shell_mode();
 
     struct stat dev_st;
     int has_disk = (stat("/dev/hda", &dev_st) == 0);
@@ -965,12 +1112,15 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!rooted_on_disk && !disk_mounted) {
-        if (!has_disk) {
-            fputs(C_YELLOW " [Live Mode]" C_RESET " No disk detected. All changes are in RAM.\n\n", stdout);
-        } else {
-            fputs(C_YELLOW " [Live Mode]" C_RESET " Disk not mounted.\n\n", stdout);
-        }
+    if (rooted_on_disk) {
+        fputs(C_GREEN " [Installed]" C_RESET " Root mounted from disk. All changes persist.\n\n", stdout);
+    } else if (disk_mounted) {
+        fputs(C_GREEN " [Installed]" C_RESET " Disk mounted at /mnt. Files under /mnt/ persist.\n", stdout);
+        fputs(C_YELLOW "             " C_RESET " Files outside /mnt/ live in RAM only.\n\n", stdout);
+    } else if (!has_disk) {
+        fputs(C_YELLOW " [Live Mode]" C_RESET " No disk detected. All changes are in RAM.\n\n", stdout);
+    } else {
+        fputs(C_YELLOW " [Live Mode]" C_RESET " Disk not mounted. All changes are in RAM.\n\n", stdout);
     }
 
     char line[LINE_MAX];
@@ -978,10 +1128,8 @@ int main(int argc, char **argv) {
         print_prompt();
         int n = readline_edit(line, LINE_MAX);
         if (n < 0) {
-            fputs("\nSession ended. Restarting shell...\n", stdout);
             const char *h = env_get("HOME");
             strncpy(cwd, (h && h[0]) ? h : "/", sizeof(cwd));
-            print_motd();
             continue;
         }
         int len = (int)strlen(line);
