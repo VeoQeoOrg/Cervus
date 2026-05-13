@@ -45,6 +45,12 @@ static int term_get_cursor_row(void) {
     return 0;
 }
 
+static int term_get_cursor_col(void) {
+    cervus_cursor_pos_t cp;
+    if (sh_ioctl(1, TIOCGCURSOR, &cp) == 0) return (int)cp.col;
+    return 0;
+}
+
 static void vt_goto(int row, int col) {
     char b[24];
     snprintf(b, sizeof(b), "\x1b[%d;%dH", row + 1, col + 1);
@@ -213,6 +219,7 @@ static const char *display_path(void) {
 }
 
 static void print_prompt(void) {
+    if (term_get_cursor_col() != 0) putchar('\n');
     const char *dp = display_path();
     fputs(C_GREEN "cervus" C_RESET ":" C_BLUE, stdout);
     fputs(dp, stdout);
@@ -492,7 +499,7 @@ static int readline_edit(char *buf, int maxlen) {
         }
 
         if (c == '\n' || c == '\r') { buf[len] = '\0'; cursor_to(len); putchar(10); return len; }
-        if (c == 3)  { fputs("^C", stdout); putchar(10); buf[0] = '\0'; return 0; }
+        if (c == 3)  { cursor_to(len); fputs("^C", stdout); putchar(10); buf[0] = '\0'; return 0; }
         if (c == 4)  {
             if (len == 0) { fputs("exit\n", stdout); return -1; }
             if (pos < len) {
@@ -599,7 +606,7 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     fputs("  " C_BOLD "File programs:" C_RESET " ls cat cp mv rm mkdir touch stat find\n", stdout);
-    fputs("                 head tail grep wc sort uniq hexdump tee\n", stdout);
+    fputs("                 head tail grep wc sort uniq hexdump tee diff\n", stdout);
     fputs("  " C_BOLD "Text & I/O:" C_RESET "    echo seq tee neo (editor)\n", stdout);
     fputs("  " C_BOLD "System:" C_RESET "        pwd whoami env uname clear date uptime\n", stdout);
     fputs("                 meminfo cpuinfo ps kill which basename dirname\n", stdout);
@@ -698,6 +705,144 @@ typedef struct {
 
 static int g_heredoc_seq = 0;
 
+#define HEREDOC_MAX_LINES 256
+
+static void hd_print_prompt(void) { fputs("> ", stdout); }
+
+static void hd_redraw_line(const char *buf, int len, int pos) {
+    putchar('\r');
+    vt_eol();
+    hd_print_prompt();
+    if (len > 0) write(1, buf, len);
+    int target_col = 2 + pos;
+    char b[24];
+    snprintf(b, sizeof(b), "\r\x1b[%dC", target_col);
+    fputs(b, stdout);
+}
+
+static int hd_read_line(char *buf, int maxlen, int *cancel,
+                        char saved_lines[][LINE_MAX], int saved_count,
+                        const char *seed)
+{
+    int len = 0, pos = 0;
+    int hidx = saved_count;
+    char preview[LINE_MAX];
+    preview[0] = '\0';
+
+    if (seed && seed[0]) {
+        len = (int)strlen(seed);
+        if (len > maxlen - 1) len = maxlen - 1;
+        memcpy(buf, seed, (size_t)len);
+        pos = len;
+    }
+    buf[len] = '\0';
+
+    hd_print_prompt();
+    if (len > 0) write(1, buf, len);
+
+    for (;;) {
+        char c;
+        ssize_t r = read(0, &c, 1);
+        if (r <= 0) { *cancel = 1; return -1; }
+
+        if (c == 3) {
+            putchar('\n');
+            *cancel = 1;
+            return -1;
+        }
+        if (c == 4) {
+            if (len == 0) { putchar('\n'); return -2; }
+            continue;
+        }
+        if (c == '\n' || c == '\r') {
+            buf[len] = '\0';
+            putchar('\n');
+            return len;
+        }
+        if (c == '\x1b') {
+            char s0, s1;
+            if (read(0, &s0, 1) <= 0) continue;
+            if (s0 != '[') continue;
+            if (read(0, &s1, 1) <= 0) continue;
+            if (s1 == 'A') {
+                if (hidx > 0) {
+                    if (hidx == saved_count) {
+                        memcpy(preview, buf, (size_t)len);
+                        preview[len] = '\0';
+                    }
+                    hidx--;
+                    int hl = (int)strlen(saved_lines[hidx]);
+                    if (hl > maxlen - 1) hl = maxlen - 1;
+                    memcpy(buf, saved_lines[hidx], (size_t)hl);
+                    buf[hl] = '\0';
+                    len = hl; pos = hl;
+                    hd_redraw_line(buf, len, pos);
+                }
+                continue;
+            }
+            if (s1 == 'B') {
+                if (hidx < saved_count) {
+                    hidx++;
+                    const char *h = (hidx == saved_count) ? preview : saved_lines[hidx];
+                    int hl = (int)strlen(h);
+                    if (hl > maxlen - 1) hl = maxlen - 1;
+                    memcpy(buf, h, (size_t)hl);
+                    buf[hl] = '\0';
+                    len = hl; pos = hl;
+                    hd_redraw_line(buf, len, pos);
+                }
+                continue;
+            }
+            if (s1 == 'C') {
+                if (pos < len) {
+                    pos++;
+                    fputs("\x1b[1C", stdout);
+                }
+                continue;
+            }
+            if (s1 == 'D') {
+                if (pos > 0) {
+                    pos--;
+                    fputs("\x1b[1D", stdout);
+                }
+                continue;
+            }
+            if (s1 == 'H') { pos = 0; hd_redraw_line(buf, len, pos); continue; }
+            if (s1 == 'F') { pos = len; hd_redraw_line(buf, len, pos); continue; }
+            if (s1 >= '0' && s1 <= '9') {
+                char t; read(0, &t, 1);
+                if (s1 == '3' && t == '~' && pos < len) {
+                    for (int i = pos; i < len - 1; i++) buf[i] = buf[i + 1];
+                    len--; buf[len] = '\0';
+                    hd_redraw_line(buf, len, pos);
+                } else if (s1 == '1' && t == '~') {
+                    pos = 0; hd_redraw_line(buf, len, pos);
+                } else if (s1 == '4' && t == '~') {
+                    pos = len; hd_redraw_line(buf, len, pos);
+                }
+                continue;
+            }
+            continue;
+        }
+        if (c == 1) { pos = 0; hd_redraw_line(buf, len, pos); continue; }
+        if (c == 5) { pos = len; hd_redraw_line(buf, len, pos); continue; }
+        if (c == '\b' || c == 0x7F) {
+            if (pos > 0) {
+                for (int i = pos - 1; i < len - 1; i++) buf[i] = buf[i + 1];
+                len--; pos--; buf[len] = '\0';
+                hd_redraw_line(buf, len, pos);
+            }
+            continue;
+        }
+        if ((unsigned char)c >= 0x20 && (unsigned char)c < 0x7F) {
+            if (len >= maxlen - 1) continue;
+            for (int i = len; i > pos; i--) buf[i] = buf[i - 1];
+            buf[pos] = c; len++; pos++; buf[len] = '\0';
+            hd_redraw_line(buf, len, pos);
+        }
+    }
+}
+
 static int collect_heredoc(const char *marker, char *out_path, size_t out_sz)
 {
     g_heredoc_seq++;
@@ -708,45 +853,37 @@ static int collect_heredoc(const char *marker, char *out_path, size_t out_sz)
         return -1;
     }
 
-    term_set_cooked_mode();
-    fputs("> ", stdout);
-    char line[LINE_MAX];
-    int li = 0;
-    char c;
+    static char saved_lines[HEREDOC_MAX_LINES][LINE_MAX];
+    int saved_count = 0;
     int mlen = (int)strlen(marker);
     int rc = 0;
     int eof_seen = 0;
+    int cancelled = 0;
 
-    while (1) {
-        ssize_t r = read(0, &c, 1);
-        if (r == 0) {
-            eof_seen = 1;
-            if (li > 0) {
-                line[li] = '\0';
-                if (li == mlen && strncmp(line, marker, (size_t)mlen) == 0) break;
-                write(fd, line, (size_t)li);
-                write(fd, "\n", 1);
-            }
-            break;
-        }
-        if (r < 0) { rc = -1; break; }
-        if (c == '\n') {
-            line[li] = '\0';
-            if (li == mlen && strncmp(line, marker, (size_t)mlen) == 0) break;
-            write(fd, line, (size_t)li);
-            write(fd, "\n", 1);
-            li = 0;
-            fputs("> ", stdout);
-        } else if (li < LINE_MAX - 1) {
-            line[li++] = c;
-        }
+    while (saved_count < HEREDOC_MAX_LINES) {
+        char line[LINE_MAX];
+        int n = hd_read_line(line, LINE_MAX, &cancelled, saved_lines, saved_count, NULL);
+        if (cancelled) { rc = -1; break; }
+        if (n == -2) { eof_seen = 1; break; }
+        if (n < 0) { rc = -1; break; }
+        if (n == mlen && strncmp(line, marker, (size_t)mlen) == 0) break;
+
+        strncpy(saved_lines[saved_count], line, LINE_MAX - 1);
+        saved_lines[saved_count][LINE_MAX - 1] = '\0';
+        saved_count++;
+
+        write(fd, line, (size_t)n);
+        write(fd, "\n", 1);
     }
-    term_set_shell_mode();
+
     close(fd);
     if (eof_seen) {
         fputs(C_YELLOW "heredoc: ended by EOF (expected '" C_RESET, stdout);
         fputs(marker, stdout);
         fputs(C_YELLOW "')\n" C_RESET, stdout);
+    }
+    if (cancelled) {
+        fputs(C_YELLOW "heredoc: cancelled\n" C_RESET, stdout);
     }
     return rc;
 }
@@ -861,9 +998,48 @@ static int run_single(char *line) {
     char *real_argv_buf[REAL_ARGV_MAX];
     static char _cwd_flag[VFS_MAX_PATH + 8];
     static char _env_flags[ENV_MAX_VARS][ENV_NAME_MAX + ENV_VAL_MAX + 8];
+    static char _shebang_interp[VFS_MAX_PATH];
+    static char _shebang_arg[VFS_MAX_PATH];
+    int shebang_applied = 0;
+    int shebang_has_arg = 0;
+
+    {
+        int sfd = open(binpath, O_RDONLY, 0);
+        if (sfd >= 0) {
+            char head[260];
+            ssize_t hn = read(sfd, head, sizeof(head) - 1);
+            close(sfd);
+            if (hn >= 2 && head[0] == '#' && head[1] == '!') {
+                head[hn] = '\0';
+                char *p = head + 2;
+                while (*p == ' ' || *p == '\t') p++;
+                int ii = 0;
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n' && ii + 1 < (int)sizeof(_shebang_interp)) {
+                    _shebang_interp[ii++] = *p++;
+                }
+                _shebang_interp[ii] = '\0';
+                if (ii > 0) {
+                    while (*p == ' ' || *p == '\t') p++;
+                    int jj = 0;
+                    while (*p && *p != '\n' && jj + 1 < (int)sizeof(_shebang_arg)) {
+                        _shebang_arg[jj++] = *p++;
+                    }
+                    _shebang_arg[jj] = '\0';
+                    shebang_has_arg = (jj > 0);
+                    shebang_applied = 1;
+                }
+            }
+        }
+    }
 
     int ri = 0;
-    real_argv_buf[ri++] = binpath;
+    if (shebang_applied) {
+        real_argv_buf[ri++] = _shebang_interp;
+        if (shebang_has_arg) real_argv_buf[ri++] = _shebang_arg;
+        real_argv_buf[ri++] = binpath;
+    } else {
+        real_argv_buf[ri++] = binpath;
+    }
     for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
     snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", cwd);
     real_argv_buf[ri++] = _cwd_flag;
@@ -873,6 +1049,11 @@ static int run_single(char *line) {
         real_argv_buf[ri++] = _env_flags[ei];
     }
     real_argv_buf[ri] = NULL;
+
+    if (shebang_applied) {
+        strncpy(binpath, _shebang_interp, sizeof(binpath) - 1);
+        binpath[sizeof(binpath) - 1] = '\0';
+    }
 
     term_set_cooked_mode();
     pid_t child = fork();
@@ -997,8 +1178,7 @@ static void term_set_shell_mode(void)
 {
     struct termios t;
     if (tcgetattr(0, &t) < 0) return;
-    t.c_lflag &= ~(ICANON | ECHO);
-    t.c_lflag |= ISIG;
+    t.c_lflag &= ~(ICANON | ECHO | ISIG);
     tcsetattr(0, TCSANOW, &t);
 }
 

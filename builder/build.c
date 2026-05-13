@@ -1025,6 +1025,7 @@ static bool write_tcc_config_h(const char *src_dir) {
 }
 
 static bool tcc_download(void) {
+    ensure_dir(TCC_DIR);
     char tar_path[SHORTPATH];
     path_join2(tar_path, sizeof(tar_path), TCC_DIR, TCC_TAR_FNAME);
     if (file_exists(tar_path)) return true;

@@ -71,6 +71,10 @@ static inline int tty_has_echo(void) {
     return (g_tty_termios.c_lflag & T_ECHO) != 0;
 }
 
+bool tty_has_isig_global(void) {
+    return (g_tty_termios.c_lflag & T_ISIG) != 0;
+}
+
 static void tty_echo_char(char c)
 {
     if (c == '\b' || c == 0x7F) {

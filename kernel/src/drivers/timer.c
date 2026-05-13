@@ -26,12 +26,16 @@ DEFINE_IRQ(0x20, timer_handler)
 
     if (cpu == 0 && g_ctrlc_pending) {
         g_ctrlc_pending = 0;
+        extern void kb_buf_push(char c);
+        extern bool kb_buf_has_ctrlc(void);
+        extern bool tty_has_isig_global(void);
+
         task_t *fg = task_find_foreground();
-        if (fg) {
+        bool isig_on = tty_has_isig_global();
+
+        if (fg && isig_on) {
             task_kill(fg);
         } else {
-            extern void kb_buf_push(char c);
-            extern bool kb_buf_has_ctrlc(void);
             if (!kb_buf_has_ctrlc())
                 kb_buf_push(0x03);
         }
