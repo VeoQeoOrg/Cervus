@@ -25,6 +25,9 @@ The goal is a self-hosting, minimal but actually usable Unix-style environment: 
 - Preemptive scheduler with `fork` / `exec` / `wait` / `waitpid`, pipes, and basic signals.
 - ~60 kernel syscalls accessible from userspace.
 
+*Buses and devices*
+- PCI / PCIe enumeration via ACPI MCFG with legacy `0xCF8/0xCFC` fallback. Recursive bridge walk, BAR sizing (incl. 64-bit), capability-list parsing, MSI and MSI-X enable. Driver matching framework keyed on vendor/device or class/subclass.
+
 *Filesystems and storage*
 - Virtual filesystem layer with mount points.
 - ext2 read/write, including in-kernel `mkfs.ext2`.
@@ -34,7 +37,7 @@ The goal is a self-hosting, minimal but actually usable Unix-style environment: 
 
 *Userland*
 - Own C library `libcervus` — POSIX-style API, ~230 source files, split one function per `.c`. Private internals isolated in a single `<libcervus.h>` header.
-- 45+ utilities under `/bin`: `cat`, `ls`, `cp`, `mv`, `rm`, `mkdir`, `find`, `grep`, `head`, `tail`, `wc`, `sort`, `uniq`, `diff`, `tee`, `sleep`, `touch`, `stat`, `ps`, `kill`, `env`, `echo`, `basename`, `dirname`, `pwd`, `true`, `false`, `which`, `whoami`, `uname`, `hexdump`, `seq`, `yes`, `clear`, `reboot`, `shutdown`, `mkfs`, `mount`, `umount`, `lsblk`, `diskinfo`, `meminfo`, `cpuinfo`.
+- 45+ utilities under `/bin`: `cat`, `ls`, `cp`, `mv`, `rm`, `mkdir`, `find`, `grep`, `head`, `tail`, `wc`, `sort`, `uniq`, `diff`, `tee`, `sleep`, `touch`, `stat`, `ps`, `kill`, `env`, `echo`, `basename`, `dirname`, `pwd`, `true`, `false`, `which`, `whoami`, `uname`, `hexdump`, `seq`, `yes`, `clear`, `reboot`, `shutdown`, `mkfs`, `mount`, `umount`, `lsblk`, `lspci`, `diskinfo`, `meminfo`, `cpuinfo`.
 - Apps under `/apps`: interactive login shell, `neo` text editor (modal-free, nano-style), calculator, calendar, date, system fetch, uptime, and a set of process / IO / memory test programs.
 - Two shells: the interactive login shell, and `csh` for scripting, with `if`/`else`/`endif`, `foreach`, `while`, redirects, pipes, environment variables and `$status`.
 - Bundled [TCC](https://bellard.org/tcc/) — the system can compile C code on itself, without a host toolchain.
@@ -56,7 +59,7 @@ The goal is a self-hosting, minimal but actually usable Unix-style environment: 
 ```
 kernel/             x86_64 kernel
   src/
-    drivers/        ata, ps/2, timer, block device, partitions
+    drivers/        ata, ps/2, timer, block device, partitions, pci
     fs/             vfs, ext2, fat32, initramfs, ramfs, devfs
     memory/         pmm, vmm, paging
     sched/          scheduler, task state, fork/exec
@@ -89,7 +92,7 @@ limine.conf         boot config
 | *Bootloader* | Done | Limine BIOS + UEFI |
 | *Graphics / PSF font* | Done | Framebuffer, text rendering |
 | *Memory (PMM/VMM)* | Done | Bitmap PMM, 4-level paging VMM |
-| *Interrupts (IDT)* | Done | Exceptions and IRQs |
+| *Interrupts (IDT)*на гитхабе лимин на ветке v12.x свежий релиз 12.2.0, но он не смог собраться | Done | Exceptions and IRQs |
 | *ACPI* | Partial | Table parsing, SDT discovery; reset path pending |
 | *APIC / IOAPIC* | Done | Per-CPU LAPIC, IRQ routing |
 | *Timers (HPET / APIC)* | Done | Periodic and one-shot |
@@ -99,7 +102,7 @@ limine.conf         boot config
 | *VFS + ext2/FAT32* | Done | Read/write, in-kernel mkfs |
 | *Disk installer* | Done | BIOS + UEFI, MBR, ext2 root |
 | *On-device C compiler* | Done | TCC ported and bundled |
-| *PCI* | Not started | PCI driver |
+| *PCI / PCIe* | Done | MCFG + legacy CF8/CFC, recursive bridge walk, MSI/MSI-X, `lspci` |
 | *USB* | Not started | XHCI / mass storage |
 | *Networking* | Not started | TCP/IP stack |
 | *GUI* | Not started | Compositor on top of framebuffer |

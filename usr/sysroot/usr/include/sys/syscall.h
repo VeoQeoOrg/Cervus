@@ -72,6 +72,8 @@
 #define SYS_LIST_MOUNTS     546
 #define SYS_STATVFS         547
 
+#define SYS_PCI_LIST        550
+
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
            uint64_t a4, uint64_t a5, uint64_t a6)

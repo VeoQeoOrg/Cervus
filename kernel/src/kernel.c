@@ -33,6 +33,7 @@
 #include "../include/drivers/blkdev.h"
 #include "../include/drivers/disk.h"
 #include "../include/drivers/partition.h"
+#include "../include/drivers/pci.h"
 #include "../include/fs/ext2.h"
 #include "../include/fs/fat32.h"
 
@@ -240,6 +241,8 @@ void kernel_main(void) {
     serial_writestring("ACPI [OK]\n");
     apic_init();
     serial_writestring("APIC [OK]\n");
+    pci_init();
+    serial_writestring("PCI [OK]\n");
     clear_screen();
     smp_init(mp_request.response);
     serial_writestring("SMP [OK]\n");

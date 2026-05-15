@@ -79,7 +79,9 @@
 #define SYS_LIST_MOUNTS       546
 #define SYS_STATVFS           547
 
-#define SYSCALL_TABLE_SIZE    548
+#define SYS_PCI_LIST          550
+
+#define SYSCALL_TABLE_SIZE    551
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
@@ -138,5 +140,34 @@ typedef struct __attribute__((packed)) {
     uint64_t sector_count;
     uint64_t size_bytes;
 } cervus_part_info_t;
+
+typedef struct __attribute__((packed)) {
+    uint64_t base;
+    uint64_t size;
+    uint8_t  type;
+    uint8_t  is_64bit;
+    uint8_t  prefetchable;
+    uint8_t  _pad;
+} cervus_pci_bar_t;
+
+typedef struct __attribute__((packed)) {
+    uint16_t         segment;
+    uint8_t          bus;
+    uint8_t          device;
+    uint8_t          function;
+    uint8_t          class_code;
+    uint8_t          subclass;
+    uint8_t          prog_if;
+    uint8_t          revision;
+    uint8_t          header_type;
+    uint8_t          irq_line;
+    uint8_t          irq_pin;
+    uint16_t         vendor_id;
+    uint16_t         device_id;
+    uint8_t          has_msi;
+    uint8_t          has_msix;
+    uint16_t         msix_table_size;
+    cervus_pci_bar_t bars[6];
+} cervus_pci_device_t;
 
 #endif

@@ -82,6 +82,35 @@ typedef struct {
     uint32_t f_namemax;
 } cervus_statvfs_t;
 
+typedef struct __attribute__((packed)) {
+    uint64_t base;
+    uint64_t size;
+    uint8_t  type;
+    uint8_t  is_64bit;
+    uint8_t  prefetchable;
+    uint8_t  _pad;
+} cervus_pci_bar_t;
+
+typedef struct __attribute__((packed)) {
+    uint16_t         segment;
+    uint8_t          bus;
+    uint8_t          device;
+    uint8_t          function;
+    uint8_t          class_code;
+    uint8_t          subclass;
+    uint8_t          prog_if;
+    uint8_t          revision;
+    uint8_t          header_type;
+    uint8_t          irq_line;
+    uint8_t          irq_pin;
+    uint16_t         vendor_id;
+    uint16_t         device_id;
+    uint8_t          has_msi;
+    uint8_t          has_msix;
+    uint16_t         msix_table_size;
+    cervus_pci_bar_t bars[6];
+} cervus_pci_device_t;
+
 #define CLOCK_REALTIME   0
 #define CLOCK_MONOTONIC  1
 
@@ -115,6 +144,8 @@ long     cervus_disk_bios_install(const char *disk, const void *sys_data, uint32
 
 long     cervus_list_mounts(cervus_mount_info_t *out, int max);
 long     cervus_statvfs(const char *path, cervus_statvfs_t *out);
+
+long     cervus_pci_list(cervus_pci_device_t *out, int max);
 
 uint32_t cervus_ioport_read(uint16_t port, int width);
 int      cervus_ioport_write(uint16_t port, int width, uint32_t val);

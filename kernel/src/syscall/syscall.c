@@ -93,6 +93,7 @@ extern int64_t sys_mkdir             (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_rename            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_list_mounts       (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_statvfs           (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_pci_list          (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -185,6 +186,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_DISK_BIOS_INSTALL] = sys_disk_bios_install,
     [SYS_LIST_MOUNTS]       = sys_list_mounts,
     [SYS_STATVFS]           = sys_statvfs,
+    [SYS_PCI_LIST]          = sys_pci_list,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
