@@ -172,6 +172,103 @@ static void env_unset(const char *name) {
 
 static int g_last_rc = 0;
 
+#define COLOR_NAME_MAX 16
+#define COLOR_SEQ_MAX  16
+
+static char g_color_name[COLOR_NAME_MAX] = "default";
+static char g_color_seq [COLOR_SEQ_MAX]  = "";
+static char g_color_file[VFS_MAX_PATH]   = "";
+
+typedef struct { const char *name; const char *seq; } color_entry_t;
+
+static const color_entry_t COLOR_TABLE[] = {
+    { "default", ""             },
+    { "white",   ""             },
+    { "red",     "\x1b[1;31m"   },
+    { "green",   "\x1b[1;32m"   },
+    { "yellow",  "\x1b[1;33m"   },
+    { "blue",    "\x1b[1;34m"   },
+    { "magenta", "\x1b[1;35m"   },
+    { "cyan",    "\x1b[1;36m"   },
+    { "gray",    "\x1b[90m"     },
+    { "bold",    "\x1b[1m"      },
+    { NULL,      NULL           },
+};
+
+static const char *color_lookup_seq(const char *name) {
+    for (int i = 0; COLOR_TABLE[i].name; i++)
+        if (strcmp(COLOR_TABLE[i].name, name) == 0) return COLOR_TABLE[i].seq;
+    return NULL;
+}
+
+static void color_apply(const char *name, const char *seq) {
+    strncpy(g_color_name, name, COLOR_NAME_MAX - 1);
+    g_color_name[COLOR_NAME_MAX - 1] = '\0';
+    strncpy(g_color_seq, seq, COLOR_SEQ_MAX - 1);
+    g_color_seq[COLOR_SEQ_MAX - 1] = '\0';
+}
+
+static void color_save(void) {
+    if (!g_color_file[0]) return;
+    int fd = open(g_color_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    int n = (int)strlen(g_color_name);
+    write(fd, g_color_name, n);
+    write(fd, "\n", 1);
+    close(fd);
+}
+
+static void color_load(void) {
+    if (!g_color_file[0]) return;
+    int fd = open(g_color_file, O_RDONLY, 0);
+    if (fd < 0) return;
+    char name[COLOR_NAME_MAX];
+    int  i = 0;
+    char c;
+    while (i < COLOR_NAME_MAX - 1 && read(fd, &c, 1) > 0) {
+        if (c == '\n' || c == '\r') break;
+        name[i++] = c;
+    }
+    name[i] = '\0';
+    close(fd);
+    if (!name[0]) return;
+    const char *seq = color_lookup_seq(name);
+    if (seq) color_apply(name, seq);
+}
+
+static int cmd_color(int argc, char **argv) {
+    if (argc < 2) {
+        fputs("  current: " C_BOLD, stdout);
+        fputs(g_color_name, stdout);
+        fputs(C_RESET "\n  available: ", stdout);
+        for (int i = 0; COLOR_TABLE[i].name; i++) {
+            if (i > 0) fputs(" ", stdout);
+            fputs(COLOR_TABLE[i].name, stdout);
+        }
+        putchar('\n');
+        if (g_color_file[0]) {
+            fputs("  saved to: ", stdout);
+            fputs(g_color_file, stdout);
+            putchar('\n');
+        } else {
+            fputs("  " C_YELLOW "(no persistent storage; not saved)" C_RESET "\n", stdout);
+        }
+        return 0;
+    }
+    const char *name = argv[1];
+    if (strcmp(name, "reset") == 0) name = "default";
+    const char *seq = color_lookup_seq(name);
+    if (!seq) {
+        fputs(C_RED "color: unknown color: " C_RESET, stdout);
+        fputs(name, stdout);
+        putchar('\n');
+        return 1;
+    }
+    color_apply(name, seq);
+    color_save();
+    return 0;
+}
+
 static void expand_vars(const char *src, char *dst, size_t dsz) {
     size_t di = 0;
     for (const char *p = src; *p && di + 1 < dsz; ) {
@@ -224,6 +321,7 @@ static void print_prompt(void) {
     fputs(C_GREEN "cervus" C_RESET ":" C_BLUE, stdout);
     fputs(dp, stdout);
     fputs(C_RESET "$ ", stdout);
+    if (g_color_seq[0]) fputs(g_color_seq, stdout);
     prompt_len = 9 + (int)strlen(dp);
 }
 
@@ -367,7 +465,7 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
             if (*p == ':') *p++ = '\0';
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, 32);
         }
-        const char *builtins[] = {"help","exit","cd","export","unset","history","clear",NULL};
+        const char *builtins[] = {"help","exit","cd","export","unset","history","clear","color",NULL};
         for (int i = 0; builtins[i] && nmatch < 32; i++) {
             if (strncmp(builtins[i], word, wlen) == 0) {
                 strncpy(matches[nmatch], builtins[i], 255);
@@ -498,8 +596,21 @@ static int readline_edit(char *buf, int maxlen) {
             continue;
         }
 
-        if (c == '\n' || c == '\r') { buf[len] = '\0'; cursor_to(len); putchar(10); return len; }
-        if (c == 3)  { cursor_to(len); fputs("^C", stdout); putchar(10); buf[0] = '\0'; return 0; }
+        if (c == '\n' || c == '\r') {
+            buf[len] = '\0';
+            cursor_to(len);
+            if (g_color_seq[0]) fputs(C_RESET, stdout);
+            putchar(10);
+            return len;
+        }
+        if (c == 3)  {
+            cursor_to(len);
+            if (g_color_seq[0]) fputs(C_RESET, stdout);
+            fputs("^C", stdout);
+            putchar(10);
+            buf[0] = '\0';
+            return 0;
+        }
         if (c == 4)  {
             if (len == 0) { fputs("exit\n", stdout); return -1; }
             if (pos < len) {
@@ -603,6 +714,7 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "export" C_RESET " N=V       set environment variable\n", stdout);
     fputs("  " C_BOLD "unset" C_RESET " N          delete environment variable\n", stdout);
     fputs("  " C_BOLD "history" C_RESET " [N|-c]   show last N entries or clear (-c)\n", stdout);
+    fputs("  " C_BOLD "color" C_RESET " [name]     set input text color (saved on disk)\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     fputs("  " C_BOLD "File programs:" C_RESET " ls cat cp mv rm mkdir touch stat find\n", stdout);
@@ -973,6 +1085,7 @@ static int run_single(char *line) {
         hist_print(limit);
         return 0;
     }
+    if (strcmp(cmd, "color")  == 0) return cmd_color(argc, argv);
 
     char binpath[VFS_MAX_PATH];
     if (cmd[0] == '/') {
@@ -1304,6 +1417,8 @@ int main(int argc, char **argv) {
             path_join(h, ".history", hist_path, sizeof(hist_path));
             g_hist_file = hist_path;
             hist_load(hist_path);
+            path_join(h, ".color", g_color_file, sizeof(g_color_file));
+            color_load();
         }
     }
 

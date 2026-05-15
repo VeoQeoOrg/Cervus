@@ -250,16 +250,39 @@ static bool extract_limine_hdd_bin(void) {
     return true;
 }
 
+#define LIMINE_VERSION    "12.2.0"
+#define LIMINE_TARBALL    "limine-binary.tar.gz"
+#define LIMINE_TARBALL_URL \
+    "https://github.com/limine-bootloader/limine/releases/download/v" \
+    LIMINE_VERSION "/" LIMINE_TARBALL
+
 bool build_limine(void) {
     if (file_exists("limine/limine")) {
         print_color(COLOR_GREEN, "Limine already built");
         extract_limine_hdd_bin();
         return true;
     }
-    print_color(COLOR_GREEN, "Building Limine...");
+    print_color(COLOR_GREEN, "Fetching Limine v%s binary release...", LIMINE_VERSION);
     if (file_exists("limine")) rm_rf("limine");
-    if (cmd_run(true, "git clone https://codeberg.org/Limine/Limine.git limine "
-                      "--branch=v11.2.1-binary --depth=1") != 0) return false;
+    rm_rf(LIMINE_TARBALL);
+
+    if (cmd_run(true, "curl -fL --retry 3 -o %s %s",
+                LIMINE_TARBALL, LIMINE_TARBALL_URL) != 0) {
+        print_color(COLOR_RED, "Failed to download Limine tarball");
+        return false;
+    }
+    if (cmd_run(true, "tar -xzf %s", LIMINE_TARBALL) != 0) {
+        print_color(COLOR_RED, "Failed to extract Limine tarball");
+        return false;
+    }
+    rm_rf(LIMINE_TARBALL);
+
+    if (!file_exists("limine-binary/Makefile")) {
+        print_color(COLOR_RED, "Limine tarball did not contain limine-binary/Makefile");
+        return false;
+    }
+    if (cmd_run(true, "mv limine-binary limine") != 0) return false;
+
     if (cmd_run(true, "make -C limine") != 0) return false;
     if (!extract_limine_hdd_bin()) return false;
     return true;
