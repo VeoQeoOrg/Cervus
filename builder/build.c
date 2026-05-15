@@ -506,42 +506,24 @@ void clean_bin_elfs(void) {
     closedir(d);
 }
 
-#define LCV_CFLAGS_INT  "-ffreestanding -nostdlib -static -fno-stack-protector " \
-                        "-mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2 " \
-                        "-mno-red-zone -fno-pie -fno-pic " \
-                        "-O0 -g -Wall -Wextra"
+#define LCV_CFLAGS  "-ffreestanding -nostdlib -static -fno-stack-protector " \
+                    "-mno-red-zone -fno-pie -fno-pic " \
+                    "-O0 -g -Wall -Wextra"
 
-#define LCV_CFLAGS_FLT  "-ffreestanding -nostdlib -static -fno-stack-protector " \
-                        "-mno-red-zone -fno-pie -fno-pic " \
-                        "-O0 -g -Wall -Wextra"
+typedef struct { char *data; size_t len; size_t cap; } dstr_t;
 
-typedef struct {
-    const char *src;
-    const char *obj;
-    int         is_float;
-} libcervus_unit_t;
+static void dstr_init(dstr_t *s) { s->data = NULL; s->len = 0; s->cap = 0; }
+static void dstr_free(dstr_t *s) { free(s->data); s->data = NULL; s->len = s->cap = 0; }
 
-static const libcervus_unit_t LCV_UNITS[] = {
-    { "libcervus.c",          "libcervus.o",         0 },
-    { "compat.c",             "compat.o",            0 },
-    { "ctype/ctype.c",        "ctype/ctype.o",       0 },
-    { "string/string.c",      "string/string.o",     0 },
-    { "memory/memory.c",      "memory/memory.o",     0 },
-    { "stdlib/stdlib.c",      "stdlib/stdlib.o",     0 },
-    { "stdlib/strtod.c",      "stdlib/strtod.o",     1 },
-    { "stdio/stdio.c",        "stdio/stdio.o",       1 },
-    { "stdio/scanf.c",        "stdio/scanf.o",       1 },
-    { "time/time.c",          "time/time.o",         0 },
-    { "signal/signal.c",      "signal/signal.o",     0 },
-    { "dirent/dirent.c",      "dirent/dirent.o",     0 },
-    { "math/abs.c",           "math/abs.o",          0 },
-    { "math/fabs.c",          "math/fabs.o",         1 },
-    { "math/isinf.c",         "math/isinf.o",        0 },
-    { "math/isnan.c",         "math/isnan.o",        0 },
-    { "math/pow.c",           "math/pow.o",          1 },
-    { "math/pow10.c",         "math/pow10.o",        1 },
-    { NULL, NULL, 0 }
-};
+static bool dstr_reserve(dstr_t *s, size_t need) {
+    if (s->cap >= need) return true;
+    size_t nc = s->cap ? s->cap : 256;
+    while (nc < need) nc *= 2;
+    char *p = realloc(s->data, nc);
+    if (!p) return false;
+    s->data = p; s->cap = nc;
+    return true;
+}
 
 static long get_mtime_safe(const char *p) {
     struct stat st;
@@ -552,6 +534,102 @@ static long get_mtime_safe(const char *p) {
 static bool need_rebuild(const char *src, const char *obj) {
     if (!file_exists(obj)) return true;
     return get_mtime_safe(src) > get_mtime_safe(obj);
+}
+
+typedef struct {
+    char **items;
+    size_t count;
+    size_t cap;
+} strvec_t;
+
+static void strvec_init(strvec_t *v) { v->items = NULL; v->count = 0; v->cap = 0; }
+
+static bool strvec_push(strvec_t *v, const char *s) {
+    if (v->count + 1 > v->cap) {
+        size_t nc = v->cap ? v->cap * 2 : 32;
+        char **nt = (char **)realloc(v->items, nc * sizeof(char *));
+        if (!nt) return false;
+        v->items = nt;
+        v->cap = nc;
+    }
+    v->items[v->count] = strdup(s);
+    if (!v->items[v->count]) return false;
+    v->count++;
+    return true;
+}
+
+static void strvec_free(strvec_t *v) {
+    if (v->items) {
+        for (size_t i = 0; i < v->count; i++) free(v->items[i]);
+        free(v->items);
+    }
+    v->items = NULL;
+    v->count = 0;
+    v->cap = 0;
+}
+
+static int strvec_cmp(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static bool scan_libcervus_sources(const char *dir, const char *rel, strvec_t *out) {
+    char full[BIGPATH];
+    if (rel && rel[0]) snprintf(full, sizeof(full), "%s/%s", dir, rel);
+    else               snprintf(full, sizeof(full), "%s", dir);
+
+    DIR *d = opendir(full);
+    if (!d) return true;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        if (nm[0] == '.') continue;
+        if (nm[0] == '_' && nm[1] != '\0') {
+            /* leading-underscore internals: include if .c, treat like normal */
+        }
+        char child_rel[BIGPATH];
+        if (rel && rel[0]) snprintf(child_rel, sizeof(child_rel), "%s/%s", rel, nm);
+        else               snprintf(child_rel, sizeof(child_rel), "%s", nm);
+
+        char child_full[BIGPATH];
+        snprintf(child_full, sizeof(child_full), "%s/%s", dir, child_rel);
+
+        struct stat st;
+        if (stat(child_full, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (!scan_libcervus_sources(dir, child_rel, out)) {
+                closedir(d);
+                return false;
+            }
+            continue;
+        }
+        size_t nlen = strlen(nm);
+        if (nlen < 3) continue;
+        if (strcmp(nm + nlen - 2, ".c") != 0) continue;
+        if (!strvec_push(out, child_rel)) { closedir(d); return false; }
+    }
+    closedir(d);
+    return true;
+}
+
+static void replace_ext_c_to_o(const char *src, char *dst, size_t dst_sz) {
+    size_t l = strlen(src);
+    if (l + 1 >= dst_sz) { dst[0] = '\0'; return; }
+    memcpy(dst, src, l - 1);
+    dst[l - 1] = 'o';
+    dst[l]     = '\0';
+}
+
+static bool ensure_parent_dir_for(const char *rel) {
+    char tmp[BIGPATH];
+    size_t l = strlen(rel);
+    if (l >= sizeof(tmp)) return false;
+    memcpy(tmp, rel, l + 1);
+    char *slash = strrchr(tmp, '/');
+    if (!slash) return true;
+    *slash = '\0';
+    char cmd[BIGPATH + 32];
+    snprintf(cmd, sizeof(cmd), "mkdir -p %s", tmp);
+    return system(cmd) == 0;
 }
 
 bool build_libcervus(void) {
@@ -584,17 +662,35 @@ bool build_libcervus(void) {
         return false;
     }
 
+    strvec_t srcs;
+    strvec_init(&srcs);
+    if (!scan_libcervus_sources(".", "", &srcs)) {
+        print_color(COLOR_RED, "[libcervus] failed to scan sources");
+        strvec_free(&srcs);
+        (void)!chdir(cwd_buf);
+        return false;
+    }
+    qsort(srcs.items, srcs.count, sizeof(char *), strvec_cmp);
+
     bool any_changed = false;
     int  built       = 0;
     int  skipped     = 0;
 
-    for (int i = 0; LCV_UNITS[i].src; i++) {
-        const libcervus_unit_t *u = &LCV_UNITS[i];
-        if (!need_rebuild(u->src, u->obj)) { skipped++; continue; }
-        const char *cflags = u->is_float ? LCV_CFLAGS_FLT : LCV_CFLAGS_INT;
-        if (cmd_run(false, "gcc %s -nostdinc -isystem %s -c -o %s %s",
-                    cflags, incdir, u->obj, u->src) != 0) {
-            print_color(COLOR_RED, "[libcervus] failed to compile %s", u->src);
+    for (size_t i = 0; i < srcs.count; i++) {
+        const char *src = srcs.items[i];
+        char obj[BIGPATH];
+        replace_ext_c_to_o(src, obj, sizeof(obj));
+        if (!need_rebuild(src, obj)) { skipped++; continue; }
+        if (!ensure_parent_dir_for(obj)) {
+            print_color(COLOR_RED, "[libcervus] cannot create obj dir for %s", obj);
+            strvec_free(&srcs);
+            (void)!chdir(cwd_buf);
+            return false;
+        }
+        if (cmd_run(false, "gcc %s -nostdinc -isystem %s -I include -c -o %s %s",
+                    LCV_CFLAGS, incdir, obj, src) != 0) {
+            print_color(COLOR_RED, "[libcervus] failed to compile %s", src);
+            strvec_free(&srcs);
             (void)!chdir(cwd_buf);
             return false;
         }
@@ -605,6 +701,7 @@ bool build_libcervus(void) {
     if (need_rebuild("setjmp.asm", "setjmp.o")) {
         if (cmd_run(false, "nasm -f elf64 -o setjmp.o setjmp.asm") != 0) {
             print_color(COLOR_RED, "[libcervus] nasm failed on setjmp.asm");
+            strvec_free(&srcs);
             (void)!chdir(cwd_buf); return false;
         }
         any_changed = true; built++;
@@ -613,6 +710,7 @@ bool build_libcervus(void) {
     if (need_rebuild("crt0.asm", "crt0.o")) {
         if (cmd_run(false, "nasm -f elf64 -o crt0.o crt0.asm") != 0) {
             print_color(COLOR_RED, "[libcervus] nasm failed on crt0.asm");
+            strvec_free(&srcs);
             (void)!chdir(cwd_buf); return false;
         }
         any_changed = true; built++;
@@ -620,18 +718,54 @@ bool build_libcervus(void) {
 
     bool need_ar = any_changed || !file_exists("libcervus.a");
     if (need_ar) {
-        char ar_cmd[8192];
-        size_t pos = 0;
-        pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, "ar rcs libcervus.a");
-        for (int i = 0; LCV_UNITS[i].src; i++) {
-            pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, " %s", LCV_UNITS[i].obj);
-        }
-        pos += snprintf(ar_cmd + pos, sizeof(ar_cmd) - pos, " setjmp.o");
-        if (cmd_run(false, "%s", ar_cmd) != 0) {
-            print_color(COLOR_RED, "[libcervus] ar failed");
+        dstr_t ar_cmd;
+        dstr_init(&ar_cmd);
+        const char *head = "ar rcs libcervus.a";
+        if (!dstr_reserve(&ar_cmd, strlen(head) + 1)) {
+            print_color(COLOR_RED, "[libcervus] out of memory");
+            strvec_free(&srcs);
             (void)!chdir(cwd_buf); return false;
         }
+        memcpy(ar_cmd.data, head, strlen(head));
+        ar_cmd.len = strlen(head);
+        ar_cmd.data[ar_cmd.len] = '\0';
+        for (size_t i = 0; i < srcs.count; i++) {
+            char obj[BIGPATH];
+            replace_ext_c_to_o(srcs.items[i], obj, sizeof(obj));
+            size_t need = ar_cmd.len + 1 + strlen(obj) + 1;
+            if (!dstr_reserve(&ar_cmd, need)) {
+                print_color(COLOR_RED, "[libcervus] out of memory");
+                dstr_free(&ar_cmd);
+                strvec_free(&srcs);
+                (void)!chdir(cwd_buf); return false;
+            }
+            ar_cmd.data[ar_cmd.len++] = ' ';
+            memcpy(ar_cmd.data + ar_cmd.len, obj, strlen(obj));
+            ar_cmd.len += strlen(obj);
+            ar_cmd.data[ar_cmd.len] = '\0';
+        }
+        const char *tail = " setjmp.o";
+        size_t need = ar_cmd.len + strlen(tail) + 1;
+        if (!dstr_reserve(&ar_cmd, need)) {
+            print_color(COLOR_RED, "[libcervus] out of memory");
+            dstr_free(&ar_cmd);
+            strvec_free(&srcs);
+            (void)!chdir(cwd_buf); return false;
+        }
+        memcpy(ar_cmd.data + ar_cmd.len, tail, strlen(tail));
+        ar_cmd.len += strlen(tail);
+        ar_cmd.data[ar_cmd.len] = '\0';
+
+        if (cmd_run(false, "%s", ar_cmd.data) != 0) {
+            print_color(COLOR_RED, "[libcervus] ar failed");
+            dstr_free(&ar_cmd);
+            strvec_free(&srcs);
+            (void)!chdir(cwd_buf); return false;
+        }
+        dstr_free(&ar_cmd);
     }
+
+    strvec_free(&srcs);
 
     if (cmd_run(false, "mkdir -p %s", libdir) != 0 ||
         cmd_run(false, "cp libcervus.a %s/", libdir) != 0 ||
@@ -651,21 +785,6 @@ bool build_libcervus(void) {
 #define TCC_SRC_DIR        "tcc-0.9.27"
 #define TCC_DOWNLOAD_URL   "https://download.savannah.gnu.org/releases/tinycc/tcc-0.9.27.tar.bz2"
 #define TCC_DIR            "usr/tcc"
-
-typedef struct { char *data; size_t len; size_t cap; } dstr_t;
-
-static void dstr_init(dstr_t *s) { s->data = NULL; s->len = 0; s->cap = 0; }
-static void dstr_free(dstr_t *s) { free(s->data); s->data = NULL; s->len = s->cap = 0; }
-
-static bool dstr_reserve(dstr_t *s, size_t need) {
-    if (s->cap >= need) return true;
-    size_t nc = s->cap ? s->cap : 256;
-    while (nc < need) nc *= 2;
-    char *p = realloc(s->data, nc);
-    if (!p) return false;
-    s->data = p; s->cap = nc;
-    return true;
-}
 
 static bool read_file_dstr(const char *path, dstr_t *out) {
     FILE *f = fopen(path, "rb");
@@ -1243,18 +1362,8 @@ void clean_tcc_build(bool deep) {
 }
 
 void clean_libcervus_build(bool deep) {
-    char buf[PATH_MAX];
-    for (int i = 0; LCV_UNITS[i].src; i++) {
-        path_join2(buf, sizeof(buf), LIBCERVUS_DIR, LCV_UNITS[i].obj);
-        if (file_exists(buf)) remove(buf);
-    }
-    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "setjmp.o");
-    if (file_exists(buf)) remove(buf);
-    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "crt0.o");
-    if (file_exists(buf)) remove(buf);
-    path_join2(buf, sizeof(buf), LIBCERVUS_DIR, "libcervus.a");
-    if (file_exists(buf)) remove(buf);
-
+    cmd_run(false, "find %s -type f -name '*.o' -delete", LIBCERVUS_DIR);
+    cmd_run(false, "rm -f %s/libcervus.a", LIBCERVUS_DIR);
     cmd_run(false, "rm -f %s/libcervus.a %s/crt0.o", SYSROOT_LIB, SYSROOT_LIB);
     (void)deep;
 }

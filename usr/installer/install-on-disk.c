@@ -261,8 +261,8 @@ static int ask_choose_disk(char *out_name, size_t out_cap)
 	char c = 0;
 	while (1) {
 		if (read(0, &c, 1) <= 0) continue;
-		if (c >= '1' && c <= (char)('0' + n)) { putchar(c); putchar(10); break; }
-		if (c == 'q' || c == 'Q') { putchar(c); putchar(10); return -1; }
+		if (c >= '1' && c <= (char)('0' + n)) break;
+		if (c == 'q' || c == 'Q') return -1;
 	}
 	int idx = c - '1';
 	safe_strcpy(out_name, out_cap, disks[idx].name);
@@ -332,7 +332,7 @@ static int do_install(void)
 	char c = 0;
 	while (1) {
 		if (read(0, &c, 1) <= 0) continue;
-		if (c == 'y' || c == 'Y' || c == 'n' || c == 'N') { putchar(c); putchar(10); break; }
+		if (c == 'y' || c == 'Y' || c == 'n' || c == 'N') break;
 	}
 
 	if (c == 'n' || c == 'N') {

@@ -253,7 +253,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     if (!find_in_path(argv[0], binpath, sizeof(binpath))) {
         fputs(C_RED "csh: not found: " C_RESET, stdout);
         fputs(argv[0], stdout); putchar('\n');
-        return 127;
+        exit(127);
     }
 
     char *real_argv[CSH_MAX_TOKENS + CSH_MAX_VARS + 4];

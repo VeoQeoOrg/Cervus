@@ -1000,6 +1000,7 @@ static int run_single(char *line) {
     static char _env_flags[ENV_MAX_VARS][ENV_NAME_MAX + ENV_VAL_MAX + 8];
     static char _shebang_interp[VFS_MAX_PATH];
     static char _shebang_arg[VFS_MAX_PATH];
+    static char _shebang_script_path[VFS_MAX_PATH];
     int shebang_applied = 0;
     int shebang_has_arg = 0;
 
@@ -1032,11 +1033,25 @@ static int run_single(char *line) {
         }
     }
 
+    if (shebang_applied) {
+        struct stat ist;
+        if (stat(_shebang_interp, &ist) != 0 || ist.st_type == 1) {
+            fputs(C_RED "bad interpreter: " C_RESET, stdout);
+            fputs(_shebang_interp, stdout);
+            fputs(" (in ", stdout);
+            fputs(binpath, stdout);
+            fputs(")\n", stdout);
+            return 127;
+        }
+    }
+
     int ri = 0;
     if (shebang_applied) {
+        strncpy(_shebang_script_path, binpath, sizeof(_shebang_script_path) - 1);
+        _shebang_script_path[sizeof(_shebang_script_path) - 1] = '\0';
         real_argv_buf[ri++] = _shebang_interp;
         if (shebang_has_arg) real_argv_buf[ri++] = _shebang_arg;
-        real_argv_buf[ri++] = binpath;
+        real_argv_buf[ri++] = _shebang_script_path;
     } else {
         real_argv_buf[ri++] = binpath;
     }
