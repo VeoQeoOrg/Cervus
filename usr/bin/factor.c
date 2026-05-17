@@ -36,8 +36,8 @@ int main(int argc, char **argv) {
 			}
 		
 			if (!is_number(num)) {
-				fprintf(stderr, C_RED "factor: %s isn't number\n" C_RESET, argv[1]);
-			    return 1;
+				fprintf(stderr, C_RED "factor: %s isn't number\n" C_RESET, num);
+				continue;
 			}
 			
 			int n = atoi(num);
