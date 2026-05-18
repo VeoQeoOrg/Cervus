@@ -188,20 +188,30 @@ static int run_diff(diff_file_t *A, diff_file_t *B) {
     return diffs ? 1 : 0;
 }
 
-static void usage(void) {
-    fputs(C_RED "usage: diff <file1> <file2>\n" C_RESET, stdout);
-}
+static const char USAGE[] =
+    "Usage: diff [-q] file1 file2\n"
+    "Compare two files line by line.\n"
+    "\n"
+    "  -q   only report whether the files differ\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
 
 int main(int argc, char **argv) {
+    if (cervus_check_help_version(argc, argv, USAGE, "diff")) return 0;
     const char *cwd = get_cwd_flag(argc, argv);
+    argc = cervus_filter_args(argc, argv);
 
-    const char *p1 = NULL, *p2 = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (!p1) p1 = argv[i];
-        else if (!p2) p2 = argv[i];
+    int brief = 0;
+    int opt;
+    while ((opt = getopt(argc, argv, "q")) != -1) {
+        switch (opt) {
+            case 'q': brief = 1; break;
+            default: usage(); return 2;
+        }
     }
-    if (!p1 || !p2) { usage(); return 2; }
+    if (argc - optind < 2) { usage(); return 2; }
+    const char *p1 = argv[optind];
+    const char *p2 = argv[optind + 1];
 
     char r1[1024], r2[1024];
     resolve_path(cwd, p1, r1, sizeof(r1));
@@ -211,7 +221,18 @@ int main(int argc, char **argv) {
     if (load_file(r1, &A) < 0) { free_file(&A); return 2; }
     if (load_file(r2, &B) < 0) { free_file(&A); free_file(&B); return 2; }
 
-    int rc = run_diff(&A, &B);
+    int rc;
+    if (brief) {
+        rc = 0;
+        if (A.nlines != B.nlines) rc = 1;
+        else {
+            for (int i = 0; i < A.nlines; i++)
+                if (strcmp(A.lines[i], B.lines[i]) != 0) { rc = 1; break; }
+        }
+        if (rc) printf("Files %s and %s differ\n", p1, p2);
+    } else {
+        rc = run_diff(&A, &B);
+    }
 
     free_file(&A);
     free_file(&B);

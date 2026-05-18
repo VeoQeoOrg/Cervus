@@ -2,8 +2,12 @@
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
+
+static const char USAGE[] =
+    "Usage: mkfs [-t fs] device [label]\nBuild a filesystem on device. -t ext2 (default) or fat32.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "mkfs")) return 0;
     const char *devname = NULL, *label = NULL;
     int ai = 0;
     for (int i = 0; i < argc; i++) {
@@ -20,6 +24,15 @@ int main(int argc, char **argv)
               stdout);
         return 1;
     }
+
+    char target[128];
+    snprintf(target, sizeof(target), "format /dev/%s", devname);
+    if (!cervus_confirm(target, NULL,
+            "every existing file on this device will be erased and unrecoverable")) {
+        fputs("mkfs: aborted\n", stderr);
+        return 1;
+    }
+
     printf("Formatting %s...\n", devname);
     int r = cervus_disk_format(devname, label ? label : devname);
     if (r < 0) {

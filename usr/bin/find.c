@@ -1,8 +1,15 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <cervus_util.h>
+
+typedef struct {
+    const char *name_pat;
+    char type;
+    int  maxdepth;
+} find_opts_t;
 
 static int str_match(const char *name, const char *pat)
 {
@@ -23,11 +30,22 @@ static int str_match(const char *name, const char *pat)
     return *name == '\0';
 }
 
-#define MAX_DEPTH 16
-
-static void do_find(const char *dir, const char *pat, int depth)
+static int type_match(uint8_t d_type, char tc)
 {
-    if (depth > MAX_DEPTH) return;
+    switch (tc) {
+        case 'f': return d_type == DT_REG || d_type == 0;
+        case 'd': return d_type == DT_DIR;
+        case 'l': return d_type == DT_LNK;
+        case 'c': return d_type == DT_CHR;
+        case 'b': return d_type == DT_BLK;
+        case 'p': return d_type == DT_FIFO;
+        default:  return 1;
+    }
+}
+
+static void do_find(const char *dir, const find_opts_t *o, int depth)
+{
+    if (o->maxdepth >= 0 && depth > o->maxdepth) return;
     DIR *d = opendir(dir);
     if (!d) return;
     struct dirent *de;
@@ -37,73 +55,73 @@ static void do_find(const char *dir, const char *pat, int depth)
              (de->d_name[1] == '.' && de->d_name[2] == '\0'))) continue;
         char path[512];
         path_join(dir, de->d_name, path, sizeof(path));
-        if (!pat || str_match(de->d_name, pat)) {
+        int match = 1;
+        if (o->name_pat && !str_match(de->d_name, o->name_pat)) match = 0;
+        if (o->type && !type_match(de->d_type, o->type)) match = 0;
+        if (match) {
             fputs(path, stdout);
             if (de->d_type == DT_DIR) putchar('/');
             putchar('\n');
         }
-        if (de->d_type == DT_DIR) do_find(path, pat, depth + 1);
+        if (de->d_type == DT_DIR) do_find(path, o, depth + 1);
     }
     closedir(d);
 }
 
-static int is_valid_path_chars(const char *s)
-{
-    for (; *s; s++) if ((unsigned char)*s < 0x20) return 0;
-    return 1;
-}
+static const char USAGE[] =
+    "Usage: find [path ...] [-name pat] [-type c] [-maxdepth N]\nRecursively walk the directory tree.\n\n  -name PAT     match basename against shell glob PAT (* ?)\n  -type c       filter by type: f file, d dir, l link, c chr, b blk, p pipe\n  -maxdepth N   descend at most N levels\n  -print        explicit print (default action)\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
 
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "find")) return 0;
     const char *cwd = get_cwd_flag(argc, argv);
-    if (!cwd || !cwd[0]) cwd = "/";
+    argc = cervus_filter_args(argc, argv);
 
-    const char *dir = NULL;
-    const char *pat = NULL;
+    find_opts_t o;
+    memset(&o, 0, sizeof(o));
+    o.maxdepth = -1;
 
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
+    const char *paths[16];
+    int npaths = 0;
+
+    int i = 1;
+    for (; i < argc; i++) {
+        if (argv[i][0] == '-') break;
+        if (npaths < 16) paths[npaths++] = argv[i];
+    }
+    for (; i < argc; i++) {
         if (strcmp(argv[i], "-name") == 0) {
-            if (i + 1 >= argc) {
-                fputs("find: option '-name' requires an argument\n", stderr);
-                return 1;
-            }
-            pat = argv[++i];
-            if (!is_valid_path_chars(pat)) {
-                fprintf(stderr, "find: invalid pattern '%s'\n", pat);
-                return 1;
-            }
-        } else if (argv[i][0] == '-') {
-            fprintf(stderr, "find: unknown option: %s\n", argv[i]);
-            fputs("usage: find [directory] [-name pattern]\n", stderr);
-            return 1;
+            if (i + 1 >= argc) { usage(); return 1; }
+            o.name_pat = argv[++i];
+        } else if (strcmp(argv[i], "-type") == 0) {
+            if (i + 1 >= argc) { usage(); return 1; }
+            o.type = argv[++i][0];
+        } else if (strcmp(argv[i], "-maxdepth") == 0) {
+            if (i + 1 >= argc) { usage(); return 1; }
+            o.maxdepth = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-print") == 0) {
+            /* default action */
         } else {
-            if (dir) {
-                fputs("find: too many path arguments\n", stderr);
-                return 1;
-            }
-            if (!is_valid_path_chars(argv[i])) {
-                fprintf(stderr, "find: invalid path '%s'\n", argv[i]);
-                return 1;
-            }
-            static char dir_buf[512];
-            resolve_path(cwd, argv[i], dir_buf, sizeof(dir_buf));
-            dir = dir_buf;
+            fprintf(stderr, "find: unknown predicate '%s'\n", argv[i]);
+            return 1;
         }
     }
-    if (!dir) dir = cwd;
 
-    struct stat st;
-    if (stat(dir, &st) < 0) {
-        fprintf(stderr, "find: '%s': no such file or directory\n", dir);
-        return 1;
-    }
-    if (st.st_type != DT_DIR) {
-        fprintf(stderr, "find: '%s': not a directory\n", dir);
-        return 1;
-    }
+    if (npaths == 0) { paths[0] = "."; npaths = 1; }
 
-    puts(dir);
-    do_find(dir, pat, 0);
+    for (int p = 0; p < npaths; p++) {
+        char resolved[512];
+        resolve_path(cwd, paths[p], resolved, sizeof(resolved));
+        struct stat st;
+        if (stat(resolved, &st) != 0) {
+            fprintf(stderr, "find: '%s': no such file or directory\n", paths[p]);
+            continue;
+        }
+        if (st.st_type != DT_DIR) { fputs(resolved, stdout); putchar('\n'); continue; }
+        fputs(resolved, stdout); putchar('\n');
+        do_find(resolved, &o, 1);
+    }
     return 0;
 }

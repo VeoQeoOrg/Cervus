@@ -8,6 +8,17 @@
 #include <sys/stat.h>
 #include <cervus_util.h>
 
+typedef struct {
+    int ignore_case;
+    int invert;
+    int show_lineno;
+    int recursive;
+    int count_only;
+    int files_with_match;
+    int quiet;
+    int no_filename;
+} grep_opts_t;
+
 static int match_line(const char *line, const char *pat, int ignore_case)
 {
     size_t pl = strlen(pat);
@@ -40,38 +51,40 @@ static int looks_binary(const char *buf, ssize_t n)
 }
 
 static int grep_fd(int fd, const char *pat, const char *prefix,
-                   int ignore_case, int invert, int show_lineno, int *any,
-                   int skip_binary)
+                   const grep_opts_t *o, int *any, int skip_binary)
 {
     char buf[8192];
     int line = 0;
-    int rc = 0;
+    int matched_in_file = 0;
     char acc[4096];
     int alen = 0;
-    int checked_binary = 0;
-    int is_binary = 0;
+    int checked = 0, is_binary = 0;
 
     while (1) {
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) break;
-        if (skip_binary && !checked_binary) {
-            checked_binary = 1;
-            if (looks_binary(buf, n)) { is_binary = 1; break; }
-        }
+        if (skip_binary && !checked) { checked = 1; if (looks_binary(buf, n)) { is_binary = 1; break; } }
         for (ssize_t i = 0; i < n; i++) {
             char c = buf[i];
             if (c == '\n' || alen + 1 >= (int)sizeof(acc)) {
                 acc[alen] = '\0';
                 line++;
-                int m = match_line(acc, pat, ignore_case);
-                if (invert) m = !m;
+                int m = match_line(acc, pat, o->ignore_case);
+                if (o->invert) m = !m;
                 if (m) {
+                    matched_in_file++;
                     if (any) *any = 1;
-                    if (prefix) { fputs(prefix, stdout); fputs(":", stdout); }
-                    if (show_lineno) { fprintf(stdout, "%d:", line); }
-                    fputs(acc, stdout);
-                    putchar('\n');
-                    rc = 0;
+                    if (!o->quiet && !o->count_only && !o->files_with_match) {
+                        if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
+                        if (o->show_lineno) fprintf(stdout, "%d:", line);
+                        fputs(acc, stdout);
+                        putchar('\n');
+                    }
+                    if (o->quiet) return 0;
+                    if (o->files_with_match) {
+                        if (prefix) { puts(prefix); }
+                        return 0;
+                    }
                 }
                 alen = 0;
                 if (c != '\n') acc[alen++] = c;
@@ -83,46 +96,49 @@ static int grep_fd(int fd, const char *pat, const char *prefix,
     if (alen > 0 && !is_binary) {
         acc[alen] = '\0';
         line++;
-        int m = match_line(acc, pat, ignore_case);
-        if (invert) m = !m;
+        int m = match_line(acc, pat, o->ignore_case);
+        if (o->invert) m = !m;
         if (m) {
+            matched_in_file++;
             if (any) *any = 1;
-            if (prefix) { fputs(prefix, stdout); fputs(":", stdout); }
-            if (show_lineno) { fprintf(stdout, "%d:", line); }
-            fputs(acc, stdout);
-            putchar('\n');
+            if (!o->quiet && !o->count_only && !o->files_with_match) {
+                if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
+                if (o->show_lineno) fprintf(stdout, "%d:", line);
+                fputs(acc, stdout);
+                putchar('\n');
+            }
         }
     }
-    return rc;
+
+    if (o->count_only) {
+        if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
+        printf("%d\n", matched_in_file);
+    }
+    return matched_in_file > 0 ? 0 : 1;
 }
 
 static int grep_path(const char *path, const char *pat,
-                     int ignore_case, int invert, int show_lineno,
-                     int recursive, int show_prefix, int *any);
+                     const grep_opts_t *o, int show_prefix, int *any);
 
 static int grep_dir(const char *dir, const char *pat,
-                    int ignore_case, int invert, int show_lineno, int *any)
+                    const grep_opts_t *o, int *any)
 {
     DIR *d = opendir(dir);
-    if (!d) {
-        fprintf(stderr, "grep: cannot open directory '%s'\n", dir);
-        return 1;
-    }
+    if (!d) { fprintf(stderr, "grep: cannot open directory '%s'\n", dir); return 1; }
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         const char *nm = de->d_name;
         if (nm[0] == '.' && (nm[1] == '\0' || (nm[1] == '.' && nm[2] == '\0'))) continue;
         char child[512];
         snprintf(child, sizeof(child), "%s/%s", dir, nm);
-        grep_path(child, pat, ignore_case, invert, show_lineno, 1, 1, any);
+        grep_path(child, pat, o, 1, any);
     }
     closedir(d);
     return 0;
 }
 
 static int grep_path(const char *path, const char *pat,
-                     int ignore_case, int invert, int show_lineno,
-                     int recursive, int show_prefix, int *any)
+                     const grep_opts_t *o, int show_prefix, int *any)
 {
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -130,70 +146,79 @@ static int grep_path(const char *path, const char *pat,
         return 1;
     }
     if (st.st_type == DT_DIR) {
-        if (!recursive) {
-            fprintf(stderr, "grep: '%s': is a directory (use -r)\n", path);
-            return 1;
-        }
-        return grep_dir(path, pat, ignore_case, invert, show_lineno, any);
+        if (!o->recursive) { fprintf(stderr, "grep: '%s': is a directory (use -r)\n", path); return 1; }
+        return grep_dir(path, pat, o, any);
     }
     int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        fprintf(stderr, "grep: cannot open '%s'\n", path);
-        return 1;
-    }
+    if (fd < 0) { fprintf(stderr, "grep: cannot open '%s'\n", path); return 1; }
     const char *prefix = show_prefix ? path : NULL;
-    grep_fd(fd, pat, prefix, ignore_case, invert, show_lineno, any, 1);
+    grep_fd(fd, pat, prefix, o, any, 1);
     close(fd);
     return 0;
 }
 
+static const char USAGE[] =
+    "Usage: grep [-cEFHhilnqrRsvx] [-e pattern] pattern [file ...]\nSearch for PATTERN in each FILE.\n\n  -c   only print count of matching lines\n  -e   pattern (allows pattern beginning with -)\n  -H   print filename prefix\n  -h   suppress filename prefix\n  -i   ignore case\n  -l   list filenames with matches only\n  -n   prefix each line with line number\n  -q   quiet, exit 0 on first match\n  -r, -R  recurse into directories\n  -v   invert match\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
+
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "grep")) return 0;
     const char *cwd = get_cwd_flag(argc, argv);
-    int ignore_case = 0, invert = 0, show_lineno = 0, recursive = 0;
-    const char *pat = NULL;
-    const char *files[64];
-    int nf = 0;
+    argc = cervus_filter_args(argc, argv);
 
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (argv[i][0] == '-' && argv[i][1] != '\0' && argv[i][1] != '-') {
-            for (const char *f = argv[i] + 1; *f; f++) {
-                if (*f == 'i') ignore_case = 1;
-                else if (*f == 'v') invert = 1;
-                else if (*f == 'n') show_lineno = 1;
-                else if (*f == 'r' || *f == 'R') recursive = 1;
-                else if (*f == 'F') { }
-                else if (*f == 'H') { }
-            }
-            continue;
+    grep_opts_t o;
+    memset(&o, 0, sizeof(o));
+    const char *e_pat = NULL;
+
+    int opt;
+    while ((opt = getopt(argc, argv, "cEFHe:hilnqrRsvx")) != -1) {
+        switch (opt) {
+            case 'c': o.count_only = 1; break;
+            case 'E': break;
+            case 'F': break;
+            case 'H': o.no_filename = 0; break;
+            case 'e': e_pat = optarg; break;
+            case 'h': o.no_filename = 1; break;
+            case 'i': o.ignore_case = 1; break;
+            case 'l': o.files_with_match = 1; break;
+            case 'n': o.show_lineno = 1; break;
+            case 'q': o.quiet = 1; break;
+            case 'r': case 'R': o.recursive = 1; break;
+            case 's': break;
+            case 'v': o.invert = 1; break;
+            case 'x': break;
+            default: usage(); return 2;
         }
-        if (!pat) pat = argv[i];
-        else if (nf < 64) files[nf++] = argv[i];
     }
 
+    const char *pat = e_pat;
+    int file_start = optind;
     if (!pat) {
-        fputs(C_RED "usage: grep [-ivnr] <pattern> [<file>|<dir>...]" C_RESET "\n", stderr);
-        return 2;
+        if (optind >= argc) { usage(); return 2; }
+        pat = argv[optind];
+        file_start = optind + 1;
     }
 
-    int found = 0;
+    int any = 0;
+    int nf = argc - file_start;
 
-    if (recursive && nf == 0) {
-        files[nf++] = ".";
+    if (o.recursive && nf == 0) {
+        grep_path(".", pat, &o, 1, &any);
+        return any ? 0 : 1;
     }
 
     if (nf == 0) {
-        grep_fd(0, pat, NULL, ignore_case, invert, show_lineno, &found, 0);
-        return found ? 0 : 1;
+        grep_fd(0, pat, NULL, &o, &any, 0);
+        return any ? 0 : 1;
     }
 
-    int show_prefix = (nf > 1) || recursive;
-    for (int i = 0; i < nf; i++) {
+    int show_prefix = (nf > 1 || o.recursive) && !o.no_filename;
+    for (int i = file_start; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, files[i], resolved, sizeof(resolved));
-        grep_path(resolved, pat, ignore_case, invert, show_lineno,
-                  recursive, show_prefix, &found);
+        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        grep_path(resolved, pat, &o, show_prefix, &any);
     }
-    return found ? 0 : 1;
+    return any ? 0 : 1;
 }

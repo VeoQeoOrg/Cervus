@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cervus_util.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -50,8 +51,12 @@ static void print_escaped(const char *s)
     }
 }
 
+
+static const char USAGE[] =
+    "Usage: echo [-neE] [string ...]\nPrint arguments separated by spaces.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "echo")) return 0;
     int newline = 1;
     int escape  = 0;
     int i       = 1;

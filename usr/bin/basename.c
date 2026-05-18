@@ -3,8 +3,12 @@
 #include <unistd.h>
 #include <cervus_util.h>
 
+
+static const char USAGE[] =
+    "Usage: basename string [suffix]\nStrip directory and optional suffix from path.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "basename")) return 0;
     const char *path = NULL;
     const char *suffix = NULL;
     int seen = 0;

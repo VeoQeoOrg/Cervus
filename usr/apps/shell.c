@@ -269,6 +269,33 @@ static int cmd_color(int argc, char **argv) {
     return 0;
 }
 
+static void expand_tilde(const char *src, char *dst, size_t dsz) {
+    const char *home = env_get("HOME");
+    if (!home || !home[0]) home = "/";
+    size_t hl = strlen(home);
+    while (hl > 1 && home[hl - 1] == '/') hl--;
+    size_t di = 0;
+    int in_dq = 0, in_sq = 0;
+    int at_arg_start = 1;
+    for (const char *p = src; *p && di + 1 < dsz; ) {
+        char c = *p;
+        if (in_dq) { if (c == '"')  in_dq = 0; dst[di++] = c; p++; at_arg_start = 0; continue; }
+        if (in_sq) { if (c == '\'') in_sq = 0; dst[di++] = c; p++; at_arg_start = 0; continue; }
+        if (c == '"')  { in_dq = 1; dst[di++] = c; p++; at_arg_start = 0; continue; }
+        if (c == '\'') { in_sq = 1; dst[di++] = c; p++; at_arg_start = 0; continue; }
+        if (at_arg_start && c == '~' &&
+            (p[1] == '/' || p[1] == '\0' || p[1] == ' ' || p[1] == '\t')) {
+            for (size_t i = 0; i < hl && di + 1 < dsz; i++) dst[di++] = home[i];
+            p++;
+            at_arg_start = 0;
+            continue;
+        }
+        at_arg_start = (c == ' ' || c == '\t') ? 1 : 0;
+        dst[di++] = c; p++;
+    }
+    dst[di] = '\0';
+}
+
 static void expand_vars(const char *src, char *dst, size_t dsz) {
     size_t di = 0;
     for (const char *p = src; *p && di + 1 < dsz; ) {
@@ -1057,8 +1084,10 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
 }
 
 static int run_single(char *line) {
+    char tilded[LINE_MAX];
+    expand_tilde(line, tilded, sizeof(tilded));
     char expanded[LINE_MAX];
-    expand_vars(line, expanded, sizeof(expanded));
+    expand_vars(tilded, expanded, sizeof(expanded));
     char buf[LINE_MAX];
     strncpy(buf, expanded, LINE_MAX - 1);
     char *argv[MAX_ARGS];

@@ -2,8 +2,12 @@
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
+
+static const char USAGE[] =
+    "Usage: mount device path | mount\nMount filesystem; with no args, list mounts.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "mount")) return 0;
     int real_argc = 0;
     for (int i = 0; i < argc; i++)
         if (!is_shell_flag(argv[i])) real_argc++;

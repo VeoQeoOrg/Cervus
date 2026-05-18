@@ -3,8 +3,12 @@
 #include <unistd.h>
 #include <cervus_util.h>
 
+
+static const char USAGE[] =
+    "Usage: dirname path ...\nStrip last component from path.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "dirname")) return 0;
     const char *path = NULL;
     for (int i = 1; i < argc; i++) {
         if (is_shell_flag(argv[i])) continue;

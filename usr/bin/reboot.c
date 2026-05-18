@@ -26,8 +26,12 @@ static int confirm_prompt(void)
            strcmp(buf, "YES") == 0 || strcmp(buf, "Y") == 0;
 }
 
+
+static const char USAGE[] =
+    "Usage: reboot\nReboot the system. Requires root.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "reboot")) return 0;
     (void)argc; (void)argv;
     fputs(C_YELLOW "=== Reboot ===" C_RESET "\n\n", stdout);
     fputs("Are you sure you want to " C_CYAN "reboot" C_RESET " the computer?\n", stdout);

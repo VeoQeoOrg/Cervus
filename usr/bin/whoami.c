@@ -4,8 +4,12 @@
 #include <unistd.h>
 #include <cervus_util.h>
 
+
+static const char USAGE[] =
+    "Usage: whoami\nPrint effective user name.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "whoami")) return 0;
     (void)argc; (void)argv;
     const char *u = getenv_argv(argc, argv, "USER", NULL);
     if (!u) u = "root";

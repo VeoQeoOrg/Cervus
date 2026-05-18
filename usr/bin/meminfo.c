@@ -31,8 +31,12 @@ static void print_bar(uint64_t used, uint64_t total)
     printf("] %d%%\n", pct);
 }
 
+
+static const char USAGE[] =
+    "Usage: meminfo\nShow system memory statistics.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "meminfo")) return 0;
     (void)argc; (void)argv;
     putchar('\n');
     fputs("  " C_CYAN "Memory Info" C_RESET "\n", stdout);

@@ -81,8 +81,12 @@ static int parse_flags(int argc, char **argv, int *verbose)
     return 0;
 }
 
+
+static const char USAGE[] =
+    "Usage: lspci [-v]\nList PCI devices.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "lspci")) return 0;
     int verbose;
     if (parse_flags(argc, argv, &verbose) < 0) return 0;
 

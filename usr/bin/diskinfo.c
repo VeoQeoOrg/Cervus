@@ -170,8 +170,12 @@ static void print_disk(const cervus_disk_info_t *d,
     if (!any_fs) fputs("  (no mounted filesystems on this disk)\n\n", stdout);
 }
 
+
+static const char USAGE[] =
+    "Usage: diskinfo\nShow available disk devices.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "diskinfo")) return 0;
     (void)argc; (void)argv;
 
     cervus_disk_info_t disks[8];

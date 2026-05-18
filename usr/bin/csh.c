@@ -271,6 +271,76 @@ static int find_in_path(const char *cmd, char *out, size_t outsz) {
     return 0;
 }
 
+static int exec_external(int argc, char **argv, redir_t *redirs, int nr);
+
+#define CSH_PIPELINE_MAX 16
+
+static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
+{
+    int nseg = npipe + 1;
+    if (nseg > CSH_PIPELINE_MAX) {
+        fputs(C_RED "csh: pipeline too long\n" C_RESET, stdout);
+        return 1;
+    }
+    int starts[CSH_PIPELINE_MAX + 1];
+    starts[0] = 0;
+    for (int i = 0; i < npipe; i++) starts[i + 1] = pipe_idx[i] + 1;
+
+    int pipes[2 * CSH_PIPELINE_MAX];
+    for (int i = 0; i < npipe; i++) {
+        if (pipe(&pipes[i * 2]) < 0) {
+            fputs(C_RED "csh: pipe failed\n" C_RESET, stdout);
+            for (int j = 0; j < i * 2; j++) close(pipes[j]);
+            return 1;
+        }
+    }
+
+    pid_t pids[CSH_PIPELINE_MAX];
+    for (int i = 0; i < nseg; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fputs(C_RED "csh: fork failed\n" C_RESET, stdout);
+            for (int j = 0; j < npipe * 2; j++) close(pipes[j]);
+            for (int k = 0; k < i; k++) {
+                int st;
+                waitpid(pids[k], &st, 0);
+            }
+            return 1;
+        }
+        if (pid == 0) {
+            if (i > 0)         dup2(pipes[(i - 1) * 2 + 0], 0);
+            if (i < nseg - 1)  dup2(pipes[i * 2 + 1],       1);
+            for (int j = 0; j < npipe * 2; j++) close(pipes[j]);
+
+            int seg_end = (i + 1 < nseg) ? pipe_idx[i] : n;
+            char *sub_argv[CSH_MAX_TOKENS];
+            int sub_n = 0;
+            for (int k = starts[i]; k < seg_end && sub_n < CSH_MAX_TOKENS - 1; k++)
+                sub_argv[sub_n++] = tok[k];
+            sub_argv[sub_n] = NULL;
+            if (sub_n == 0) exit(0);
+
+            redir_t rd[CSH_REDIRS_MAX]; int nr = 0;
+            if (parse_redirects(sub_argv, &sub_n, rd, CSH_REDIRS_MAX, &nr) < 0) exit(1);
+            if (sub_n == 0) exit(0);
+
+            int rc = exec_external(sub_n, sub_argv, rd, nr);
+            exit(rc);
+        }
+        pids[i] = pid;
+    }
+
+    for (int j = 0; j < npipe * 2; j++) close(pipes[j]);
+
+    int last_rc = 0;
+    for (int i = 0; i < nseg; i++) {
+        int st = 0;
+        waitpid(pids[i], &st, 0);
+        if (i == nseg - 1) last_rc = (st >> 8) & 0xFF;
+    }
+    return last_rc;
+}
+
 static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     char binpath[CSH_PATH_MAX];
     if (!find_in_path(argv[0], binpath, sizeof(binpath))) {
@@ -810,6 +880,18 @@ static int run_script(void) {
         if (strcmp(tok[0], "exit") == 0) {
             int code = (n > 1) ? atoi(tok[1]) : g_last_rc;
             exit(code);
+        }
+
+        {
+            int pipe_idx[CSH_PIPELINE_MAX];
+            int npipe = 0;
+            for (int i = 0; i < n && npipe < CSH_PIPELINE_MAX; i++) {
+                if (strcmp(tok[i], "|") == 0) pipe_idx[npipe++] = i;
+            }
+            if (npipe > 0) {
+                rc_set(exec_pipeline(tok, n, pipe_idx, npipe));
+                line_idx++; continue;
+            }
         }
 
         if (strcmp(tok[0], "set") == 0) {

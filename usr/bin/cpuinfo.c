@@ -11,8 +11,12 @@ static void cpuid_leaf(uint32_t leaf, uint32_t *a, uint32_t *b,
                   : "0"(leaf), "2"(0));
 }
 
+
+static const char USAGE[] =
+    "Usage: cpuinfo\nShow CPU information.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "cpuinfo")) return 0;
     (void)argc; (void)argv;
     uint32_t a, b, c, d;
     putchar('\n');

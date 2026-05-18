@@ -5,23 +5,38 @@
 #include <fcntl.h>
 #include <cervus_util.h>
 
+static const char USAGE[] =
+    "Usage: tee [-ai] [file ...]\nCopy standard input to each FILE and standard output.\n\n  -a   append to FILEs instead of overwriting\n  -i   ignored (kept for portability)\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
+
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "tee")) return 0;
     const char *cwd = get_cwd_flag(argc, argv);
+    argc = cervus_filter_args(argc, argv);
+
     int append = 0;
+    int opt;
+    while ((opt = getopt(argc, argv, "ai")) != -1) {
+        switch (opt) {
+            case 'a': append = 1; break;
+            case 'i': break;
+            default: usage(); return 1;
+        }
+    }
+
     int fds[32];
     int nfd = 0;
-
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (strcmp(argv[i], "-a") == 0) { append = 1; continue; }
-        if (nfd >= 32) continue;
+    int rc = 0;
+    for (int i = optind; i < argc && nfd < 32; i++) {
         char resolved[512];
         resolve_path(cwd, argv[i], resolved, sizeof(resolved));
-        int fl = O_WRONLY | O_CREAT | (append ? 0 : O_TRUNC);
+        int fl = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
         int fd = open(resolved, fl, 0644);
         if (fd < 0) {
             fprintf(stderr, "tee: cannot open '%s'\n", argv[i]);
+            rc = 1;
             continue;
         }
         fds[nfd++] = fd;
@@ -41,5 +56,5 @@ int main(int argc, char **argv)
         }
     }
     for (int i = 0; i < nfd; i++) close(fds[i]);
-    return 0;
+    return rc;
 }

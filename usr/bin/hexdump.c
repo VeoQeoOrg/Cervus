@@ -1,56 +1,22 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 #include <cervus_util.h>
 
-int main(int argc, char **argv)
+static const char USAGE[] =
+    "Usage: hexdump [-C] [-n length] [-s skip] [file ...]\nDisplay file contents in hex+ASCII canonical form.\n\n  -C       canonical (default)\n  -n N     display only N bytes\n  -s OFF   skip OFF bytes at start\n  -v       no compression (no-op)\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
+
+static int dump_fd(int fd, long skip, long count)
 {
-    const char *cwd = get_cwd_flag(argc, argv);
-    const char *path = NULL;
-    long skip = 0;
-    long count = -1;
-
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
-            skip = strtol(argv[++i], NULL, 0);
-            continue;
-        }
-        if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) {
-            count = strtol(argv[++i], NULL, 0);
-            continue;
-        }
-        if (!path) path = argv[i];
-    }
-
-    if (!path) {
-        fputs("Usage: hexdump [-s OFF] [-n CNT] <file>\n", stdout);
-        return 1;
-    }
-
-    char resolved[512];
-    resolve_path(cwd, path, resolved, sizeof(resolved));
-
-    struct stat st;
-    if (stat(resolved, &st) == 0 && st.st_type == DT_DIR) {
-        fprintf(stderr, "hexdump: %s: Is a directory\n", path);
-        return 1;
-    }
-
-    int fd = open(resolved, O_RDONLY);
-    if (fd < 0) {
-        fprintf(stderr, "hexdump: cannot open: %s\n", path);
-        return 1;
-    }
-
     if (skip > 0) lseek(fd, skip, 0);
-
     uint8_t buf[16];
     uint64_t offset = (uint64_t)skip;
     long remaining = count;
@@ -63,13 +29,11 @@ int main(int argc, char **argv)
         }
         printf("%016lx  ", (unsigned long)offset);
         for (int i = 0; i < 8; i++) {
-            if (i < n) printf("%02x ", buf[i]);
-            else       fputs("   ", stdout);
+            if (i < n) printf("%02x ", buf[i]); else fputs("   ", stdout);
         }
         putchar(' ');
         for (int i = 8; i < 16; i++) {
-            if (i < n) printf("%02x ", buf[i]);
-            else       fputs("   ", stdout);
+            if (i < n) printf("%02x ", buf[i]); else fputs("   ", stdout);
         }
         fputs(" |", stdout);
         for (int i = 0; i < n; i++) {
@@ -80,6 +44,43 @@ int main(int argc, char **argv)
         offset += (uint64_t)n;
     }
     printf("%016lx\n", (unsigned long)offset);
-    close(fd);
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (cervus_check_help_version(argc, argv, USAGE, "hexdump")) return 0;
+    const char *cwd = get_cwd_flag(argc, argv);
+    argc = cervus_filter_args(argc, argv);
+
+    long skip = 0;
+    long count = -1;
+    int opt;
+    while ((opt = getopt(argc, argv, "Cn:s:v")) != -1) {
+        switch (opt) {
+            case 'C': break;
+            case 'n': count = strtol(optarg, NULL, 0); break;
+            case 's': skip  = strtol(optarg, NULL, 0); break;
+            case 'v': break;
+            default: usage(); return 1;
+        }
+    }
+
+    if (optind >= argc) return dump_fd(0, skip, count);
+
+    int rc = 0;
+    for (int i = optind; i < argc; i++) {
+        char resolved[512];
+        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        struct stat st;
+        if (stat(resolved, &st) == 0 && st.st_type == DT_DIR) {
+            fprintf(stderr, "hexdump: %s: is a directory\n", argv[i]);
+            rc = 1; continue;
+        }
+        int fd = open(resolved, O_RDONLY);
+        if (fd < 0) { fprintf(stderr, "hexdump: cannot open '%s'\n", argv[i]); rc = 1; continue; }
+        dump_fd(fd, skip, count);
+        close(fd);
+    }
+    return rc;
 }

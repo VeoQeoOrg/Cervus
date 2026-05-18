@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <cervus_util.h>
 #include <string.h>
 #include <sys/cervus.h>
 
@@ -30,8 +31,12 @@ static int print_size_human(char *buf, size_t bufsz, uint64_t bytes)
     }
 }
 
+
+static const char USAGE[] =
+    "Usage: lsblk\nList block devices.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "lsblk")) return 0;
     (void)argc; (void)argv;
     cervus_mount_info_t mounts[16];
     long nm = cervus_list_mounts(mounts, 16);

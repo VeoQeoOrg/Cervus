@@ -26,8 +26,12 @@ static int confirm_prompt(void)
            strcmp(buf, "YES") == 0 || strcmp(buf, "Y") == 0;
 }
 
+
+static const char USAGE[] =
+    "Usage: shutdown\nPower off the system. Requires root.\n";
 int main(int argc, char **argv)
 {
+    if (cervus_check_help_version(argc, argv, USAGE, "shutdown")) return 0;
     (void)argc; (void)argv;
     fputs(C_YELLOW "=== Shutdown ===" C_RESET "\n\n", stdout);
     fputs("Are you sure you want to " C_RED "shut down" C_RESET " the computer?\n", stdout);

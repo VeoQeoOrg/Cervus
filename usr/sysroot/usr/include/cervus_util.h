@@ -104,6 +104,108 @@ static inline int is_shell_flag(const char *a)
     return 0;
 }
 
+static inline int cervus_filter_args(int argc, char **argv)
+{
+    int out = 1;
+    for (int i = 1; i < argc; i++) {
+        if (is_shell_flag(argv[i])) continue;
+        argv[out++] = argv[i];
+    }
+    argv[out] = (char *)0;
+    return out;
+}
+
+#define CERVUS_VERSION_STR "Cervus 0.0.2"
+
+static inline void __cervus_help_write(const char *s)
+{
+    if (!s) return;
+    size_t n = 0;
+    while (s[n]) n++;
+    if (n) write(1, s, n);
+}
+
+static inline int cervus_check_help_version(int argc, char **argv,
+                                            const char *usage,
+                                            const char *prog)
+{
+    for (int i = 1; i < argc; i++) {
+        if (!argv[i]) continue;
+        if (is_shell_flag(argv[i])) continue;
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-?") == 0) {
+            __cervus_help_write(usage);
+            return 1;
+        }
+        if (strcmp(argv[i], "--version") == 0) {
+            if (prog) {
+                __cervus_help_write(prog);
+                __cervus_help_write(" (");
+                __cervus_help_write(CERVUS_VERSION_STR);
+                __cervus_help_write(")\n");
+            } else {
+                __cervus_help_write(CERVUS_VERSION_STR);
+                __cervus_help_write("\n");
+            }
+            return 1;
+        }
+        if (argv[i][0] != '-' || argv[i][1] == '\0') break;
+        if (argv[i][0] == '-' && argv[i][1] == '-' && argv[i][2] == '\0') break;
+    }
+    return 0;
+}
+
+static inline int cervus_confirm(const char *what,
+                                 const char *target,
+                                 const char *reason)
+{
+    __cervus_help_write("\x1b[1;31m  WARNING:\x1b[0m ");
+    if (what)   { __cervus_help_write(what); __cervus_help_write(" "); }
+    if (target) { __cervus_help_write("'"); __cervus_help_write(target); __cervus_help_write("'"); }
+    __cervus_help_write("\n");
+    if (reason) {
+        __cervus_help_write("  \x1b[90m");
+        __cervus_help_write(reason);
+        __cervus_help_write("\x1b[0m\n");
+    }
+    __cervus_help_write("  Continue? [y/N] ");
+    char buf[8];
+    ssize_t n = read(0, buf, sizeof(buf));
+    if (n <= 0) { __cervus_help_write("\n"); return 0; }
+    int ok = (buf[0] == 'y' || buf[0] == 'Y');
+    int saw_nl = 0;
+    for (ssize_t i = 0; i < n; i++) if (buf[i] == '\n') { saw_nl = 1; break; }
+    if (!saw_nl) __cervus_help_write("\n");
+    return ok;
+}
+
+static inline const char *cervus_path_danger(const char *path)
+{
+    if (!path) return (const char *)0;
+    static const struct { const char *p; const char *r; } LIST[] = {
+        {"/",      "this is the root of the filesystem — every file would be lost"},
+        {"/bin",   "removing /bin destroys every system command"},
+        {"/apps",  "removing /apps destroys every installed application"},
+        {"/etc",   "removing /etc loses all system configuration"},
+        {"/home",  "removing /home loses user files and history"},
+        {"/usr",   "removing /usr destroys the sysroot (headers, libs, tcc)"},
+        {"/dev",   "/dev is the virtual device filesystem — I/O will break"},
+        {"/mnt",   "/mnt holds mounted disk partitions"},
+        {"/boot",  "removing /boot makes the system unbootable"},
+        {"/tmp",   "/tmp may hold open files for running programs"},
+        {"/var",   "/var holds logs and persistent runtime state"},
+        {(const char *)0, (const char *)0}
+    };
+    const char *p = path;
+    while (*p == '/' && p[1] == '/') p++;
+    size_t pl = strlen(p);
+    while (pl > 1 && p[pl - 1] == '/') pl--;
+    for (int i = 0; LIST[i].p; i++) {
+        size_t lp = strlen(LIST[i].p);
+        if (pl == lp && strncmp(p, LIST[i].p, lp) == 0) return LIST[i].r;
+    }
+    return (const char *)0;
+}
+
 static inline const char *get_cwd_flag(int argc, char **argv)
 {
     (void)argc; (void)argv;

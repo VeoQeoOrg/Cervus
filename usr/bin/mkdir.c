@@ -1,10 +1,12 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <cervus_util.h>
 
-static int mkdir_p(const char *path)
+static int mkdir_p(const char *path, mode_t mode)
 {
     char tmp[512];
     size_t len = strlen(path);
@@ -16,7 +18,7 @@ static int mkdir_p(const char *path)
             tmp[i] = '\0';
             struct stat st;
             if (stat(tmp, &st) != 0) {
-                int r = mkdir(tmp, 0755);
+                int r = mkdir(tmp, mode);
                 if (r < 0 && errno != EEXIST) { tmp[i] = saved; return r; }
             }
             tmp[i] = saved;
@@ -25,35 +27,45 @@ static int mkdir_p(const char *path)
     return 0;
 }
 
+static const char USAGE[] =
+    "Usage: mkdir [-p] [-m mode] dir ...\nCreate DIRECTORY(ies) if they do not exist.\n\n  -m M   set file mode (as in chmod, octal)\n  -p     no error if existing, make parent dirs as needed\n  -v     verbose (no-op currently)\n";
+
+static void usage(void) { fputs(USAGE, stderr); }
+
 int main(int argc, char **argv)
 {
-    const char *cwd_str = get_cwd_flag(argc, argv);
-    int found = 0;
+    if (cervus_check_help_version(argc, argv, USAGE, "mkdir")) return 0;
+    const char *cwd = get_cwd_flag(argc, argv);
+    argc = cervus_filter_args(argc, argv);
+
     int flag_p = 0;
+    mode_t mode = 0755;
 
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (strcmp(argv[i], "-p") == 0) { flag_p = 1; continue; }
-        if (argv[i][0] == '-') continue;
-        found++;
-
-        char path[512];
-        resolve_path(cwd_str, argv[i], path, sizeof(path));
-
-        int r = flag_p ? mkdir_p(path) : mkdir(path, 0755);
-        if (r < 0) {
-            if (errno == EEXIST) {
-                if (!flag_p)
-                    fprintf(stderr, "mkdir: '%s' already exists\n", argv[i]);
-            } else {
-                fprintf(stderr, "mkdir: cannot create '%s' (errno %d)\n",
-                        argv[i], errno);
-            }
+    int opt;
+    while ((opt = getopt(argc, argv, "pm:v")) != -1) {
+        switch (opt) {
+            case 'p': flag_p = 1; break;
+            case 'm': mode = (mode_t)strtol(optarg, NULL, 8); break;
+            case 'v': break;
+            default: usage(); return 1;
         }
     }
-    if (!found) {
-        fputs("Usage: mkdir [-p] <dir> [dir2 ...]\n", stdout);
-        return 1;
+    if (optind >= argc) { usage(); return 1; }
+
+    int rc = 0;
+    for (int i = optind; i < argc; i++) {
+        char path[512];
+        resolve_path(cwd, argv[i], path, sizeof(path));
+        int r = flag_p ? mkdir_p(path, mode) : mkdir(path, mode);
+        if (r < 0) {
+            if (errno == EEXIST && flag_p) continue;
+            if (errno == EEXIST) {
+                fprintf(stderr, "mkdir: '%s' already exists\n", argv[i]);
+            } else {
+                fprintf(stderr, "mkdir: cannot create '%s'\n", argv[i]);
+            }
+            rc = 1;
+        }
     }
-    return 0;
+    return rc;
 }
