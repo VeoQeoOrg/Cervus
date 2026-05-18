@@ -45,6 +45,7 @@ typedef struct {
 typedef struct {
     char name[CSH_NAME_MAX];
     char value[CSH_VAL_MAX];
+    int  is_env;
 } var_t;
 
 typedef enum { CSH_REDIR_NONE, CSH_REDIR_OUT, CSH_REDIR_APPEND, CSH_REDIR_IN } redir_type_t;
@@ -90,15 +91,37 @@ static void var_set(const char *name, const char *value) {
         i = g_nvars++;
         strncpy(g_vars[i].name, name, CSH_NAME_MAX - 1);
         g_vars[i].name[CSH_NAME_MAX - 1] = '\0';
+        g_vars[i].is_env = 0;
     }
     strncpy(g_vars[i].value, value, CSH_VAL_MAX - 1);
     g_vars[i].value[CSH_VAL_MAX - 1] = '\0';
+}
+
+static void var_setenv(const char *name, const char *value) {
+    int i = var_find(name);
+    if (i < 0) {
+        if (g_nvars >= CSH_MAX_VARS) return;
+        i = g_nvars++;
+        strncpy(g_vars[i].name, name, CSH_NAME_MAX - 1);
+        g_vars[i].name[CSH_NAME_MAX - 1] = '\0';
+    }
+    strncpy(g_vars[i].value, value, CSH_VAL_MAX - 1);
+    g_vars[i].value[CSH_VAL_MAX - 1] = '\0';
+    g_vars[i].is_env = 1;
 }
 
 static void var_unset(const char *name) {
     int i = var_find(name);
     if (i < 0) return;
     g_vars[i] = g_vars[--g_nvars];
+}
+
+static int var_unsetenv(const char *name) {
+    int i = var_find(name);
+    if (i < 0) return 0;
+    if (!g_vars[i].is_env) return -1;
+    g_vars[i] = g_vars[--g_nvars];
+    return 0;
 }
 
 static void rc_set(int rc) {
@@ -266,6 +289,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", g_cwd);
     real_argv[ri++] = _cwd_flag;
     for (int ei = 0; ei < g_nvars && ri < (int)(sizeof(real_argv)/sizeof(real_argv[0])) - 1; ei++) {
+        if (!g_vars[ei].is_env) continue;
         snprintf(_env_flags[ei], sizeof(_env_flags[ei]), "--env:%s=%s",
                  g_vars[ei].name, g_vars[ei].value);
         real_argv[ri++] = _env_flags[ei];
@@ -416,6 +440,7 @@ static int is_skipping(void) {
 static int run_set(char **tok, int n) {
     if (n == 1) {
         for (int i = 0; i < g_nvars; i++) {
+            fputs(g_vars[i].is_env ? "env " : "    ", stdout);
             fputs(g_vars[i].name, stdout);
             putchar('=');
             fputs(g_vars[i].value, stdout);
@@ -455,6 +480,42 @@ static int run_set(char **tok, int n) {
 static int run_unset(char **tok, int n) {
     for (int i = 1; i < n; i++) var_unset(tok[i]);
     return 0;
+}
+
+static int run_setenv(char **tok, int n) {
+    if (n == 1) {
+        for (int i = 0; i < g_nvars; i++) {
+            if (!g_vars[i].is_env) continue;
+            fputs(g_vars[i].name, stdout);
+            putchar('=');
+            fputs(g_vars[i].value, stdout);
+            putchar('\n');
+        }
+        return 0;
+    }
+    if (n == 2) {
+        var_setenv(tok[1], "");
+        return 0;
+    }
+    if (n == 3) {
+        var_setenv(tok[1], tok[2]);
+        return 0;
+    }
+    fputs(C_RED "csh: bad setenv syntax (usage: setenv NAME VALUE)\n" C_RESET, stdout);
+    return 1;
+}
+
+static int run_unsetenv(char **tok, int n) {
+    int rc = 0;
+    for (int i = 1; i < n; i++) {
+        if (var_unsetenv(tok[i]) < 0) {
+            fputs(C_RED "csh: not an environment variable: " C_RESET, stdout);
+            fputs(tok[i], stdout);
+            putchar('\n');
+            rc = 1;
+        }
+    }
+    return rc;
 }
 
 static int run_echo_builtin(char **tok, int n) {
@@ -761,6 +822,16 @@ static int run_script(void) {
             line_idx++; continue;
         }
 
+        if (strcmp(tok[0], "setenv") == 0) {
+            rc_set(run_setenv(tok, n));
+            line_idx++; continue;
+        }
+
+        if (strcmp(tok[0], "unsetenv") == 0) {
+            rc_set(run_unsetenv(tok, n));
+            line_idx++; continue;
+        }
+
         if (strcmp(tok[0], "cd") == 0) {
             const char *path = (n > 1) ? tok[1] : var_get("HOME");
             if (!path || !path[0]) path = "/";
@@ -813,8 +884,8 @@ int main(int argc, char **argv) {
         g_path_env[sizeof(g_path_env) - 1] = '\0';
     }
     const char *h = getenv_argv(argc, argv, "HOME", "/");
-    var_set("HOME", h);
-    var_set("PATH", g_path_env);
+    var_setenv("HOME", h);
+    var_setenv("PATH", g_path_env);
     var_set("status", "0");
 
     const char *script = NULL;
