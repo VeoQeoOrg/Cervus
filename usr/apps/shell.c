@@ -725,8 +725,7 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "Disk:" C_RESET "          mount umount mkfs lsblk diskinfo\n", stdout);
     fputs("  " C_BOLD "Power:" C_RESET "         " C_RED "shutdown" C_RESET ", " C_CYAN "reboot" C_RESET "\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
-    fputs("  " C_BOLD "Operators:" C_RESET "  cmd1 " C_YELLOW ";" C_RESET
-          " cmd2   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "   " C_YELLOW ">" C_RESET "   " C_YELLOW ">>" C_RESET "\n", stdout);
+    fputs("  " C_BOLD "Operators:" C_RESET "  " C_YELLOW ";" C_RESET "   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "   " C_YELLOW "|" C_RESET "   " C_YELLOW ">" C_RESET "   " C_YELLOW ">>" C_RESET "   " C_YELLOW "<" C_RESET "\n", stdout);
     fputs("  " C_BOLD "Tab" C_RESET "          auto-complete commands and paths\n", stdout);
     fputs("  " C_BOLD "Ctrl+C" C_RESET "       interrupt current input\n", stdout);
     fputs("  " C_BOLD "Ctrl+D" C_RESET "       EOF (logout) / delete forward\n", stdout);
@@ -1223,6 +1222,84 @@ static int run_single(char *line) {
 
 typedef enum { CH_NONE = 0, CH_SEQ, CH_AND, CH_OR } chain_t;
 
+#define PIPELINE_MAX 16
+
+static int split_pipeline(char *seg, char *parts[], int max) {
+    int n = 0;
+    if (max <= 0) return 0;
+    parts[n++] = seg;
+    char *p = seg;
+    while (*p && n < max) {
+        if (*p == '"')  { p++; while (*p && *p != '"')  p++; if (*p) p++; continue; }
+        if (*p == '\'') { p++; while (*p && *p != '\'') p++; if (*p) p++; continue; }
+        if (*p == '|' && *(p+1) != '|') {
+            *p = '\0'; p++;
+            while (isspace((unsigned char)*p)) p++;
+            parts[n++] = p;
+            continue;
+        }
+        p++;
+    }
+    for (int i = 0; i < n; i++) {
+        char *s = parts[i];
+        while (isspace((unsigned char)*s)) s++;
+        parts[i] = s;
+        size_t sl = strlen(s);
+        while (sl > 0 && isspace((unsigned char)s[sl - 1])) s[--sl] = '\0';
+    }
+    return n;
+}
+
+static int run_pipeline(char **parts, int n) {
+    if (n <= 0) return 0;
+    if (n == 1) return run_single(parts[0]);
+    if (n > PIPELINE_MAX) {
+        fputs(C_RED "pipeline too long\n" C_RESET, stdout);
+        return 1;
+    }
+    int pipes[2 * (PIPELINE_MAX - 1)];
+    int npipes = n - 1;
+    for (int i = 0; i < npipes; i++) {
+        if (pipe(&pipes[i * 2]) < 0) {
+            fputs(C_RED "pipe failed\n" C_RESET, stdout);
+            for (int j = 0; j < i * 2; j++) close(pipes[j]);
+            return 1;
+        }
+    }
+    pid_t pids[PIPELINE_MAX];
+    term_set_cooked_mode();
+    for (int i = 0; i < n; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fputs(C_RED "fork failed\n" C_RESET, stdout);
+            for (int j = 0; j < npipes * 2; j++) close(pipes[j]);
+            for (int j = 0; j < i; j++) {
+                int st;
+                if (pids[j] > 0) waitpid(pids[j], &st, 0);
+            }
+            term_set_shell_mode();
+            return 1;
+        }
+        if (pid == 0) {
+            if (i > 0)        dup2(pipes[(i - 1) * 2 + 0], 0);
+            if (i < n - 1)    dup2(pipes[i * 2 + 1],       1);
+            for (int j = 0; j < npipes * 2; j++) close(pipes[j]);
+            int rc = run_single(parts[i]);
+            exit(rc);
+        }
+        pids[i] = pid;
+    }
+    for (int j = 0; j < npipes * 2; j++) close(pipes[j]);
+    int last_rc = 0;
+    for (int i = 0; i < n; i++) {
+        int st = 0;
+        waitpid(pids[i], &st, 0);
+        if (i == n - 1) last_rc = (st >> 8) & 0xFF;
+    }
+    term_set_shell_mode();
+    return last_rc;
+}
+
 static void run_command(char *line) {
     char work[LINE_MAX];
     strncpy(work, line, LINE_MAX - 1);
@@ -1248,7 +1325,10 @@ static void run_command(char *line) {
             if (ops[i] == CH_AND && rc != 0) continue;
             if (ops[i] == CH_OR  && rc == 0) continue;
         }
-        rc = run_single(s);
+        char *parts[PIPELINE_MAX];
+        int np = split_pipeline(s, parts, PIPELINE_MAX);
+        if (np <= 1) rc = run_single(s);
+        else         rc = run_pipeline(parts, np);
     }
     g_last_rc = rc;
 }
