@@ -1,5 +1,6 @@
 #include "../../include/drivers/disk.h"
 #include "../../include/drivers/ata.h"
+#include "../../include/drivers/ahci.h"
 #include "../../include/drivers/blkdev.h"
 #include "../../include/drivers/partition.h"
 #include "../../include/fs/ext2.h"
@@ -30,7 +31,23 @@ static const blkdev_ops_t ata_blkdev_ops = {
     .flush         = ata_blk_flush,
 };
 
+static int ahci_blk_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf) {
+    return ahci_read_sectors((ahci_device_t *)dev->priv, lba, count, buf);
+}
+static int ahci_blk_write(blkdev_t *dev, uint64_t lba, uint32_t count, const void *buf) {
+    return ahci_write_sectors((ahci_device_t *)dev->priv, lba, count, buf);
+}
+static int ahci_blk_flush(blkdev_t *dev) {
+    return ahci_flush((ahci_device_t *)dev->priv);
+}
+static const blkdev_ops_t ahci_blkdev_ops = {
+    .read_sectors  = ahci_blk_read,
+    .write_sectors = ahci_blk_write,
+    .flush         = ahci_blk_flush,
+};
+
 static blkdev_t g_ata_blkdevs[ATA_MAX_DRIVES];
+static blkdev_t g_ahci_blkdevs[AHCI_MAX_DEVICES];
 extern void devfs_register(const char *name, vnode_t *node);
 
 static int64_t blk_vnode_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
@@ -62,12 +79,14 @@ static const vnode_ops_t blk_vnode_ops = {
     .stat = blk_vnode_stat, .ref = blk_vnode_ref, .unref = blk_vnode_unref,
 };
 
-static vnode_t g_blk_vnodes[ATA_MAX_DRIVES];
+#define MAX_DISK_VNODES (ATA_MAX_DRIVES + AHCI_MAX_DEVICES)
+static vnode_t g_blk_vnodes[MAX_DISK_VNODES];
 static uint64_t g_blk_ino_base = 200;
 
 void disk_init(void) {
     serial_writestring("[disk] initializing...\n");
     blkdev_init();
+    ahci_init();
     ata_init();
     int count = 0;
     const char *names[] = { "hda", "hdb", "hdc", "hdd" };
@@ -102,6 +121,49 @@ void disk_init(void) {
         partition_scan(bdev);
         count++;
     }
+
+    const char *sd_names[] = { "sda", "sdb", "sdc", "sdd", "sde", "sdf", "sdg", "sdh" };
+    int sd_idx = 0;
+    int n_ahci = ahci_device_count();
+    for (int i = 0; i < n_ahci && sd_idx < (int)(sizeof(sd_names) / sizeof(sd_names[0])); i++) {
+        ahci_device_t *adev = ahci_get_device(i);
+        if (!adev || !adev->present) continue;
+        if (sd_idx >= AHCI_MAX_DEVICES) break;
+        blkdev_t *bdev = &g_ahci_blkdevs[sd_idx];
+        memset(bdev, 0, sizeof(*bdev));
+        strncpy(bdev->name, sd_names[sd_idx], BLKDEV_NAME_MAX - 1);
+        bdev->present      = true;
+        bdev->sector_count = adev->sectors;
+        bdev->size_bytes   = adev->size_bytes;
+        bdev->sector_size  = AHCI_SECTOR_SIZE;
+        bdev->ops          = &ahci_blkdev_ops;
+        bdev->priv         = adev;
+        blkdev_register(bdev);
+
+        int vn_slot = ATA_MAX_DRIVES + sd_idx;
+        vnode_t *vn = &g_blk_vnodes[vn_slot];
+        memset(vn, 0, sizeof(*vn));
+        vn->type     = VFS_NODE_BLKDEV;
+        vn->mode     = 0660;
+        vn->ino      = g_blk_ino_base + (uint64_t)vn_slot;
+        vn->ops      = &blk_vnode_ops;
+        vn->fs_data  = bdev;
+        vn->size     = adev->size_bytes;
+        vn->refcount = 1;
+        devfs_register(sd_names[sd_idx], vn);
+
+        serial_printf("[disk] /dev/%s -> AHCI %s (%llu MB)\n",
+                      sd_names[sd_idx], adev->model,
+                      adev->size_bytes / (1024 * 1024));
+        printf("[disk] /dev/%s -> AHCI %s (%llu MB)\n",
+                      sd_names[sd_idx], adev->model,
+                      adev->size_bytes / (1024 * 1024));
+
+        partition_scan(bdev);
+        sd_idx++;
+        count++;
+    }
+
     if (count == 0) serial_writestring("[disk] no disks available\n");
     else { serial_printf("[disk] %d disk(s) ready\n", count); printf("[disk] %d disk(s) ready\n", count); }
 }

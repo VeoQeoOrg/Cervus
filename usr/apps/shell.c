@@ -1452,15 +1452,35 @@ int main(int argc, char **argv) {
     term_set_shell_mode();
 
     struct stat dev_st;
-    int has_disk = (stat("/dev/hda", &dev_st) == 0);
-    int has_hda2 = (stat("/dev/hda2", &dev_st) == 0);
+    static const char *const DISK_PREFIXES[] = { "hda", "sda" };
+    const char *disk_pfx = NULL;
+    char dev_path[32];
+    char dev_path2[32];
+    int has_disk = 0, has_part2 = 0;
+    for (size_t k = 0; k < sizeof(DISK_PREFIXES)/sizeof(DISK_PREFIXES[0]); k++) {
+        snprintf(dev_path,  sizeof(dev_path),  "/dev/%s",  DISK_PREFIXES[k]);
+        snprintf(dev_path2, sizeof(dev_path2), "/dev/%s2", DISK_PREFIXES[k]);
+        int dh  = (stat(dev_path,  &dev_st) == 0);
+        int dh2 = (stat(dev_path2, &dev_st) == 0);
+        if (dh || dh2) {
+            disk_pfx = DISK_PREFIXES[k];
+            has_disk  = dh;
+            has_part2 = dh2;
+            break;
+        }
+    }
+    if (!disk_pfx) disk_pfx = "hda";
+
+    char disk_name[16], part2_name[16];
+    snprintf(disk_name,  sizeof(disk_name),  "%s",  disk_pfx);
+    snprintf(part2_name, sizeof(part2_name), "%s2", disk_pfx);
 
     struct stat root_usr_st;
     int root_has_usr = (stat("/usr/bin", &root_usr_st) == 0);
     int disk_mounted = 0;
     int rooted_on_disk = 0;
 
-    if (root_has_usr && has_hda2) {
+    if (root_has_usr && has_part2) {
         struct stat home_st;
         if (stat("/home", &home_st) == 0) {
             rooted_on_disk = 1;
@@ -1468,14 +1488,14 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!rooted_on_disk && has_hda2) {
-        int mr = sys_disk_mount("hda2", "/mnt");
+    if (!rooted_on_disk && has_part2) {
+        int mr = sys_disk_mount(part2_name, "/mnt");
         if (mr == 0) {
             disk_mounted = 1;
             g_installed = 1;
         }
     } else if (!rooted_on_disk && has_disk) {
-        int mr = sys_disk_mount("hda", "/mnt");
+        int mr = sys_disk_mount(disk_name, "/mnt");
         if (mr == 0) {
             disk_mounted = 1;
             g_installed = 1;
@@ -1485,9 +1505,11 @@ int main(int argc, char **argv) {
     if (!rooted_on_disk && !disk_mounted && has_disk) {
         if (ask_install_or_live() == 1) {
             launch_installer();
+            char retry_path[32];
+            snprintf(retry_path, sizeof(retry_path), "/dev/%s", part2_name);
             struct stat retry_st;
-            if (stat("/dev/hda2", &retry_st) == 0) {
-                if (sys_disk_mount("hda2", "/mnt") == 0) {
+            if (stat(retry_path, &retry_st) == 0) {
+                if (sys_disk_mount(part2_name, "/mnt") == 0) {
                     disk_mounted = 1;
                     g_installed = 1;
                 }

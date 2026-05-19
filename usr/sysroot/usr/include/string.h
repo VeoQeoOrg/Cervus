@@ -9,6 +9,8 @@ void   *memmove(void *dst, const void *src, size_t n);
 int     memcmp(const void *a, const void *b, size_t n);
 void   *memchr(const void *s, int c, size_t n);
 void   *memmem(const void *haystack, size_t hlen, const void *needle, size_t nlen);
+void   *memrchr(const void *s, int c, size_t n);
+void   *mempcpy(void *dst, const void *src, size_t n);
 
 size_t  strlen(const char *s);
 size_t  strnlen(const char *s, size_t max);
@@ -30,6 +32,9 @@ size_t  strcspn(const char *s, const char *reject);
 char   *strpbrk(const char *s, const char *accept);
 char   *strtok(char *str, const char *delim);
 char   *strtok_r(char *str, const char *delim, char **saveptr);
+char   *strsep(char **stringp, const char *delim);
+size_t  strlcpy(char *dst, const char *src, size_t size);
+size_t  strlcat(char *dst, const char *src, size_t size);
 char   *strerror(int errnum);
 char   *strsignal(int sig);
 

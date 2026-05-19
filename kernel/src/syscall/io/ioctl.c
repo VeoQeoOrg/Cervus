@@ -4,12 +4,13 @@
 
 #define IOCTL_KBUF_MAX 128
 
-#define TIOCGWINSZ   0x5413
-#define TIOCGCURSOR  0x5480
-#define TCGETS       0x5401
-#define TCSETS       0x5402
-#define TCSETSW      0x5403
-#define TCSETSF      0x5404
+#define TIOCGWINSZ    0x5413
+#define TIOCGCURSOR   0x5480
+#define TIOCSNONBLOCK 0x5481
+#define TCGETS        0x5401
+#define TCSETS        0x5402
+#define TCSETSW       0x5403
+#define TCSETSF       0x5404
 
 #define IOCTL_TERMIOS_SIZE 48
 
@@ -29,6 +30,7 @@ static size_t ioctl_in_size(uint64_t request)
         case TCSETS:
         case TCSETSW:
         case TCSETSF:     return IOCTL_TERMIOS_SIZE;
+        case TIOCSNONBLOCK: return sizeof(int);
         default:          return 0;
     }
 }

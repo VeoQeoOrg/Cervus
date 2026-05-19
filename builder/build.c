@@ -114,6 +114,7 @@ bool ARG_NO_INITRAMFS   = false;
 bool ARG_RESET_HW_CONF  = false;
 bool ARG_RESET_DISK     = false;
 bool ARG_LIVE           = false;
+bool ARG_AHCI           = false;
 
 char **TREE_FILES       = NULL;
 int    TREE_FILES_COUNT = 0;
@@ -606,14 +607,12 @@ static bool scan_libcervus_sources(const char *dir, const char *rel, strvec_t *o
     while ((de = readdir(d)) != NULL) {
         const char *nm = de->d_name;
         if (nm[0] == '.') continue;
-        if (nm[0] == '_' && nm[1] != '\0') {
-            /* leading-underscore internals: include if .c, treat like normal */
-        }
+        if (nm[0] == '_' && nm[1] != '\0') {}
         char child_rel[BIGPATH];
         if (rel && rel[0]) snprintf(child_rel, sizeof(child_rel), "%s/%s", rel, nm);
         else               snprintf(child_rel, sizeof(child_rel), "%s", nm);
 
-        char child_full[BIGPATH];
+        char child_full[BIGPATH * 2];
         snprintf(child_full, sizeof(child_full), "%s/%s", dir, child_rel);
 
         struct stat st;
@@ -2404,6 +2403,8 @@ static void print_help(void) {
     printf("  run-installed-uefi Launch QEMU from cervus_disk.img only (UEFI, no ISO)\n");
     printf("  run-fresh        Wipe disk and run installer from ISO again (BIOS)\n");
     printf("  run-fresh-uefi   Wipe disk and run installer from ISO again (UEFI)\n");
+    printf("  run-ahci         Build + boot QEMU (BIOS, q35 machine, AHCI/SATA disk)\n");
+    printf("  run-fresh-ahci   Wipe disk and run installer from ISO via AHCI\n");
     printf("  hardwaretest     Build & install Cervus into Limine boot menu (requires sudo)\n");
     printf("  flash            Flash latest ISO to USB device (requires sudo)\n");
     printf("  clean            Remove all build artifacts\n");
@@ -2559,6 +2560,16 @@ int main(int argc, char **argv) {
         command = "run";
     }
 
+    if (strcmp(command, "run-ahci") == 0) {
+        ARG_AHCI = true;
+        command = "run";
+    }
+    if (strcmp(command, "run-fresh-ahci") == 0) {
+        ARG_AHCI = true;
+        ARG_RESET_DISK = true;
+        command = "run";
+    }
+
     if (strcmp(command, "run-fresh-uefi") == 0) {
         ARG_RESET_DISK = true;
         command = "run-uefi";
@@ -2633,6 +2644,18 @@ int main(int argc, char **argv) {
                     " -drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk"
                     " 2>&1 | tee log.txt",
                     ovmf, iso_path);
+            } else if (ARG_AHCI) {
+                print_color(COLOR_GREEN, "Starting QEMU with BIOS (AHCI/SATA via q35)...");
+                cmd_run(false,
+                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35"
+                    " -cdrom %s -boot d"
+                    " -drive id=hd0,file=cervus_disk.img,format=raw,if=none,file.locking=off"
+                    " -device ich9-ahci,id=ahci"
+                    " -device ide-hd,bus=ahci.0,drive=hd0"
+                    " -serial stdio"
+                    " %s"
+                    " 2>&1 | tee log.txt",
+                    iso_path, QEMUFLAGS);
             } else {
                 print_color(COLOR_GREEN, "Starting QEMU with BIOS...");
                 cmd_run(false,

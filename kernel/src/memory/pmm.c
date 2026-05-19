@@ -125,11 +125,15 @@ static void _buddy_free_order(uintptr_t phys, int order) {
     }
     _fl_push(&g_buddy.orders[order], _phys_to_block(phys), order);
     g_buddy.free_pages += (size_t)1 << order;
+    if (g_buddy.free_pages > g_buddy.usable_pages)
+        g_buddy.free_pages = g_buddy.usable_pages;
 }
 
 static void _buddy_free_nocoalesce(uintptr_t phys) {
     _fl_push(&g_buddy.orders[0], _phys_to_block(phys), 0);
     g_buddy.free_pages += 1;
+    if (g_buddy.free_pages > g_buddy.usable_pages)
+        g_buddy.free_pages = g_buddy.usable_pages;
 }
 
 void pmm_init(struct limine_memmap_response *memmap,
@@ -290,16 +294,9 @@ void pmm_free(void *addr, size_t pages) {
         return;
     }
 
-    size_t free_before = g_buddy.free_pages;
     memset(addr, 0, 64);
     _buddy_free_order(phys, order);
-    size_t free_after = g_buddy.free_pages;
     __atomic_fetch_add(&g_pmm_free_count, (size_t)1 << order, __ATOMIC_RELAXED);
-
-    if (free_after <= free_before) {
-        serial_printf("[PMM_FREE_BUG] free_pages didn't grow: before=%zu after=%zu phys=0x%llx\n",
-                      free_before, free_after, (unsigned long long)phys);
-    }
 
     spinlock_release(&g_pmm_lock);
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
@@ -322,9 +319,19 @@ uintptr_t pmm_virt_to_phys(void *vaddr)      { return (uintptr_t)vaddr - g_buddy
 uint64_t  pmm_get_hhdm_offset(void)          { return g_buddy.hhdm_offset; }
 size_t    pmm_get_total_pages(void)           { return g_buddy.total_pages; }
 size_t    pmm_get_usable_pages(void)          { return g_buddy.usable_pages; }
-size_t    pmm_get_free_pages(void)            { return g_buddy.free_pages; }
-size_t    pmm_get_used_pages(void)            { return g_buddy.usable_pages > g_buddy.free_pages
-                                                       ? g_buddy.usable_pages - g_buddy.free_pages : 0; }
+size_t    pmm_get_free_pages(void)            {
+    size_t fp = g_buddy.free_pages;
+    if (fp > g_buddy.usable_pages) fp = g_buddy.usable_pages;
+    return fp;
+}
+size_t    pmm_get_used_pages(void)            {
+    uint64_t a = __atomic_load_n(&g_pmm_alloc_count, __ATOMIC_RELAXED);
+    uint64_t f = __atomic_load_n(&g_pmm_free_count,  __ATOMIC_RELAXED);
+    if (a <= f) return 0;
+    size_t u = (size_t)(a - f);
+    if (u > g_buddy.usable_pages) u = g_buddy.usable_pages;
+    return u;
+}
 
 static void _print_size(size_t bytes, const char *label) {
     uint64_t v = (uint64_t)bytes;

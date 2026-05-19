@@ -3,6 +3,8 @@
 #include "../../include/io/ports.h"
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
+#include "../../include/memory/vmm.h"
+#include "../../include/memory/paging.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -258,6 +260,28 @@ static void scan_bus(uint16_t seg, uint8_t bus)
     }
 }
 
+#define MCFG_MAX_MAP_BUSES 16
+
+static void mcfg_map_range(uint64_t phys_base, uint32_t start_bus, uint32_t end_bus)
+{
+    uint32_t span_end = end_bus;
+    if (span_end > start_bus + (MCFG_MAX_MAP_BUSES - 1))
+        span_end = start_bus + (MCFG_MAX_MAP_BUSES - 1);
+    uint64_t phys_start = phys_base + ((uint64_t)start_bus << 20);
+    uint64_t phys_end   = phys_base + ((uint64_t)(span_end + 1) << 20);
+    uint64_t hhdm       = pmm_get_hhdm_offset();
+    uint64_t virt_start = phys_start + hhdm;
+    size_t   pages      = (size_t)((phys_end - phys_start) >> 12);
+    if (pages == 0) return;
+    vmm_pagemap_t *km = vmm_get_kernel_pagemap();
+    if (!paging_map_range(km, virt_start, phys_start, pages,
+                          VMM_PRESENT | VMM_WRITE | VMM_PCD)) {
+        serial_printf("[pci] MCFG: failed to map %llu pages at phys 0x%llx\n",
+                      (unsigned long long)pages,
+                      (unsigned long long)phys_start);
+    }
+}
+
 static void load_mcfg(void)
 {
     acpi_mcfg_t *mcfg = (acpi_mcfg_t *)acpi_find_table("MCFG", 0);
@@ -270,15 +294,18 @@ static void load_mcfg(void)
     size_t n = (total - sizeof(acpi_mcfg_t)) / sizeof(mcfg_entry_t);
     mcfg_entry_t *entries = (mcfg_entry_t *)((uint8_t *)mcfg + sizeof(acpi_mcfg_t));
     for (size_t i = 0; i < n && g_mcfg_count < MCFG_MAX_SEGMENTS; i++) {
+        uint8_t sb = entries[i].start_pci_bus;
+        uint8_t eb = entries[i].end_pci_bus;
+        uint8_t mapped_end = (eb > sb + (MCFG_MAX_MAP_BUSES - 1))
+                           ? (uint8_t)(sb + (MCFG_MAX_MAP_BUSES - 1)) : eb;
         g_mcfg[g_mcfg_count].base      = entries[i].base_address;
         g_mcfg[g_mcfg_count].segment   = entries[i].pci_segment_group;
-        g_mcfg[g_mcfg_count].start_bus = entries[i].start_pci_bus;
-        g_mcfg[g_mcfg_count].end_bus   = entries[i].end_pci_bus;
-        serial_printf("[pci] MCFG seg=%u buses=%u..%u base=0x%llx\n",
-                      g_mcfg[g_mcfg_count].segment,
-                      g_mcfg[g_mcfg_count].start_bus,
-                      g_mcfg[g_mcfg_count].end_bus,
+        g_mcfg[g_mcfg_count].start_bus = sb;
+        g_mcfg[g_mcfg_count].end_bus   = mapped_end;
+        serial_printf("[pci] MCFG seg=%u buses=%u..%u (firmware advertised 0..%u) base=0x%llx\n",
+                      g_mcfg[g_mcfg_count].segment, sb, mapped_end, eb,
                       (unsigned long long)g_mcfg[g_mcfg_count].base);
+        mcfg_map_range(g_mcfg[g_mcfg_count].base, sb, mapped_end);
         g_mcfg_count++;
     }
 }

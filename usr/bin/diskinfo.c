@@ -76,6 +76,16 @@ static int read_mbr_types(const char *disk, uint8_t ty[4], uint32_t st[4], uint3
     return 0;
 }
 
+static const char *transport_for(const char *name)
+{
+    if (!name || !name[0]) return "Unknown";
+    if (name[0] == 's' && name[1] == 'd') return "AHCI/SATA (DMA)";
+    if (name[0] == 'h' && name[1] == 'd') return "ATA/IDE (PIO)";
+    if (name[0] == 'n' && name[1] == 'v' && name[2] == 'm' && name[3] == 'e')
+        return "NVMe";
+    return "Unknown";
+}
+
 static void print_disk(const cervus_disk_info_t *d,
                        const cervus_part_info_t *parts, int nparts,
                        const cervus_mount_info_t *mounts, int nmounts)
@@ -83,7 +93,7 @@ static void print_disk(const cervus_disk_info_t *d,
     fputs(C_BOLD C_CYAN "Device" C_RESET "\n", stdout);
     printf("  Name       : %s\n", d->name);
     printf("  Model      : %s\n", d->model[0] ? d->model : "(unknown)");
-    fputs( "  Transport  : ATA/IDE (PIO)\n", stdout);
+    printf("  Transport  : %s\n", transport_for(d->name));
     fputs( "  Size       : ", stdout); print_size(d->size_bytes);
     printf(" (%lu sectors, 512 B each)\n\n", (unsigned long)d->sectors);
 

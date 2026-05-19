@@ -389,6 +389,9 @@ void task_wakeup_waiters(uint32_t pid) {
         enqueue_global(to_wake[i]);
 }
 
+extern void tty_reset_nonblock(void);
+extern void tty_reset_on_exit(void);
+
 __attribute__((noreturn)) void task_exit(void)
 {
     asm volatile("cli");
@@ -399,6 +402,8 @@ __attribute__((noreturn)) void task_exit(void)
     if (!me) kernel_panic("task_exit: no current task");
 
     serial_printf("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
+
+    tty_reset_on_exit();
 
     task_t* init = task_find_by_pid(1);
     if (init && init != me) {

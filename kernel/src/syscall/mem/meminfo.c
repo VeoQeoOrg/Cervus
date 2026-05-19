@@ -7,11 +7,9 @@ int64_t sys_meminfo(uint64_t buf_ptr)
     cervus_meminfo_t info;
 
     uint64_t usable = (uint64_t)pmm_get_usable_pages() * PAGE_SIZE;
-    uint64_t free   = (uint64_t)pmm_get_free_pages()   * PAGE_SIZE;
     uint64_t used   = (uint64_t)pmm_get_used_pages()   * PAGE_SIZE;
-
-    if (free > usable) free = usable;
     if (used > usable) used = usable;
+    uint64_t free   = usable - used;
 
     info.total_bytes  = usable;
     info.free_bytes   = free;

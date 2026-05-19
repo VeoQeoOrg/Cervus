@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <regex.h>
 #include <sys/stat.h>
 #include <cervus_util.h>
 
@@ -17,26 +18,34 @@ typedef struct {
     int files_with_match;
     int quiet;
     int no_filename;
+    int fixed;
+    int extended;
+    regex_t re;
+    int re_ready;
 } grep_opts_t;
 
-static int match_line(const char *line, const char *pat, int ignore_case)
+static int match_line(const char *line, const char *pat, grep_opts_t *o)
 {
-    size_t pl = strlen(pat);
-    if (pl == 0) return 1;
-    for (const char *p = line; *p; p++) {
-        size_t k = 0;
-        while (k < pl && p[k]) {
-            char a = p[k], b = pat[k];
-            if (ignore_case) {
-                if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
-                if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
+    if (o->fixed) {
+        size_t pl = strlen(pat);
+        if (pl == 0) return 1;
+        for (const char *p = line; *p; p++) {
+            size_t k = 0;
+            while (k < pl && p[k]) {
+                char a = p[k], b = pat[k];
+                if (o->ignore_case) {
+                    if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
+                    if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
+                }
+                if (a != b) break;
+                k++;
             }
-            if (a != b) break;
-            k++;
+            if (k == pl) return 1;
         }
-        if (k == pl) return 1;
+        return 0;
     }
-    return 0;
+    if (!o->re_ready) return 0;
+    return regexec(&o->re, line, 0, NULL, 0) == 0;
 }
 
 static int looks_binary(const char *buf, ssize_t n)
@@ -69,7 +78,7 @@ static int grep_fd(int fd, const char *pat, const char *prefix,
             if (c == '\n' || alen + 1 >= (int)sizeof(acc)) {
                 acc[alen] = '\0';
                 line++;
-                int m = match_line(acc, pat, o->ignore_case);
+                int m = match_line(acc, pat, (grep_opts_t *)o);
                 if (o->invert) m = !m;
                 if (m) {
                     matched_in_file++;
@@ -96,7 +105,7 @@ static int grep_fd(int fd, const char *pat, const char *prefix,
     if (alen > 0 && !is_binary) {
         acc[alen] = '\0';
         line++;
-        int m = match_line(acc, pat, o->ignore_case);
+        int m = match_line(acc, pat, (grep_opts_t *)o);
         if (o->invert) m = !m;
         if (m) {
             matched_in_file++;
@@ -176,8 +185,8 @@ int main(int argc, char **argv)
     while ((opt = getopt(argc, argv, "cEFHe:hilnqrRsvx")) != -1) {
         switch (opt) {
             case 'c': o.count_only = 1; break;
-            case 'E': break;
-            case 'F': break;
+            case 'E': o.extended = 1; break;
+            case 'F': o.fixed = 1; break;
             case 'H': o.no_filename = 0; break;
             case 'e': e_pat = optarg; break;
             case 'h': o.no_filename = 1; break;
@@ -201,17 +210,35 @@ int main(int argc, char **argv)
         file_start = optind + 1;
     }
 
+    if (!o.fixed) {
+        int cflags = 0;
+        if (o.extended) cflags |= REG_EXTENDED;
+        if (o.ignore_case) cflags |= REG_ICASE;
+        cflags |= REG_NOSUB;
+        int rc = regcomp(&o.re, pat, cflags);
+        if (rc != 0) {
+            char err[128];
+            regerror(rc, &o.re, err, sizeof(err));
+            fprintf(stderr, "grep: bad pattern: %s\n", err);
+            return 2;
+        }
+        o.re_ready = 1;
+    }
+
     int any = 0;
     int nf = argc - file_start;
 
+    int rc_final = 0;
     if (o.recursive && nf == 0) {
         grep_path(".", pat, &o, 1, &any);
-        return any ? 0 : 1;
+        rc_final = any ? 0 : 1;
+        goto out;
     }
 
     if (nf == 0) {
         grep_fd(0, pat, NULL, &o, &any, 0);
-        return any ? 0 : 1;
+        rc_final = any ? 0 : 1;
+        goto out;
     }
 
     int show_prefix = (nf > 1 || o.recursive) && !o.no_filename;
@@ -220,5 +247,8 @@ int main(int argc, char **argv)
         resolve_path(cwd, argv[i], resolved, sizeof(resolved));
         grep_path(resolved, pat, &o, show_prefix, &any);
     }
-    return any ? 0 : 1;
+    rc_final = any ? 0 : 1;
+out:
+    if (o.re_ready) regfree(&o.re);
+    return rc_final;
 }

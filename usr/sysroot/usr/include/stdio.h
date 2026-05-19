@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <sys/types.h>
 
 #define EOF (-1)
 
@@ -57,6 +58,9 @@ int    fileno(FILE *stream);
 
 FILE  *popen(const char *cmd, const char *type);
 int    pclose(FILE *stream);
+
+ssize_t getline(char **lineptr, size_t *n, FILE *stream);
+ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream);
 
 void perror(const char *msg);
 int  rename(const char *oldp, const char *newp);

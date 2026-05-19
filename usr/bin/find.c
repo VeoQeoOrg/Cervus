@@ -102,7 +102,7 @@ int main(int argc, char **argv)
             if (i + 1 >= argc) { usage(); return 1; }
             o.maxdepth = atoi(argv[++i]);
         } else if (strcmp(argv[i], "-print") == 0) {
-            /* default action */
+            /* default */
         } else {
             fprintf(stderr, "find: unknown predicate '%s'\n", argv[i]);
             return 1;

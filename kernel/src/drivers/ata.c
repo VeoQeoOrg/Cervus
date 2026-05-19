@@ -143,6 +143,19 @@ static bool ata_identify_drive(uint16_t io, uint16_t ctrl, uint8_t drv_sel, ata_
     return true;
 }
 
+static bool ata_channel_present(uint16_t io, uint16_t ctrl) {
+    uint8_t s1 = inb(io + ATA_REG_STATUS);
+    uint8_t s2 = inb(ctrl);
+    if (s1 == 0xFF && s2 == 0xFF) return false;
+
+    outb(io + ATA_REG_LBA_LO,  0x55);
+    outb(io + ATA_REG_LBA_MID, 0xAA);
+    uint8_t v1 = inb(io + ATA_REG_LBA_LO);
+    uint8_t v2 = inb(io + ATA_REG_LBA_MID);
+    if (v1 != 0x55 || v2 != 0xAA) return false;
+    return true;
+}
+
 void ata_init(void) {
     serial_writestring("[ATA] probing drives...\n");
     g_drive_count = 0;
@@ -153,6 +166,11 @@ void ata_init(void) {
     };
 
     for (int ch = 0; ch < 2; ch++) {
+        if (!ata_channel_present(channels[ch].io, channels[ch].ctrl)) {
+            serial_printf("[ATA] channel %d not present, skipping\n", ch);
+            continue;
+        }
+
         outb(channels[ch].ctrl, 0x02);
         ata_soft_reset(channels[ch].ctrl);
 

@@ -141,36 +141,47 @@ void ps2_task(void* arg) {
     ps2_init();
 }
 
-static bool detect_installed_system(void) {
-    blkdev_t *hda2 = blkdev_get_by_name("hda2");
-    if (hda2) {
-        uint16_t magic = 0;
-        if (blkdev_read(hda2, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
-            && magic == EXT2_SUPER_MAGIC) {
-            serial_writestring("[boot] ext2 on hda2 -> installed system\n");
-            return true;
-        }
-    }
+static const char *const ROOT_DISK_PREFIXES[] = { "hda", "sda" };
+#define ROOT_DISK_PREFIX_COUNT (sizeof(ROOT_DISK_PREFIXES) / sizeof(ROOT_DISK_PREFIXES[0]))
 
-    blkdev_t *hda1 = blkdev_get_by_name("hda1");
-    if (hda1) {
-        uint8_t sector[512];
-        if (hda1->ops->read_sectors(hda1, 0, 1, sector) == 0) {
-            if (sector[510] == 0x55 && sector[511] == (uint8_t)0xAA
-                && memcmp(sector + 82, "FAT32", 5) == 0) {
-                serial_writestring("[boot] FAT32 on hda1 -> looks like installed system\n");
+static bool detect_installed_system(void) {
+    for (size_t k = 0; k < ROOT_DISK_PREFIX_COUNT; k++) {
+        const char *pfx = ROOT_DISK_PREFIXES[k];
+        char name[16];
+
+        snprintf(name, sizeof(name), "%s2", pfx);
+        blkdev_t *p2 = blkdev_get_by_name(name);
+        if (p2) {
+            uint16_t magic = 0;
+            if (blkdev_read(p2, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
+                && magic == EXT2_SUPER_MAGIC) {
+                serial_printf("[boot] ext2 on %s -> installed system\n", name);
                 return true;
             }
         }
-    }
 
-    blkdev_t *hda = blkdev_get_by_name("hda");
-    if (hda) {
-        uint16_t magic = 0;
-        if (blkdev_read(hda, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
-            && magic == EXT2_SUPER_MAGIC) {
-            serial_writestring("[boot] legacy ext2-on-whole-disk detected\n");
-            return true;
+        snprintf(name, sizeof(name), "%s1", pfx);
+        blkdev_t *p1 = blkdev_get_by_name(name);
+        if (p1) {
+            uint8_t sector[512];
+            if (p1->ops->read_sectors(p1, 0, 1, sector) == 0) {
+                if (sector[510] == 0x55 && sector[511] == (uint8_t)0xAA
+                    && memcmp(sector + 82, "FAT32", 5) == 0) {
+                    serial_printf("[boot] FAT32 on %s -> looks like installed system\n",
+                                  name);
+                    return true;
+                }
+            }
+        }
+
+        blkdev_t *whole = blkdev_get_by_name(pfx);
+        if (whole) {
+            uint16_t magic = 0;
+            if (blkdev_read(whole, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
+                && magic == EXT2_SUPER_MAGIC) {
+                serial_printf("[boot] legacy ext2-on-whole-disk on %s detected\n", pfx);
+                return true;
+            }
         }
     }
     return false;
@@ -276,8 +287,16 @@ void kernel_main(void) {
 
     if (skip_initramfs) {
         const char *root_dev = NULL;
-        if (blkdev_get_by_name("hda2")) root_dev = "hda2";
-        else if (blkdev_get_by_name("hda")) root_dev = "hda";
+        static char root_name[16];
+        for (size_t k = 0; k < ROOT_DISK_PREFIX_COUNT && !root_dev; k++) {
+            const char *pfx = ROOT_DISK_PREFIXES[k];
+            snprintf(root_name, sizeof(root_name), "%s2", pfx);
+            if (blkdev_get_by_name(root_name)) { root_dev = root_name; break; }
+            if (blkdev_get_by_name(pfx)) {
+                snprintf(root_name, sizeof(root_name), "%s", pfx);
+                root_dev = root_name; break;
+            }
+        }
 
         if (root_dev) {
             int ur = vfs_umount("/");

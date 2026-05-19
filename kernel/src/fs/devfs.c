@@ -29,6 +29,8 @@ extern uint32_t get_cursor_col(void);
 
 static int tty_nonblock = 0;
 
+void tty_reset_nonblock(void) { tty_nonblock = 0; }
+
 #define T_ICANON  0x0002
 #define T_ECHO    0x0008
 #define T_ISIG    0x0001
@@ -60,6 +62,16 @@ static struct cervus_termios g_tty_termios = {
     .c_lflag = T_ICANON | T_ECHO | T_ISIG,
     .c_cc    = {0},
 };
+
+extern int putchar(int);
+
+void tty_reset_on_exit(void)
+{
+    tty_nonblock = 0;
+    const char *s = "\x1b[?25h\x1b[0m";
+    while (*s) putchar((int)(unsigned char)*s++);
+    serial_writebuf("\x1b[?25h\x1b[0m", 10);
+}
 
 static inline int tty_is_canonical(void) {
     return (g_tty_termios.c_lflag & T_ICANON) != 0;
