@@ -1,0 +1,65 @@
+NAME
+       termios - terminal attribute control
+
+SYNOPSIS
+       #include <termios.h>
+
+       int tcgetattr(int fd, struct termios *t);
+       int tcsetattr(int fd, int actions, const struct termios *t);
+       int tcflush(int fd, int queue);
+       int tcdrain(int fd);
+       int tcflow(int fd, int action);
+       int tcsendbreak(int fd, int duration);
+       pid_t tcgetsid(int fd);
+
+       void    cfmakeraw(struct termios *t);
+       speed_t cfgetispeed(const struct termios *t);
+       speed_t cfgetospeed(const struct termios *t);
+       int     cfsetispeed(struct termios *t, speed_t s);
+       int     cfsetospeed(struct termios *t, speed_t s);
+       int     cfsetspeed(struct termios *t, speed_t s);
+
+DESCRIPTION
+       libcervus provides a POSIX-compatible termios interface that
+       maps to the kernel TTY through the TCGETS, TCSETS, TCSETSW,
+       TCSETSF, TCFLSH, TCDRAIN, TCSBRK and TCXONC ioctls.
+
+       The structure is 48 bytes wide and matches the kernel layout:
+
+           tcflag_t c_iflag, c_oflag, c_cflag, c_lflag;
+           cc_t     c_cc[NCCS];
+
+       Baud rate is stored in the CBAUD field of c_cflag and accessed
+       through cfget/cfsetispeed / ospeed. The constants B0..B38400
+       are encoded indices, not the raw bit-rate.
+
+       cfmakeraw() configures *t for fully non-canonical, no-echo,
+       no-signal, 8-bit operation with VMIN=1 and VTIME=0.
+
+TTY MODES
+       Canonical mode (default): read() returns whole lines; line
+       editing follows VERASE / VKILL.
+
+       Non-canonical mode (~ICANON): every byte is delivered as soon
+       as it is available. Combine with TIOCSNONBLOCK to make read()
+       return -1 / EAGAIN when no data is buffered.
+
+ACTIONS
+       The third argument to tcsetattr selects when the change takes
+       effect: TCSANOW immediately, TCSADRAIN after draining the
+       output queue, TCSAFLUSH also discards input.
+
+       tcflush() empties the input queue (TCIFLUSH), the output queue
+       (TCOFLUSH), or both (TCIOFLUSH).
+
+EXAMPLES
+       struct termios o, raw;
+       tcgetattr(0, &o);
+       raw = o;
+       cfmakeraw(&raw);
+       tcsetattr(0, TCSAFLUSH, &raw);
+       /* ... read raw bytes from stdin ... */
+       tcsetattr(0, TCSAFLUSH, &o);
+
+SEE ALSO
+       read(2), ioctl(2), curses(3)
