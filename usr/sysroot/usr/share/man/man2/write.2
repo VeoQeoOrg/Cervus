@@ -1,0 +1,22 @@
+NAME
+       write - write to a file descriptor
+
+SYNOPSIS
+       #include <unistd.h>
+
+       ssize_t write(int fd, const void *buf, size_t count);
+
+DESCRIPTION
+       Writes up to count bytes from buf to fd. For block devices the
+       offset advances; for terminals the bytes are passed straight to
+       the framebuffer renderer and to /dev/ttyS0.
+
+RETURN VALUE
+       Bytes successfully written, or -1 on error.
+
+ERRORS
+       EBADF      fd is not open for writing
+       EFAULT     buf is not a valid pointer
+
+SEE ALSO
+       read(2), open(2)

@@ -1,0 +1,28 @@
+NAME
+       cervus_meminfo - report kernel physical memory usage
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_meminfo(cervus_meminfo_t *out);
+
+DESCRIPTION
+       Fills *out with a snapshot of the buddy allocator state:
+
+           uint64_t total_bytes;   total usable RAM
+           uint64_t free_bytes;    total_bytes - used_bytes
+           uint64_t used_bytes;    pages currently allocated through
+                                   pmm_alloc (counter-based)
+           uint64_t usable_bytes;  alias of total_bytes
+           uint64_t page_size;     usually 4096
+
+       used_bytes is the difference of two atomic counters incremented
+       on every pmm_alloc / pmm_free, and therefore reflects exactly
+       what the kernel has handed out, not what the buddy free lists
+       show.
+
+RETURN VALUE
+       0 on success, -1 on error (errno EFAULT).
+
+SEE ALSO
+       sysmon(1), meminfo(1)

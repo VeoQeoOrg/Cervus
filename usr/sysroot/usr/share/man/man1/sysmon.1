@@ -1,0 +1,40 @@
+NAME
+       sysmon - real-time CPU, memory, and process monitor
+
+SYNOPSIS
+       sysmon
+
+DESCRIPTION
+       Interactive monitor for the running Cervus system. Displays a
+       header with uptime and process count, a CPU and a memory bar with
+       coloured thresholds (green < 50% < yellow < 80% < red), and a
+       sortable table of every task currently known to the scheduler.
+
+       The screen is refreshed on a configurable interval (default 1 s).
+       Input is read in non-blocking raw mode through the
+       TIOCSNONBLOCK ioctl.
+
+KEYS
+       q, Ctrl-C    quit
+       p            pause / resume refresh
+       s            cycle the sort key (cpu / runtime / pid / name)
+       c, r, i, n   set sort key directly
+       arrows       move selection
+       PageUp/Down  scroll selection by 10
+       k            send a kill signal to the selected process
+                    (confirms first; do not pick init)
+       + / -        speed up / slow down refresh by 100 ms
+       ?, h         toggle the help line
+
+DISPLAY COLUMNS
+       PID     process id
+       PPID    parent pid
+       UID     owner
+       STATE   RUN, RDY, BLK or ZMB
+       PRIO    scheduler priority
+       CPU%    fraction of one CPU consumed in the last refresh interval
+       RUNTIME total user-mode time since exec
+       NAME    process name as reported by the kernel
+
+SEE ALSO
+       ps(1), meminfo(1), cpuinfo(1)

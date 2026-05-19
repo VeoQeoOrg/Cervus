@@ -1,0 +1,38 @@
+NAME
+       grep - print lines matching a pattern
+
+SYNOPSIS
+       grep [-cEFHhilnqrRsvx] [-e PATTERN] PATTERN [FILE ...]
+
+DESCRIPTION
+       Reads each FILE (or stdin) line-by-line and prints lines that
+       match PATTERN. By default PATTERN is a basic regular expression
+       (BRE) compiled by the libcervus regex(3) engine.
+
+OPTIONS
+       -c          print only a count of matching lines per file
+       -E          interpret PATTERN as an extended regex (ERE)
+       -F          interpret PATTERN as a fixed string, no regex
+       -H          force filename prefix on each match
+       -h          suppress filename prefix
+       -i          case-insensitive match
+       -l          print only filenames containing any match
+       -n          prefix each match with its line number
+       -q          quiet; exit 0 as soon as a match is found
+       -r, -R      recurse into directories
+       -s          suppress error messages
+       -v          invert match
+       -x          match whole lines
+
+EXIT STATUS
+       0    at least one line matched
+       1    no lines matched
+       2    incorrect usage or bad pattern
+
+EXAMPLES
+       grep -n main *.c
+       grep -rE '\\b[Ee]rror\\b' /var/log
+       grep -F '#include' file.c
+
+SEE ALSO
+       find(1), regex(3)

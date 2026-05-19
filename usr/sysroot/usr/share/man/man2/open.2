@@ -1,0 +1,35 @@
+NAME
+       open - open or create a file
+
+SYNOPSIS
+       #include <fcntl.h>
+
+       int open(const char *path, int flags, mode_t mode);
+
+DESCRIPTION
+       Opens the file at path with the given flags. If O_CREAT is set
+       and the file does not exist, it is created with mode (after
+       u-mask). The returned file descriptor is the lowest unused
+       integer for the calling task.
+
+FLAGS
+       O_RDONLY   read only
+       O_WRONLY   write only
+       O_RDWR     read and write
+       O_CREAT    create if missing
+       O_APPEND   append on every write
+       O_TRUNC    truncate to 0 if opening writable
+       O_NONBLOCK marks the fd non-blocking (TTYs respect this through
+                  the TIOCSNONBLOCK ioctl, not the flag directly)
+
+RETURN VALUE
+       File descriptor (>= 0) on success, -1 on error.
+
+ERRORS
+       ENOENT     no such file and O_CREAT not set
+       EISDIR     trying to write a directory
+       EACCES     permission denied
+       ENOTDIR    a component of path is not a directory
+
+SEE ALSO
+       close(2), read(2), write(2), fcntl(2)

@@ -1,0 +1,25 @@
+NAME
+       ls - list directory contents
+
+SYNOPSIS
+       ls [-aAlh1] [FILE ...]
+
+DESCRIPTION
+       Lists the contents of each FILE, or of the current directory if
+       none is given. By default produces a short multi-column listing
+       and hides entries starting with a dot.
+
+OPTIONS
+       -a    show hidden entries, including . and ..
+       -A    show hidden entries except . and ..
+       -l    long format with mode, size, and name
+       -h    print sizes in human-readable form (with -l)
+       -1    force one entry per line
+
+EXAMPLES
+       ls
+       ls -la /etc
+       ls -1 /bin
+
+SEE ALSO
+       find(1), stat(1), cat(1)

@@ -1,0 +1,32 @@
+NAME
+       man - read manual pages bundled with Cervus
+
+SYNOPSIS
+       man [SECTION] PAGE
+       man -l
+
+DESCRIPTION
+       Looks up PAGE in the on-disk manual under /usr/share/man and renders
+       it to the terminal. If SECTION is given it is used directly,
+       otherwise the search order is 1, 2, 3.
+
+       Section 1 documents user-facing commands; section 2 documents
+       Cervus system calls reachable via the libcervus bindings; section 3
+       documents library functions exported by libcervus.
+
+OPTIONS
+       -l, -a, --list
+              List every page found in the manual paths.
+
+EXAMPLES
+       man find
+       man 2 read
+       man 3 regex
+
+FILES
+       /usr/share/man/man1/*.1     command pages
+       /usr/share/man/man2/*.2     system call pages
+       /usr/share/man/man3/*.3     library function pages
+
+SEE ALSO
+       sysmon(1), find(1), grep(1)

@@ -1,0 +1,52 @@
+NAME
+       find - walk a directory tree and evaluate an expression
+
+SYNOPSIS
+       find [PATH ...] [EXPRESSION]
+
+DESCRIPTION
+       Recursively descends each PATH and, for every file encountered,
+       evaluates the expression. With no expression, the default action
+       is -print. With no PATH, the current directory is used.
+
+TESTS
+       -name PAT      basename matches shell glob PAT (* and ?)
+       -iname PAT     like -name, but case insensitive
+       -path PAT      full path matches glob PAT
+       -ipath PAT     like -path, case insensitive
+       -type C        file type: f file, d dir, l link, c chr, b blk,
+                      p fifo
+       -empty         empty file or empty directory
+       -size [+-]N[ckMG]
+                      file size; default unit is 512-byte blocks ('b').
+                      'c' = bytes, 'k' = KiB, 'M' = MiB, 'G' = GiB.
+                      Prefix '+' means "more than N", '-' means
+                      "less than N", no prefix means "exactly N".
+       -mindepth N    only act on entries at depth >= N
+       -maxdepth N    do not descend below depth N
+
+OPERATORS
+       ! TEST, -not TEST       negate TEST
+       TEST -and TEST          implicit conjunction
+       TEST -or  TEST          logical OR
+       -true, -false           constants
+
+ACTIONS
+       -print          write path + newline (default if no action set)
+       -print0         write path + NUL byte (pairs with xargs -0)
+       -depth          process directory contents before the directory
+                       itself
+       -exec CMD ... ;
+                       run CMD for each match; the literal {} in any
+                       argument is replaced by the current path. The
+                       expression must be terminated by ';' (quote it as
+                       \\; in shell-style invocations).
+
+EXAMPLES
+       find /bin -type f -name 'l*'
+       find . -iname '*.c' -size +1k
+       find /tmp -depth -mindepth 1 -exec rm {} ;
+       find / -path '*/usr/*' -type d -maxdepth 4
+
+SEE ALSO
+       grep(1), ls(1)

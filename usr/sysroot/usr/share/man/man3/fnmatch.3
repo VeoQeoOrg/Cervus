@@ -1,0 +1,25 @@
+NAME
+       fnmatch - match a filename against a shell pattern
+
+SYNOPSIS
+       #include <fnmatch.h>
+
+       int fnmatch(const char *pattern, const char *string, int flags);
+
+DESCRIPTION
+       Tests whether string matches the shell-style pattern. Patterns
+       support the wildcards *, ?, character classes [abc] / [a-z] /
+       [!abc], and backslash escapes (unless FNM_NOESCAPE).
+
+FLAGS
+       FNM_PATHNAME    '*' and '?' do not match '/'
+       FNM_NOESCAPE    treat '\\' as a literal
+       FNM_PERIOD      a leading '.' must be matched literally
+       FNM_CASEFOLD    case-insensitive match
+       FNM_LEADING_DIR pattern matches a prefix of string ending at '/'
+
+RETURN VALUE
+       0 on match, FNM_NOMATCH otherwise.
+
+SEE ALSO
+       regex(3), find(1)

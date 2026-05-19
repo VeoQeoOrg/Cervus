@@ -4,6 +4,7 @@ DEFAULT REL
 section .text
     global _start
     extern main
+    extern exit
     extern __cervus_argc
     extern __cervus_argv
 
@@ -79,8 +80,7 @@ _start:
     call    main
 
     movsxd  rdi, eax
-    xor     eax, eax
-    syscall
+    call    exit
 
 .hang:
     hlt

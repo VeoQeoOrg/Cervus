@@ -1,0 +1,38 @@
+NAME
+       read - read from a file descriptor
+
+SYNOPSIS
+       #include <unistd.h>
+
+       ssize_t read(int fd, void *buf, size_t count);
+
+DESCRIPTION
+       Attempts to read up to count bytes from file descriptor fd into
+       the buffer pointed to by buf. The return value is the number of
+       bytes actually transferred, or -1 on error with errno set.
+
+       For block devices the offset advances by the number of bytes
+       read; for terminals see TTY MODES below.
+
+TTY MODES
+       /dev/tty respects the termios c_lflag bits ICANON, ECHO, ISIG.
+       In canonical mode read returns whole lines terminated by '\\n'.
+       In non-canonical (raw) mode every byte is delivered as soon as
+       it arrives.
+
+       Non-blocking reads on the TTY are activated through the
+       TIOCSNONBLOCK ioctl with a non-zero int argument. When set, read
+       returns -1 with errno = EAGAIN if no input is ready.
+
+RETURN VALUE
+       Number of bytes read. 0 indicates end of file. -1 indicates an
+       error and errno is set.
+
+ERRORS
+       EAGAIN     non-blocking and no data available
+       EBADF      fd is not open for reading
+       EINTR      interrupted by a signal
+       EFAULT     buf is not a valid pointer
+
+SEE ALSO
+       write(2), open(2), ioctl(2)

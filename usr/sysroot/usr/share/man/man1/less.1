@@ -1,0 +1,43 @@
+NAME
+       less - paginated file viewer with regex search
+
+SYNOPSIS
+       less [-N] [FILE]
+
+DESCRIPTION
+       Reads FILE (or stdin) into memory and displays it one screenful
+       at a time. Search uses the libcervus regex(3) engine with POSIX
+       extended syntax. The status line shows the filename, current
+       line range, and percentage through the document.
+
+OPTIONS
+       -N    show line numbers in the left margin
+
+KEYS
+       q, Ctrl-C       quit
+       h               help screen
+       j, down         scroll one line down
+       k, up           scroll one line up
+       space, PgDn     scroll one page down
+       b, PgUp         scroll one page up
+       g, Home         jump to first line
+       G, End          jump to last line
+       /PATTERN        search forward
+       ?PATTERN        search backward
+       n               repeat last search in same direction
+       N               repeat last search in opposite direction
+       =, F            toggle line numbers
+       Esc             cancel an in-progress prompt
+
+SEARCH
+       PATTERN is compiled as a POSIX extended regular expression.
+       Matches are highlighted on every visible line. The status line
+       reports "pattern not found" when a search fails.
+
+EXAMPLES
+       less /etc/motd
+       cat big.log | less
+       less -N /apps/shell.c
+
+SEE ALSO
+       man(1), grep(1), regex(3)

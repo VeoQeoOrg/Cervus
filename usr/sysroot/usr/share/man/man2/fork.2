@@ -1,0 +1,27 @@
+NAME
+       fork - create a child process
+
+SYNOPSIS
+       #include <unistd.h>
+
+       pid_t fork(void);
+
+DESCRIPTION
+       Duplicates the calling task. The child receives a copy of every
+       page table entry, of every open file descriptor, and a copy of
+       the user stack at the syscall entry point. Both processes
+       continue execution from the same instruction. The child sees a
+       return value of 0; the parent sees the child PID.
+
+       Cervus does not implement copy-on-write yet; the child page map
+       is fully populated at fork time.
+
+RETURN VALUE
+       0 in the child, the child PID in the parent, -1 on failure.
+
+ERRORS
+       ENOMEM     not enough memory to copy the page map
+       EAGAIN     pid table exhausted
+
+SEE ALSO
+       wait(2), execve(2), exit(2)

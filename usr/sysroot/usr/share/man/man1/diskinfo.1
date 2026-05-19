@@ -1,0 +1,18 @@
+NAME
+       diskinfo - report attached disks, partitions and mounts
+
+SYNOPSIS
+       diskinfo
+
+DESCRIPTION
+       Enumerates every block device returned by cervus_disk_info(2),
+       prints its model, transport, capacity, MBR partition table, list
+       of mount points, and statvfs-derived usage for each mounted
+       partition.
+
+       Transport is inferred from the kernel-assigned device name:
+       'hd*' devices are reported as ATA/IDE (PIO); 'sd*' as
+       AHCI/SATA (DMA); 'nvme*' as NVMe.
+
+SEE ALSO
+       mount(1), lsblk(1), mkfs(1)

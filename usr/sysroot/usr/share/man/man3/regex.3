@@ -1,0 +1,48 @@
+NAME
+       regcomp, regexec, regfree, regerror - POSIX regular expressions
+
+SYNOPSIS
+       #include <regex.h>
+
+       int    regcomp(regex_t *preg, const char *pattern, int cflags);
+       int    regexec(const regex_t *preg, const char *string,
+                      size_t nmatch, regmatch_t pmatch[], int eflags);
+       void   regfree(regex_t *preg);
+       size_t regerror(int errcode, const regex_t *preg,
+                       char *errbuf, size_t buflen);
+
+DESCRIPTION
+       libcervus ships a from-scratch POSIX regex engine built around a
+       bytecode VM with backtracking. Both BRE (default) and ERE
+       (REG_EXTENDED) are supported.
+
+CFLAGS
+       REG_EXTENDED   ERE syntax: + ? | ( ) {m,n}
+       REG_ICASE      case-insensitive
+       REG_NOSUB      do not populate pmatch
+       REG_NEWLINE    ^ and $ also match at every newline
+
+SYNTAX
+       .              any character (except '\\n' with REG_NEWLINE)
+       ^   $          start / end of string
+       [abc] [^abc]   character classes; ranges like [a-z]; POSIX
+                      classes such as [[:digit:]] are recognised
+       \\d \\w \\s     digit, word, space (negated variants \\D \\W \\S)
+       \\b \\B         word boundary / non-boundary
+       *  +  ?  {m,n} repetition (+ ? { } require ERE)
+       ( )            grouping (\\( \\) in BRE)
+       \\1 .. \\9     back references
+
+EXAMPLES
+       regex_t re;
+       regmatch_t m[4];
+       if (regcomp(&re, "^([A-Za-z_][A-Za-z0-9_]*)=(.*)$",
+                   REG_EXTENDED) == 0) {
+           if (regexec(&re, line, 4, m, 0) == 0) {
+               /* m[1] is the key, m[2] is the value */
+           }
+           regfree(&re);
+       }
+
+SEE ALSO
+       grep(1), fnmatch(3)

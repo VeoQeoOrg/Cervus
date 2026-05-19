@@ -1,0 +1,25 @@
+NAME
+       getline, getdelim - read a delimited line from a stream
+
+SYNOPSIS
+       #include <stdio.h>
+
+       ssize_t getline(char **lineptr, size_t *n, FILE *stream);
+       ssize_t getdelim(char **lineptr, size_t *n, int delim,
+                        FILE *stream);
+
+DESCRIPTION
+       Reads from stream up to and including the next delimiter
+       character ('\\n' for getline; any byte for getdelim). The line
+       is stored in *lineptr, which is grown with realloc as needed; n
+       is updated to the new capacity.
+
+       If *lineptr is NULL on entry, a buffer is allocated; the caller
+       must free it eventually.
+
+RETURN VALUE
+       Number of bytes read (including the delimiter), or -1 on EOF or
+       error.
+
+SEE ALSO
+       fgets(3), fopen(3)

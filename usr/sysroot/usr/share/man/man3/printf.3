@@ -1,0 +1,36 @@
+NAME
+       printf, fprintf, snprintf, vsnprintf - formatted output
+
+SYNOPSIS
+       #include <stdio.h>
+
+       int  printf(const char *fmt, ...);
+       int  fprintf(FILE *stream, const char *fmt, ...);
+       int  snprintf(char *buf, size_t n, const char *fmt, ...);
+       int  vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
+
+DESCRIPTION
+       libcervus implements an integer-only printf family suitable for
+       freestanding user code built with -mno-sse. Variadic doubles
+       cannot be passed in such code, so %f / %e / %g require an SSE
+       build of the application.
+
+SUPPORTED CONVERSIONS
+       %d %i %u %o %x %X     signed/unsigned integers
+       %ld %lu %lx %lld %llu %llx
+                             long and long long variants
+       %s %c %p              string, char, pointer
+       %f %e %g %F %E %G     floating point (only when caller is built
+                             with SSE enabled)
+       %%                    literal percent
+
+FLAGS
+       -  +  ' '  0  #         standard left-align, sign, space, zero pad
+       *                        width or precision from the argument list
+
+RETURN VALUE
+       Number of bytes written (snprintf: that would have been written
+       had n been large enough). Negative on error.
+
+SEE ALSO
+       fputs(3), write(2)

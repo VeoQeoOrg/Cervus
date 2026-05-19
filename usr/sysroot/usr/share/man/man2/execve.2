@@ -1,0 +1,27 @@
+NAME
+       execve - execute a program
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int execve(const char *path, char *const argv[], char *const envp[]);
+
+DESCRIPTION
+       Replaces the current process image with the ELF located at path.
+       All previous mappings except for the kernel half are torn down;
+       file descriptors stay open across exec unless O_CLOEXEC is set.
+
+       argv and envp are copied into the new user stack as a standard
+       sysv-amd64 frame; argv[0] is conventionally the program name.
+
+RETURN VALUE
+       Does not return on success. -1 with errno set on failure.
+
+ERRORS
+       ENOENT     no such file
+       EACCES     not an executable
+       ENOEXEC    not a valid ELF64
+       ENOMEM     out of memory while loading segments
+
+SEE ALSO
+       fork(2), wait(2)
