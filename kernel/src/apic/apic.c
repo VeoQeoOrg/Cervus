@@ -14,6 +14,17 @@ uint32_t hpet_period = 0;
 static acpi_madt_t* madt = NULL;
 static acpi_hpet_t* hpet_table = NULL;
 
+typedef struct {
+    uint8_t  valid;
+    uint8_t  source_irq;
+    uint32_t gsi;
+    uint16_t flags;
+} irq_override_t;
+
+#define MAX_IRQ_OVERRIDES 16
+static irq_override_t g_irq_overrides[MAX_IRQ_OVERRIDES];
+static int g_irq_override_count = 0;
+
 uint64_t g_hpet_boot_counter = 0;
 
 static inline uintptr_t phys_to_virt(uintptr_t phys) {
@@ -145,12 +156,34 @@ static void parse_madt(void) {
                 break;
             }
 
+            case MADT_ENTRY_ISO: {
+                madt_iso_entry_t* iso = (madt_iso_entry_t*)entries;
+                if (g_irq_override_count < MAX_IRQ_OVERRIDES) {
+                    irq_override_t *o = &g_irq_overrides[g_irq_override_count++];
+                    o->valid       = 1;
+                    o->source_irq  = iso->source;
+                    o->gsi         = iso->global_system_interrupt;
+                    o->flags       = iso->flags;
+                    serial_printf("[APIC] ISO: IRQ %u -> GSI %u flags=0x%04x\n",
+                                  iso->source, iso->global_system_interrupt, iso->flags);
+                }
+                break;
+            }
+
             default:
                 break;
         }
 
         entries += header->length;
     }
+}
+
+static const irq_override_t *find_irq_override(uint8_t irq) {
+    for (int i = 0; i < g_irq_override_count; i++) {
+        if (g_irq_overrides[i].valid && g_irq_overrides[i].source_irq == irq)
+            return &g_irq_overrides[i];
+    }
+    return NULL;
 }
 
 bool apic_is_available(void) {
@@ -176,10 +209,23 @@ void apic_init(void) {
 void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags) {
     if (!ioapic_base) return;
 
+    uint32_t gsi = irq;
     uint32_t redir_flags = IOAPIC_DELIVERY_FIXED | flags;
+
+    const irq_override_t *ov = find_irq_override(irq);
+    if (ov) {
+        gsi = ov->gsi;
+        uint8_t polarity = ov->flags & 0x3;
+        uint8_t trigger  = (ov->flags >> 2) & 0x3;
+        if (polarity == 0x3) redir_flags |= IOAPIC_POLARITY_LOW;
+        if (trigger  == 0x3) redir_flags |= IOAPIC_TRIGGER_LEVEL;
+        serial_printf("[APIC] IRQ %u -> GSI %u (polarity=%u trigger=%u)\n",
+                      irq, gsi, polarity, trigger);
+    }
+
     if (mask) redir_flags |= IOAPIC_INT_MASKED;
 
-    ioapic_redirect_irq(irq, vector, redir_flags);
+    ioapic_redirect_irq((uint8_t)gsi, vector, redir_flags);
 }
 
 void apic_timer_calibrate(void) {

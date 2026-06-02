@@ -282,10 +282,20 @@ void kernel_main(void) {
     serial_writestring("SMP [OK]\n");
 
     serial_writestring("Waiting until all APs are fully ready...\n");
-    while (smp_get_online_count() < (smp_get_cpu_count() - 1)) {
-        timer_sleep_ms(100);
+    {
+        int waited_ms = 0;
+        uint32_t need = (smp_get_cpu_count() > 0) ? (smp_get_cpu_count() - 1) : 0;
+        while (smp_get_online_count() < need && waited_ms < 5000) {
+            timer_sleep_ms(100);
+            waited_ms += 100;
+        }
+        if (smp_get_online_count() < need) {
+            serial_printf("[SMP] Timeout waiting for APs: %u/%u online, continuing\n",
+                          smp_get_online_count(), need);
+        } else {
+            serial_writestring("All APs ready.\n");
+        }
     }
-    serial_writestring("All APs ready.\n");
 
     printf("Kernel initialized successfully!\n\n");
     printf("Framebuffer: %dx%d, %d bpp\n", global_framebuffer->width, global_framebuffer->height, global_framebuffer->bpp);
@@ -372,12 +382,14 @@ void kernel_main(void) {
     }
 
     timer_init();
+    serial_writestring("Initializing PS/2 keyboard/mouse...\n");
+    ps2_init();
+
     sched_init();
     sched_notify_ready();
     timer_sleep_ms(10);
     clear_screen();
     load_elf_module();
-    task_create("PS/2", ps2_task, NULL, 10);
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
 

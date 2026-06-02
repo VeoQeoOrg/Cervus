@@ -282,9 +282,15 @@ static int ata_dma_xfer_once(ata_drive_t *drv, uint64_t lba, uint32_t count,
 
     outb(bmr + BMR_STATUS, BMR_STS_IRQ | BMR_STS_ERR);
 
+    serial_printf("[ATA-DMA] xfer start lba=%llu count=%u write=%d\n",
+                  (unsigned long long)lba, count, is_write);
     outb(io + ATA_REG_DRIVE, drv->drive_select);
     ata_io_wait(ctrl);
-    if (ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT) < 0) return -EIO;
+    if (ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT) < 0) {
+        serial_writestring("[ATA-DMA] wait_ready timeout\n");
+        return -EIO;
+    }
+    serial_writestring("[ATA-DMA] wait_ready ok\n");
 
     if (drv->lba48 && (lba > 0x0FFFFFFF || count > 256)) {
         outb(io + ATA_REG_DRIVE, (drv->drive_select & 0xF0) | ATA_LBA_BIT);
@@ -313,18 +319,31 @@ static int ata_dma_xfer_once(ata_drive_t *drv, uint64_t lba, uint32_t count,
     uint8_t cmd_byte = is_write ? 0 : BMR_CMD_READ;
     outb(bmr + BMR_CMD, cmd_byte | BMR_CMD_START);
 
-    uint64_t deadline = hpet_elapsed_ns() + 30000000000ULL;
+    serial_writestring("[ATA-DMA] BMR start, polling...\n");
+    uint64_t deadline = hpet_elapsed_ns() + 3000000000ULL;
+    uint32_t poll_iter = 0;
+    uint8_t  last_st = 0, last_sr = 0;
     for (;;) {
         uint8_t st = inb(bmr + BMR_STATUS);
         uint8_t sr = inb(ctrl + ATA_REG_ALT_STATUS);
+        last_st = st; last_sr = sr;
         if (st & BMR_STS_ERR) {
+            serial_printf("[ATA-DMA] ERR bit set st=0x%02x sr=0x%02x\n", st, sr);
             outb(bmr + BMR_CMD, 0);
             outb(bmr + BMR_STATUS, BMR_STS_IRQ | BMR_STS_ERR);
             return -EIO;
         }
-        if (!(st & BMR_STS_ACTIVE) && (st & BMR_STS_IRQ) && !(sr & ATA_SR_BSY))
+        if (!(st & BMR_STS_ACTIVE) && !(sr & ATA_SR_BSY)) {
+            serial_printf("[ATA-DMA] done iter=%u st=0x%02x sr=0x%02x\n",
+                          poll_iter, st, sr);
             break;
+        }
+        if (++poll_iter % 100000 == 0)
+            serial_printf("[ATA-DMA] poll iter=%u st=0x%02x sr=0x%02x\n",
+                          poll_iter, st, sr);
         if (hpet_elapsed_ns() > deadline) {
+            serial_printf("[ATA-DMA] TIMEOUT after %u iter st=0x%02x sr=0x%02x\n",
+                          poll_iter, last_st, last_sr);
             outb(bmr + BMR_CMD, 0);
             return -ETIMEDOUT;
         }

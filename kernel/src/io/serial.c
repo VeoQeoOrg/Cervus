@@ -36,14 +36,6 @@ void serial_initialize(uint16_t port, uint32_t baud_rate) {
 
     outb(port + 3, 0x03);
     outb(port + 2, 0xC7);
-    outb(port + 4, 0x0B);
-    outb(port + 4, 0x1E);
-    outb(port + 0, 0xAE);
-
-    if (inb(port + 0) != 0xAE) {
-        return;
-    }
-
     outb(port + 4, 0x0F);
 
     default_serial_port = port;

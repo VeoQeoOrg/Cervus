@@ -274,7 +274,11 @@ void smp_init(struct limine_mp_response* mp_response) {
 
 smp_info_t* smp_get_info(void)       { return &smp_info; }
 uint32_t    smp_get_cpu_count(void)  { return smp_info.cpu_count; }
-uint32_t    smp_get_online_count(void){ return smp_info.online_count; }
+uint32_t    smp_get_online_count(void){
+    uint32_t dyn = 1 + __atomic_load_n(&ap_online_count, __ATOMIC_ACQUIRE);
+    if (dyn > smp_info.online_count) smp_info.online_count = dyn;
+    return smp_info.online_count;
+}
 bool        smp_is_bsp(void)         { return lapic_get_id() == smp_info.bsp_lapic_id; }
 
 cpu_info_t* smp_get_current_cpu(void) {
