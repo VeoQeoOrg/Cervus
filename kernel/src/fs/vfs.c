@@ -346,6 +346,23 @@ int64_t vfs_seek(vfs_file_t *file, int64_t offset, int whence) {
     return new_off;
 }
 
+static uint32_t mode_type_bits(vnode_type_t t) {
+    switch (t) {
+        case VFS_NODE_FILE:    return 0100000;
+        case VFS_NODE_DIR:     return 0040000;
+        case VFS_NODE_CHARDEV: return 0020000;
+        case VFS_NODE_BLKDEV:  return 0060000;
+        case VFS_NODE_SYMLINK: return 0120000;
+        case VFS_NODE_PIPE:    return 0010000;
+        default:               return 0;
+    }
+}
+
+static void stat_apply_type_bits(vfs_stat_t *out) {
+    if ((out->st_mode & 0170000) == 0)
+        out->st_mode |= mode_type_bits(out->st_type);
+}
+
 int vfs_stat(const char *path, vfs_stat_t *out) {
     if (!path || !out) return -EINVAL;
     vnode_t *node = NULL;
@@ -364,6 +381,7 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
         out->st_size = node->size;
         ret = 0;
     }
+    if (ret == 0) stat_apply_type_bits(out);
     vnode_unref(node);
     return ret;
 }
@@ -371,15 +389,21 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
 int vfs_fstat(vfs_file_t *file, vfs_stat_t *out) {
     if (!file || !file->vnode || !out) return -EBADF;
     vnode_t *node = file->vnode;
-    if (node->ops && node->ops->stat) return node->ops->stat(node, out);
-    memset(out, 0, sizeof(*out));
-    out->st_ino  = node->ino;
-    out->st_type = node->type;
-    out->st_mode = node->mode;
-    out->st_uid  = node->uid;
-    out->st_gid  = node->gid;
-    out->st_size = node->size;
-    return 0;
+    int ret;
+    if (node->ops && node->ops->stat) {
+        ret = node->ops->stat(node, out);
+    } else {
+        memset(out, 0, sizeof(*out));
+        out->st_ino  = node->ino;
+        out->st_type = node->type;
+        out->st_mode = node->mode;
+        out->st_uid  = node->uid;
+        out->st_gid  = node->gid;
+        out->st_size = node->size;
+        ret = 0;
+    }
+    if (ret == 0) stat_apply_type_bits(out);
+    return ret;
 }
 
 int64_t vfs_ioctl(vfs_file_t *file, uint64_t req, void *arg) {

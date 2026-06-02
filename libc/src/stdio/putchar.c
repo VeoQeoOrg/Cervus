@@ -492,6 +492,37 @@ int putchar(int c) {
             }
             case 'C': cursor_move_right(ps_get(0, 1)); break;
             case 'D': cursor_move_left (ps_get(0, 1)); break;
+            case 'E': {
+                int n = ps_get(0, 1); if (n < 1) n = 1;
+                uint32_t sh = get_screen_height();
+                cursor_x = 0;
+                cursor_y += (uint32_t)(n * 16);
+                if (cursor_y + 16 > sh) cursor_y = (sh >= 16) ? sh - 16 : 0;
+                break;
+            }
+            case 'F': {
+                int n = ps_get(0, 1); if (n < 1) n = 1;
+                uint32_t d = (uint32_t)(n * 16);
+                cursor_x = 0;
+                cursor_y = (cursor_y >= d) ? cursor_y - d : 0;
+                break;
+            }
+            case 'G': {
+                int col = ps_get(0, 1); if (col < 1) col = 1;
+                uint32_t sw = get_screen_width();
+                uint32_t cx = (uint32_t)((col - 1) * 8);
+                if (cx + 8 > sw) cx = (sw >= 8) ? sw - 8 : 0;
+                cursor_x = cx;
+                break;
+            }
+            case 'd': {
+                int row = ps_get(0, 1); if (row < 1) row = 1;
+                uint32_t sh = get_screen_height();
+                uint32_t cy = (uint32_t)((row - 1) * 16);
+                if (cy + 16 > sh) cy = (sh >= 16) ? sh - 16 : 0;
+                cursor_y = cy;
+                break;
+            }
             case 's': saved_cx = cursor_x; saved_cy = cursor_y; break;
             case 'u': cursor_x = saved_cx; cursor_y = saved_cy; break;
             default: break;
