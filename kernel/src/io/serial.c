@@ -3,12 +3,28 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 #include "../../include/io/ports.h"
 #include "../../include/io/serial.h"
+#include "../../include/console/klog.h"
 
 static volatile uint8_t serial_lock = 0;
 static uint16_t default_serial_port = 0;
+
+static void serial_log_emit(const char *buf, size_t len) {
+    if (!buf || len == 0) return;
+    klog_write(buf, len);
+    if (default_serial_port == 0) return;
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    while (__sync_lock_test_and_set(&serial_lock, 1))
+        __asm__ volatile("pause" ::: "memory");
+    for (size_t i = 0; i < len; i++)
+        serial_write_port(default_serial_port, buf[i]);
+    __sync_lock_release(&serial_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+}
 
 void serial_initialize(uint16_t port, uint32_t baud_rate) {
     outb(port + 1, 0x00);
@@ -91,27 +107,13 @@ void serial_writestring_port(uint16_t port, const char* str) {
 }
 
 void serial_writestring(const char* str) {
-    if (default_serial_port == 0) return;
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    while (__sync_lock_test_and_set(&serial_lock, 1))
-        __asm__ volatile("pause" ::: "memory");
-    serial_writestring_port(default_serial_port, str);
-    __sync_lock_release(&serial_lock);
-    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+    if (!str) return;
+    serial_log_emit(str, strlen(str));
 }
 
 
 void serial_writebuf(const char* buf, size_t len) {
-    if (default_serial_port == 0 || !buf || len == 0) return;
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    while (__sync_lock_test_and_set(&serial_lock, 1))
-        __asm__ volatile("pause" ::: "memory");
-    for (size_t i = 0; i < len; i++)
-        serial_write_port(default_serial_port, buf[i]);
-    __sync_lock_release(&serial_lock);
-    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+    serial_log_emit(buf, len);
 }
 
 
@@ -593,234 +595,13 @@ void serial_printf_port(uint16_t port, const char* format, ...) {
 }
 
 void serial_printf(const char* format, ...) {
-    if (default_serial_port == 0) return;
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    while (__sync_lock_test_and_set(&serial_lock, 1)) {
-        __asm__ volatile("pause" ::: "memory");
-    }
-
+    char buf[1024];
     va_list args;
     va_start(args, format);
-
-    char buffer[256];
-    const char* ptr = format;
-
-    while (*ptr) {
-        if (*ptr != '%') {
-            serial_write_port(default_serial_port, *ptr);
-            ptr++;
-            continue;
-        }
-
-        const char* percent_start = ptr++;
-
-        while (*ptr == '0' || *ptr == '-' || *ptr == '+' || *ptr == ' ' || *ptr == '#') {
-            ptr++;
-        }
-
-        int width = 0;
-        while (*ptr >= '0' && *ptr <= '9') {
-            width = width * 10 + (*ptr - '0');
-            ptr++;
-        }
-
-        int precision = -1;
-        if (*ptr == '.') {
-            ptr++;
-            precision = 0;
-            while (*ptr >= '0' && *ptr <= '9') {
-                precision = precision * 10 + (*ptr - '0');
-                ptr++;
-            }
-        }
-
-        bool has_ll = false;
-        bool has_l = false;
-        bool has_size_t = false;
-
-        if (*ptr == 'z') {
-            ptr++;
-            has_size_t = true;
-        } else if (*ptr == 'l') {
-            ptr++;
-            if (*ptr == 'l') {
-                ptr++;
-                has_ll = true;
-            } else {
-                has_l = true;
-            }
-        } else if (*ptr == 'h') {
-            ptr++;
-            if (*ptr == 'h') ptr++;
-        } else if (*ptr == 'L' || *ptr == 'j' || *ptr == 't') {
-            ptr++;
-        }
-
-        switch (*ptr) {
-            case 'c': {
-                char c = (char)va_arg(args, int);
-                serial_write_port(default_serial_port, c);
-                break;
-            }
-
-            case 's': {
-                const char* str = va_arg(args, const char*);
-                if (!str) {
-                    str = "(null)";
-                }
-                serial_writestring_port(default_serial_port, str);
-                break;
-            }
-
-            case 'd':
-            case 'i': {
-                int64_t num;
-                if (has_size_t) {
-                    num = (int64_t)va_arg(args, size_t);
-                } else if (has_ll) {
-                    num = va_arg(args, int64_t);
-                } else if (has_l) {
-                    num = (int64_t)va_arg(args, long);
-                } else {
-                    num = (int64_t)va_arg(args, int);
-                }
-                int_to_str(num, buffer, 10, false);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'u': {
-                uint64_t num;
-                if (has_size_t) {
-                    num = (uint64_t)va_arg(args, size_t);
-                } else if (has_ll) {
-                    num = va_arg(args, uint64_t);
-                } else if (has_l) {
-                    num = (uint64_t)va_arg(args, unsigned long);
-                } else {
-                    num = (uint64_t)va_arg(args, unsigned int);
-                }
-                uint_to_str(num, buffer, 10, false);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'x': {
-                uint64_t num;
-                if (has_size_t) {
-                    num = (uint64_t)va_arg(args, size_t);
-                } else if (has_ll) {
-                    num = va_arg(args, uint64_t);
-                } else if (has_l) {
-                    num = (uint64_t)va_arg(args, unsigned long);
-                } else {
-                    num = (uint64_t)va_arg(args, unsigned int);
-                }
-                uint_to_str(num, buffer, 16, false);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'X': {
-                uint64_t num;
-                if (has_size_t) {
-                    num = (uint64_t)va_arg(args, size_t);
-                } else if (has_ll) {
-                    num = va_arg(args, uint64_t);
-                } else if (has_l) {
-                    num = (uint64_t)va_arg(args, unsigned long);
-                } else {
-                    num = (uint64_t)va_arg(args, unsigned int);
-                }
-                uint_to_str(num, buffer, 16, true);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'o': {
-                uint64_t num;
-                if (has_size_t) {
-                    num = (uint64_t)va_arg(args, size_t);
-                } else if (has_ll) {
-                    num = va_arg(args, uint64_t);
-                } else if (has_l) {
-                    num = (uint64_t)va_arg(args, unsigned long);
-                } else {
-                    num = (uint64_t)va_arg(args, unsigned int);
-                }
-                uint_to_str(num, buffer, 8, false);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'p': {
-                void* ptr_val = va_arg(args, void*);
-                serial_writestring_port(default_serial_port, "0x");
-                uint_to_str((uintptr_t)ptr_val, buffer, 16, false);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'f':
-            case 'F': {
-                double num = va_arg(args, double);
-                double_to_string(num, buffer, precision);
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'e':
-            case 'E': {
-                double num = va_arg(args, double);
-                double_to_scientific(num, buffer, precision, (*ptr == 'E'));
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'g':
-            case 'G': {
-                double num = va_arg(args, double);
-                double_to_general(num, buffer, precision, (*ptr == 'G'));
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'a':
-            case 'A': {
-                double num = va_arg(args, double);
-                double_to_scientific(num, buffer, precision, (*ptr == 'A'));
-                buffer[0] = '0';
-                buffer[1] = 'x';
-                serial_writestring_port(default_serial_port, buffer);
-                break;
-            }
-
-            case 'n': {
-                int* count_ptr = va_arg(args, int*);
-                *count_ptr = 0;
-                break;
-            }
-
-            case '%': {
-                serial_write_port(default_serial_port, '%');
-                break;
-            }
-
-            default: {
-                for (const char* p = percent_start; p <= ptr; p++) {
-                    serial_write_port(default_serial_port, *p);
-                }
-                break;
-            }
-        }
-
-        if (*ptr != '\0') {
-            ptr++;
-        }
-    }
-
+    int n = vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
-    __sync_lock_release(&serial_lock);
-    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+    if (n < 0) return;
+    size_t len = (size_t)n;
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    serial_log_emit(buf, len);
 }

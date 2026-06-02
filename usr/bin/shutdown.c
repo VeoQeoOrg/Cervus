@@ -14,14 +14,9 @@ static int confirm_prompt(void)
         ssize_t r = read(0, &c, 1);
         if (r <= 0) break;
         if (c == '\n' || c == '\r') break;
-        if (c == '\b' || c == 0x7F) {
-            if (i > 0) { i--; fputs("\b \b", stdout); }
-            continue;
-        }
-        if (isprint((unsigned char)c)) { buf[i++] = c; putchar(c); }
+        if (isprint((unsigned char)c)) buf[i++] = c;
     }
     buf[i] = '\0';
-    putchar('\n');
     return strcmp(buf, "yes") == 0 || strcmp(buf, "y") == 0 ||
            strcmp(buf, "YES") == 0 || strcmp(buf, "Y") == 0;
 }
@@ -33,7 +28,7 @@ int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "shutdown")) return 0;
     (void)argc; (void)argv;
-    fputs(C_YELLOW "=== Shutdown ===" C_RESET "\n\n", stdout);
+    fputs(C_YELLOW "[Shutdown]" C_RESET "\n\n", stdout);
     fputs("Are you sure you want to " C_RED "shut down" C_RESET " the computer?\n", stdout);
     fputs("Type " C_BOLD "yes" C_RESET " to confirm, or anything else to cancel: ", stdout);
 

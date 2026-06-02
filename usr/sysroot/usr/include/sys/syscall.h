@@ -71,8 +71,16 @@
 
 #define SYS_LIST_MOUNTS     546
 #define SYS_STATVFS         547
+#define SYS_DISK_EJECT      548
+#define SYS_DISK_PARTITION_GPT 549
 
 #define SYS_PCI_LIST        550
+#define SYS_USB_LIST        551
+#define SYS_SYNC            552
+#define SYS_VT_SPAWN_POLL   553
+#define SYS_VT_SET_CTTY     554
+#define SYS_VT_CLEAR_SHELL  555
+#define SYS_VT_SWITCH       556
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

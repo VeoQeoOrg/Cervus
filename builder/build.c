@@ -13,11 +13,12 @@
 #include <limits.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <termios.h>
 
 #define IMAGE_NAME   "Cervus"
 #define VERSION      "v0.0.2"
-#define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on " \
-                     "-drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk "
+#define QEMUFLAGS    "-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+#define QEMU_IDE_DISK "-drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk"
 
 #define LIMINE_CONF_PATH       "/boot/limine/limine.conf"
 #define LIMINE_CONF_BACKUP     "/boot/limine/limine.conf.cervus-backup"
@@ -36,8 +37,9 @@
 #define LIBCERVUS_DIR    "usr/lib/libcervus"
 #define SHELL_SRC        "usr/apps/shell.c"
 #define SHELL_ELF        "usr/apps/shell.elf"
-#define INSTALLER_SRC    "usr/installer/install-on-disk.c"
-#define INSTALLER_ELF    "usr/installer/install-on-disk.elf"
+#define INIT_ELF         "usr/apps/init.elf"
+#define INSTALLER_SRC    "usr/installer/cervus-installer.c"
+#define INSTALLER_ELF    "usr/installer/cervus-installer.elf"
 
 #define INITRAMFS_TAR      "initramfs.tar"
 #define INITRAMFS_ROOTFS   "rootfs"
@@ -79,13 +81,17 @@ const char *FILES_TO_CLEAN[] = {
     "kernel/.deps-obtained",
     "limine.conf",
     "OS-TREE.txt", "log.txt",
-    SHELL_ELF, INSTALLER_ELF,
+    SHELL_ELF, INIT_ELF, INSTALLER_ELF,
     SYSROOT_LIB "/libcervus.a",
     SYSROOT_LIB "/crt0.o",
     SYSROOT_DIR "/usr/bin/tcc",
     SYSROOT_LIB "/tcc/libtcc1.a",
     INITRAMFS_TAR,
     "cervus_disk.img",
+    "cervus_ata.img",
+    "cervus_sata.img",
+    "cervus_nvme.img",
+    "cervus_data.iso",
     NULL
 };
 
@@ -115,6 +121,8 @@ bool ARG_RESET_HW_CONF  = false;
 bool ARG_RESET_DISK     = false;
 bool ARG_LIVE           = false;
 bool ARG_AHCI           = false;
+bool ARG_NVME           = false;
+bool ARG_ALL_DISKS      = false;
 
 char **TREE_FILES       = NULL;
 int    TREE_FILES_COUNT = 0;
@@ -1452,6 +1460,10 @@ bool build_initramfs(void) {
             get_mtime(SHELL_ELF) > get_mtime(INITRAMFS_TAR)) {
             any_newer = true;
         }
+        if (!any_newer && file_exists(INIT_ELF) &&
+            get_mtime(INIT_ELF) > get_mtime(INITRAMFS_TAR)) {
+            any_newer = true;
+        }
         if (!any_newer && file_exists(INSTALLER_ELF) &&
             get_mtime(INSTALLER_ELF) > get_mtime(INITRAMFS_TAR)) {
             any_newer = true;
@@ -1511,15 +1523,15 @@ bool build_initramfs(void) {
         fclose(motd);
     }
 
-    if (file_exists(SHELL_ELF)) {
-        if (cmd_run(false, "cp %s %s/bin/init", SHELL_ELF, INITRAMFS_ROOTFS) != 0) {
-            print_color(COLOR_RED, "[initramfs] Failed to copy shell.elf -> bin/init");
+    if (file_exists(SHELL_ELF) && file_exists(INIT_ELF)) {
+        if (cmd_run(false, "cp %s %s/bin/init", INIT_ELF, INITRAMFS_ROOTFS) != 0) {
+            print_color(COLOR_RED, "[initramfs] Failed to copy init.elf -> bin/init");
             return false;
         }
         cmd_run(false, "cp %s %s/bin/shell", SHELL_ELF, INITRAMFS_ROOTFS);
-        print_color(COLOR_GREEN, "[initramfs] shell.elf -> /bin/init + /bin/shell");
+        print_color(COLOR_GREEN, "[initramfs] init.elf -> /bin/init, shell.elf -> /bin/shell");
     } else {
-        print_color(COLOR_RED, "[initramfs] shell.elf not found - boot will drop to nothing!");
+        print_color(COLOR_RED, "[initramfs] init.elf/shell.elf not found - boot will drop to nothing!");
         FILE *stub = fopen(INITRAMFS_ROOTFS "/bin/.keep", "w");
         if (stub) fclose(stub);
     }
@@ -1558,9 +1570,9 @@ bool build_initramfs(void) {
 
     if (file_exists(INSTALLER_ELF)) {
         char dst[512];
-        snprintf(dst, sizeof(dst), "%s/bin/install-on-disk", INITRAMFS_ROOTFS);
+        snprintf(dst, sizeof(dst), "%s/bin/cervus-installer", INITRAMFS_ROOTFS);
         if (cmd_run(false, "cp %s %s", INSTALLER_ELF, dst) == 0)
-            print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/install-on-disk",
+            print_color(COLOR_GREEN, "[initramfs] %s -> rootfs/bin/cervus-installer",
                         INSTALLER_ELF);
         else
             print_color(COLOR_RED, "[initramfs] failed to copy installer");
@@ -1633,7 +1645,7 @@ bool build_initramfs(void) {
 
     struct { const char *src; const char *dst; bool required; } boot_items[] = {
         { "bin/kernel",                 INITRAMFS_ROOTFS "/boot/kernel",                true  },
-        { SHELL_ELF,                    INITRAMFS_ROOTFS "/boot/shell.elf",             true  },
+        { INIT_ELF,                     INITRAMFS_ROOTFS "/boot/shell.elf",             true  },
         { "limine/limine-bios.sys",     INITRAMFS_ROOTFS "/boot/limine-bios.sys",       false },
         { "limine/limine-bios-hdd.bin", INITRAMFS_ROOTFS "/boot/limine-bios-hdd.bin",   false },
         { "limine/BOOTX64.EFI",         INITRAMFS_ROOTFS "/boot/BOOTX64.EFI",           false },
@@ -1866,12 +1878,12 @@ bool create_iso(void) {
 
     cmd_run(false, "cp bin/kernel iso_root/boot/kernel");
 
-    bool has_elf = file_exists(SHELL_ELF);
+    bool has_elf = file_exists(INIT_ELF);
     if (has_elf) {
-        cmd_run(false, "cp %s iso_root/boot/shell.elf", SHELL_ELF);
-        print_color(COLOR_GREEN, "[module 0] shell.elf -> iso_root/boot/shell.elf");
+        cmd_run(false, "cp %s iso_root/boot/shell.elf", INIT_ELF);
+        print_color(COLOR_GREEN, "[module 0] init.elf -> iso_root/boot/shell.elf");
     } else {
-        print_color(COLOR_RED, "[module 0] shell.elf not found - boot will fail!");
+        print_color(COLOR_RED, "[module 0] init.elf not found - boot will fail!");
     }
 
     bool has_initramfs = !ARG_NO_INITRAMFS && file_exists(INITRAMFS_TAR);
@@ -1947,6 +1959,63 @@ bool create_iso(void) {
     rm_rf("iso_root");
 
     print_color(COLOR_GREEN, "ISO ready: %s", iso_name);
+    return true;
+}
+
+bool build_data_iso(void) {
+    const char *root = "data_iso_root";
+    rm_rf(root);
+    ensure_dir(root);
+    ensure_dir("data_iso_root/docs");
+
+    FILE *f = fopen("data_iso_root/readme.txt", "w");
+    if (f) {
+        fprintf(f,
+            "Cervus OS sample data CD\n"
+            "------------------------\n"
+            "This disc is mounted as /dev/sdb on -machine pc q35 AHCI.\n"
+            "Mount it inside Cervus with:  mount /dev/sdb /mnt/cdrom\n"
+            "Then:  ls /mnt/cdrom\n"
+            "       cat /mnt/cdrom/readme.txt\n"
+            "       cat /mnt/cdrom/docs/hello.txt\n");
+        fclose(f);
+    }
+
+    f = fopen("data_iso_root/hello.txt", "w");
+    if (f) {
+        fprintf(f,
+            "Hello from a CD-ROM!\n"
+            "If you can read this from inside Cervus,\n"
+            "the ATAPI driver and ISO9660 filesystem are working.\n");
+        fclose(f);
+    }
+
+    f = fopen("data_iso_root/docs/hello.txt", "w");
+    if (f) {
+        fprintf(f,
+            "This file lives in a nested directory (docs/).\n"
+            "Used to test ISO9660 directory traversal.\n");
+        fclose(f);
+    }
+
+    f = fopen("data_iso_root/large.dat", "wb");
+    if (f) {
+        unsigned char buf[1024];
+        for (int i = 0; i < (int)sizeof(buf); i++) buf[i] = (unsigned char)(i & 0xFF);
+        for (int i = 0; i < 64; i++) fwrite(buf, 1, sizeof(buf), f);
+        fclose(f);
+    }
+
+    print_color(COLOR_GREEN, "Building cervus_data.iso (sample data disc)...");
+    int rc = cmd_run(false,
+        "xorriso -as mkisofs -r -J -V CERVUS_DATA -o cervus_data.iso %s "
+        " > /dev/null 2>&1", root);
+    rm_rf(root);
+    if (rc != 0) {
+        print_color(COLOR_RED, "[data-iso] xorriso failed");
+        return false;
+    }
+    print_color(COLOR_GREEN, "cervus_data.iso ready");
     return true;
 }
 
@@ -2283,10 +2352,10 @@ void hardware_test(void) {
     }
     print_color(COLOR_GREEN, "  kernel -> %s/kernel", CERVUS_BOOT_DIR);
 
-    bool has_elf = file_exists(SHELL_ELF);
+    bool has_elf = file_exists(INIT_ELF);
     if (has_elf) {
-        cmd_run(true, "cp %s %s/shell.elf", SHELL_ELF, CERVUS_BOOT_DIR);
-        print_color(COLOR_GREEN, "  shell.elf -> %s/shell.elf", CERVUS_BOOT_DIR);
+        cmd_run(true, "cp %s %s/shell.elf", INIT_ELF, CERVUS_BOOT_DIR);
+        print_color(COLOR_GREEN, "  init.elf -> %s/shell.elf", CERVUS_BOOT_DIR);
     }
 
     bool has_initramfs = file_exists(INITRAMFS_TAR);
@@ -2393,299 +2462,413 @@ static const char* find_ovmf(void) {
     return NULL;
 }
 
+static void do_clean(void) {
+    for (int i = 0; DIRS_TO_CLEAN[i];  i++) rm_rf(DIRS_TO_CLEAN[i]);
+    clean_apps_elfs();
+    clean_bin_elfs();
+    for (int i = 0; FILES_TO_CLEAN[i]; i++)
+        if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
+    clean_libcervus_build(true);
+    clean_tcc_build(true);
+    cmd_run(false, "rm -f " INSTALLER_DIR "/*.elf 2>/dev/null");
+    cmd_run(false, "rm -f temp_* 2>/dev/null");
+    print_color(COLOR_GREEN, "Cleanup complete");
+}
+
 static void print_help(void) {
-    printf("%sCervus OS build system%s\n\n", COLOR_BOLD, COLOR_RESET);
-    printf("Usage: ./build [command] [options]\n\n");
-    printf("Commands:\n");
-    printf("  run              Build kernel + initramfs + ISO, then launch QEMU (BIOS, with disk)\n");
-    printf("  run-uefi         Build kernel + initramfs + ISO, then launch QEMU (UEFI, with disk)\n");
-    printf("  run-installed    Launch QEMU from cervus_disk.img only (BIOS, no ISO, real hardware sim)\n");
-    printf("  run-installed-uefi Launch QEMU from cervus_disk.img only (UEFI, no ISO)\n");
-    printf("  run-fresh        Wipe disk and run installer from ISO again (BIOS)\n");
-    printf("  run-fresh-uefi   Wipe disk and run installer from ISO again (UEFI)\n");
-    printf("  run-ahci         Build + boot QEMU (BIOS, q35 machine, AHCI/SATA disk)\n");
-    printf("  run-fresh-ahci   Wipe disk and run installer from ISO via AHCI\n");
-    printf("  hardwaretest     Build & install Cervus into Limine boot menu (requires sudo)\n");
-    printf("  flash            Flash latest ISO to USB device (requires sudo)\n");
-    printf("  clean            Remove all build artifacts\n");
-    printf("  cleaniso         Remove only ISO images in demo_iso/\n");
-    printf("  gitclean         Same as clean (for git commit prep)\n");
-    printf("  help             Show this message\n\n");
-    printf("Subcomponent build (debug):\n");
-    printf("  _libcervus       Build only libcervus.a + crt0.o into sysroot\n");
-    printf("  _tcc             Build only TCC (and libcervus first) into sysroot\n\n");
-    printf("Options:\n");
-    printf("  --tree [files]         Generate OS-TREE.txt (optional: only list files)\n");
-    printf("  --structure-only       Generate tree without file contents\n");
-    printf("  --no-clean             Keep obj/ and bin/ after run\n");
-    printf("  --no-initramfs         Skip initramfs.tar creation\n");
-    printf("  --reset-disk           Re-create empty disk image\n");
-    printf("  --live                 Run without disk (Live Mode, BIOS only)\n");
-    printf("  --resethardwareconf    Restore original Limine config (requires sudo)\n\n");
-    printf("Boot entries in Limine menu:\n");
-    printf("  Install / Live                  - first boot, runs installer, uses initramfs\n");
-    printf("  Installed - boot from disk      - after install, no initramfs, uses ext2 disk\n\n");
-    printf("Hardware test workflow:\n");
-    printf("  sudo ./build hardwaretest        # build, install to /boot, add boot entries\n");
-    printf("  sudo ./build --resethardwareconf # restore original bootloader config\n\n");
-    printf("UEFI Requirements:\n");
-    printf("  Install OVMF: sudo apt install ovmf (Debian/Ubuntu) or equivalent\n\n");
+    printf("%sCervus build%s\n\n", COLOR_BOLD, COLOR_RESET);
+    printf("Usage:\n");
+    printf("  ./build                  Interactive menu (TUI)\n");
+    printf("  ./build run [options]    Build kernel + initramfs + ISO, launch QEMU\n");
+    printf("  ./build flash            Flash latest ISO to a USB device (sudo)\n");
+    printf("  ./build hardware         Install Cervus into the Limine boot menu (sudo)\n");
+    printf("  ./build clean            Remove all build artifacts\n");
+    printf("  ./build tree [files]     Generate OS-TREE.txt\n\n");
+    printf("run options (combine freely):\n");
+    printf("  --uefi           Boot via UEFI/OVMF        (default: BIOS)\n");
+    printf("  --disk=MODE      ide | ahci | nvme | all | none   (default: ide)\n");
+    printf("  --live           No disk, boot ISO live    (same as --disk=none)\n");
+    printf("  --fresh          Recreate empty disk image(s) before boot\n");
+    printf("  --installed      Boot existing disk only, no ISO (simulate real HW)\n");
+    printf("  --no-clean       Keep obj/ and bin/ after the run\n");
+    printf("  --no-initramfs   Skip initramfs.tar creation\n\n");
+    printf("global options:\n");
+    printf("  --tree [files]        Generate OS-TREE.txt\n");
+    printf("  --structure-only      Tree without file contents\n");
+    printf("  --resethardwareconf   Restore original Limine config (sudo)\n\n");
     printf("Examples:\n");
-    printf("  ./build run                      # normal boot with disk (BIOS)\n");
-    printf("  ./build run-uefi                 # normal boot with disk (UEFI)\n");
-    printf("  ./build run --live               # boot without disk (Live Mode, BIOS)\n");
-    printf("  ./build run-fresh-uefi           # fresh disk, boot installer (UEFI)\n");
-    printf("  ./build run --reset-disk         # fresh disk (BIOS)\n");
-    printf("  ./build run --tree\n");
-    printf("  ./build --tree kernel.c vfs.c\n");
+    printf("  ./build run                  BIOS + IDE disk\n");
+    printf("  ./build run --disk=ahci      BIOS + AHCI/SATA disk\n");
+    printf("  ./build run --uefi --disk=all\n");
+    printf("  ./build run --live           Live, no disk\n");
+    printf("  ./build run --installed      Boot the installed disk only\n");
+}
+
+typedef enum { DISK_IDE, DISK_AHCI, DISK_NVME, DISK_ALL, DISK_NONE } disk_mode_t;
+
+typedef struct {
+    bool        uefi;
+    disk_mode_t disk;
+    bool        fresh;
+    bool        installed;
+    bool        no_clean;
+} run_cfg_t;
+
+static const char *disk_name(disk_mode_t d) {
+    switch (d) {
+        case DISK_IDE:  return "IDE";
+        case DISK_AHCI: return "AHCI/SATA";
+        case DISK_NVME: return "NVMe";
+        case DISK_ALL:  return "All (ATA+SATA+NVMe)";
+        case DISK_NONE: return "None (Live)";
+    }
+    return "?";
+}
+
+static void apply_cfg(const run_cfg_t *c) {
+    ARG_LIVE       = (c->disk == DISK_NONE);
+    ARG_AHCI       = (c->disk == DISK_AHCI);
+    ARG_NVME       = (c->disk == DISK_NVME);
+    ARG_ALL_DISKS  = (c->disk == DISK_ALL);
+    ARG_RESET_DISK = c->fresh;
+    ARG_NO_CLEAN   = c->no_clean;
+}
+
+static void prepare_disks(const run_cfg_t *c) {
+    if (c->disk == DISK_NONE) return;
+    if (c->disk == DISK_ALL) {
+        const char *imgs[] = { "cervus_ata.img", "cervus_sata.img", "cervus_nvme.img", NULL };
+        for (int i = 0; imgs[i]; i++) {
+            if (c->fresh && file_exists(imgs[i])) {
+                print_color(COLOR_YELLOW, "[disk] removing %s", imgs[i]);
+                remove(imgs[i]);
+            }
+            if (!file_exists(imgs[i])) {
+                print_color(COLOR_CYAN, "Creating %s (256MB)...", imgs[i]);
+                cmd_run(false, "dd if=/dev/zero of=%s bs=1M count=256 2>/dev/null", imgs[i]);
+            }
+        }
+        if (!file_exists("cervus_data.iso")) build_data_iso();
+        return;
+    }
+    if (c->fresh && file_exists("cervus_disk.img")) {
+        print_color(COLOR_YELLOW, "[disk] removing cervus_disk.img");
+        remove("cervus_disk.img");
+    }
+    if (!file_exists("cervus_disk.img")) {
+        print_color(COLOR_CYAN, "Creating cervus_disk.img (256MB)...");
+        cmd_run(false, "dd if=/dev/zero of=cervus_disk.img bs=1M count=256 2>/dev/null");
+    } else {
+        print_color(COLOR_GREEN, "Using existing cervus_disk.img (persistent)");
+    }
+}
+
+static void launch_qemu(const run_cfg_t *c, const char *iso) {
+    char bios[PATH_MAX] = "";
+    if (c->uefi) {
+        const char *ovmf = find_ovmf();
+        if (!ovmf) { print_color(COLOR_RED, "OVMF not found (sudo apt install ovmf)"); return; }
+        snprintf(bios, sizeof bios, " -bios %s", ovmf);
+        print_color(COLOR_GREEN, "UEFI/OVMF: %s", ovmf);
+    }
+    if (c->disk == DISK_NONE) {
+        print_color(COLOR_CYAN, "Starting QEMU (live, no disk)...");
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc%s -cdrom %s -boot d"
+            " -serial stdio %s 2>&1 | tee log.txt",
+            bios, iso, QEMUFLAGS);
+        return;
+    }
+    if (c->disk == DISK_ALL) {
+        print_color(COLOR_GREEN, "Starting QEMU (ATA + SATA + NVMe + CDROM)...");
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35%s"
+            " -drive id=ata0,file=cervus_ata.img,format=raw,if=none"
+            " -device ide-hd,bus=ide.0,unit=0,drive=ata0,bootindex=2"
+            " -drive id=cd0,file=%s,format=raw,if=none,media=cdrom"
+            " -device ide-cd,bus=ide.1,unit=0,drive=cd0,bootindex=10"
+            " -device ich9-ahci,id=ahci"
+            " -drive id=sata0,file=cervus_sata.img,format=raw,if=none,file.locking=off"
+            " -device ide-hd,bus=ahci.0,drive=sata0,bootindex=3"
+            " -drive id=cd_data,file=cervus_data.iso,format=raw,if=none,media=cdrom,file.locking=off"
+            " -device ide-cd,bus=ahci.1,drive=cd_data"
+            " -drive id=nvm0,file=cervus_nvme.img,format=raw,if=none,file.locking=off"
+            " -device nvme,serial=CRV001,drive=nvm0,bootindex=4"
+            " -device qemu-xhci,id=xhci -boot menu=on,splash-time=2000"
+            " -serial stdio %s 2>&1 | tee log.txt",
+            bios, iso, QEMUFLAGS);
+        return;
+    }
+    if (c->disk == DISK_AHCI) {
+        print_color(COLOR_GREEN, "Starting QEMU (AHCI/SATA, q35)...");
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35%s -cdrom %s -boot d"
+            " -drive id=hd0,file=cervus_disk.img,format=raw,if=none,file.locking=off"
+            " -device ich9-ahci,id=ahci -device ide-hd,bus=ahci.0,drive=hd0"
+            " -serial stdio %s 2>&1 | tee log.txt",
+            bios, iso, QEMUFLAGS);
+        return;
+    }
+    if (c->disk == DISK_NVME) {
+        print_color(COLOR_GREEN, "Starting QEMU (NVMe, q35)...");
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35%s -cdrom %s -boot d"
+            " -drive id=nvm0,file=cervus_disk.img,format=raw,if=none,file.locking=off"
+            " -device nvme,serial=CRV001,drive=nvm0"
+            " -serial stdio %s 2>&1 | tee log.txt",
+            bios, iso, QEMUFLAGS);
+        return;
+    }
+    print_color(COLOR_GREEN, "Starting QEMU (BIOS, IDE)...");
+    cmd_run(false,
+        "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc%s -cdrom %s -boot d"
+        " -serial stdio %s %s 2>&1 | tee log.txt",
+        bios, iso, QEMUFLAGS, QEMU_IDE_DISK);
+}
+
+static int launch_installed(const run_cfg_t *c) {
+    if (!file_exists("cervus_disk.img")) {
+        print_color(COLOR_RED, "cervus_disk.img not found. Run './build run' first.");
+        return 1;
+    }
+    char bios[PATH_MAX] = "";
+    if (c->uefi) {
+        const char *ovmf = find_ovmf();
+        if (!ovmf) { print_color(COLOR_RED, "OVMF not found (sudo apt install ovmf)"); return 1; }
+        snprintf(bios, sizeof bios, " -bios %s", ovmf);
+    }
+    print_color(COLOR_CYAN, "Starting QEMU from installed disk (no ISO)...");
+    if (c->disk == DISK_NVME) {
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35%s"
+            " -drive id=nvm0,file=cervus_disk.img,format=raw,if=none,file.locking=off"
+            " -device nvme,serial=CRV001,drive=nvm0 -serial stdio %s 2>&1 | tee log.txt",
+            bios, QEMUFLAGS);
+    } else {
+        cmd_run(false,
+            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc%s"
+            " -drive file=cervus_disk.img,format=raw,if=ide -serial stdio %s 2>&1 | tee log.txt",
+            bios, QEMUFLAGS);
+    }
+    return 0;
+}
+
+static void post_clean(const run_cfg_t *c) {
+    if (c->no_clean) return;
+    print_color(COLOR_CYAN, "[post-run] cleaning build artifacts...");
+    rm_rf("obj");
+    rm_rf("bin");
+    rm_rf(INITRAMFS_ROOTFS);
+    if (file_exists(INITRAMFS_TAR)) remove(INITRAMFS_TAR);
+    clean_apps_elfs();
+    clean_bin_elfs();
+    clean_libcervus_build(false);
+    clean_tcc_build(false);
+    print_color(COLOR_GREEN, "[post-run] done.");
+}
+
+static int run_os(run_cfg_t cfg) {
+    apply_cfg(&cfg);
+    if (cfg.installed) return launch_installed(&cfg);
+
+    if (!compile_kernel())  { print_color(COLOR_RED, "Kernel compilation failed"); return 1; }
+    if (!build_initramfs()) { print_color(COLOR_RED, "initramfs build failed");   return 1; }
+    if (!create_iso())      { print_color(COLOR_RED, "ISO creation failed");      return 1; }
+    if (ARG_TREE) do_generate_tree();
+
+    char iso[PATH_MAX];
+    snprintf(iso, sizeof iso, "demo_iso/%s.latest.iso", IMAGE_NAME);
+
+    prepare_disks(&cfg);
+    launch_qemu(&cfg, iso);
+    post_clean(&cfg);
+    return 0;
+}
+
+static struct termios g_saved_tio;
+
+static void tui_raw_on(void) {
+    tcgetattr(STDIN_FILENO, &g_saved_tio);
+    struct termios t = g_saved_tio;
+    t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    t.c_cc[VMIN] = 1;
+    t.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
+static void tui_raw_off(void) {
+    tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_tio);
+}
+
+#define K_UP    1000
+#define K_DOWN  1001
+#define K_RIGHT 1002
+#define K_LEFT  1003
+
+static int tui_key(void) {
+    unsigned char ch;
+    if (read(STDIN_FILENO, &ch, 1) != 1) return -1;
+    if (ch == 0x1b) {
+        unsigned char a, b;
+        if (read(STDIN_FILENO, &a, 1) != 1) return 0x1b;
+        if (a != '[') return 0x1b;
+        if (read(STDIN_FILENO, &b, 1) != 1) return 0x1b;
+        switch (b) {
+            case 'A': return K_UP;
+            case 'B': return K_DOWN;
+            case 'C': return K_RIGHT;
+            case 'D': return K_LEFT;
+        }
+        return 0;
+    }
+    return ch;
+}
+
+#define MENU_ROWS 9
+
+static void tui_render(const run_cfg_t *c, int sel) {
+    printf("\033[2J\033[H");
+    printf("%s  Cervus build & run%s\n", COLOR_BOLD COLOR_CYAN, COLOR_RESET);
+    printf("  up/down: move   left/right: change   enter: select   q: quit\n\n");
+    const char *items[MENU_ROWS] = {
+        "Firmware",
+        "Disk",
+        "Fresh disk",
+        "Boot installed",
+        "Keep artifacts",
+        "Build & Run",
+        "Flash ISO to USB",
+        "Clean artifacts",
+        "Hardware install (sudo)",
+    };
+    char val[MENU_ROWS][48];
+    snprintf(val[0], 48, "%s", c->uefi ? "UEFI" : "BIOS");
+    snprintf(val[1], 48, "%s", disk_name(c->disk));
+    snprintf(val[2], 48, "%s", c->fresh ? "yes" : "no");
+    snprintf(val[3], 48, "%s", c->installed ? "yes" : "no");
+    snprintf(val[4], 48, "%s", c->no_clean ? "yes" : "no");
+    val[5][0] = val[6][0] = val[7][0] = val[8][0] = 0;
+    for (int i = 0; i < MENU_ROWS; i++) {
+        const char *cur = (i == sel) ? COLOR_GREEN "> " : "  ";
+        if (val[i][0])
+            printf("%s%-26s %s%s%s\n", cur, items[i], COLOR_YELLOW, val[i], COLOR_RESET);
+        else
+            printf("%s%s[ %s ]%s\n", cur, COLOR_BOLD, items[i], COLOR_RESET);
+    }
+    printf("\n");
+    fflush(stdout);
+}
+
+static void cfg_change(run_cfg_t *c, int row, int dir) {
+    switch (row) {
+        case 0: c->uefi = !c->uefi; break;
+        case 1: {
+            int d = (int)c->disk + (dir >= 0 ? 1 : -1);
+            if (d < 0) d = DISK_NONE;
+            if (d > DISK_NONE) d = 0;
+            c->disk = (disk_mode_t)d;
+            break;
+        }
+        case 2: c->fresh = !c->fresh; break;
+        case 3: c->installed = !c->installed; break;
+        case 4: c->no_clean = !c->no_clean; break;
+        default: break;
+    }
+}
+
+static int tui_menu(run_cfg_t *cfg) {
+    int sel = 5;
+    int action = 4;
+    tui_raw_on();
+    for (;;) {
+        tui_render(cfg, sel);
+        int k = tui_key();
+        if (k == 'q' || k == 0x1b || k == -1) { action = 4; break; }
+        if (k == K_UP)   { sel = (sel + MENU_ROWS - 1) % MENU_ROWS; continue; }
+        if (k == K_DOWN) { sel = (sel + 1) % MENU_ROWS; continue; }
+        if (k == K_LEFT)  { if (sel <= 4) cfg_change(cfg, sel, -1); continue; }
+        if (k == K_RIGHT) { if (sel <= 4) cfg_change(cfg, sel, +1); continue; }
+        if (k == '\n' || k == '\r') {
+            if (sel <= 4) { cfg_change(cfg, sel, +1); continue; }
+            if (sel == 5) { action = 0; break; }
+            if (sel == 6) { action = 1; break; }
+            if (sel == 7) { action = 2; break; }
+            if (sel == 8) { action = 3; break; }
+        }
+    }
+    tui_raw_off();
+    printf("\033[2J\033[H");
+    fflush(stdout);
+    return action;
 }
 
 int main(int argc, char **argv) {
     char *command = NULL;
+    run_cfg_t cfg = { .uefi = false, .disk = DISK_IDE, .fresh = false,
+                      .installed = false, .no_clean = false };
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--tree") == 0) {
+        char *a = argv[i];
+        if (strcmp(a, "--tree") == 0) {
             ARG_TREE = true;
             int j = i + 1;
             while (j < argc && argv[j][0] != '-') add_tree_file(argv[j++]);
             i = j - 1;
-        } else if (strcmp(argv[i], "--structure-only") == 0) {
+        } else if (strcmp(a, "--structure-only") == 0) {
             ARG_STRUCTURE_ONLY = true;
-        } else if (strcmp(argv[i], "--no-clean") == 0) {
-            ARG_NO_CLEAN = true;
-        } else if (strcmp(argv[i], "--no-initramfs") == 0) {
+        } else if (strcmp(a, "--no-clean") == 0) {
+            ARG_NO_CLEAN = true; cfg.no_clean = true;
+        } else if (strcmp(a, "--no-initramfs") == 0) {
             ARG_NO_INITRAMFS = true;
-        } else if (strcmp(argv[i], "--resethardwareconf") == 0) {
+        } else if (strcmp(a, "--resethardwareconf") == 0) {
             ARG_RESET_HW_CONF = true;
-        } else if (strcmp(argv[i], "--reset-disk") == 0) {
-            ARG_RESET_DISK = true;
-        } else if (strcmp(argv[i], "--live") == 0) {
-            ARG_LIVE = true;
-        } else if (argv[i][0] != '-') {
-            command = argv[i];
+        } else if (strcmp(a, "--fresh") == 0 || strcmp(a, "--reset-disk") == 0) {
+            cfg.fresh = true;
+        } else if (strcmp(a, "--live") == 0) {
+            cfg.disk = DISK_NONE;
+        } else if (strcmp(a, "--uefi") == 0) {
+            cfg.uefi = true;
+        } else if (strcmp(a, "--installed") == 0) {
+            cfg.installed = true;
+        } else if (strncmp(a, "--disk=", 7) == 0) {
+            const char *d = a + 7;
+            if      (strcmp(d, "ide")  == 0) cfg.disk = DISK_IDE;
+            else if (strcmp(d, "ahci") == 0) cfg.disk = DISK_AHCI;
+            else if (strcmp(d, "nvme") == 0) cfg.disk = DISK_NVME;
+            else if (strcmp(d, "all")  == 0) cfg.disk = DISK_ALL;
+            else if (strcmp(d, "none") == 0) cfg.disk = DISK_NONE;
+            else { print_color(COLOR_RED, "Unknown --disk=%s", d); return 1; }
+        } else if (a[0] != '-') {
+            command = a;
         }
     }
 
     if (ARG_TREE && !command) { do_generate_tree(); return 0; }
+    if (ARG_RESET_HW_CONF)    { reset_hardware_conf(); return 0; }
 
-    if (ARG_RESET_HW_CONF) {
-        reset_hardware_conf();
-        return 0;
-    }
-
-    if (!command || strcmp(command, "help") == 0) {
-        print_help();
-        return 0;
-    }
-
-    if (strcmp(command, "clean") == 0 || strcmp(command, "gitclean") == 0) {
-        for (int i = 0; DIRS_TO_CLEAN[i];  i++) rm_rf(DIRS_TO_CLEAN[i]);
-        clean_apps_elfs();
-        clean_bin_elfs();
-        for (int i = 0; FILES_TO_CLEAN[i]; i++)
-            if (file_exists(FILES_TO_CLEAN[i])) remove(FILES_TO_CLEAN[i]);
-        clean_libcervus_build(true);
-        clean_tcc_build(true);
-        cmd_run(false, "rm -f " INSTALLER_DIR "/*.elf 2>/dev/null");
-        cmd_run(false, "rm -f temp_* 2>/dev/null");
-        print_color(COLOR_GREEN, "Cleanup complete");
-        return 0;
-    }
-
-    if (strcmp(command, "cleaniso") == 0) {
-        rm_rf("demo_iso");
-        ensure_dir("demo_iso");
-        return 0;
-    }
-
-    if (strcmp(command, "flash") == 0) {
-        flash_iso();
-        return 0;
-    }
-
-    if (strcmp(command, "hardwaretest") == 0) {
-        hardware_test();
-        return 0;
-    }
-
-    if (strcmp(command, "_libcervus") == 0) {
-        return build_libcervus() ? 0 : 1;
-    }
-    if (strcmp(command, "_tcc") == 0) {
-        if (!build_libcervus()) return 1;
-        return build_tcc() ? 0 : 1;
-    }
-
-    if (strcmp(command, "run-installed-uefi") == 0) {
-        if (!file_exists("cervus_disk.img")) {
-            print_color(COLOR_RED, "cervus_disk.img not found. Run './build run' first.");
-            return 1;
+    if (!command) {
+        int action = tui_menu(&cfg);
+        switch (action) {
+            case 0: return run_os(cfg);
+            case 1: flash_iso(); return 0;
+            case 2: do_clean(); return 0;
+            case 3: hardware_test(); return 0;
+            default: return 0;
         }
-        const char *ovmf = find_ovmf();
-        if (!ovmf) {
-            print_color(COLOR_RED, "OVMF not found. Install: sudo apt install ovmf");
-            return 1;
-        }
-        print_color(COLOR_GREEN, "Starting QEMU with UEFI firmware from disk only...");
-        print_color(COLOR_GREEN, "Using OVMF: %s", ovmf);
-        cmd_run(false,
-            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-            " -bios %s"
-            " -drive file=cervus_disk.img,format=raw,if=ide"
-            " -serial stdio"
-            " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
-            " 2>&1 | tee log.txt",
-            ovmf);
-        return 0;
     }
 
-    if (strcmp(command, "run-installed") == 0) {
-        if (!file_exists("cervus_disk.img")) {
-            print_color(COLOR_RED, "cervus_disk.img not found. "
-                                   "Run './build run' first to build and install Cervus.");
-            return 1;
-        }
-        print_color(COLOR_CYAN, "Starting QEMU from disk only (no ISO, simulates real hardware)...");
-        cmd_run(false,
-            "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-            " -drive file=cervus_disk.img,format=raw,if=ide"
-            " -serial stdio"
-            " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
-            " 2>&1 | tee log.txt");
-        return 0;
-    }
+    if (strcmp(command, "help") == 0)         { print_help(); return 0; }
+    if (strcmp(command, "run") == 0)          return run_os(cfg);
+    if (strcmp(command, "flash") == 0)        { flash_iso(); return 0; }
+    if (strcmp(command, "hardware") == 0 ||
+        strcmp(command, "hardwaretest") == 0) { hardware_test(); return 0; }
+    if (strcmp(command, "clean") == 0 ||
+        strcmp(command, "gitclean") == 0)     { do_clean(); return 0; }
+    if (strcmp(command, "cleaniso") == 0)     { rm_rf("demo_iso"); ensure_dir("demo_iso"); return 0; }
+    if (strcmp(command, "tree") == 0)         { do_generate_tree(); return 0; }
+    if (strcmp(command, "_libcervus") == 0)   return build_libcervus() ? 0 : 1;
+    if (strcmp(command, "_tcc") == 0)         { if (!build_libcervus()) return 1; return build_tcc() ? 0 : 1; }
 
-    if (strcmp(command, "run-fresh") == 0) {
-        ARG_RESET_DISK = true;
-        command = "run";
-    }
-
-    if (strcmp(command, "run-ahci") == 0) {
-        ARG_AHCI = true;
-        command = "run";
-    }
-    if (strcmp(command, "run-fresh-ahci") == 0) {
-        ARG_AHCI = true;
-        ARG_RESET_DISK = true;
-        command = "run";
-    }
-
-    if (strcmp(command, "run-fresh-uefi") == 0) {
-        ARG_RESET_DISK = true;
-        command = "run-uefi";
-    }
-
-    if (strcmp(command, "run") == 0 || strcmp(command, "run-uefi") == 0) {
-        bool use_uefi = (strcmp(command, "run-uefi") == 0);
-
-        if (!compile_kernel()) {
-            print_color(COLOR_RED, "Kernel compilation failed");
-            return 1;
-        }
-
-        if (!build_initramfs()) {
-            print_color(COLOR_RED, "initramfs build failed");
-            return 1;
-        }
-
-        if (!create_iso()) {
-            print_color(COLOR_RED, "ISO creation failed");
-            return 1;
-        }
-
-        if (ARG_TREE) do_generate_tree();
-
-        char iso_path[PATH_MAX];
-        snprintf(iso_path, sizeof(iso_path), "demo_iso/%s.latest.iso", IMAGE_NAME);
-
-        if (use_uefi) {
-            const char *ovmf = find_ovmf();
-            if (!ovmf) {
-                print_color(COLOR_RED, "OVMF not found. Install: sudo apt install ovmf");
-                return 1;
-            }
-            print_color(COLOR_GREEN, "Using OVMF: %s", ovmf);
-        }
-
-        if (ARG_LIVE && !use_uefi) {
-            print_color(COLOR_CYAN, "Starting QEMU in Live Mode (no disk, BIOS)...");
-            cmd_run(false,
-                "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-                " -cdrom %s -boot d"
-                " -serial stdio"
-                " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
-                " 2>&1 | tee log.txt",
-                iso_path);
-        } else if (ARG_LIVE && use_uefi) {
-            print_color(COLOR_RED, "Live mode (--live) is not supported in UEFI mode yet");
-            return 1;
-        } else {
-            if (!file_exists("cervus_disk.img") || ARG_RESET_DISK) {
-                if (ARG_RESET_DISK && file_exists("cervus_disk.img")) {
-                    print_color(COLOR_YELLOW, "[disk] --reset-disk: removing old disk image");
-                    remove("cervus_disk.img");
-                }
-                print_color(COLOR_CYAN, "Creating empty disk image (256MB)...");
-                cmd_run(false, "dd if=/dev/zero of=cervus_disk.img bs=1M count=256 2>/dev/null");
-                print_color(COLOR_GREEN, "Disk created (OS installer will format on first boot)");
-            } else {
-                print_color(COLOR_GREEN, "Using existing cervus_disk.img (persistent data)");
-            }
-
-            if (use_uefi) {
-                const char *ovmf = find_ovmf();
-                print_color(COLOR_GREEN, "Starting QEMU with UEFI firmware (IDE mode)...");
-                cmd_run(false,
-                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-                    " -bios %s"
-                    " -cdrom %s -boot d"
-                    " -serial stdio"
-                    " -m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
-                    " -drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk"
-                    " 2>&1 | tee log.txt",
-                    ovmf, iso_path);
-            } else if (ARG_AHCI) {
-                print_color(COLOR_GREEN, "Starting QEMU with BIOS (AHCI/SATA via q35)...");
-                cmd_run(false,
-                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine q35"
-                    " -cdrom %s -boot d"
-                    " -drive id=hd0,file=cervus_disk.img,format=raw,if=none,file.locking=off"
-                    " -device ich9-ahci,id=ahci"
-                    " -device ide-hd,bus=ahci.0,drive=hd0"
-                    " -serial stdio"
-                    " %s"
-                    " 2>&1 | tee log.txt",
-                    iso_path, QEMUFLAGS);
-            } else {
-                print_color(COLOR_GREEN, "Starting QEMU with BIOS...");
-                cmd_run(false,
-                    "GDK_BACKEND=x11 qemu-system-x86_64 -machine pc"
-                    " -cdrom %s -boot d"
-                    " -serial stdio"
-                    " %s"
-                    " 2>&1 | tee log.txt",
-                    iso_path, QEMUFLAGS);
-            }
-        }
-
-        if (!ARG_NO_CLEAN) {
-            print_color(COLOR_CYAN, "[post-run] Cleaning build artifacts...");
-            rm_rf("obj");
-            rm_rf("bin");
-            rm_rf(INITRAMFS_ROOTFS);
-            if (file_exists(INITRAMFS_TAR)) {
-                remove(INITRAMFS_TAR);
-                print_color(COLOR_GREEN, "[post-run] removed %s", INITRAMFS_TAR);
-            }
-            clean_apps_elfs();
-            clean_bin_elfs();
-            clean_libcervus_build(false);
-            clean_tcc_build(false);
-            print_color(COLOR_GREEN, "[post-run] Done.");
-        }
-        return 0;
-    }
-
-    print_color(COLOR_RED, "Unknown command: %s (try: ./build help)", command);
+    print_color(COLOR_RED, "Unknown command: %s (try ./build help)", command);
     return 1;
 }

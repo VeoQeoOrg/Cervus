@@ -9,8 +9,6 @@ typedef struct {
     char     buf[PIPE_BUFSZ];
     uint32_t head, tail;
     int      readers, writers;
-    uint32_t reader_waiting_pid;
-    spinlock_t lock;
 } pipe_shared_t;
 
 typedef struct {
@@ -30,15 +28,8 @@ static int64_t pipe_read_op(vnode_t *n, void *buf, size_t len, uint64_t off)
             if (ps->writers == 0) break;
             if (got > 0) break;
 
+            task_yield();
             task_t *me = syscall_cur_task();
-            if (me) {
-                syscall_save_user_regs(me);
-                ps->reader_waiting_pid = me->pid;
-                me->runnable = false;
-                me->state    = TASK_BLOCKED;
-            }
-            sched_reschedule();
-            if (me) ps->reader_waiting_pid = 0;
             if (me && me->pending_kill) return got > 0 ? (int64_t)got : -EINTR;
             continue;
         }
@@ -60,9 +51,8 @@ static int64_t pipe_write_op(vnode_t *n, const void *buf, size_t len, uint64_t o
         int spins = 0;
         while (next == ps->head) {
             if (ps->readers == 0) return (i > 0) ? (int64_t)i : -EPIPE;
-            task_t *me = syscall_cur_task();
-            if (me) syscall_save_user_regs(me);
             task_yield();
+            task_t *me = syscall_cur_task();
             if (me && me->pending_kill) return (i > 0) ? (int64_t)i : -EINTR;
             next = (ps->tail + 1) % PIPE_BUFSZ;
             spins++;
@@ -73,12 +63,6 @@ static int64_t pipe_write_op(vnode_t *n, const void *buf, size_t len, uint64_t o
         }
         ps->buf[ps->tail] = src[i];
         ps->tail = next;
-        if (ps->reader_waiting_pid) {
-            task_t *reader = task_find_by_pid(ps->reader_waiting_pid);
-            if (reader && !reader->runnable) {
-                task_unblock(reader);
-            }
-        }
     }
     return (int64_t)len;
 }
@@ -100,13 +84,6 @@ static void pipe_unref_op(vnode_t *n)
     if (vd->end == 0) ps->readers--;
     else {
         ps->writers--;
-        if (ps->reader_waiting_pid) {
-            task_t *reader = task_find_by_pid(ps->reader_waiting_pid);
-            if (reader && !reader->runnable) {
-                task_unblock(reader);
-            }
-            ps->reader_waiting_pid = 0;
-        }
     }
 
     int r = ps->readers;

@@ -265,6 +265,44 @@ void *pmm_alloc_aligned(size_t pages, size_t alignment) {
     return (void *)(phys + g_buddy.hhdm_offset);
 }
 
+void *pmm_alloc_below(size_t pages, uintptr_t max_phys) {
+    if (!pages) return NULL;
+    int order = _pages_to_order(pages);
+    if (order < 0) return NULL;
+    uintptr_t span = (uintptr_t)PAGE_SIZE << order;
+
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    spinlock_acquire(&g_pmm_lock);
+
+    uintptr_t phys = 0;
+    for (int o = order; o <= PMM_MAX_ORDER && !phys; o++) {
+        pmm_free_list_t *fl = &g_buddy.orders[o];
+        for (pmm_block_t *b = fl->head.next; b != &fl->head; b = b->next) {
+            uintptr_t bp = _block_phys(b);
+            if (bp < PMM_FREE_MIN_PHYS) continue;
+            if (bp + span > max_phys) continue;
+
+            _fl_del(fl, b);
+            int found = o;
+            while (found > order) {
+                found--;
+                uintptr_t buddy_phys = bp + ((uintptr_t)PAGE_SIZE << found);
+                _fl_push(&g_buddy.orders[found], _phys_to_block(buddy_phys), found);
+            }
+            g_buddy.free_pages -= (size_t)1 << order;
+            phys = bp;
+            break;
+        }
+    }
+
+    spinlock_release(&g_pmm_lock);
+    asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+
+    if (!phys) return NULL;
+    return (void *)(phys + g_buddy.hhdm_offset);
+}
+
 void pmm_free(void *addr, size_t pages) {
     if (!addr || !pages) return;
     uintptr_t phys = (uintptr_t)addr - g_buddy.hhdm_offset;

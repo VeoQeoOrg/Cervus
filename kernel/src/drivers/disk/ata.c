@@ -1,14 +1,21 @@
-#include "../../include/drivers/ata.h"
-#include "../../include/io/ports.h"
-#include "../../include/io/serial.h"
-#include "../../include/memory/pmm.h"
-#include "../../include/sched/spinlock.h"
-#include "../../include/syscall/errno.h"
+#include "../../../include/drivers/disk/ata.h"
+#include "../../../include/drivers/pci.h"
+#include "../../../include/io/ports.h"
+#include "../../../include/io/serial.h"
+#include "../../../include/memory/pmm.h"
+#include "../../../include/memory/dma.h"
+#include "../../../include/apic/apic.h"
+#include "../../../include/sched/spinlock.h"
+#include "../../../include/syscall/errno.h"
 #include <string.h>
 
 static ata_drive_t g_drives[ATA_MAX_DRIVES];
 static int         g_drive_count = 0;
 static spinlock_t  g_ata_lock = SPINLOCK_INIT;
+
+#define ATA_IO_TIMEOUT    20000000
+#define ATA_WRITE_TIMEOUT 40000000
+#define ATA_RETRY_COUNT   3
 
 static void ata_io_wait(uint16_t ctrl) {
     inb(ctrl); inb(ctrl); inb(ctrl); inb(ctrl);
@@ -156,9 +163,189 @@ static bool ata_channel_present(uint16_t io, uint16_t ctrl) {
     return true;
 }
 
+#define BMR_CMD        0x00
+#define BMR_STATUS     0x02
+#define BMR_PRDT_ADDR  0x04
+
+#define BMR_CMD_START  0x01
+#define BMR_CMD_READ   0x08
+
+#define BMR_STS_IRQ    0x04
+#define BMR_STS_ERR    0x02
+#define BMR_STS_ACTIVE 0x01
+
+#define ATA_DMA_BUF_SIZE  (64 * 1024)
+
+typedef struct __attribute__((packed)) {
+    uint32_t phys;
+    uint16_t count;
+    uint16_t flags;
+} prdt_entry_t;
+
+static uint16_t g_bmr_primary   = 0;
+static uint16_t g_bmr_secondary = 0;
+
+static void ata_pci_find_bmr(void) {
+    int n = pci_device_count();
+    for (int i = 0; i < n; i++) {
+        pci_device_t *pd = pci_device_at(i);
+        if (!pd) continue;
+        if (pd->class_code != 0x01) continue;
+        if (pd->subclass != 0x01 && pd->subclass != 0x06) continue;
+
+        pci_bar_t *b4 = &pd->bars[4];
+        if (b4->type != PCI_BAR_TYPE_IO || b4->base == 0) continue;
+
+        uint16_t cmd = pci_config_read16(pd->segment, pd->bus, pd->device,
+                                         pd->function, PCI_COMMAND);
+        cmd |= PCI_COMMAND_MASTER | PCI_COMMAND_IO;
+        pci_config_write16(pd->segment, pd->bus, pd->device, pd->function,
+                           PCI_COMMAND, cmd);
+
+        g_bmr_primary   = (uint16_t)b4->base;
+        g_bmr_secondary = (uint16_t)(b4->base + 8);
+        serial_printf("[ATA] PCI %02x:%02x.%u IDE BMR=0x%04x (class=%u:%u prog_if=0x%02x)\n",
+                      pd->bus, pd->device, pd->function,
+                      g_bmr_primary, pd->class_code, pd->subclass, pd->prog_if);
+        return;
+    }
+    serial_writestring("[ATA] no PCI IDE/SATA bus-master found (PIO only)\n");
+}
+
+static int ata_setup_dma(ata_drive_t *drv) {
+    drv->dma_supported = false;
+    if (drv->is_atapi) return 0;
+
+    uint16_t bmr = (drv->io_base == ATA_PRIMARY_IO) ? g_bmr_primary : g_bmr_secondary;
+    if (bmr == 0) return 0;
+
+    uintptr_t prdt_phys;
+    void *prdt = dma_alloc_coherent(4096, &prdt_phys);
+    if (!prdt) return -ENOMEM;
+    if (prdt_phys >= 0xFFFFFFFFULL) {
+        serial_printf("[ATA] PRDT phys 0x%llx >4GB, DMA disabled\n",
+                      (unsigned long long)prdt_phys);
+        return 0;
+    }
+
+    uintptr_t buf_phys;
+    void *buf = dma_alloc_coherent(ATA_DMA_BUF_SIZE, &buf_phys);
+    if (!buf) return -ENOMEM;
+    if (buf_phys + ATA_DMA_BUF_SIZE > 0xFFFFFFFFULL) {
+        serial_printf("[ATA] DMA buf phys 0x%llx >4GB, DMA disabled\n",
+                      (unsigned long long)buf_phys);
+        return 0;
+    }
+
+    drv->bmr_base     = bmr;
+    drv->prdt_phys    = prdt_phys;
+    drv->prdt_virt    = prdt;
+    drv->dma_buf_phys = buf_phys;
+    drv->dma_buf_virt = buf;
+    drv->dma_buf_size = ATA_DMA_BUF_SIZE;
+    drv->dma_supported = true;
+
+    serial_printf("[ATA] drive %u: DMA enabled (BMR=0x%04x, PRDT@0x%llx, buf@0x%llx)\n",
+                  drv->drive_select == ATA_DRIVE_MASTER ? 0 : 1,
+                  bmr,
+                  (unsigned long long)prdt_phys,
+                  (unsigned long long)buf_phys);
+    return 0;
+}
+
+static int ata_dma_xfer_once(ata_drive_t *drv, uint64_t lba, uint32_t count,
+                             void *user_buf, bool is_write)
+{
+    if (!drv->dma_supported) return -ENOSYS;
+    if (count == 0 || count * 512U > drv->dma_buf_size) return -EINVAL;
+
+    uint16_t io   = drv->io_base;
+    uint16_t ctrl = drv->ctrl_base;
+    uint16_t bmr  = drv->bmr_base;
+    uint32_t bytes = count * 512U;
+
+    if (is_write) memcpy(drv->dma_buf_virt, user_buf, bytes);
+
+    prdt_entry_t *prdt = (prdt_entry_t *)drv->prdt_virt;
+    prdt[0].phys  = (uint32_t)drv->dma_buf_phys;
+    prdt[0].count = (uint16_t)(bytes == 0x10000 ? 0 : bytes);
+    prdt[0].flags = 0x8000;
+
+    outb(bmr + BMR_CMD, 0);
+    asm volatile("" ::: "memory");
+
+    uint32_t prdt_lo = (uint32_t)drv->prdt_phys;
+    outb(bmr + BMR_PRDT_ADDR + 0, (uint8_t)(prdt_lo >> 0));
+    outb(bmr + BMR_PRDT_ADDR + 1, (uint8_t)(prdt_lo >> 8));
+    outb(bmr + BMR_PRDT_ADDR + 2, (uint8_t)(prdt_lo >> 16));
+    outb(bmr + BMR_PRDT_ADDR + 3, (uint8_t)(prdt_lo >> 24));
+
+    outb(bmr + BMR_STATUS, BMR_STS_IRQ | BMR_STS_ERR);
+
+    outb(io + ATA_REG_DRIVE, drv->drive_select);
+    ata_io_wait(ctrl);
+    if (ata_wait_ready(io, ctrl, ATA_IO_TIMEOUT) < 0) return -EIO;
+
+    if (drv->lba48 && (lba > 0x0FFFFFFF || count > 256)) {
+        outb(io + ATA_REG_DRIVE, (drv->drive_select & 0xF0) | ATA_LBA_BIT);
+        outb(io + ATA_REG_SECCOUNT, (uint8_t)(count >> 8));
+        outb(io + ATA_REG_LBA_LO,  (uint8_t)(lba >> 24));
+        outb(io + ATA_REG_LBA_MID, (uint8_t)(lba >> 32));
+        outb(io + ATA_REG_LBA_HI,  (uint8_t)(lba >> 40));
+        outb(io + ATA_REG_SECCOUNT, (uint8_t)count);
+        outb(io + ATA_REG_LBA_LO,  (uint8_t)lba);
+        outb(io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
+        outb(io + ATA_REG_LBA_HI,  (uint8_t)(lba >> 16));
+        outb(io + ATA_REG_COMMAND,
+             is_write ? ATA_CMD_WRITE_DMA_EXT : ATA_CMD_READ_DMA_EXT);
+    } else {
+        outb(io + ATA_REG_DRIVE,
+             (drv->drive_select & 0xF0) | ATA_LBA_BIT | ((lba >> 24) & 0xF));
+        outb(io + ATA_REG_SECCOUNT, (uint8_t)count);
+        outb(io + ATA_REG_LBA_LO,  (uint8_t)lba);
+        outb(io + ATA_REG_LBA_MID, (uint8_t)(lba >> 8));
+        outb(io + ATA_REG_LBA_HI,  (uint8_t)(lba >> 16));
+        outb(io + ATA_REG_COMMAND,
+             is_write ? ATA_CMD_WRITE_DMA : ATA_CMD_READ_DMA);
+    }
+    ata_io_wait(ctrl);
+
+    uint8_t cmd_byte = is_write ? 0 : BMR_CMD_READ;
+    outb(bmr + BMR_CMD, cmd_byte | BMR_CMD_START);
+
+    uint64_t deadline = hpet_elapsed_ns() + 30000000000ULL;
+    for (;;) {
+        uint8_t st = inb(bmr + BMR_STATUS);
+        uint8_t sr = inb(ctrl + ATA_REG_ALT_STATUS);
+        if (st & BMR_STS_ERR) {
+            outb(bmr + BMR_CMD, 0);
+            outb(bmr + BMR_STATUS, BMR_STS_IRQ | BMR_STS_ERR);
+            return -EIO;
+        }
+        if (!(st & BMR_STS_ACTIVE) && (st & BMR_STS_IRQ) && !(sr & ATA_SR_BSY))
+            break;
+        if (hpet_elapsed_ns() > deadline) {
+            outb(bmr + BMR_CMD, 0);
+            return -ETIMEDOUT;
+        }
+        ata_cpu_relax();
+    }
+
+    outb(bmr + BMR_CMD, 0);
+    outb(bmr + BMR_STATUS, BMR_STS_IRQ | BMR_STS_ERR);
+
+    uint8_t final_sr = inb(io + ATA_REG_STATUS);
+    if (final_sr & (ATA_SR_ERR | ATA_SR_DF)) return -EIO;
+
+    if (!is_write) memcpy(user_buf, drv->dma_buf_virt, bytes);
+    return 0;
+}
+
 void ata_init(void) {
     serial_writestring("[ATA] probing drives...\n");
     g_drive_count = 0;
+
+    ata_pci_find_bmr();
 
     struct { uint16_t io; uint16_t ctrl; uint8_t irq; } channels[] = {
         { ATA_PRIMARY_IO,   ATA_PRIMARY_CTRL,   14 },
@@ -182,11 +369,13 @@ void ata_init(void) {
                                    drvs[d], drv))
             {
                 drv->irq = channels[ch].irq;
+                ata_setup_dma(drv);
                 g_drive_count++;
-                serial_printf("[ATA] drive %d: '%s'  %llu sectors (%llu MB) %s\n",
+                serial_printf("[ATA] drive %d: '%s'  %llu sectors (%llu MB) %s%s\n",
                     idx, drv->model, drv->sectors,
                     drv->size_bytes / (1024 * 1024),
-                    drv->lba48 ? "LBA48" : "LBA28");
+                    drv->lba48 ? "LBA48" : "LBA28",
+                    drv->dma_supported ? " +DMA" : "");
             }
         }
     }
@@ -207,9 +396,6 @@ int ata_get_drive_count(void) {
     return g_drive_count;
 }
 
-#define ATA_IO_TIMEOUT   20000000
-#define ATA_WRITE_TIMEOUT 40000000
-#define ATA_RETRY_COUNT   3
 
 static int ata_read_sectors_once(ata_drive_t *drive, uint64_t lba,
                                  uint32_t count, void *buffer)
@@ -273,8 +459,32 @@ int ata_read_sectors(ata_drive_t *drive, uint64_t lba,
     if (lba + count > drive->sectors) return -EINVAL;
 
     uint64_t flags = spinlock_acquire_irqsave(&g_ata_lock);
-
     int ret = -EIO;
+
+    if (drive->dma_supported) {
+        uint32_t chunk = drive->dma_buf_size / 512;
+        uint32_t done = 0;
+        ret = 0;
+        while (done < count) {
+            uint32_t take = count - done;
+            if (take > chunk) take = chunk;
+            ret = ata_dma_xfer_once(drive, lba + done, take,
+                                    (uint8_t *)buffer + (size_t)done * 512, false);
+            if (ret < 0) {
+                serial_printf("[ATA] DMA read lba=%llu count=%u failed: %d (falling back to PIO)\n",
+                              lba + done, take, ret);
+                ata_soft_reset(drive->ctrl_base);
+                drive->dma_supported = false;
+                break;
+            }
+            done += take;
+        }
+        if (ret == 0 && drive->dma_supported) {
+            spinlock_release_irqrestore(&g_ata_lock, flags);
+            return 0;
+        }
+    }
+
     for (int attempt = 0; attempt < ATA_RETRY_COUNT; attempt++) {
         ret = ata_read_sectors_once(drive, lba, count, buffer);
         if (ret == 0) break;
@@ -355,8 +565,33 @@ int ata_write_sectors(ata_drive_t *drive, uint64_t lba,
     if (lba + count > drive->sectors) return -EINVAL;
 
     uint64_t flags = spinlock_acquire_irqsave(&g_ata_lock);
-
     int ret = -EIO;
+
+    if (drive->dma_supported) {
+        uint32_t chunk = drive->dma_buf_size / 512;
+        uint32_t done = 0;
+        ret = 0;
+        while (done < count) {
+            uint32_t take = count - done;
+            if (take > chunk) take = chunk;
+            ret = ata_dma_xfer_once(drive, lba + done, take,
+                                    (void *)((const uint8_t *)buffer +
+                                             (size_t)done * 512), true);
+            if (ret < 0) {
+                serial_printf("[ATA] DMA write lba=%llu count=%u failed: %d (falling back to PIO)\n",
+                              lba + done, take, ret);
+                ata_soft_reset(drive->ctrl_base);
+                drive->dma_supported = false;
+                break;
+            }
+            done += take;
+        }
+        if (ret == 0 && drive->dma_supported) {
+            spinlock_release_irqrestore(&g_ata_lock, flags);
+            return 0;
+        }
+    }
+
     for (int attempt = 0; attempt < ATA_RETRY_COUNT; attempt++) {
         ret = ata_write_sectors_once(drive, lba, count, buffer);
         if (ret == 0) break;

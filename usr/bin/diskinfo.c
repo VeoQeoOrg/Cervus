@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
@@ -62,10 +63,14 @@ static const char *type_to_name(uint8_t t)
     }
 }
 
-static int read_mbr_types(const char *disk, uint8_t ty[4], uint32_t st[4], uint32_t ct[4], uint8_t bt[4])
+static int read_mbr_types(const char *disk, uint32_t sec_size,
+                          uint8_t ty[4], uint32_t st[4], uint32_t ct[4], uint8_t bt[4])
 {
-    uint8_t sec[512];
+    if (sec_size == 0) sec_size = 512;
+    if (sec_size > 4096) return -1;
+    uint8_t sec[4096];
     if (cervus_disk_read_raw(disk, 0, 1, sec) < 0) return -1;
+    if (sec[510] != 0x55 || sec[511] != 0xAA) return -1;
     for (int i = 0; i < 4; i++) {
         uint8_t *e = sec + 0x1BE + i * 16;
         bt[i] = e[0];
@@ -79,10 +84,15 @@ static int read_mbr_types(const char *disk, uint8_t ty[4], uint32_t st[4], uint3
 static const char *transport_for(const char *name)
 {
     if (!name || !name[0]) return "Unknown";
+    if (name[0] == 's' && name[1] == 'r') return "AHCI ATAPI (CD/DVD)";
     if (name[0] == 's' && name[1] == 'd') return "AHCI/SATA (DMA)";
     if (name[0] == 'h' && name[1] == 'd') return "ATA/IDE (PIO)";
     if (name[0] == 'n' && name[1] == 'v' && name[2] == 'm' && name[3] == 'e')
         return "NVMe";
+    if (name[0] == 'u' && name[1] == 's' && name[2] == 'b')
+        return "USB Mass Storage (BBB)";
+    if (name[0] == 'u' && name[1] == 'h' && name[2] == 'd')
+        return "USB Mass Storage (BBB)";
     return "Unknown";
 }
 
@@ -90,17 +100,21 @@ static void print_disk(const cervus_disk_info_t *d,
                        const cervus_part_info_t *parts, int nparts,
                        const cervus_mount_info_t *mounts, int nmounts)
 {
+    uint32_t sec_size = d->sector_size ? d->sector_size : 512;
+
     fputs(C_BOLD C_CYAN "Device" C_RESET "\n", stdout);
     printf("  Name       : %s\n", d->name);
     printf("  Model      : %s\n", d->model[0] ? d->model : "(unknown)");
     printf("  Transport  : %s\n", transport_for(d->name));
     fputs( "  Size       : ", stdout); print_size(d->size_bytes);
-    printf(" (%lu sectors, 512 B each)\n\n", (unsigned long)d->sectors);
+    printf(" (%lu sectors, %u B each)\n\n", (unsigned long)d->sectors, sec_size);
 
     fputs(C_BOLD C_CYAN "Partitions" C_RESET "\n", stdout);
 
     uint8_t  ty[4] = {0}; uint32_t st[4] = {0}; uint32_t ct[4] = {0}; uint8_t bt[4] = {0};
-    int got_mbr = (read_mbr_types(d->name, ty, st, ct, bt) == 0);
+    int got_mbr = (sec_size == 512)
+                ? (read_mbr_types(d->name, sec_size, ty, st, ct, bt) == 0)
+                : 0;
 
     fputs("  " C_BOLD "NAME    TYPE             LBA START   SECTORS    SIZE      BOOT" C_RESET "\n", stdout);
     fputs("  -------------------------------------------------------------------\n", stdout);
@@ -112,17 +126,30 @@ static void print_disk(const cervus_disk_info_t *d,
         if (strcmp(p->part_name, d->name) == 0) continue;
         any_part = 1;
 
-        uint8_t  t = 0; uint32_t lba = 0, sectors = 0; int boot = 0;
-        if (got_mbr && p->part_num >= 1 && p->part_num <= 4) {
-            t       = ty[p->part_num - 1];
-            lba     = st[p->part_num - 1];
-            sectors = ct[p->part_num - 1];
-            boot    = (bt[p->part_num - 1] & 0x80) ? 1 : 0;
+        uint8_t  t       = p->type;
+        uint64_t lba     = p->lba_start;
+        uint64_t sectors = p->sector_count;
+        int      boot    = p->bootable ? 1 : 0;
+
+        if (t == 0 && got_mbr && p->part_num >= 1 && p->part_num <= 4) {
+            uint8_t mt = ty[p->part_num - 1];
+            if (mt != 0) {
+                t = mt;
+                boot = (bt[p->part_num - 1] & 0x80) ? 1 : 0;
+            }
         }
-        uint64_t sz = (uint64_t)sectors * 512ULL;
-        printf("  %-6s  %02x %-14s  %10u  %9u  %6lu M  %s\n",
+        if (lba == 0 && got_mbr && p->part_num >= 1 && p->part_num <= 4 &&
+            st[p->part_num - 1] != 0)
+            lba = st[p->part_num - 1];
+        if (sectors == 0 && got_mbr && p->part_num >= 1 && p->part_num <= 4 &&
+            ct[p->part_num - 1] != 0)
+            sectors = ct[p->part_num - 1];
+
+        uint64_t sz = sectors * (uint64_t)sec_size;
+        printf("  %-6s  %02x %-14s  %10lu  %9lu  %6lu M  %s\n",
                p->part_name, t, type_to_name(t),
-               lba, sectors, (unsigned long)(sz / (1024 * 1024)),
+               (unsigned long)lba, (unsigned long)sectors,
+               (unsigned long)(sz / (1024 * 1024)),
                boot ? "*" : "-");
     }
     if (!any_part) fputs("  (no partitions - disk not partitioned)\n", stdout);
@@ -188,20 +215,18 @@ int main(int argc, char **argv)
     if (cervus_check_help_version(argc, argv, USAGE, "diskinfo")) return 0;
     (void)argc; (void)argv;
 
-    cervus_disk_info_t disks[8];
+    cervus_disk_info_t disks[16];
     int ndisks = 0;
-    for (int i = 0; i < 8; i++) {
-        memset(&disks[ndisks], 0, sizeof(disks[0]));
-        int r = cervus_disk_info(i, &disks[ndisks]);
-        if (r < 0) break;
-        if (!disks[ndisks].present) continue;
-
-        int is_part = 0;
-        for (size_t k = 0; disks[ndisks].name[k]; k++)
-            if (disks[ndisks].name[k] >= '0' && disks[ndisks].name[k] <= '9') { is_part = 1; break; }
-        if (is_part) continue;
-        ndisks++;
-        if (ndisks >= 8) break;
+    for (int i = 0; i < 64; i++) {
+        cervus_disk_info_t info;
+        memset(&info, 0, sizeof(info));
+        int r = cervus_disk_info(i, &info);
+        if (r == -ERANGE) break;
+        if (r < 0) continue;
+        if (!info.present) continue;
+        if (info.is_partition) continue;
+        disks[ndisks++] = info;
+        if (ndisks >= (int)(sizeof(disks) / sizeof(disks[0]))) break;
     }
 
     if (ndisks == 0) {

@@ -10,26 +10,31 @@
 #include "../../include/sched/sched.h"
 #include "../../include/apic/apic.h"
 #include "../../include/smp/percpu.h"
+#include "../../include/console/console.h"
 
 extern void draw_cursor(void);
 extern void erase_cursor(void);
+extern int  console_cursor_visible(void);
+extern int  putchar(int);
+extern void putchar_flush_begin(void);
+extern void putchar_flush_end(void);
 
 extern uint32_t get_screen_width(void);
 extern uint32_t get_screen_height(void);
 extern uint32_t get_cursor_row(void);
 extern uint32_t get_cursor_col(void);
 
-#define TIOCGWINSZ   0x5413
-#define TIOCGCURSOR  0x5480
-#define TCGETS       0x5401
-#define TCSETS       0x5402
-#define TCSETSW      0x5403
-#define TCSETSF      0x5404
+extern void vt_write(int vt, const char *buf, size_t len);
+extern int  vt_active(void);
+extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
+
+#define TIOCGWINSZ    0x5413
+#define TIOCGCURSOR   0x5480
+#define TCGETS        0x5401
+#define TCSETS        0x5402
+#define TCSETSW       0x5403
+#define TCSETSF       0x5404
 #define TIOCSNONBLOCK 0x5481
-
-static int tty_nonblock = 0;
-
-void tty_reset_nonblock(void) { tty_nonblock = 0; }
 
 #define T_ICANON  0x0002
 #define T_ECHO    0x0008
@@ -55,55 +60,54 @@ struct cervus_termios {
     uint8_t  c_cc[32];
 };
 
-static struct cervus_termios g_tty_termios = {
-    .c_iflag = 0,
-    .c_oflag = 0,
-    .c_cflag = 0,
-    .c_lflag = T_ICANON | T_ECHO | T_ISIG,
-    .c_cc    = {0},
-};
+#define TTY_LINE_MAX 4096
 
-extern int putchar(int);
+typedef struct {
+    char     ring[KB_BUF_SIZE];
+    volatile uint16_t r_head, r_tail;
+    struct cervus_termios termios;
+    char     line[TTY_LINE_MAX];
+    size_t   line_len, line_read;
+    int      line_eof;
+    int      nonblock;
+} vt_tty_t;
 
-void tty_reset_on_exit(void)
-{
-    tty_nonblock = 0;
-    const char *s = "\x1b[?25h\x1b[0m";
-    while (*s) putchar((int)(unsigned char)*s++);
-    serial_writebuf("\x1b[?25h\x1b[0m", 10);
+static vt_tty_t g_vtty[VT_COUNT];
+
+static void vtty_reset(vt_tty_t *t) {
+    t->r_head = t->r_tail = 0;
+    t->termios.c_iflag = 0;
+    t->termios.c_oflag = 0;
+    t->termios.c_cflag = 0;
+    t->termios.c_lflag = T_ICANON | T_ECHO | T_ISIG;
+    memset(t->termios.c_cc, 0, sizeof(t->termios.c_cc));
+    t->line_len = 0;
+    t->line_read = 0;
+    t->line_eof = 0;
+    t->nonblock = 0;
 }
 
-static inline int tty_is_canonical(void) {
-    return (g_tty_termios.c_lflag & T_ICANON) != 0;
-}
-static inline int tty_has_isig(void) {
-    return (g_tty_termios.c_lflag & T_ISIG) != 0;
-}
-static inline int tty_has_echo(void) {
-    return (g_tty_termios.c_lflag & T_ECHO) != 0;
+void tty_vt_init(void) {
+    for (int i = 0; i < VT_COUNT; i++) vtty_reset(&g_vtty[i]);
 }
 
-bool tty_has_isig_global(void) {
-    return (g_tty_termios.c_lflag & T_ISIG) != 0;
-}
-
-static void tty_echo_char(char c)
-{
-    if (c == '\b' || c == 0x7F) {
-        const char *s = "\b \b";
-        serial_writebuf(s, 3);
-        putchar('\b'); putchar(' '); putchar('\b');
-        return;
+void tty_vt_input(int vt, char c) {
+    if (vt < 0 || vt >= VT_COUNT) return;
+    vt_tty_t *t = &g_vtty[vt];
+    uint16_t next = (uint16_t)((t->r_tail + 1) % KB_BUF_SIZE);
+    if (next != t->r_head) {
+        t->ring[t->r_tail] = c;
+        t->r_tail = next;
     }
-    if (c == '\n' || c == '\r') {
-        serial_writebuf("\n", 1);
-        putchar('\n');
-        return;
-    }
-    if ((unsigned char)c < 0x20 || (unsigned char)c == 0x7F) return;
-    char b[1] = { c };
-    serial_writebuf(b, 1);
-    putchar((int)(unsigned char)c);
+}
+
+static int ring_empty(vt_tty_t *t) { return t->r_head == t->r_tail; }
+
+static int ring_getc(vt_tty_t *t, char *out) {
+    if (ring_empty(t)) return 0;
+    *out = t->ring[t->r_head];
+    t->r_head = (uint16_t)((t->r_head + 1) % KB_BUF_SIZE);
+    return 1;
 }
 
 static inline task_t* devfs_cur_task(void) {
@@ -111,149 +115,190 @@ static inline task_t* devfs_cur_task(void) {
     return pc ? (task_t*)pc->current_task : NULL;
 }
 
-static int wait_for_char(char *out, uint64_t half_tick, uint64_t *next_blink, int *cursor_on)
-{
-    while (kb_buf_empty()) {
-        task_t *me = devfs_cur_task();
-        if (me && me->pending_kill) {
-            if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
-            return -1;
-        }
-
-        if (half_tick) {
-            uint64_t now = hpet_read_counter();
-            if (now >= *next_blink) {
-                if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
-                else            { draw_cursor();  *cursor_on = 1; }
-                *next_blink = now + half_tick;
-            }
-        }
-        task_yield();
-    }
-    if (*cursor_on) { erase_cursor(); *cursor_on = 0; }
-    *out = kb_buf_getc();
-    return 0;
+static int cur_vt(void) {
+    task_t *t = devfs_cur_task();
+    int v = t ? t->ctty : 0;
+    if (v < 0 || v >= VT_COUNT) v = 0;
+    return v;
 }
 
-#define TTY_LINE_MAX 4096
-static char g_tty_line[TTY_LINE_MAX];
-static size_t g_tty_line_len  = 0;
-static size_t g_tty_line_read = 0;
-static int    g_tty_line_eof  = 0;
+bool tty_has_isig_global(void) {
+    return (g_vtty[vt_active()].termios.c_lflag & T_ISIG) != 0;
+}
+
+void tty_reset_nonblock(void) {
+    g_vtty[cur_vt()].nonblock = 0;
+}
+
+void tty_reset_on_exit(void) {
+    int vt = cur_vt();
+    g_vtty[vt].nonblock = 0;
+    vt_write(vt, "\x1b[?25h\x1b[0m", 9);
+}
+
+static void tty_echo_char(int vt, char c) {
+    if (c == '\b' || c == 0x7F) {
+        vt_write(vt, "\b \b", 3);
+        return;
+    }
+    if (c == '\n' || c == '\r') {
+        vt_write(vt, "\n", 1);
+        return;
+    }
+    if ((unsigned char)c < 0x20 || (unsigned char)c == 0x7F) return;
+    char b[1] = { c };
+    vt_write(vt, b, 1);
+}
+
+static int wait_for_char(int vt, vt_tty_t *t, char *out,
+                         uint64_t half_tick, uint64_t *next_blink, int *cursor_on)
+{
+    while (ring_empty(t) || vt != vt_active()) {
+        task_t *me = devfs_cur_task();
+        if (me && me->pending_kill) {
+            if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
+            return -1;
+        }
+        if (vt == vt_active() && half_tick) {
+            uint64_t now = hpet_read_counter();
+            if (now >= *next_blink) {
+                if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
+                else            { vt_cursor(vt, 1); *cursor_on = 1; }
+                *next_blink = now + half_tick;
+            }
+        } else if (vt != vt_active() && *cursor_on) {
+            *cursor_on = 0;
+        }
+        if (me && hpet_is_available()) {
+            me->wakeup_time_ns = hpet_elapsed_ns() + 8000000ULL;
+            me->runnable = false;
+            me->state = TASK_BLOCKED;
+            sched_reschedule();
+        } else {
+            task_yield();
+        }
+    }
+    if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
+    ring_getc(t, out);
+    return 0;
+}
 
 static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
     if (len == 0) return 0;
 
-    char *dst = buf;
+    int       vt        = cur_vt();
+    vt_tty_t *t         = &g_vtty[vt];
+    char     *dst       = buf;
 
-    uint64_t freq      = hpet_is_available() ? hpet_get_frequency() : 0;
-    uint64_t half_tick = freq ? freq / 2 : 0;
-    uint64_t next_blink = half_tick ? (hpet_read_counter() + half_tick) : 0;
-    int      cursor_on  = 1;
-    int      canonical  = tty_is_canonical();
-    int      isig       = tty_has_isig();
-    int      echo       = canonical && tty_has_echo();
+    int      want_cursor = console_cursor_visible();
+    uint64_t freq        = hpet_is_available() ? hpet_get_frequency() : 0;
+    uint64_t half_tick   = (want_cursor && freq) ? freq / 2 : 0;
+    uint64_t next_blink  = half_tick ? (hpet_read_counter() + half_tick) : 0;
+    int      cursor_on   = want_cursor ? 1 : 0;
+    int      canonical   = (t->termios.c_lflag & T_ICANON) != 0;
+    int      isig        = (t->termios.c_lflag & T_ISIG) != 0;
+    int      echo        = canonical && (t->termios.c_lflag & T_ECHO) != 0;
 
-    if (tty_nonblock && kb_buf_empty()
-        && (!canonical || g_tty_line_read >= g_tty_line_len))
+    if (t->nonblock && ring_empty(t)
+        && (!canonical || t->line_read >= t->line_len))
         return -EAGAIN;
 
-    draw_cursor();
+    if (want_cursor) vt_cursor(vt, 1);
 
     if (!canonical) {
         char c;
-        if (wait_for_char(&c, half_tick, &next_blink, &cursor_on) < 0) {
-            erase_cursor();
-            kb_buf_consume_ctrlc();
+        if (wait_for_char(vt, t, &c, half_tick, &next_blink, &cursor_on) < 0)
             return -EINTR;
-        }
-        erase_cursor();
-        if (isig && c == 0x03) { kb_buf_consume_ctrlc(); return -EINTR; }
+        if (isig && c == 0x03) return -EINTR;
         dst[0] = c;
         size_t got = 1;
         while (got < len) {
             char nc;
-            if (!kb_buf_try_getc(&nc)) break;
+            if (!ring_getc(t, &nc)) break;
             dst[got++] = nc;
         }
         return (int64_t)got;
     }
 
-    erase_cursor();
-
-    if (g_tty_line_read >= g_tty_line_len) {
-        g_tty_line_len  = 0;
-        g_tty_line_read = 0;
-        g_tty_line_eof  = 0;
+    if (t->line_read >= t->line_len) {
+        t->line_len  = 0;
+        t->line_read = 0;
+        t->line_eof  = 0;
 
         for (;;) {
             char c;
-            if (wait_for_char(&c, half_tick, &next_blink, &cursor_on) < 0) {
-                kb_buf_consume_ctrlc();
+            if (wait_for_char(vt, t, &c, half_tick, &next_blink, &cursor_on) < 0)
                 return -EINTR;
-            }
 
             if (isig && c == 0x03) {
-                kb_buf_consume_ctrlc();
-                if (echo) {
-                    const char *s = "^C\n";
-                    serial_writebuf(s, 3);
-                    putchar('^'); putchar('C'); putchar('\n');
-                }
-                g_tty_line_len  = 0;
-                g_tty_line_read = 0;
+                t->line_len  = 0;
+                t->line_read = 0;
                 return -EINTR;
             }
 
             if (c == 0x04) {
-                g_tty_line_eof = 1;
+                t->line_eof = 1;
                 break;
             }
 
+            if (c == 0x1B) {
+                char nc;
+                if (!ring_getc(t, &nc)) continue;
+                if (nc == '[' || nc == 'O') {
+                    for (;;) {
+                        char fc;
+                        if (!ring_getc(t, &fc)) break;
+                        if ((unsigned char)fc >= 0x40 && (unsigned char)fc <= 0x7E) break;
+                    }
+                }
+                continue;
+            }
+
             if (c == '\b' || c == 0x7F) {
-                if (g_tty_line_len > 0) {
-                    g_tty_line_len--;
-                    if (echo) tty_echo_char('\b');
+                if (t->line_len > 0) {
+                    t->line_len--;
+                    if (echo) tty_echo_char(vt, '\b');
                 }
                 continue;
             }
 
             if (c == '\r') c = '\n';
 
-            if (g_tty_line_len < TTY_LINE_MAX) {
-                g_tty_line[g_tty_line_len++] = c;
-                if (echo) tty_echo_char(c);
+            if (t->line_len < TTY_LINE_MAX) {
+                t->line[t->line_len++] = c;
+                if (echo) tty_echo_char(vt, c);
             }
 
             if (c == '\n') break;
         }
     }
 
-    if (g_tty_line_len == 0 && g_tty_line_eof) {
-        g_tty_line_eof = 0;
+    if (t->line_len == 0 && t->line_eof) {
+        t->line_eof = 0;
         return 0;
     }
 
-    size_t avail = g_tty_line_len - g_tty_line_read;
+    size_t avail   = t->line_len - t->line_read;
     size_t deliver = (avail < len) ? avail : len;
     if (deliver > 0) {
-        memcpy(dst, g_tty_line + g_tty_line_read, deliver);
-        g_tty_line_read += deliver;
+        memcpy(dst, t->line + t->line_read, deliver);
+        t->line_read += deliver;
     }
     return (int64_t)deliver;
 }
 
 static int64_t tty_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
     (void)node; (void)offset;
-    serial_writebuf((const char *)buf, len);
-    const unsigned char *p = (const unsigned char *)buf;
-    for (size_t i = 0; i < len; i++) putchar((int)p[i]);
+    task_t *me = devfs_cur_task();
+    if (me && me->pending_kill) return (int64_t)len;
+    vt_write(cur_vt(), (const char *)buf, len);
     return (int64_t)len;
 }
 
 static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
     (void)node;
+    vt_tty_t *t = &g_vtty[cur_vt()];
 
     if (req == TIOCGWINSZ) {
         if (!arg) return -EFAULT;
@@ -270,26 +315,28 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
     if (req == TIOCGCURSOR) {
         if (!arg) return -EFAULT;
         struct cervus_cursor_pos *cp = (struct cervus_cursor_pos *)arg;
-        cp->row = get_cursor_row();
-        cp->col = get_cursor_col();
+        uint32_t r = 0, c = 0;
+        vt_get_cursor(cur_vt(), &r, &c);
+        cp->row = r;
+        cp->col = c;
         return 0;
     }
 
     if (req == TIOCSNONBLOCK) {
         if (!arg) return -EFAULT;
-        tty_nonblock = *((int *)arg) ? 1 : 0;
+        t->nonblock = *((int *)arg) ? 1 : 0;
         return 0;
     }
 
     if (req == TCGETS) {
         if (!arg) return -EFAULT;
-        memcpy(arg, &g_tty_termios, sizeof(g_tty_termios));
+        memcpy(arg, &t->termios, sizeof(t->termios));
         return 0;
     }
 
     if (req == TCSETS || req == TCSETSW || req == TCSETSF) {
         if (!arg) return -EFAULT;
-        memcpy(&g_tty_termios, arg, sizeof(g_tty_termios));
+        memcpy(&t->termios, arg, sizeof(t->termios));
         return 0;
     }
 
@@ -405,6 +452,12 @@ static const vnode_ops_t devfs_dir_ops = {
 };
 
 void devfs_register(const char *name, vnode_t *node) {
+    for (int i = 0; i < g_devdir.count; i++) {
+        if (strcmp(g_devdir.entries[i].name, name) == 0) {
+            g_devdir.entries[i].node = node;
+            return;
+        }
+    }
     if (g_devdir.count >= DEVFS_MAX_ENTRIES) return;
     devfs_entry_t *e = &g_devdir.entries[g_devdir.count++];
     strncpy(e->name, name, VFS_MAX_NAME - 1);
@@ -418,6 +471,8 @@ vnode_t *devfs_create_root(void) {
     memset(&g_tty_node,  0, sizeof(g_tty_node));
     memset(&g_null_node, 0, sizeof(g_null_node));
     memset(&g_zero_node, 0, sizeof(g_zero_node));
+
+    tty_vt_init();
 
     g_devroot.type     = VFS_NODE_DIR;
     g_devroot.mode     = 0755;

@@ -5,6 +5,7 @@
 #include <limine.h>
 #include "../../../include/graphics/fb/fb.h"
 #include "../../../include/io/serial.h"
+#include "../../../include/memory/vmm.h"
 
 uint32_t *g_backbuf = NULL;
 uint32_t  g_bb_pitch = 0;
@@ -17,6 +18,16 @@ void fb_init_backbuffer(struct limine_framebuffer *fb) {
     g_bb_h = fb->height;
     g_bb_pitch = fb->pitch / 4;
     size_t sz = (size_t)g_bb_pitch * g_bb_h * sizeof(uint32_t);
+
+    uintptr_t fb_virt = (uintptr_t)fb->address & ~0xFFFULL;
+    size_t fb_pages = (sz + 0xFFF) >> 12;
+    if (vmm_remap_range_wc(vmm_get_kernel_pagemap(), fb_virt, fb_pages)) {
+        serial_printf("[FB] Framebuffer remapped as WC: %zu pages from 0x%llx\n",
+                      fb_pages, (unsigned long long)fb_virt);
+    } else {
+        serial_printf("[FB] WARNING: WC remap failed; framebuffer using default cache attr\n");
+    }
+
     g_backbuf = (uint32_t *)malloc(sz);
     if (g_backbuf) {
         memcpy(g_backbuf, fb->address, sz);
@@ -25,6 +36,22 @@ void fb_init_backbuffer(struct limine_framebuffer *fb) {
     } else {
         serial_printf("[FB] WARNING: backbuffer alloc failed, using direct VRAM\n");
     }
+}
+
+void fb_set_backbuffer(uint32_t *buf) {
+    if (buf) g_backbuf = buf;
+}
+
+uint32_t *fb_get_backbuffer(void) {
+    return g_backbuf;
+}
+
+uint32_t fb_backbuffer_pitch(void) {
+    return g_bb_pitch;
+}
+
+size_t fb_backbuffer_bytes(void) {
+    return (size_t)g_bb_pitch * g_bb_h * sizeof(uint32_t);
 }
 
 static inline uint32_t *fb_get_buf(struct limine_framebuffer *fb) {
@@ -48,7 +75,20 @@ void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_
     uint32_t *dst = (uint32_t *)fb->address + y_start * g_bb_pitch;
     uint32_t *src = g_backbuf + y_start * g_bb_pitch;
     size_t bytes = (size_t)(y_end - y_start) * g_bb_pitch * sizeof(uint32_t);
-    memcpy(dst, src, bytes);
+
+    size_t qwords = bytes >> 3;
+    size_t tail   = bytes &  7;
+    asm volatile (
+        "rep movsq\n\t"
+        : "+D"(dst), "+S"(src), "+c"(qwords)
+        :: "memory"
+    );
+    if (tail) {
+        uint8_t *db = (uint8_t *)dst;
+        uint8_t *sb = (uint8_t *)src;
+        for (size_t i = 0; i < tail; i++) db[i] = sb[i];
+    }
+    asm volatile ("sfence" ::: "memory");
 }
 
 void fb_draw_pixel(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color) {

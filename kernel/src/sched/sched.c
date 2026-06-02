@@ -10,6 +10,7 @@
 #include "../include/gdt/gdt.h"
 #include "../include/fs/vfs.h"
 #include "../include/panic/panic.h"
+#include "../include/console/console.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -193,7 +194,6 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     pid_register(t);
     enqueue_global(t);
-    serial_printf("[SCHED] task_create: '%s' pid=%u prio=%d\n", t->name, t->pid, t->priority);
     return t;
 }
 
@@ -240,8 +240,6 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
 
     pid_register(t);
     enqueue_global(t);
-    serial_printf("[SCHED] task_create_user: '%s' pid=%u uid=%u entry=0x%llx user_rsp=0x%llx caps=0x%llx\n",
-                  t->name, t->pid, t->uid, entry, user_rsp, t->capabilities);
     return t;
 }
 
@@ -257,6 +255,7 @@ task_t* task_fork(task_t* parent) {
     strncpy(child->name, parent->name, sizeof(child->name)-1);
     child->uid             = parent->uid;
     child->gid             = parent->gid;
+    child->ctty            = parent->ctty;
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;
@@ -267,8 +266,6 @@ task_t* task_fork(task_t* parent) {
     child->brk_current = parent->brk_current;
     child->brk_max     = parent->brk_max;
     child->user_rsp = parent->user_rsp;
-    serial_printf("[FORK-DBG2] parent pid=%u user_rsp=0x%llx user_saved_rip=0x%llx\n",
-                  parent->pid, parent->user_rsp, parent->user_saved_rip);
 
     child->user_saved_rip = parent->user_saved_rip;
     child->user_saved_rbp = parent->user_saved_rbp;
@@ -288,8 +285,6 @@ task_t* task_fork(task_t* parent) {
         return NULL;
     }
     vmm_sync_kernel_mappings(child->pagemap);
-    serial_printf("[FORK-DBG] child pid=%u stack_base=0x%llx rsp=0x%llx\n",
-                  child->pid, child->stack_base, child->rsp);
     child->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     if (child->fpu_state && parent->fpu_state) {
         memcpy(child->fpu_state, parent->fpu_state, sizeof(fpu_state_t));
@@ -314,9 +309,6 @@ task_t* task_fork(task_t* parent) {
 
     serial_printf("[FORK-CHK] child=%p rsp=0x%llx stk=0x%llx rip=0x%llx\n",
                   (void*)child, child->rsp, child->stack_base, child->user_saved_rip);
-
-    serial_printf("[SCHED] fork: parent='%s' pid=%u -> child pid=%u rip=0x%llx\n",
-                  parent->name, parent->pid, child->pid, child->user_saved_rip);
 
     enqueue_global(child);
     return child;
@@ -462,18 +454,33 @@ void task_kill(task_t* target) {
     }
 }
 
-volatile uint32_t g_foreground_pid = 0;
+static volatile uint32_t g_foreground_pid[VT_COUNT];
+
+static int caller_ctty(void) {
+    percpu_t *pc = get_percpu();
+    task_t *me = pc ? (task_t *)pc->current_task : current_task[lapic_get_id()];
+    int vt = me ? me->ctty : 0;
+    if (vt < 0 || vt >= VT_COUNT) vt = 0;
+    return vt;
+}
 
 void task_set_foreground(uint32_t pid) {
-    g_foreground_pid = pid;
+    g_foreground_pid[caller_ctty()] = pid;
+}
+
+void task_clear_foreground_if(uint32_t pid) {
+    int vt = caller_ctty();
+    if (g_foreground_pid[vt] == pid) g_foreground_pid[vt] = 0;
 }
 
 task_t* task_find_foreground(void) {
-    uint32_t fpid = g_foreground_pid;
+    int vt = vt_active();
+    if (vt < 0 || vt >= VT_COUNT) return NULL;
+    uint32_t fpid = g_foreground_pid[vt];
     if (fpid == 0) return NULL;
     task_t *t = task_find_by_pid(fpid);
     if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) {
-        g_foreground_pid = 0;
+        g_foreground_pid[vt] = 0;
         return NULL;
     }
     return t;
@@ -585,6 +592,13 @@ void sched_reschedule(void) {
         }
     }
 
+    if (hpet_is_available()) {
+        uint64_t now = hpet_elapsed_ns();
+        if (old && old != &idle_tasks[cpu] && old->run_start_ns > 0 && now > old->run_start_ns)
+            old->total_runtime += (now - old->run_start_ns);
+        next->run_start_ns = now;
+    }
+
     next->cpu_id = cpu;
     next->state  = TASK_RUNNING;
     if (next->fpu_state) fpu_restore(next->fpu_state);
@@ -593,18 +607,10 @@ void sched_reschedule(void) {
         next->flags |= TASK_FLAG_STARTED;
         current_task[cpu] = next;
         if (next->cr3) {
-            serial_printf("[SCHED] CR3 switch cpu=%u old=0x%llx -> new=0x%llx (pid %u->%u)\n",
-                          cpu, old ? old->cr3 : 0ULL, switch_cr3,
-                          old ? old->pid : 0, next->pid);
             asm volatile("mov %0, %%cr3" :: "r"(next->cr3) : "memory");
             switch_cr3 = 0;
         } else {
             asm volatile("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
-        }
-        if (next->is_userspace) {
-            serial_printf("[SCHED] CPU %u: first start '%s' pid=%u entry=0x%llx user_rsp=0x%llx\n",
-                          cpu, next->name, next->pid,
-                          (uint64_t)next->entry, next->user_rsp);
         }
     }
 
@@ -619,6 +625,20 @@ void sched_reschedule(void) {
 void task_yield(void) {
     sched_reschedule();
 }
+
+void task_sleep_ns(uint64_t ns) {
+    if (ns == 0) return;
+    if (!hpet_is_available()) { task_yield(); return; }
+    uint32_t cpu = lapic_get_id();
+    task_t *me = current_task[cpu];
+    if (!me) return;
+    me->wakeup_time_ns = hpet_elapsed_ns() + ns;
+    me->runnable = false;
+    me->state    = TASK_BLOCKED;
+    sched_reschedule();
+}
+
+void task_sleep_ms(uint64_t ms) { task_sleep_ns(ms * 1000000ULL); }
 
 void sched_print_stats(void) {
     uint64_t _irqf;

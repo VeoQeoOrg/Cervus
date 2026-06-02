@@ -78,10 +78,18 @@
 #define SYS_DISK_BIOS_INSTALL 545
 #define SYS_LIST_MOUNTS       546
 #define SYS_STATVFS           547
+#define SYS_DISK_EJECT        548
+#define SYS_DISK_PARTITION_GPT 549
 
 #define SYS_PCI_LIST          550
+#define SYS_USB_LIST          551
+#define SYS_SYNC              552
+#define SYS_VT_SPAWN_POLL     553
+#define SYS_VT_SET_CTTY       554
+#define SYS_VT_CLEAR_SHELL    555
+#define SYS_VT_SWITCH         556
 
-#define SYSCALL_TABLE_SIZE    551
+#define SYSCALL_TABLE_SIZE    557
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

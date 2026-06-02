@@ -8,6 +8,7 @@
 #define AHCI_MAX_PORTS    32
 #define AHCI_MAX_DEVICES  AHCI_MAX_PORTS
 #define AHCI_SECTOR_SIZE  512
+#define ATAPI_SECTOR_SIZE 2048
 
 typedef struct ahci_hba ahci_hba_t;
 
@@ -49,5 +50,7 @@ ahci_device_t *ahci_get_device(int index);
 int ahci_read_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, void *buf);
 int ahci_write_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, const void *buf);
 int ahci_flush(ahci_device_t *d);
+
+int ahci_eject(ahci_device_t *d);
 
 #endif

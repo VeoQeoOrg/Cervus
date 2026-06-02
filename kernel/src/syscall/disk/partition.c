@@ -1,6 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/blkdev.h"
-#include "../../../include/drivers/partition.h"
+#include "../../../include/drivers/disk/blkdev.h"
+#include "../../../include/drivers/disk/partition.h"
 #include <string.h>
 
 int64_t sys_disk_partition(uint64_t devname_ptr, uint64_t specs_ptr, uint64_t nparts,

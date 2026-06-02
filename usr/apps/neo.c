@@ -1012,6 +1012,16 @@ int main(int argc, char **argv)
 {
     g_cwd = get_cwd_flag(argc, argv);
 
+    if (!isatty(0)) {
+        close(0);
+        int tty_fd = open("/dev/tty", O_RDONLY, 0);
+        if (tty_fd < 0) {
+            fputs("neo: cannot open /dev/tty (stdin is a pipe)\n", stderr);
+            return 1;
+        }
+        if (tty_fd != 0) { dup2(tty_fd, 0); close(tty_fd); }
+    }
+
     init_editor();
     enable_raw_mode();
 

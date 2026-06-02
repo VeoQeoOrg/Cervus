@@ -344,6 +344,7 @@ static const char *display_path(void) {
 
 static void print_prompt(void) {
     if (term_get_cursor_col() != 0) putchar('\n');
+    fputs("\r\x1b[K", stdout);
     const char *dp = display_path();
     fputs(C_GREEN "cervus" C_RESET ":" C_BLUE, stdout);
     fputs(dp, stdout);
@@ -492,7 +493,7 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
             if (*p == ':') *p++ = '\0';
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, 32);
         }
-        const char *builtins[] = {"help","exit","cd","export","unset","history","clear","color",NULL};
+        const char *builtins[] = {"help","exit","cd","export","unset","alias","unalias","history","clear","color",NULL};
         for (int i = 0; builtins[i] && nmatch < 32; i++) {
             if (strncmp(builtins[i], word, wlen) == 0) {
                 strncpy(matches[nmatch], builtins[i], 255);
@@ -811,6 +812,121 @@ static int cmd_unset(int argc, char *argv[]) {
     return 0;
 }
 
+#define ALIAS_MAX        32
+#define ALIAS_NAME_MAX   16
+#define ALIAS_VAL_MAX    128
+
+typedef struct {
+    char name[ALIAS_NAME_MAX];
+    char value[ALIAS_VAL_MAX];
+    int  used;
+} alias_t;
+
+static alias_t g_alias[ALIAS_MAX];
+static int     g_alias_inited = 0;
+
+static void alias_init_defaults(void)
+{
+    if (g_alias_inited) return;
+    g_alias_inited = 1;
+    strncpy(g_alias[0].name,  "cc",  ALIAS_NAME_MAX - 1);
+    strncpy(g_alias[0].value, "tcc", ALIAS_VAL_MAX  - 1);
+    g_alias[0].used = 1;
+}
+
+static const char *alias_lookup(const char *name)
+{
+    alias_init_defaults();
+    for (int i = 0; i < ALIAS_MAX; i++) {
+        if (g_alias[i].used && strcmp(g_alias[i].name, name) == 0)
+            return g_alias[i].value;
+    }
+    return NULL;
+}
+
+static int alias_set(const char *name, const char *val)
+{
+    alias_init_defaults();
+    for (int i = 0; i < ALIAS_MAX; i++) {
+        if (g_alias[i].used && strcmp(g_alias[i].name, name) == 0) {
+            strncpy(g_alias[i].value, val, ALIAS_VAL_MAX - 1);
+            g_alias[i].value[ALIAS_VAL_MAX - 1] = '\0';
+            return 0;
+        }
+    }
+    for (int i = 0; i < ALIAS_MAX; i++) {
+        if (!g_alias[i].used) {
+            strncpy(g_alias[i].name, name, ALIAS_NAME_MAX - 1);
+            g_alias[i].name[ALIAS_NAME_MAX - 1] = '\0';
+            strncpy(g_alias[i].value, val, ALIAS_VAL_MAX - 1);
+            g_alias[i].value[ALIAS_VAL_MAX - 1] = '\0';
+            g_alias[i].used = 1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int alias_unset(const char *name)
+{
+    alias_init_defaults();
+    for (int i = 0; i < ALIAS_MAX; i++) {
+        if (g_alias[i].used && strcmp(g_alias[i].name, name) == 0) {
+            g_alias[i].used = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int cmd_alias(int argc, char *argv[])
+{
+    alias_init_defaults();
+    if (argc < 2) {
+        for (int i = 0; i < ALIAS_MAX; i++) {
+            if (g_alias[i].used)
+                printf("alias %s='%s'\n", g_alias[i].name, g_alias[i].value);
+        }
+        return 0;
+    }
+    for (int a = 1; a < argc; a++) {
+        char *eq = strchr(argv[a], '=');
+        if (!eq) {
+            const char *v = alias_lookup(argv[a]);
+            if (v) printf("alias %s='%s'\n", argv[a], v);
+            else   { fprintf(stderr, "alias: %s: not found\n", argv[a]); return 1; }
+        } else {
+            *eq = '\0';
+            const char *val = eq + 1;
+            if (val[0] == '\'' || val[0] == '"') {
+                size_t n = strlen(val);
+                if (n >= 2 && val[n - 1] == val[0]) {
+                    char *m = (char *)val;
+                    m[n - 1] = '\0';
+                    val = m + 1;
+                }
+            }
+            if (alias_set(argv[a], val) < 0) {
+                fputs(C_RED "alias: table full\n" C_RESET, stderr);
+                *eq = '=';
+                return 1;
+            }
+            *eq = '=';
+        }
+    }
+    return 0;
+}
+
+static int cmd_unalias(int argc, char *argv[])
+{
+    if (argc < 2) { fputs("unalias: usage: unalias NAME ...\n", stderr); return 1; }
+    int rc = 0;
+    for (int i = 1; i < argc; i++) {
+        if (alias_unset(argv[i]) < 0) { fprintf(stderr, "unalias: %s: not found\n", argv[i]); rc = 1; }
+    }
+    return rc;
+}
+
 static int find_in_path(const char *cmd, char *out, size_t outsz) {
     const char *pathvar = env_get("PATH");
     if (!pathvar || !pathvar[0]) {
@@ -1083,7 +1199,10 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
     return 0;
 }
 
-static int run_single(char *line) {
+static int run_single_ex(char *line, int in_child);
+static int run_single(char *line) { return run_single_ex(line, 0); }
+
+static int run_single_ex(char *line, int in_child) {
     char tilded[LINE_MAX];
     expand_tilde(line, tilded, sizeof(tilded));
     char expanded[LINE_MAX];
@@ -1102,11 +1221,21 @@ static int run_single(char *line) {
 
     const char *cmd = argv[0];
 
-    if (strcmp(cmd, "help")   == 0) { cmd_help(); return 0; }
-    if (strcmp(cmd, "exit")   == 0) { fputs("Goodbye!\n", stdout); exit(0); }
-    if (strcmp(cmd, "cd")     == 0) return cmd_cd(argc > 1 ? argv[1] : NULL);
-    if (strcmp(cmd, "export") == 0) return cmd_export(argc, argv);
-    if (strcmp(cmd, "unset")  == 0) return cmd_unset(argc, argv);
+    {
+        const char *aval = alias_lookup(cmd);
+        if (aval) {
+            argv[0] = (char *)aval;
+            cmd     = argv[0];
+        }
+    }
+
+    if (strcmp(cmd, "help")    == 0) { cmd_help(); return 0; }
+    if (strcmp(cmd, "exit")    == 0) { fputs("Goodbye!\n", stdout); exit(0); }
+    if (strcmp(cmd, "cd")      == 0) return cmd_cd(argc > 1 ? argv[1] : NULL);
+    if (strcmp(cmd, "export")  == 0) return cmd_export(argc, argv);
+    if (strcmp(cmd, "unset")   == 0) return cmd_unset(argc, argv);
+    if (strcmp(cmd, "alias")   == 0) return cmd_alias(argc, argv);
+    if (strcmp(cmd, "unalias") == 0) return cmd_unalias(argc, argv);
     if (strcmp(cmd, "history") == 0) {
         if (argc > 1 && strcmp(argv[1], "-c") == 0) { hist_clear(); return 0; }
         int limit = (argc > 1) ? atoi(argv[1]) : 0;
@@ -1211,6 +1340,27 @@ static int run_single(char *line) {
         binpath[sizeof(binpath) - 1] = '\0';
     }
 
+    if (in_child) {
+        for (int i = 0; i < nredirs; i++) {
+            int fd = -1, target_fd = -1;
+            if (redirs[i].type == REDIR_OUT) {
+                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_TRUNC, 0644); target_fd = 1;
+            } else if (redirs[i].type == REDIR_APPEND) {
+                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_APPEND, 0644); target_fd = 1;
+            } else if (redirs[i].type == REDIR_IN || redirs[i].type == REDIR_HEREDOC) {
+                fd = open(redirs[i].path, O_RDONLY, 0); target_fd = 0;
+            }
+            if (fd < 0) {
+                fputs(C_RED "redirect: cannot open: " C_RESET, stdout);
+                fputs(redirs[i].path, stdout); putchar('\n'); exit(1);
+            }
+            dup2(fd, target_fd); close(fd);
+        }
+        execve(binpath, (char *const *)real_argv_buf, NULL);
+        fputs(C_RED "exec failed: " C_RESET, stdout); fputs(binpath, stdout); putchar(10);
+        exit(127);
+    }
+
     term_set_cooked_mode();
     pid_t child = fork();
     if (child < 0) { fputs(C_RED "fork failed" C_RESET "\n", stdout); term_set_shell_mode(); return 1; }
@@ -1313,7 +1463,7 @@ static int run_pipeline(char **parts, int n) {
             if (i > 0)        dup2(pipes[(i - 1) * 2 + 0], 0);
             if (i < n - 1)    dup2(pipes[i * 2 + 1],       1);
             for (int j = 0; j < npipes * 2; j++) close(pipes[j]);
-            int rc = run_single(parts[i]);
+            int rc = run_single_ex(parts[i], 1);
             exit(rc);
         }
         pids[i] = pid;
@@ -1372,26 +1522,31 @@ static void print_motd(void) {
     if (n > 0) { buf[n] = '\0'; write(1, buf, n); }
 }
 
-
 static int g_installed = 0;
 
 static int sys_disk_mount(const char *dev, const char *path) {
     return (int)syscall2(SYS_DISK_MOUNT, dev, path);
 }
 
-static int launch_installer(void) {
-    const char *path = "/bin/install-on-disk";
+static int sys_disk_umount(const char *path) {
+    return (int)syscall1(SYS_DISK_UMOUNT, path);
+}
+
+static int launch_installer_mode(const char *extra_env) {
+    const char *path = "/bin/cervus-installer";
     struct stat st;
     if (stat(path, &st) != 0) {
-        fputs(C_RED "  install-on-disk not found on system.\n" C_RESET, stdout);
+        fputs(C_RED "  cervus-installer not found on system.\n" C_RESET, stdout);
         return -1;
     }
 
-    const char *argv[4];
-    argv[0] = path;
-    argv[1] = "--env:MODE=live";
-    argv[2] = "--cwd=/";
-    argv[3] = NULL;
+    const char *argv[5];
+    int ai = 0;
+    argv[ai++] = path;
+    argv[ai++] = "--env:MODE=live";
+    argv[ai++] = "--cwd=/";
+    if (extra_env) argv[ai++] = extra_env;
+    argv[ai] = NULL;
 
     term_set_cooked_mode();
     pid_t child = fork();
@@ -1402,13 +1557,23 @@ static int launch_installer(void) {
     }
     if (child == 0) {
         execve(path, (char *const *)argv, NULL);
-        fputs(C_RED "  exec install-on-disk failed\n" C_RESET, stdout);
+        fputs(C_RED "  exec cervus-installer failed\n" C_RESET, stdout);
         exit(127);
     }
     int status = 0;
     waitpid(child, &status, 0);
+    fputs("\x1b[?25h\x1b[2J\x1b[H", stdout);
+    fflush(stdout);
     term_set_shell_mode();
     return (status >> 8) & 0xFF;
+}
+
+static int launch_installer(void) {
+    return launch_installer_mode(NULL);
+}
+
+static int launch_installer_boot(void) {
+    return launch_installer_mode("--env:BOOT_PROMPT=1");
 }
 
 static void term_set_shell_mode(void)
@@ -1427,92 +1592,104 @@ static void term_set_cooked_mode(void)
     tcsetattr(0, TCSANOW, &t);
 }
 
-static int ask_install_or_live(void) {
+static int ask_install_or_live(int existing_install) {
     fputs("\x1b[2J\x1b[H", stdout);
     fputs("\n", stdout);
     fputs(C_CYAN "  Cervus OS" C_RESET " - Live ISO\n", stdout);
     fputs(C_GRAY "  -----------------------------------" C_RESET "\n\n", stdout);
-    fputs("  A disk has been detected on this machine.\n", stdout);
-    fputs("  What would you like to do?\n\n", stdout);
-    fputs("    [" C_BOLD "1" C_RESET "] Install Cervus to disk\n", stdout);
-    fputs("    [" C_BOLD "2" C_RESET "] Continue in Live mode\n\n", stdout);
-    fputs("  Choice [1-2]: ", stdout);
+    char maxc;
+    if (existing_install) {
+        fputs(C_YELLOW "  An existing Cervus install was detected on disk." C_RESET "\n", stdout);
+        fputs("  What would you like to do?\n\n", stdout);
+        fputs("    [" C_BOLD "1" C_RESET "] " C_RED "Reinstall" C_RESET " Cervus (erases the existing install)\n", stdout);
+        fputs("    [" C_BOLD "2" C_RESET "] Live mode (run from ISO/initramfs, disk untouched)\n", stdout);
+        fputs("    [" C_BOLD "3" C_RESET "] Boot the installed system (mount disk at /mnt)\n\n", stdout);
+        fputs("  Choice [1-3]: ", stdout);
+        maxc = '3';
+    } else {
+        fputs("  A disk has been detected on this machine.\n", stdout);
+        fputs("  What would you like to do?\n\n", stdout);
+        fputs("    [" C_BOLD "1" C_RESET "] Install Cervus to disk\n", stdout);
+        fputs("    [" C_BOLD "2" C_RESET "] Live mode (run from ISO/initramfs, disk untouched)\n\n", stdout);
+        fputs("  Choice [1-2]: ", stdout);
+        maxc = '2';
+    }
 
     char c = 0;
     while (1) {
         if (read(0, &c, 1) <= 0) continue;
-        if (c == '1' || c == '2') { putchar(c); putchar(10); break; }
+        if (c >= '1' && c <= maxc) { putchar(c); putchar(10); break; }
     }
-    return (c == '1') ? 1 : 0;
+    return c - '0';
 }
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-
+    printf("\033[H\033[J");
     term_set_shell_mode();
 
     struct stat dev_st;
-    static const char *const DISK_PREFIXES[] = { "hda", "sda" };
+    static const char *const DISK_PREFIXES[] = { "nvme0n1", "sda", "hda" };
+
+    int rooted_on_disk = 0;
+    {
+        cervus_mount_info_t mnts[16];
+        long nm = cervus_list_mounts(mnts, 16);
+        for (long i = 0; i < nm; i++) {
+            if (strcmp(mnts[i].path, "/") != 0) continue;
+            if (strcmp(mnts[i].fstype, "ramfs")     == 0) break;
+            if (strcmp(mnts[i].fstype, "initramfs") == 0) break;
+            if (strcmp(mnts[i].fstype, "devfs")     == 0) break;
+            rooted_on_disk = 1;
+            break;
+        }
+    }
+    if (rooted_on_disk) g_installed = 1;
+
     const char *disk_pfx = NULL;
     char dev_path[32];
     char dev_path2[32];
     int has_disk = 0, has_part2 = 0;
     for (size_t k = 0; k < sizeof(DISK_PREFIXES)/sizeof(DISK_PREFIXES[0]); k++) {
-        snprintf(dev_path,  sizeof(dev_path),  "/dev/%s",  DISK_PREFIXES[k]);
-        snprintf(dev_path2, sizeof(dev_path2), "/dev/%s2", DISK_PREFIXES[k]);
+        const char *pfx = DISK_PREFIXES[k];
+        size_t pl = strlen(pfx);
+        const char *sep =
+            (pl > 0 && pfx[pl - 1] >= '0' && pfx[pl - 1] <= '9') ? "p" : "";
+        snprintf(dev_path,  sizeof(dev_path),  "/dev/%s",     pfx);
+        snprintf(dev_path2, sizeof(dev_path2), "/dev/%s%s2",  pfx, sep);
         int dh  = (stat(dev_path,  &dev_st) == 0);
         int dh2 = (stat(dev_path2, &dev_st) == 0);
-        if (dh || dh2) {
-            disk_pfx = DISK_PREFIXES[k];
-            has_disk  = dh;
-            has_part2 = dh2;
+        if (dh2) {
+            disk_pfx = pfx;
+            has_disk = dh;
+            has_part2 = 1;
             break;
+        }
+        if (dh && !disk_pfx) {
+            disk_pfx = pfx;
+            has_disk = 1;
+            has_part2 = 0;
         }
     }
     if (!disk_pfx) disk_pfx = "hda";
 
     char disk_name[16], part2_name[16];
-    snprintf(disk_name,  sizeof(disk_name),  "%s",  disk_pfx);
-    snprintf(part2_name, sizeof(part2_name), "%s2", disk_pfx);
+    {
+        size_t pl = strlen(disk_pfx);
+        const char *sep =
+            (pl > 0 && disk_pfx[pl - 1] >= '0' && disk_pfx[pl - 1] <= '9') ? "p" : "";
+        snprintf(disk_name,  sizeof(disk_name),  "%s", disk_pfx);
+        snprintf(part2_name, sizeof(part2_name), "%s%s2", disk_pfx, sep);
+    }
 
-    struct stat root_usr_st;
-    int root_has_usr = (stat("/usr/bin", &root_usr_st) == 0);
     int disk_mounted = 0;
-    int rooted_on_disk = 0;
 
-    if (root_has_usr && has_part2) {
-        struct stat home_st;
-        if (stat("/home", &home_st) == 0) {
-            rooted_on_disk = 1;
-            g_installed = 1;
-        }
-    }
-
-    if (!rooted_on_disk && has_part2) {
-        int mr = sys_disk_mount(part2_name, "/mnt");
-        if (mr == 0) {
-            disk_mounted = 1;
-            g_installed = 1;
-        }
-    } else if (!rooted_on_disk && has_disk) {
-        int mr = sys_disk_mount(disk_name, "/mnt");
-        if (mr == 0) {
-            disk_mounted = 1;
-            g_installed = 1;
-        }
-    }
-
-    if (!rooted_on_disk && !disk_mounted && has_disk) {
-        if (ask_install_or_live() == 1) {
-            launch_installer();
-            char retry_path[32];
-            snprintf(retry_path, sizeof(retry_path), "/dev/%s", part2_name);
-            struct stat retry_st;
-            if (stat(retry_path, &retry_st) == 0) {
-                if (sys_disk_mount(part2_name, "/mnt") == 0) {
-                    disk_mounted = 1;
-                    g_installed = 1;
-                }
+    if (!rooted_on_disk && has_disk) {
+        int code = launch_installer_boot();
+        if (code == 10) {
+            if (sys_disk_mount(part2_name, "/mnt") == 0) {
+                disk_mounted = 1;
+                g_installed = 1;
             }
         }
     }

@@ -164,13 +164,10 @@ int vfs_lookup(const char *path, vnode_t **out) {
         if (comp[0] == '\0') continue;
 
         if (cur->type != VFS_NODE_DIR) {
-            serial_printf("[VFS] lookup '%s': '%s' is not a dir (type=%d)\n",
-                          path, comp, cur->type);
             vnode_unref(cur);
             return -ENOTDIR;
         }
         if (!cur->ops || !cur->ops->lookup) {
-            serial_printf("[VFS] lookup '%s': no lookup op for comp '%s'\n", path, comp);
             vnode_unref(cur);
             return -EIO;
         }
@@ -178,7 +175,6 @@ int vfs_lookup(const char *path, vnode_t **out) {
         vnode_t *next = NULL;
         int ret = cur->ops->lookup(cur, comp, &next);
         if (ret < 0) {
-            serial_printf("[VFS] lookup '%s': ops->lookup('%s') = %d\n", path, comp, ret);
             vnode_unref(cur);
             return ret;
         }

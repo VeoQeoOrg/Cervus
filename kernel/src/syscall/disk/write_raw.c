@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/blkdev.h"
+#include "../../../include/drivers/disk/blkdev.h"
 #include <string.h>
 
 int64_t sys_disk_write_raw(uint64_t devname_ptr, uint64_t lba, uint64_t count,

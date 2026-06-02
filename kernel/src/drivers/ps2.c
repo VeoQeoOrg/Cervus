@@ -7,6 +7,7 @@
 #include "../../include/io/ports.h"
 #include "../../include/io/serial.h"
 #include "../../include/graphics/fb/fb.h"
+#include "../../include/console/console.h"
 #include <stdio.h>
 #include <stddef.h>
 
@@ -57,7 +58,6 @@ static const char sc_upper[89] = {
     0,    0,    0,    0,    0,    0,    0,    0,
     0,    0,    0,    0,    0,    0,    0,    0,    0,
 };
-
 
 static void ps2_wait_read(void) {
     for (int i = 0; i < 100000; i++) {
@@ -189,33 +189,6 @@ extern struct limine_framebuffer *global_framebuffer;
 extern void     get_cursor_position(uint32_t *x, uint32_t *y);
 extern uint32_t get_screen_width(void);
 
-/*static void mouse_print_status(void) {
-    const mouse_state_t *m = (const mouse_state_t *)&mouse_state;
-    const char *scroll_str = "NONE";
-    if (m->scroll == MOUSE_SCROLL_UP)   scroll_str = "UP  ";
-    if (m->scroll == MOUSE_SCROLL_DOWN) scroll_str = "DOWN";
-
-    serial_printf("[MOUSE] X:%5d Y:%5d  L:%d M:%d R:%d  Scroll:%s\n",
-                  m->x, m->y,
-                  (int)m->btn_left, (int)m->btn_middle, (int)m->btn_right,
-                  scroll_str);
-
-    uint32_t saved_x, saved_y;
-    get_cursor_position(&saved_x, &saved_y);
-
-    if (global_framebuffer)
-        fb_fill_rect(global_framebuffer, 0, 0, global_framebuffer->width, 16, bg_color);
-
-    cursor_x = 0; cursor_y = 0;
-    printf("[MOUSE] X:%-5d Y:%-5d  [L:%d M:%d R:%d]  Wheel:%s",
-           m->x, m->y,
-           (int)m->btn_left, (int)m->btn_middle, (int)m->btn_right,
-           scroll_str);
-
-    cursor_x = saved_x;
-    cursor_y = saved_y;
-}*/
-
 DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 {
     (void)frame;
@@ -230,13 +203,15 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
         e0_prefix = false;
         if (!released) {
             switch (key) {
-                case 0x48: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('A'); break;
-                case 0x50: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('B'); break;
-                case 0x4D: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('C'); break;
-                case 0x4B: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('D'); break;
-                case 0x47: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('H'); break;
-                case 0x4F: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('F'); break;
-                case 0x53: kb_buf_push('\x1b'); kb_buf_push('['); kb_buf_push('3'); kb_buf_push('~'); break;
+                case 0x48: console_input_char('\x1b'); console_input_char('['); console_input_char('A'); break;
+                case 0x50: console_input_char('\x1b'); console_input_char('['); console_input_char('B'); break;
+                case 0x4D: console_input_char('\x1b'); console_input_char('['); console_input_char('C'); break;
+                case 0x4B: console_input_char('\x1b'); console_input_char('['); console_input_char('D'); break;
+                case 0x47: console_input_char('\x1b'); console_input_char('['); console_input_char('H'); break;
+                case 0x4F: console_input_char('\x1b'); console_input_char('['); console_input_char('F'); break;
+                case 0x49: console_input_char('\x1b'); console_input_char('['); console_input_char('5'); console_input_char('~'); break;
+                case 0x51: console_input_char('\x1b'); console_input_char('['); console_input_char('6'); console_input_char('~'); break;
+                case 0x53: console_input_char('\x1b'); console_input_char('['); console_input_char('3'); console_input_char('~'); break;
                 default: break;
             }
         }
@@ -250,23 +225,29 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
     if (key == SC_CAPS && !released)           { kb_state.caps_lock = !kb_state.caps_lock; lapic_eoi(); return; }
     if (released)                              { lapic_eoi(); return; }
 
+    if (kb_state.ctrl && kb_state.alt) {
+        int fn = 0;
+        if (key >= 0x3B && key <= 0x44) fn = key - 0x3B + 1;
+        else if (key == 0x57) fn = 11;
+        else if (key == 0x58) fn = 12;
+        if (fn) { vt_handle_chord(fn); lapic_eoi(); return; }
+    }
+
     if (kb_state.ctrl) {
         char base = scancode_to_char(key);
-        serial_printf("[PS2] ctrl+key sc=0x%02x base='%c'(0x%02x)\n", (unsigned)key, (base>=0x20&&base<0x7f)?base:'?', (unsigned)(uint8_t)base);
         if (base >= 'a' && base <= 'z') {
             uint8_t ctrl_char = (uint8_t)(base - 'a' + 1);
-            serial_printf("[PS2] ctrl char generated: 0x%02x\n", ctrl_char);
             if (ctrl_char == 0x03) {
                 g_ctrlc_pending = 1;
                 lapic_eoi();
                 return;
             }
-            kb_buf_push((char)ctrl_char);
+            console_input_char((char)ctrl_char);
             lapic_eoi();
             return;
         }
         if (base >= 'A' && base <= 'Z') {
-            kb_buf_push((char)(base - 'A' + 1));
+            console_input_char((char)(base - 'A' + 1));
             lapic_eoi();
             return;
         }
@@ -274,7 +255,7 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 
     char c = scancode_to_char(key);
     if (c != 0)
-        kb_buf_push(c);
+        console_input_char(c);
 
     lapic_eoi();
 }
@@ -332,7 +313,6 @@ DEFINE_IRQ(MOUSE_IRQ_VECTOR, ps2_mouse_handler)
         else            mouse_state.scroll = MOUSE_SCROLL_NONE;
     }
 
-    //mouse_print_status();
     lapic_eoi();
 }
 
@@ -351,7 +331,8 @@ bool ps2_init(void) {
 
     ps2_send_cmd(PS2_CMD_READ_CONFIG);
     uint8_t cfg = ps2_recv_data();
-    cfg &= ~(PS2_CFG_PORT1_IRQ | PS2_CFG_PORT2_IRQ | PS2_CFG_PORT1_XLAT);
+    cfg &= ~(PS2_CFG_PORT1_IRQ | PS2_CFG_PORT2_IRQ);
+    cfg |=  PS2_CFG_PORT1_XLAT;
     ps2_send_cmd(PS2_CMD_WRITE_CONFIG);
     ps2_send_data(cfg);
 
@@ -374,17 +355,26 @@ bool ps2_init(void) {
     if (mouse_ok) ps2_send_cmd(PS2_CMD_ENABLE_PORT2);
 
     if (kb_ok) {
-        ps2_send_data(0xFF);
-        for (int i = 0; i < 200000; i++) {
-            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL)
-                if (inb(PS2_DATA_PORT) == 0xAA) break;
+        ps2_flush_output();
+        ps2_send_data(0xF5);
+        for (int i = 0; i < 50000; i++) {
+            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
+                uint8_t r = inb(PS2_DATA_PORT);
+                if (r == 0xFA || r == 0xFE) break;
+            }
             io_wait();
         }
         ps2_flush_output();
-        ps2_send_data(0xF0); ps2_flush_output();
-        ps2_send_data(0x01); ps2_flush_output();
-        ps2_send_data(0xF4); ps2_flush_output();
-        serial_writestring("[PS2] Keyboard ready (scancode set 1)\n");
+        ps2_send_data(0xF4);
+        for (int i = 0; i < 50000; i++) {
+            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
+                uint8_t r = inb(PS2_DATA_PORT);
+                if (r == 0xFA || r == 0xFE) break;
+            }
+            io_wait();
+        }
+        ps2_flush_output();
+        serial_writestring("[PS2] Keyboard ready (XLAT in controller -> set 1)\n");
     }
 
     if (mouse_ok) {
@@ -499,7 +489,7 @@ void kb_buf_consume_ctrlc(void) {
 char kb_buf_getc(void) {
     char c;
     while (!kb_buf_try_getc(&c)) {
-         //wait
+
     }
     return c;
 }

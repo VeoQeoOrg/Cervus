@@ -1,11 +1,33 @@
 #include "../../include/fs/ext2.h"
 #include "../../include/fs/vfs.h"
-#include "../../include/drivers/blkdev.h"
+#include "../../include/drivers/disk/blkdev.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include "../../include/syscall/errno.h"
 #include <string.h>
 #include <stdio.h>
+
+static int ext2_wsec_retry(blkdev_t *dev, uint64_t lba, uint32_t count, const void *buf) {
+    int r = -EIO;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        r = dev->ops->write_sectors(dev, lba, count, buf);
+        if (r >= 0) return r;
+        serial_printf("[ext2] write_sectors retry %d at LBA %llu (%u sec): %d\n",
+                      attempt, (unsigned long long)lba, count, r);
+    }
+    return r;
+}
+
+static int ext2_bwrite_retry(blkdev_t *dev, uint64_t off, const void *buf, size_t len) {
+    int r = -EIO;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        r = blkdev_write(dev, off, buf, len);
+        if (r >= 0) return r;
+        serial_printf("[ext2] blkdev_write retry %d at off %llu (%zu B): %d\n",
+                      attempt, (unsigned long long)off, len, r);
+    }
+    return r;
+}
 
 static int block_read(ext2_t *fs, uint32_t block, void *buf) {
     return blkdev_read(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
@@ -735,7 +757,9 @@ int ext2_format(blkdev_t *dev, const char *label) {
     if (!dev) return -EINVAL;
     uint64_t disk_bytes = dev->size_bytes;
     if (disk_bytes < 64 * 1024) return -ENOSPC;
-    uint32_t block_size = 1024;
+
+    uint32_t block_size = (disk_bytes >= 512ULL * 1024 * 1024) ? 4096 : 1024;
+    uint32_t log_block_size = (block_size == 4096) ? 2 : 0;
     uint32_t total_blocks = (uint32_t)(disk_bytes / block_size);
     uint32_t blocks_per_group = block_size * 8;
     uint32_t inodes_per_group = (total_blocks < 8192) ? 128 : 256;
@@ -744,7 +768,8 @@ int ext2_format(blkdev_t *dev, const char *label) {
     uint32_t total_inodes = inodes_per_group * groups_count;
     uint32_t inode_size = 128;
     uint32_t it_blocks_pg = (inodes_per_group * inode_size + block_size - 1) / block_size;
-    uint32_t first_data_block = 1;
+
+    uint32_t first_data_block = (block_size == 1024) ? 1 : 0;
     uint8_t *zb = kzalloc(block_size);
     if (!zb) return -ENOMEM;
     for (uint32_t b = 0; b < total_blocks && b < 16; b++)
@@ -757,7 +782,7 @@ int ext2_format(blkdev_t *dev, const char *label) {
     sb.s_free_blocks_count = total_blocks;
     sb.s_free_inodes_count = total_inodes;
     sb.s_first_data_block = first_data_block;
-    sb.s_log_block_size = 0;
+    sb.s_log_block_size = log_block_size;
     sb.s_blocks_per_group = blocks_per_group;
     sb.s_frags_per_group = blocks_per_group;
     sb.s_inodes_per_group = inodes_per_group;
@@ -774,9 +799,14 @@ int ext2_format(blkdev_t *dev, const char *label) {
     ext2_group_desc_t *gdt = kzalloc(gdt_blocks * block_size);
     if (!gdt) { kfree(zb); return -ENOMEM; }
     uint32_t used_total = first_data_block;
-    printf("       ext2: ");
     uint32_t last_pct_ext2 = 999;
-    uint32_t spinner_ext2 = 0;
+
+    static uint8_t zeros_chunk[64 * 1024];
+    memset(zeros_chunk, 0, sizeof(zeros_chunk));
+    uint32_t sec_sz = dev->sector_size ? dev->sector_size : 512;
+    uint32_t sectors_per_block = block_size / sec_sz;
+    uint32_t chunk_sectors = sizeof(zeros_chunk) / sec_sz;
+
     for (uint32_t g = 0; g < groups_count; g++) {
         uint32_t gs = g * blocks_per_group + first_data_block;
         uint32_t cb = (g == 0) ? (gdt_block + gdt_blocks) : gs;
@@ -791,34 +821,52 @@ int ext2_format(blkdev_t *dev, const char *label) {
         gdt[g].bg_free_blocks_count = (gb > meta) ? (uint16_t)(gb - meta) : 0;
         gdt[g].bg_free_inodes_count = (uint16_t)inodes_per_group;
         used_total += meta;
-        for (uint32_t t = 0; t < it_blocks_pg; t++)
-            blkdev_write(dev, (uint64_t)(gdt[g].bg_inode_table + t) * block_size, zb, block_size);
-        uint8_t *bbmp = kzalloc(block_size);
+
+        if (g == 0) {
+            uint64_t it_base_lba = (uint64_t)gdt[g].bg_inode_table * sectors_per_block;
+            uint32_t it_total_sectors = it_blocks_pg * sectors_per_block;
+            uint32_t it_done = 0;
+            while (it_done < it_total_sectors) {
+                uint32_t batch = it_total_sectors - it_done;
+                if (batch > chunk_sectors) batch = chunk_sectors;
+                int wr = ext2_wsec_retry(dev, it_base_lba + it_done, batch, zeros_chunk);
+                if (wr < 0) {
+                    serial_printf("[ext2] inode-table zero-fill failed at LBA %llu group=%u: %d\n",
+                                  (unsigned long long)(it_base_lba + it_done), g, wr);
+                    kfree(gdt); kfree(zb);
+                    return wr;
+                }
+                it_done += batch;
+            }
+        }
+
+        uint8_t *bmps = kzalloc(2 * block_size);
+        if (!bmps) { kfree(gdt); kfree(zb); return -ENOMEM; }
+        uint8_t *bbmp = bmps;
+        uint8_t *ibmp = bmps + block_size;
         for (uint32_t i = 0; i < meta; i++) bmp_set(bbmp, i);
         if (g == 0)
             for (uint32_t i = 0; i < (gdt_block + gdt_blocks - first_data_block); i++)
                 bmp_set(bbmp, i);
         for (uint32_t i = gb; i < blocks_per_group; i++) bmp_set(bbmp, i);
-        blkdev_write(dev, (uint64_t)gdt[g].bg_block_bitmap * block_size, bbmp, block_size);
-        kfree(bbmp);
-        uint8_t *ibmp = kzalloc(block_size);
         if (g == 0) {
             for (uint32_t i = 0; i < 11; i++) { bmp_set(ibmp, i); gdt[g].bg_free_inodes_count--; }
         }
         for (uint32_t i = inodes_per_group; i < block_size * 8; i++) bmp_set(ibmp, i);
-        blkdev_write(dev, (uint64_t)gdt[g].bg_inode_bitmap * block_size, ibmp, block_size);
-        kfree(ibmp);
+        int br = ext2_bwrite_retry(dev, (uint64_t)gdt[g].bg_block_bitmap * block_size,
+                                   bmps, 2 * block_size);
+        kfree(bmps);
+        if (br < 0) {
+            serial_printf("[ext2] bitmap write failed group=%u: %d\n", g, br);
+            kfree(gdt); kfree(zb);
+            return br;
+        }
 
         uint32_t pct = ((g + 1) * 100) / groups_count;
         if (pct != last_pct_ext2) {
-            static const char glyphs[4] = { '|', '/', '-', '\\' };
-            printf("\r                                                                                \r       %c ext2: %u%% (group %u/%u)",
-                   glyphs[spinner_ext2 & 3], pct, g + 1, groups_count);
-            spinner_ext2++;
             last_pct_ext2 = pct;
         }
     }
-    printf("\r                                                                                \r       ext2: done\n");
     sb.s_free_blocks_count = total_blocks - used_total;
     sb.s_free_inodes_count = total_inodes - 11;
     int32_t root_blk = -1;
@@ -862,6 +910,7 @@ int ext2_format(blkdev_t *dev, const char *label) {
     blkdev_write(dev, (uint64_t)gdt_block * block_size, gdt, gdt_blocks * block_size);
     kfree(gdt);
     kfree(zb);
+    if (dev->ops && dev->ops->flush) dev->ops->flush(dev);
     serial_printf("[ext2] formatted: %u blocks (%u KiB), %u inodes, bs=%u, label='%s'\n",
                   total_blocks, total_blocks * block_size / 1024, total_inodes, block_size,
                   label ? label : "");

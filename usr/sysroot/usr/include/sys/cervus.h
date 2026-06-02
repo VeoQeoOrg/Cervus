@@ -22,6 +22,13 @@ typedef struct __attribute__((packed)) {
     uint32_t sector_count;
 } cervus_mbr_part_t;
 
+struct cervus_gpt_entry_spec {
+    uint8_t  type_guid[16];
+    uint64_t first_lba;
+    uint64_t last_lba;
+    char     name[36];
+};
+
 typedef struct __attribute__((packed)) {
     char     disk_name[32];
     char     part_name[32];
@@ -39,7 +46,9 @@ typedef struct {
     uint64_t size_bytes;
     char     model[41];
     uint8_t  present;
-    uint8_t  _pad[6];
+    uint8_t  is_partition;
+    uint8_t  _pad[1];
+    uint32_t sector_size;
 } cervus_disk_info_t;
 
 typedef struct {
@@ -111,6 +120,31 @@ typedef struct __attribute__((packed)) {
     cervus_pci_bar_t bars[6];
 } cervus_pci_device_t;
 
+typedef struct __attribute__((packed)) {
+    uint8_t  ctrl_idx;
+    uint8_t  slot_id;
+    uint8_t  port_id;
+    uint8_t  speed;
+    uint16_t vid;
+    uint16_t pid;
+    uint16_t bcd_dev;
+    uint16_t bcd_usb;
+    uint8_t  dev_class;
+    uint8_t  dev_sub;
+    uint8_t  dev_proto;
+    uint8_t  intf_class;
+    uint8_t  intf_sub;
+    uint8_t  intf_proto;
+    uint8_t  ep0_mps;
+    uint8_t  n_configs;
+    uint8_t  parent_slot;
+    uint8_t  parent_port;
+    uint8_t  depth;
+    uint8_t  present;
+    uint32_t route_string;
+    char     product[40];
+} cervus_usb_dev_t;
+
 #define CLOCK_REALTIME   0
 #define CLOCK_MONOTONIC  1
 
@@ -141,11 +175,21 @@ int      cervus_disk_read_raw(const char *dev, uint64_t lba, uint64_t count, voi
 int      cervus_disk_write_raw(const char *dev, uint64_t lba, uint64_t count, const void *buf);
 long     cervus_disk_list_parts(cervus_part_info_t *out, int max);
 long     cervus_disk_bios_install(const char *disk, const void *sys_data, uint32_t sys_size);
+int      cervus_disk_eject(const char *dev);
+int      cervus_disk_partition_gpt(const char *dev,
+                                   const struct cervus_gpt_entry_spec *specs, uint64_t n);
 
 long     cervus_list_mounts(cervus_mount_info_t *out, int max);
 long     cervus_statvfs(const char *path, cervus_statvfs_t *out);
 
 long     cervus_pci_list(cervus_pci_device_t *out, int max);
+long     cervus_usb_list(cervus_usb_dev_t *out, int max);
+int      cervus_sync(void);
+
+int      cervus_vt_spawn_poll(void);
+int      cervus_vt_set_ctty(int vt);
+int      cervus_vt_clear_shell(int vt);
+int      cervus_vt_switch(int vt);
 
 uint32_t cervus_ioport_read(uint16_t port, int width);
 int      cervus_ioport_write(uint16_t port, int width, uint32_t val);

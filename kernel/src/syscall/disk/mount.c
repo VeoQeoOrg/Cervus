@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/disk.h"
+#include "../../../include/drivers/disk/disk.h"
 #include "../../../include/io/serial.h"
 
 int64_t sys_disk_mount(uint64_t devname_ptr, uint64_t path_ptr,

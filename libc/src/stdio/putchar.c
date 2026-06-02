@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 #include "../../../kernel/include/graphics/fb/fb.h"
+#include "../../../kernel/include/console/console.h"
 
 uint32_t cursor_x   = 0;
 uint32_t cursor_y   = 0;
@@ -15,6 +17,109 @@ static int  total_scroll_lines  = 0;
 static int  flush_inhibit       = 0;
 static int  autowrap            = 1;
 
+static uint32_t dirty_y_min = 0xFFFFFFFFu;
+static uint32_t dirty_y_max = 0;
+static int        g_offscreen = 0;
+static int        g_need_redraw = 0;
+static unsigned long long g_last_flush_ns = 0;
+static vt_cell_t *g_grid  = NULL;
+static uint32_t   g_gcols = 0;
+static uint32_t   g_grows = 0;
+
+extern bool               hpet_is_available(void);
+extern unsigned long long hpet_elapsed_ns(void);
+
+#define CONSOLE_FLUSH_INTERVAL_NS 16000000ULL
+
+void console_set_offscreen(int on) { g_offscreen = on; }
+
+int console_cursor_visible(void) { return cursor_visible; }
+
+void console_set_grid(vt_cell_t *grid, uint32_t cols, uint32_t rows) {
+    g_grid = grid; g_gcols = cols; g_grows = rows;
+    if (!grid) {
+        g_need_redraw = 0;
+        dirty_y_min = 0xFFFFFFFFu;
+        dirty_y_max = 0;
+    }
+}
+
+static inline void grid_put(uint32_t col, uint32_t row, uint32_t ch, uint32_t fg, uint32_t bg) {
+    if (!g_grid || col >= g_gcols || row >= g_grows) return;
+    vt_cell_t *c = &g_grid[(size_t)row * g_gcols + col];
+    c->ch = ch; c->fg = fg; c->bg = bg;
+}
+
+static void grid_clear_cells(uint32_t col, uint32_t row, uint32_t n, uint32_t bg) {
+    if (!g_grid || row >= g_grows) return;
+    for (uint32_t i = 0; i < n && (col + i) < g_gcols; i++) {
+        vt_cell_t *c = &g_grid[(size_t)row * g_gcols + col + i];
+        c->ch = ' '; c->fg = text_color; c->bg = bg;
+    }
+}
+
+void console_redraw_grid(void) {
+    if (!global_framebuffer || !g_grid) return;
+    for (uint32_t row = 0; row < g_grows; row++) {
+        for (uint32_t col = 0; col < g_gcols; col++) {
+            vt_cell_t *c = &g_grid[(size_t)row * g_gcols + col];
+            uint32_t x = col * 8, y = row * 16;
+            fb_fill_rect(global_framebuffer, x, y, 8, 16, c->bg);
+            if (c->ch && c->ch != ' ')
+                fb_draw_char(global_framebuffer, (char)c->ch, x, y, c->fg);
+        }
+    }
+}
+
+static void mark_dirty(uint32_t y_start, uint32_t h) {
+    if (h == 0) return;
+    uint32_t end = y_start + h;
+    if (y_start < dirty_y_min) dirty_y_min = y_start;
+    if (end      > dirty_y_max) dirty_y_max = end;
+}
+
+static void do_flush_now(void) {
+    if (g_need_redraw) {
+        console_redraw_grid();
+        g_need_redraw = 0;
+        dirty_y_min = 0;
+        dirty_y_max = global_framebuffer ? global_framebuffer->height : 0;
+    }
+    if (dirty_y_min < dirty_y_max)
+        fb_flush_lines(global_framebuffer, dirty_y_min, dirty_y_max);
+    dirty_y_min = 0xFFFFFFFFu;
+    dirty_y_max = 0;
+    if (hpet_is_available()) g_last_flush_ns = hpet_elapsed_ns();
+}
+
+static void commit_dirty(void) {
+    if (!global_framebuffer) return;
+    if (g_offscreen) {
+        dirty_y_min = 0xFFFFFFFFu; dirty_y_max = 0; g_need_redraw = 0;
+        return;
+    }
+    if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
+    if (hpet_is_available()) {
+        unsigned long long now = hpet_elapsed_ns();
+        if (now - g_last_flush_ns < CONSOLE_FLUSH_INTERVAL_NS) return;
+    }
+    do_flush_now();
+}
+
+void console_flush_pending(void) {
+    if (g_offscreen || !global_framebuffer) return;
+    if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
+    do_flush_now();
+}
+
+void putchar_flush_begin(void) {
+    flush_inhibit++;
+}
+void putchar_flush_end(void) {
+    if (flush_inhibit > 0) flush_inhibit--;
+    if (flush_inhibit == 0) commit_dirty();
+}
+
 uint32_t get_screen_width(void) {
     if (!global_framebuffer) return 1024;
     return global_framebuffer->width;
@@ -28,17 +133,34 @@ uint32_t get_cursor_row(void) { return cursor_y / 16; }
 uint32_t get_cursor_col(void) { return cursor_x / 8;  }
 
 static void flush_all(void) {
-    if (!flush_inhibit && global_framebuffer)
+    if (!flush_inhibit && !g_offscreen && global_framebuffer)
         fb_flush(global_framebuffer);
 }
 
 static void flush_region(uint32_t y_start, uint32_t h) {
-    if (!flush_inhibit && global_framebuffer)
-        fb_flush_lines(global_framebuffer, y_start, y_start + h);
+    mark_dirty(y_start, h);
 }
 
 void scroll_screen(int lines) {
-    if (!global_framebuffer || lines <= 0) return;
+    if (lines <= 0) return;
+
+    if (g_grid) {
+        if ((uint32_t)lines < g_grows) {
+            uint32_t mv = g_grows - (uint32_t)lines;
+            memmove(g_grid, g_grid + (size_t)lines * g_gcols,
+                    (size_t)mv * g_gcols * sizeof(vt_cell_t));
+            for (uint32_t r = mv; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+        } else {
+            for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+        }
+        if (!g_offscreen && global_framebuffer) {
+            g_need_redraw = 1;
+            mark_dirty(0, global_framebuffer->height);
+        }
+        return;
+    }
+
+    if (g_offscreen || !global_framebuffer) return;
     uint32_t sh = get_screen_height();
     uint32_t sp = (uint32_t)(lines * 16);
     if (sp >= sh) { fb_clear(global_framebuffer, bg_color); flush_all(); return; }
@@ -70,27 +192,31 @@ void scroll_screen(int lines) {
         }
     }
 
-    flush_all();
+    mark_dirty(0, sh);
 }
 
 static void draw_cursor_at(uint32_t x, uint32_t y) {
+    if (g_offscreen) return;
     if (!global_framebuffer || !cursor_visible) return;
     if (x + 8 > global_framebuffer->width || y + 16 > global_framebuffer->height) return;
     for (uint32_t col = 0; col < 8; col++) {
         fb_draw_pixel(global_framebuffer, x + col, y + 14, text_color);
         fb_draw_pixel(global_framebuffer, x + col, y + 15, text_color);
     }
-    flush_region(y + 14, 2);
+    if (global_framebuffer)
+        fb_flush_lines(global_framebuffer, y + 14, y + 16);
 }
 
 static void erase_cursor_at(uint32_t x, uint32_t y) {
+    if (g_offscreen) return;
     if (!global_framebuffer) return;
     if (x + 8 > global_framebuffer->width || y + 16 > global_framebuffer->height) return;
     for (uint32_t col = 0; col < 8; col++) {
         fb_draw_pixel(global_framebuffer, x + col, y + 14, bg_color);
         fb_draw_pixel(global_framebuffer, x + col, y + 15, bg_color);
     }
-    flush_region(y + 14, 2);
+    if (global_framebuffer)
+        fb_flush_lines(global_framebuffer, y + 14, y + 16);
 }
 
 void draw_cursor(void)  { draw_cursor_at(cursor_x, cursor_y); }
@@ -178,7 +304,9 @@ static void handle_sgr(void) {
 }
 
 static void erase_to_eol(void) {
-    if (!global_framebuffer) return;
+    uint32_t col = cursor_x / 8, row = cursor_y / 16;
+    grid_clear_cells(col, row, (g_gcols > col) ? (g_gcols - col) : 0, bg_color);
+    if (g_offscreen || !global_framebuffer) return;
     uint32_t sw = get_screen_width();
     if (cursor_x >= sw) return;
     fb_fill_rect(global_framebuffer, cursor_x, cursor_y, sw - cursor_x, 16, bg_color);
@@ -199,7 +327,8 @@ static void cursor_move_left(int n) {
 static uint32_t saved_cx = 0, saved_cy = 0;
 
 static void clear_cell(uint32_t x, uint32_t y) {
-    if (!global_framebuffer) return;
+    grid_put(x / 8, y / 16, ' ', text_color, bg_color);
+    if (g_offscreen || !global_framebuffer) return;
     fb_fill_rect(global_framebuffer, x, y, 8, 16, bg_color);
 }
 
@@ -207,15 +336,13 @@ static void draw_and_advance(char c) {
     if (!global_framebuffer) return;
     uint32_t sh = get_screen_height();
     uint32_t sw = get_screen_width();
-    if (!autowrap && cursor_x + 8 >= sw) {
-        clear_cell(cursor_x, cursor_y);
+    grid_put(cursor_x / 8, cursor_y / 16, (uint8_t)c, text_color, bg_color);
+    if (!g_offscreen) {
+        fb_fill_rect(global_framebuffer, cursor_x, cursor_y, 8, 16, bg_color);
         fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
         flush_region(cursor_y, 16);
-        return;
     }
-    clear_cell(cursor_x, cursor_y);
-    fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
-    flush_region(cursor_y, 16);
+    if (!autowrap && cursor_x + 8 >= sw) return;
     cursor_x += 8;
     if (cursor_x + 8 > sw) { cursor_x = 0; cursor_y += 16; }
     if (cursor_y + 16 > sh) { scroll_screen(1); cursor_y = sh - 16; }
@@ -225,16 +352,18 @@ int putchar(int c) {
     if (!global_framebuffer) return EOF;
     uint8_t ch = (uint8_t)c;
 
+    if (ch == 0x1B) { ps_state = PS_ESC; return c; }
+
     switch (ps_state) {
 
     case PS_NORMAL:
-        if (ch == 0x1B) { ps_state = PS_ESC; return c; }
         switch (ch) {
         case '\n':
             cursor_x = 0; cursor_y += 16;
             if (cursor_y + 16 > get_screen_height()) {
                 scroll_screen(1); cursor_y = get_screen_height() - 16;
             }
+            if (!flush_inhibit) commit_dirty();
             break;
         case '\r': cursor_x = 0; break;
         case '\t': cursor_x = (cursor_x + 32) & ~31u; break;
@@ -277,12 +406,15 @@ int putchar(int c) {
                 if (p == 25) {
                     if (ch == 'l') {
                         cursor_visible = 0;
-                        flush_inhibit  = 1;
                     } else if (ch == 'h') {
                         cursor_visible = 1;
-                        flush_inhibit  = 0;
-                        if (global_framebuffer)
-                            fb_flush(global_framebuffer);
+                    }
+                } else if (p == 2026) {
+                    if (ch == 'h') {
+                        flush_inhibit++;
+                    } else if (ch == 'l') {
+                        if (flush_inhibit > 0) flush_inhibit--;
+                        if (flush_inhibit == 0) commit_dirty();
                     }
                 } else if (p == 7) {
                     if      (ch == 'l') autowrap = 0;
@@ -296,11 +428,36 @@ int putchar(int c) {
             case 'm': handle_sgr(); break;
             case 'J': {
                 int mode = ps_get(0, 0);
+                uint32_t sh = get_screen_height();
+                uint32_t sw = get_screen_width();
+                uint32_t ccol = cursor_x / 8, crow = cursor_y / 16;
                 if (mode == 2 || mode == 3) {
-                    fb_clear(global_framebuffer, bg_color);
+                    for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
                     cursor_x = 0; cursor_y = 0;
-                    flush_all();
+                    if (!g_offscreen) { fb_clear(global_framebuffer, bg_color); mark_dirty(0, sh); }
+                } else if (mode == 0) {
+                    grid_clear_cells(ccol, crow, (g_gcols > ccol) ? (g_gcols - ccol) : 0, bg_color);
+                    for (uint32_t r = crow + 1; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+                    if (!g_offscreen) {
+                        if (cursor_x < sw)
+                            fb_fill_rect(global_framebuffer, cursor_x, cursor_y, sw - cursor_x, 16, bg_color);
+                        uint32_t y2 = cursor_y + 16;
+                        if (y2 < sh)
+                            fb_fill_rect(global_framebuffer, 0, y2, sw, sh - y2, bg_color);
+                        mark_dirty(cursor_y, sh - cursor_y);
+                    }
+                } else if (mode == 1) {
+                    for (uint32_t r = 0; r < crow; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+                    grid_clear_cells(0, crow, ccol + 1, bg_color);
+                    if (!g_offscreen) {
+                        if (cursor_y > 0)
+                            fb_fill_rect(global_framebuffer, 0, 0, sw, cursor_y, bg_color);
+                        if (cursor_x > 0)
+                            fb_fill_rect(global_framebuffer, 0, cursor_y, cursor_x, 16, bg_color);
+                        mark_dirty(0, cursor_y + 16);
+                    }
                 }
+                if (!flush_inhibit) commit_dirty();
                 break;
             }
             case 'K': {
@@ -347,14 +504,54 @@ int putchar(int c) {
 }
 
 void clear_screen_with_scroll(void) {
-    if (global_framebuffer) {
+    for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+    cursor_x = 0; cursor_y = 0;
+    scroll_buffer_index = 0; total_scroll_lines = 0;
+    if (!g_offscreen && global_framebuffer) {
         fb_clear(global_framebuffer, bg_color);
-        cursor_x = 0; cursor_y = 0;
-        scroll_buffer_index = 0; total_scroll_lines = 0;
         flush_all();
     }
 }
 void get_cursor_position(uint32_t *x, uint32_t *y) {
     if (x) *x = cursor_x;
     if (y) *y = cursor_y;
+}
+
+void console_save_state(console_state_t *s) {
+    s->cursor_x = cursor_x; s->cursor_y = cursor_y;
+    s->text_color = text_color; s->bg_color = bg_color;
+    s->cursor_visible = cursor_visible; s->autowrap = autowrap;
+    s->flush_inhibit = flush_inhibit;
+    s->scroll_buffer_index = scroll_buffer_index;
+    s->total_scroll_lines = total_scroll_lines;
+    s->dirty_y_min = dirty_y_min; s->dirty_y_max = dirty_y_max;
+    s->ps_state = (int)ps_state; s->ps_nparams = ps_nparams;
+    s->ps_cur = ps_cur; s->ps_bold = ps_bold; s->ps_reverse = ps_reverse;
+    for (int i = 0; i < CONSOLE_ESC_MAX_PARAMS; i++) s->ps_params[i] = ps_params[i];
+    s->saved_cx = saved_cx; s->saved_cy = saved_cy;
+}
+
+void console_load_state(const console_state_t *s) {
+    cursor_x = s->cursor_x; cursor_y = s->cursor_y;
+    text_color = s->text_color; bg_color = s->bg_color;
+    cursor_visible = s->cursor_visible; autowrap = s->autowrap;
+    flush_inhibit = s->flush_inhibit;
+    scroll_buffer_index = s->scroll_buffer_index;
+    total_scroll_lines = s->total_scroll_lines;
+    dirty_y_min = s->dirty_y_min; dirty_y_max = s->dirty_y_max;
+    ps_state = (parse_state_t)s->ps_state; ps_nparams = s->ps_nparams;
+    ps_cur = s->ps_cur; ps_bold = s->ps_bold; ps_reverse = s->ps_reverse;
+    for (int i = 0; i < CONSOLE_ESC_MAX_PARAMS; i++) ps_params[i] = s->ps_params[i];
+    saved_cx = s->saved_cx; saved_cy = s->saved_cy;
+}
+
+void console_reset_state(void) {
+    cursor_x = 0; cursor_y = 0;
+    text_color = COLOR_WHITE; bg_color = COLOR_BLACK;
+    cursor_visible = 1; autowrap = 1; flush_inhibit = 0;
+    scroll_buffer_index = 0; total_scroll_lines = 0;
+    dirty_y_min = 0xFFFFFFFFu; dirty_y_max = 0;
+    ps_state = PS_NORMAL; ps_nparams = 0; ps_cur = 0; ps_bold = 0; ps_reverse = 0;
+    for (int i = 0; i < ESC_MAX_PARAMS; i++) ps_params[i] = -1;
+    saved_cx = 0; saved_cy = 0;
 }

@@ -103,7 +103,7 @@ limine.conf         boot config
 | *Disk installer* | Done | BIOS + UEFI, MBR, ext2 root |
 | *On-device C compiler* | Done | TCC ported and bundled |
 | *PCI / PCIe* | Done | MCFG + legacy CF8/CFC, recursive bridge walk, MSI/MSI-X, `lspci` |
-| *USB* | Not started | XHCI / mass storage |
+| *USB* | Done| XHCI / mass storage |
 | *Networking* | Not started | TCP/IP stack |
 | *GUI* | Not started | Compositor on top of framebuffer |
 

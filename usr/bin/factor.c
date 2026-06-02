@@ -18,10 +18,6 @@ int is_number(const char *s) {
 }
 
 int main(int argc, char **argv) {
-/*	if (argc != 2) {
-		fprintf(stderr, C_RED "factor: variable not specified\n" C_RESET);
-        return 1;
-	}*/
 
 	if (argc != 2) {
 		printf(C_CYAN "Cervus factor, write integer and press enter. exit or ctrl+c to quit\n" C_RESET);
@@ -34,15 +30,15 @@ int main(int argc, char **argv) {
 				printf("exiting..");
 				return 1;
 			}
-		
+
 			if (!is_number(num)) {
 				fprintf(stderr, C_RED "factor: %s isn't number\n" C_RESET, num);
 				continue;
 			}
-			
+
 			int n = atoi(num);
 			int d = 2;
-			
+
 			printf("%d: ", n);
 			do {
 				if (n % d == 0) {
@@ -63,7 +59,7 @@ int main(int argc, char **argv) {
 
 	int n = atoi(argv[1]);
 	int d = 2;
-	
+
 	printf("%d: ", n);
 	do {
 		if (n % d == 0) {

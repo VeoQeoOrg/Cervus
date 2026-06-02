@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/disk.h"
+#include "../../../include/drivers/disk/disk.h"
 
 int64_t sys_disk_umount(uint64_t path_ptr, uint64_t a2, uint64_t a3,
                         uint64_t a4, uint64_t a5, uint64_t a6)

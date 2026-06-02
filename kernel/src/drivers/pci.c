@@ -362,7 +362,14 @@ void pci_register_driver(const pci_driver_t *drv)
     if (!drv || g_driver_count >= DRIVER_MAX) return;
     g_drivers[g_driver_count++] = drv;
     for (int i = 0; i < g_device_count; i++) {
-        try_drivers_for(&g_devices[i]);
+        pci_device_t *d = &g_devices[i];
+        bool m_vendor   = (drv->match_vendor   < 0) || (uint16_t)drv->match_vendor   == d->vendor_id;
+        bool m_device   = (drv->match_device   < 0) || (uint16_t)drv->match_device   == d->device_id;
+        bool m_class    = (drv->match_class    < 0) || (uint8_t) drv->match_class    == d->class_code;
+        bool m_subclass = (drv->match_subclass < 0) || (uint8_t) drv->match_subclass == d->subclass;
+        if (m_vendor && m_device && m_class && m_subclass && drv->probe) {
+            drv->probe(d);
+        }
     }
 }
 

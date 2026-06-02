@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/blkdev.h"
+#include "../../../include/drivers/disk/blkdev.h"
 #include "../../../include/io/serial.h"
 #include <string.h>
 

@@ -126,6 +126,10 @@ typedef struct task {
 
     atomic_bool on_cpu;
 
+    int ctty;
+
+    uint64_t run_start_ns;
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -151,6 +155,8 @@ void sched_init(void);
 void sched_reschedule(void);
 void sched_print_stats(void);
 void task_yield(void);
+void task_sleep_ns(uint64_t ns);
+void task_sleep_ms(uint64_t ms);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
 
@@ -170,8 +176,8 @@ void    task_wakeup_waiters(uint32_t pid);
 void    task_unblock(task_t* t);
 void    sched_wakeup_sleepers(uint64_t now_ns);
 task_t* task_find_foreground(void);
-extern volatile uint32_t g_foreground_pid;
 void task_set_foreground(uint32_t pid);
+void task_clear_foreground_if(uint32_t pid);
 
 extern void context_switch(task_t* old, task_t* next, task_t** current_task_slot, uint64_t new_cr3);
 extern void first_task_start(task_t* task);

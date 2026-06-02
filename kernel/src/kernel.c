@@ -29,11 +29,16 @@
 #include "../include/fs/ramfs.h"
 #include "../include/fs/devfs.h"
 #include "../include/fs/initramfs.h"
-#include "../include/drivers/ata.h"
-#include "../include/drivers/blkdev.h"
-#include "../include/drivers/disk.h"
-#include "../include/drivers/partition.h"
+#include "../include/drivers/disk/ata.h"
+#include "../include/drivers/disk/blkdev.h"
+#include "../include/drivers/disk/disk.h"
+#include "../include/drivers/disk/partition.h"
 #include "../include/drivers/pci.h"
+#include "../include/drivers/disk/nvme.h"
+#include "../include/drivers/usb/xhci.h"
+#include "../include/drivers/usb/ehci.h"
+#include "../include/drivers/usb/uhci.h"
+#include "../include/console/console.h"
 #include "../include/fs/ext2.h"
 #include "../include/fs/fat32.h"
 
@@ -133,6 +138,12 @@ static void load_elf_module(void) {
         serial_writestring("[VFS] stdio assigned to task\n");
 
     serial_printf("[ELF] Task 'init' created: cr3=0x%llx\n", t->cr3);
+
+    xhci_start_worker();
+    ehci_start_worker();
+    uhci_start_worker();
+
+    console_boot_logging_off();
 }
 
 void ps2_task(void* arg) {
@@ -141,47 +152,57 @@ void ps2_task(void* arg) {
     ps2_init();
 }
 
-static const char *const ROOT_DISK_PREFIXES[] = { "hda", "sda" };
+static const char *const ROOT_DISK_PREFIXES[] = { "nvme0n1", "sda", "hda" };
 #define ROOT_DISK_PREFIX_COUNT (sizeof(ROOT_DISK_PREFIXES) / sizeof(ROOT_DISK_PREFIXES[0]))
 
-static bool detect_installed_system(void) {
+static void make_part_name(char *out, size_t out_size, const char *pfx, int part) {
+    size_t nlen = strlen(pfx);
+    const char *sep = "";
+    if (nlen > 0 && pfx[nlen - 1] >= '0' && pfx[nlen - 1] <= '9') sep = "p";
+    snprintf(out, out_size, "%s%s%d", pfx, sep, part);
+}
+
+static bool blkdev_has_ext2(blkdev_t *dev) {
+    if (!dev) return false;
+    uint16_t magic = 0;
+    if (blkdev_read(dev, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) != 0) return false;
+    return magic == EXT2_SUPER_MAGIC;
+}
+
+static bool find_installed_root(char *out, size_t out_cap) {
     for (size_t k = 0; k < ROOT_DISK_PREFIX_COUNT; k++) {
         const char *pfx = ROOT_DISK_PREFIXES[k];
         char name[16];
 
-        snprintf(name, sizeof(name), "%s2", pfx);
-        blkdev_t *p2 = blkdev_get_by_name(name);
-        if (p2) {
-            uint16_t magic = 0;
-            if (blkdev_read(p2, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
-                && magic == EXT2_SUPER_MAGIC) {
-                serial_printf("[boot] ext2 on %s -> installed system\n", name);
-                return true;
-            }
+        make_part_name(name, sizeof(name), pfx, 2);
+        if (blkdev_has_ext2(blkdev_get_by_name(name))) {
+            serial_printf("[boot] ext2 on %s -> installed system\n", name);
+            snprintf(out, out_cap, "%s", name);
+            return true;
         }
 
-        snprintf(name, sizeof(name), "%s1", pfx);
+        make_part_name(name, sizeof(name), pfx, 1);
         blkdev_t *p1 = blkdev_get_by_name(name);
         if (p1) {
             uint8_t sector[512];
-            if (p1->ops->read_sectors(p1, 0, 1, sector) == 0) {
-                if (sector[510] == 0x55 && sector[511] == (uint8_t)0xAA
-                    && memcmp(sector + 82, "FAT32", 5) == 0) {
-                    serial_printf("[boot] FAT32 on %s -> looks like installed system\n",
-                                  name);
+            if (p1->ops->read_sectors(p1, 0, 1, sector) == 0
+                && sector[510] == 0x55 && sector[511] == (uint8_t)0xAA
+                && memcmp(sector + 82, "FAT32", 5) == 0) {
+                serial_printf("[boot] FAT32 ESP on %s, looking for ext2 sibling\n", name);
+                char rname[16];
+                make_part_name(rname, sizeof(rname), pfx, 2);
+                if (blkdev_has_ext2(blkdev_get_by_name(rname))) {
+                    snprintf(out, out_cap, "%s", rname);
                     return true;
                 }
             }
         }
 
         blkdev_t *whole = blkdev_get_by_name(pfx);
-        if (whole) {
-            uint16_t magic = 0;
-            if (blkdev_read(whole, EXT2_SUPER_OFFSET + 56, &magic, sizeof(magic)) == 0
-                && magic == EXT2_SUPER_MAGIC) {
-                serial_printf("[boot] legacy ext2-on-whole-disk on %s detected\n", pfx);
-                return true;
-            }
+        if (whole && whole->sector_count > 0 && blkdev_has_ext2(whole)) {
+            serial_printf("[boot] legacy ext2-on-whole-disk on %s detected\n", pfx);
+            snprintf(out, out_cap, "%s", pfx);
+            return true;
         }
     }
     return false;
@@ -227,6 +248,8 @@ void kernel_main(void) {
     serial_writestring("Paging [OK]\n");
     vmm_init();
     serial_writestring("VMM [OK]\n");
+    fb_init_backbuffer(global_framebuffer);
+    vt_init();
     vfs_init();
     serial_writestring("VFS [OK]\n");
 
@@ -278,48 +301,60 @@ void kernel_main(void) {
     disk_init();
     serial_writestring("Disk subsystem [OK]\n");
 
-    bool skip_initramfs = detect_installed_system();
-    if (skip_initramfs) {
-        printf("[boot] installed Cervus detected on disk -- booting from disk\n");
+    xhci_init();
+    if (xhci_controller_count() > 0)
+        serial_printf("USB XHCI [OK] (%d controller(s))\n", xhci_controller_count());
+    else
+        serial_writestring("USB XHCI [none detected]\n");
+
+    ehci_init();
+    if (ehci_controller_count() > 0)
+        serial_printf("USB EHCI [OK] (%d controller(s))\n", ehci_controller_count());
+    else
+        serial_writestring("USB EHCI [none detected]\n");
+
+    uhci_init();
+    if (uhci_controller_count() > 0)
+        serial_printf("USB UHCI [OK] (%d controller(s))\n", uhci_controller_count());
+    else
+        serial_writestring("USB UHCI [none detected]\n");
+
+    bool has_initramfs_module = (module_request.response &&
+                                  module_request.response->module_count >= 2);
+    static char root_name[16] = {0};
+    bool skip_initramfs = false;
+    if (has_initramfs_module) {
+        serial_writestring("[boot] initramfs module present -- ISO boot, not auto-mounting disk\n");
     } else {
-        serial_writestring("[boot] no installed system detected, using initramfs\n");
+        skip_initramfs = find_installed_root(root_name, sizeof(root_name));
+        if (skip_initramfs) {
+            printf("[boot] installed Cervus detected on %s -- booting from disk\n", root_name);
+        } else {
+            serial_writestring("[boot] no installed system detected, using initramfs\n");
+        }
     }
 
     if (skip_initramfs) {
-        const char *root_dev = NULL;
-        static char root_name[16];
-        for (size_t k = 0; k < ROOT_DISK_PREFIX_COUNT && !root_dev; k++) {
-            const char *pfx = ROOT_DISK_PREFIXES[k];
-            snprintf(root_name, sizeof(root_name), "%s2", pfx);
-            if (blkdev_get_by_name(root_name)) { root_dev = root_name; break; }
-            if (blkdev_get_by_name(pfx)) {
-                snprintf(root_name, sizeof(root_name), "%s", pfx);
-                root_dev = root_name; break;
-            }
-        }
-
-        if (root_dev) {
-            int ur = vfs_umount("/");
-            serial_printf("[boot] umount(/) -> %d\n", ur);
-            int mr = disk_mount(root_dev, "/");
-            serial_printf("[boot] disk_mount(%s,/) -> %d\n", root_dev, mr);
-            if (mr == 0) {
-                vfs_mkdir("/dev",  0755);
-                vfs_mkdir("/tmp",  0755);
-                vfs_mkdir("/proc", 0755);
-                vfs_mkdir("/mnt",  0755);
-            } else {
-                vnode_t *fallback = ramfs_create_root();
-                vfs_mount("/", fallback);
-                vfs_set_mount_info("/", "ramfs", "ramfs");
-                vnode_unref(fallback);
-                vfs_mkdir("/dev",  0755);
-                vfs_mkdir("/bin",  0755);
-                vfs_mkdir("/etc",  0755);
-                vfs_mkdir("/tmp",  0755);
-                vfs_mkdir("/proc", 0755);
-                vfs_mkdir("/mnt",  0755);
-            }
+        int ur = vfs_umount("/");
+        serial_printf("[boot] umount(/) -> %d\n", ur);
+        int mr = disk_mount(root_name, "/");
+        serial_printf("[boot] disk_mount(%s,/) -> %d\n", root_name, mr);
+        if (mr == 0) {
+            vfs_mkdir("/dev",  0755);
+            vfs_mkdir("/tmp",  0755);
+            vfs_mkdir("/proc", 0755);
+            vfs_mkdir("/mnt",  0755);
+        } else {
+            vnode_t *fallback = ramfs_create_root();
+            vfs_mount("/", fallback);
+            vfs_set_mount_info("/", "ramfs", "ramfs");
+            vnode_unref(fallback);
+            vfs_mkdir("/dev",  0755);
+            vfs_mkdir("/bin",  0755);
+            vfs_mkdir("/etc",  0755);
+            vfs_mkdir("/tmp",  0755);
+            vfs_mkdir("/proc", 0755);
+            vfs_mkdir("/mnt",  0755);
         }
     }
 

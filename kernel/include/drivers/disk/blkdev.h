@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define BLKDEV_MAX       8
+#define BLKDEV_MAX       64
 #define BLKDEV_NAME_MAX  32
 #define BLKDEV_SECTOR_SIZE 512
 
@@ -17,14 +17,21 @@ typedef struct blkdev_ops {
     int (*flush)        (blkdev_t *dev);
 } blkdev_ops_t;
 
+#define BLKDEV_MODEL_MAX 41
+
 struct blkdev {
     char              name[BLKDEV_NAME_MAX];
+    char              model[BLKDEV_MODEL_MAX];
     bool              present;
+    bool              is_partition;
     uint64_t          sector_count;
     uint64_t          size_bytes;
     uint32_t          sector_size;
     const blkdev_ops_t *ops;
     void             *priv;
+    uint64_t          part_lba_start;
+    uint8_t           part_type;
+    uint8_t           part_bootable;
 };
 
 int blkdev_register(blkdev_t *dev);

@@ -26,23 +26,33 @@ DEFINE_IRQ(0x20, timer_handler)
 
     if (cpu == 0 && g_ctrlc_pending) {
         g_ctrlc_pending = 0;
-        extern void kb_buf_push(char c);
-        extern bool kb_buf_has_ctrlc(void);
         extern bool tty_has_isig_global(void);
+        extern int  vt_active(void);
+        extern void vt_write(int vt, const char *buf, size_t len);
+        extern void tty_vt_input(int vt, char c);
 
-        task_t *fg = task_find_foreground();
-        bool isig_on = tty_has_isig_global();
+        int  vt   = vt_active();
+        bool isig = tty_has_isig_global();
 
-        if (fg && isig_on) {
-            task_kill(fg);
+        if (isig) {
+            vt_write(vt, "^C\n", 3);
+            task_t *fg = task_find_foreground();
+            if (fg) task_kill(fg);
+            else    tty_vt_input(vt, 0x03);
         } else {
-            if (!kb_buf_has_ctrlc())
-                kb_buf_push(0x03);
+            tty_vt_input(vt, 0x03);
         }
     }
 
     if (cpu == 0 && hpet_is_available()) {
         sched_wakeup_sleepers(hpet_elapsed_ns());
+    }
+
+    if (cpu == 0) {
+        extern void vt_tick_flush(void);
+        extern void monitor_tick(void);
+        vt_tick_flush();
+        monitor_tick();
     }
 
     if (!current) return;

@@ -94,6 +94,14 @@ extern int64_t sys_rename            (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_list_mounts       (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_statvfs           (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_pci_list          (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_usb_list          (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_sync              (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_disk_eject        (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_disk_partition_gpt(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_vt_spawn_poll(void);
+extern int64_t sys_vt_set_ctty(uint64_t);
+extern int64_t sys_vt_clear_shell(uint64_t);
+extern int64_t sys_vt_switch(uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -127,6 +135,11 @@ W0(sys_shutdown)    W0(sys_reboot)
 
 W3(sys_execve)
 W3(sys_wait)
+
+W0(sys_vt_spawn_poll)
+W1(sys_vt_set_ctty)
+W1(sys_vt_clear_shell)
+W1(sys_vt_switch)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -186,7 +199,15 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_DISK_BIOS_INSTALL] = sys_disk_bios_install,
     [SYS_LIST_MOUNTS]       = sys_list_mounts,
     [SYS_STATVFS]           = sys_statvfs,
+    [SYS_DISK_EJECT]        = sys_disk_eject,
+    [SYS_DISK_PARTITION_GPT]= sys_disk_partition_gpt,
     [SYS_PCI_LIST]          = sys_pci_list,
+    [SYS_USB_LIST]          = sys_usb_list,
+    [SYS_SYNC]              = sys_sync,
+    [SYS_VT_SPAWN_POLL]     = _sys_vt_spawn_poll,
+    [SYS_VT_SET_CTTY]       = _sys_vt_set_ctty,
+    [SYS_VT_CLEAR_SHELL]    = _sys_vt_clear_shell,
+    [SYS_VT_SWITCH]         = _sys_vt_switch,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

@@ -13,6 +13,7 @@
 #define VMM_ACCESSED   (1ULL << 5)
 #define VMM_DIRTY      (1ULL << 6)
 #define VMM_PSE        (1ULL << 7)
+#define VMM_PAT        (1ULL << 7)
 #define VMM_GLOBAL     (1ULL << 8)
 #define VMM_NOEXEC     (1ULL << 63)
 
@@ -36,6 +37,7 @@ vmm_pagemap_t* vmm_get_kernel_pagemap(void);
 vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src);
 void vmm_free_pagemap(vmm_pagemap_t* map);
 void vmm_sync_kernel_mappings(vmm_pagemap_t* map);
+bool vmm_remap_range_wc(vmm_pagemap_t* map, uintptr_t virt_base, size_t pages);
 void vmm_test(void);
 
 #endif

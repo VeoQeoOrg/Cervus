@@ -1,7 +1,7 @@
-#include "../../include/drivers/blkdev.h"
-#include "../../include/io/serial.h"
-#include "../../include/memory/pmm.h"
-#include "../../include/syscall/errno.h"
+#include "../../../include/drivers/disk/blkdev.h"
+#include "../../../include/io/serial.h"
+#include "../../../include/memory/pmm.h"
+#include "../../../include/syscall/errno.h"
 #include <string.h>
 
 static blkdev_t *g_blkdevs[BLKDEV_MAX];
@@ -18,9 +18,11 @@ int blkdev_register(blkdev_t *dev) {
     int idx = g_blkdev_count;
     g_blkdevs[idx] = dev;
     g_blkdev_count++;
-    serial_printf("[blkdev] registered '%s' (%llu sectors, %llu MB)\n",
-                  dev->name, dev->sector_count,
-                  dev->size_bytes / (1024 * 1024));
+    serial_printf("[blkdev] registered '%s' %s (%llu sectors, %llu MB, model='%s')\n",
+                  dev->name, dev->is_partition ? "[part]" : "[disk]",
+                  dev->sector_count,
+                  dev->size_bytes / (1024 * 1024),
+                  dev->model[0] ? dev->model : "(none)");
     return idx;
 }
 

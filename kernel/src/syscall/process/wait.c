@@ -30,8 +30,6 @@ retry:;
         if (pid_arg != (uint64_t)-1)
             task_set_foreground((uint32_t)pid_arg);
 
-        serial_printf("[WAIT] pid=%u blocking: user_rsp=0x%llx task_rsp=0x%llx\n",
-                      parent->pid, parent->user_rsp, parent->rsp);
         sched_reschedule();
         goto retry;
     }
@@ -56,14 +54,7 @@ retry:;
         spinlock_release_irqrestore(&children_lock, _cf);
     }
 
-    serial_printf("[SYSCALL] wait: parent pid=%u reaped child pid=%u\n",
-                  parent->pid, zpid);
-
-    if (g_foreground_pid == zpid)
-        task_set_foreground(0);
+    task_clear_foreground_if(zpid);
     task_destroy(zombie);
-    serial_printf("[SYSCALL] wait: task_destroy done, returning %u\n", zpid);
-    serial_printf("[WAIT-RET] parent pid=%u user_saved_rip=0x%llx user_rsp=0x%llx\n",
-                  parent->pid, parent->user_saved_rip, parent->user_rsp);
     return (int64_t)zpid;
 }

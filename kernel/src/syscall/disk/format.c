@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/disk.h"
+#include "../../../include/drivers/disk/disk.h"
 #include <string.h>
 
 int64_t sys_disk_format(uint64_t devname_ptr, uint64_t label_ptr,

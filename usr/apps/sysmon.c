@@ -50,6 +50,7 @@ static int g_ncpus = 1;
 static uint64_t g_prev_total_ns = 0;
 static uint64_t g_prev_uptime_ns = 0;
 static unsigned g_cpu_pct_x100 = 0;
+static uint64_t g_last_interval_ns = 0;
 static cervus_meminfo_t g_mi = {0};
 static int g_mi_valid = 0;
 
@@ -225,6 +226,7 @@ static void sample_tasks(uint64_t cur_uptime_ns) {
     for (int i = 0; i < g_nrows; i++) sum += g_rows[i].cpu_ns_delta;
     uint64_t interval = (g_prev_uptime_ns > 0 && cur_uptime_ns > g_prev_uptime_ns)
                        ? (cur_uptime_ns - g_prev_uptime_ns) : 1;
+    g_last_interval_ns = interval;
     uint64_t denom = (uint64_t)g_ncpus * interval;
     uint64_t pct_x100 = denom ? (sum * 10000ULL) / denom : 0;
     if (pct_x100 > 10000) pct_x100 = 10000;
@@ -308,7 +310,7 @@ static void draw_bar(int width, unsigned pct_x100, const char *color)
 }
 
 static void draw_screen(uint64_t uptime_ns) {
-    fputs("\x1b[H", stdout);
+    fputs("\x1b[?2026h\x1b[H", stdout);
 
     fputs(C_BOLD C_CYAN " Cervus sysmon " C_RESET, stdout);
     uint64_t s = uptime_ns / 1000000000ULL;
@@ -375,11 +377,10 @@ static void draw_screen(uint64_t uptime_ns) {
         task_row_t *r = &g_rows[idx];
 
         unsigned pct_x100 = 0;
-        if (g_prev_uptime_ns != 0 && g_refresh_ms != 0) {
-            uint64_t denom = (uint64_t)g_refresh_ms * 1000000ULL;
-            uint64_t p = (r->cpu_ns_delta * 10000ULL) / denom;
-            uint64_t cap = (uint64_t)g_ncpus * 10000ULL;
-            if (p > cap) p = cap;
+        if (g_last_interval_ns > 0) {
+            uint64_t denom = (uint64_t)g_ncpus * g_last_interval_ns;
+            uint64_t p = denom ? (r->cpu_ns_delta * 10000ULL) / denom : 0;
+            if (p > 10000) p = 10000;
             pct_x100 = (unsigned)p;
         }
 
@@ -414,7 +415,7 @@ static void draw_screen(uint64_t uptime_ns) {
         printf(" sort=%s  refresh=%dms  rows=%d/%d  press [?] for help",
                names[g_sort], g_refresh_ms, g_nrows, g_nrows);
     }
-    fputs(C_RESET "\x1b[K", stdout);
+    fputs(C_RESET "\x1b[K\x1b[?2026l", stdout);
     fflush(stdout);
 }
 
@@ -454,6 +455,39 @@ static uint64_t ns_now(void)
 
 static void on_sig(int s) { (void)s; g_running = 0; }
 
+static void sysmon_snapshot(void) {
+    g_ncpus = detect_ncpus();
+    sample_mem();
+    g_prev_uptime_ns = 0;
+    sample_tasks(ns_now());
+    sort_rows();
+
+    uint64_t s = ns_now() / 1000000000ULL;
+    printf("Cervus sysmon snapshot  up %02llu:%02llu:%02llu  cpus:%d  procs:%d\n",
+           (unsigned long long)(s / 3600),
+           (unsigned long long)((s / 60) % 60),
+           (unsigned long long)(s % 60), g_ncpus, g_nrows);
+
+    if (g_mi_valid && g_mi.total_bytes > 0) {
+        char us[32], ts[32];
+        fmt_bytes(g_mi.used_bytes,  us, sizeof(us));
+        fmt_bytes(g_mi.total_bytes, ts, sizeof(ts));
+        unsigned p = (unsigned)((g_mi.used_bytes * 10000ULL) / g_mi.total_bytes);
+        printf("MEM %u.%02u%%  %s / %s\n", p / 100, p % 100, us, ts);
+    }
+
+    printf("  PID  PPID  UID  STATE  PRIO  RUNTIME  NAME\n");
+    for (int i = 0; i < g_nrows; i++) {
+        task_row_t *r = &g_rows[i];
+        char rt[16];
+        fmt_runtime(r->runtime_ns, rt, sizeof(rt));
+        printf("%5u %5u %4u  %-5s  %4u  %8s  %s\n",
+               (unsigned)r->pid, (unsigned)r->ppid, (unsigned)r->uid,
+               state_name(r->state), (unsigned)r->priority, rt, r->name);
+    }
+    fflush(stdout);
+}
+
 int main(int argc, char **argv)
 {
     static const char USAGE[] =
@@ -470,6 +504,11 @@ int main(int argc, char **argv)
         "  ?       toggle help line\n";
     if (cervus_check_help_version(argc, argv, USAGE, "sysmon")) return 0;
     (void)argc; (void)argv;
+
+    if (!isatty(0) || !isatty(1)) {
+        sysmon_snapshot();
+        return 0;
+    }
 
     signal(SIGINT,  on_sig);
     signal(SIGTERM, on_sig);
@@ -492,25 +531,27 @@ int main(int argc, char **argv)
     while (g_running) {
         int key;
         int redraw = 0;
+        int resort = 0;
+        int resched = 0;
         while (read_key_nonblock(&key)) {
             redraw = 1;
             if (key == 'q' || key == 'Q' || key == 3) { g_running = 0; break; }
             else if (key == '?' || key == 'h' || key == 'H') g_show_help = !g_show_help;
             else if (key == 'p' || key == 'P') g_paused = !g_paused;
-            else if (key == 's' || key == 'S') g_sort = (g_sort + 1) % 4;
-            else if (key == 'c' || key == 'C') g_sort = 0;
-            else if (key == 'r' || key == 'R') g_sort = 1;
-            else if (key == 'i' || key == 'I') g_sort = 2;
-            else if (key == 'n' || key == 'N') g_sort = 3;
+            else if (key == 's' || key == 'S') { g_sort = (g_sort + 1) % 4; resort = 1; }
+            else if (key == 'c' || key == 'C') { g_sort = 0; resort = 1; }
+            else if (key == 'r' || key == 'R') { g_sort = 1; resort = 1; }
+            else if (key == 'i' || key == 'I') { g_sort = 2; resort = 1; }
+            else if (key == 'n' || key == 'N') { g_sort = 3; resort = 1; }
             else if (key == 1000)    { if (g_selected > 0) g_selected--; }
             else if (key == 1001)  { if (g_selected + 1 < g_nrows) g_selected++; }
             else if (key == 1004)  { g_selected -= 10; if (g_selected < 0) g_selected = 0; }
             else if (key == 1005)  { g_selected += 10; if (g_selected >= g_nrows) g_selected = g_nrows - 1; }
             else if (key == '+' || key == '=') {
-                if (g_refresh_ms >= 200) g_refresh_ms -= 100;
+                if (g_refresh_ms >= 200) { g_refresh_ms -= 100; resched = 1; }
             }
             else if (key == '-' || key == '_') {
-                if (g_refresh_ms < 10000) g_refresh_ms += 100;
+                if (g_refresh_ms < 10000) { g_refresh_ms += 100; resched = 1; }
             }
             else if (key == 'k' || key == 'K') {
                 if (g_selected >= 0 && g_selected < g_nrows) {
@@ -533,6 +574,8 @@ int main(int argc, char **argv)
                 }
             }
         }
+        if (resort) sort_rows();
+        if (resched) next_sample = ns_now() + (uint64_t)g_refresh_ms * 1000000ULL;
         if (redraw) draw_screen(ns_now());
 
         uint64_t now = ns_now();

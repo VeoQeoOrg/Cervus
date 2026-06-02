@@ -1,5 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/blkdev.h"
+#include "../../../include/drivers/disk/blkdev.h"
 #include <string.h>
 
 int64_t sys_disk_read_raw(uint64_t devname_ptr, uint64_t lba, uint64_t count,
@@ -21,7 +21,10 @@ int64_t sys_disk_read_raw(uint64_t devname_ptr, uint64_t lba, uint64_t count,
     if (!dev) return -ENODEV;
     if (lba + count > dev->sector_count) return -EINVAL;
 
+    uint64_t bytes = count * (uint64_t)dev->sector_size;
+    if (!syscall_uptr_validate((void *)buf_ptr, (size_t)bytes)) return -EFAULT;
+
     int r = dev->ops->read_sectors(dev, lba, (uint32_t)count, (void *)buf_ptr);
     if (r < 0) return r;
-    return (int64_t)(count * dev->sector_size);
+    return (int64_t)bytes;
 }

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include "../drivers/blkdev.h"
+#include "../drivers/disk/blkdev.h"
 #include "vfs.h"
 
 #define FAT32_SECTOR_SIZE         512

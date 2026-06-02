@@ -357,10 +357,15 @@ int vsnprintf(char* restrict buf, size_t size, const char* restrict fmt,
     return (int)ctx.pos;
 }
 
+extern void putchar_flush_begin(void);
+extern void putchar_flush_end(void);
+
 int vprintf(const char* restrict fmt, va_list ap) {
     char buf[1024];
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    putchar_flush_begin();
     for (int i = 0; i < n && buf[i]; i++) putchar(buf[i]);
+    putchar_flush_end();
     return n;
 }
 

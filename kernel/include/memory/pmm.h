@@ -64,6 +64,8 @@ void  pmm_init(struct limine_memmap_response *memmap,
 void *pmm_alloc(size_t pages);
 void *pmm_alloc_zero(size_t pages);
 void *pmm_alloc_aligned(size_t pages, size_t alignment);
+
+void *pmm_alloc_below(size_t pages, uintptr_t max_phys);
 void  pmm_free(void *addr, size_t pages);
 void  pmm_free_single(void *addr);
 

@@ -37,6 +37,10 @@
 #define ATA_CMD_READ_PIO_EXT 0x24
 #define ATA_CMD_WRITE_PIO    0x30
 #define ATA_CMD_WRITE_PIO_EXT 0x34
+#define ATA_CMD_READ_DMA     0xC8
+#define ATA_CMD_READ_DMA_EXT 0x25
+#define ATA_CMD_WRITE_DMA    0xCA
+#define ATA_CMD_WRITE_DMA_EXT 0x35
 #define ATA_CMD_CACHE_FLUSH  0xE7
 #define ATA_CMD_CACHE_FLUSH_EXT 0xEA
 #define ATA_CMD_IDENTIFY     0xEC
@@ -65,6 +69,14 @@ typedef struct {
     char     serial[21];
     char     firmware[9];
     uint16_t identify[256];
+
+    bool     dma_supported;
+    uint16_t bmr_base;
+    uint64_t prdt_phys;
+    void    *prdt_virt;
+    uint64_t dma_buf_phys;
+    void    *dma_buf_virt;
+    uint32_t dma_buf_size;
 } ata_drive_t;
 
 void ata_init(void);

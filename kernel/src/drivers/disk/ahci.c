@@ -1,11 +1,11 @@
-#include "../../include/drivers/ahci.h"
-#include "../../include/drivers/pci.h"
-#include "../../include/io/serial.h"
-#include "../../include/memory/pmm.h"
-#include "../../include/memory/vmm.h"
-#include "../../include/memory/paging.h"
-#include "../../include/sched/spinlock.h"
-#include "../../include/syscall/errno.h"
+#include "../../../include/drivers/disk/ahci.h"
+#include "../../../include/drivers/pci.h"
+#include "../../../include/io/serial.h"
+#include "../../../include/memory/pmm.h"
+#include "../../../include/memory/vmm.h"
+#include "../../../include/memory/paging.h"
+#include "../../../include/sched/spinlock.h"
+#include "../../../include/syscall/errno.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -71,6 +71,12 @@
 #define ATA_CMD_READ_DMA_EX     0x25
 #define ATA_CMD_WRITE_DMA_EX    0x35
 #define ATA_CMD_FLUSH_CACHE_EX  0xEA
+#define ATA_CMD_PACKET          0xA0
+
+#define ATAPI_OP_READ_CAPACITY    0x25
+#define ATAPI_OP_READ_10          0x28
+#define ATAPI_OP_START_STOP_UNIT  0x1B
+#define ATAPI_OP_PREVENT_ALLOW    0x1E
 
 #define FIS_TYPE_REG_H2D 0x27
 
@@ -314,6 +320,117 @@ static int ahci_identify(ahci_hba_t *hba, ahci_device_t *d) {
 }
 
 #define AHCI_RW_CHUNK_SECTORS 128
+#define ATAPI_RW_CHUNK_SECTORS 16
+
+static int ahci_atapi_packet(ahci_device_t *d, const uint8_t cdb[16],
+                             uintptr_t buf_phys, uint32_t buf_bytes,
+                             uint32_t timeout_loops) {
+    ahci_hba_t *hba = d->hba;
+    volatile uint8_t *base = hba->abar;
+    int port = d->port_idx;
+
+    int slot = find_cmd_slot(base, port, hba->ncs);
+    if (slot < 0) return -EBUSY;
+
+    ahci_cmd_header_t *hdr = &((ahci_cmd_header_t *)d->clb_virt)[slot];
+    hdr->flags = (uint16_t)(sizeof(ahci_fis_reg_h2d_t) / 4);
+    hdr->flags |= (1u << 5);
+    hdr->prdtl = buf_bytes ? 1 : 0;
+    hdr->prdbc = 0;
+
+    ahci_cmd_table_t *ct = (ahci_cmd_table_t *)((uint8_t *)d->ctba_virt + slot * 256);
+    memset(ct, 0, sizeof(*ct));
+    memcpy(ct->acmd, cdb, 16);
+
+    if (buf_bytes) {
+        ct->prdt[0].dba  = (uint32_t)(buf_phys & 0xFFFFFFFFu);
+        ct->prdt[0].dbau = (uint32_t)(buf_phys >> 32);
+        ct->prdt[0].dbc  = buf_bytes - 1;
+    }
+
+    ahci_fis_reg_h2d_t *fis = (ahci_fis_reg_h2d_t *)ct->cfis;
+    memset(fis, 0, sizeof(*fis));
+    fis->fis_type = FIS_TYPE_REG_H2D;
+    fis->pm       = 0x80;
+    fis->command  = ATA_CMD_PACKET;
+    fis->featurel = buf_bytes ? 0x01 : 0x00;
+    fis->lba1     = (uint8_t)(buf_bytes & 0xFF);
+    fis->lba2     = (uint8_t)((buf_bytes >> 8) & 0xFF);
+
+    return ahci_issue_cmd(hba, d, slot, timeout_loops);
+}
+
+static int ahci_atapi_read_capacity(ahci_device_t *d) {
+    uint8_t cdb[16] = {0};
+    cdb[0] = ATAPI_OP_READ_CAPACITY;
+
+    uint8_t *buf = (uint8_t *)pmm_alloc_zero(1);
+    if (!buf) return -ENOMEM;
+    uintptr_t buf_phys = pmm_virt_to_phys(buf);
+
+    spinlock_acquire(&g_ahci_lock);
+    int r = ahci_atapi_packet(d, cdb, buf_phys, 8, 5000000);
+    spinlock_release(&g_ahci_lock);
+    if (r != 0) { pmm_free(buf, 1); return r; }
+
+    uint32_t max_lba    = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16)
+                        | ((uint32_t)buf[2] << 8)  |  (uint32_t)buf[3];
+    uint32_t block_size = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16)
+                        | ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
+
+    pmm_free(buf, 1);
+
+    if (block_size == 0 || max_lba == 0xFFFFFFFFu) {
+        d->sectors    = 0;
+        d->size_bytes = 0;
+        return -EIO;
+    }
+
+    d->sectors    = (uint64_t)max_lba + 1;
+    d->size_bytes = d->sectors * (uint64_t)block_size;
+    return 0;
+}
+
+static int ahci_atapi_read(ahci_device_t *d, uint64_t lba, uint32_t count, void *buf) {
+    if (!d || !d->present || !buf || count == 0) return -EINVAL;
+
+    if (count > ATAPI_RW_CHUNK_SECTORS) {
+        uint8_t *bp = (uint8_t *)buf;
+        while (count > 0) {
+            uint32_t n = count > ATAPI_RW_CHUNK_SECTORS ? ATAPI_RW_CHUNK_SECTORS : count;
+            int r = ahci_atapi_read(d, lba, n, bp);
+            if (r != 0) return r;
+            lba += n;
+            count -= n;
+            bp += (size_t)n * ATAPI_SECTOR_SIZE;
+        }
+        return 0;
+    }
+
+    spinlock_acquire(&g_ahci_lock);
+
+    uint32_t bytes = count * ATAPI_SECTOR_SIZE;
+    uint32_t pages = (bytes + 4095) / 4096;
+    void *bounce = pmm_alloc(pages);
+    if (!bounce) { spinlock_release(&g_ahci_lock); return -ENOMEM; }
+    uintptr_t bounce_phys = pmm_virt_to_phys(bounce);
+
+    uint8_t cdb[16] = {0};
+    cdb[0] = ATAPI_OP_READ_10;
+    cdb[2] = (uint8_t)((lba >> 24) & 0xFF);
+    cdb[3] = (uint8_t)((lba >> 16) & 0xFF);
+    cdb[4] = (uint8_t)((lba >>  8) & 0xFF);
+    cdb[5] = (uint8_t)( lba        & 0xFF);
+    cdb[7] = (uint8_t)((count >> 8) & 0xFF);
+    cdb[8] = (uint8_t)( count       & 0xFF);
+
+    int r = ahci_atapi_packet(d, cdb, bounce_phys, bytes, 10000000);
+    if (r == 0) memcpy(buf, bounce, bytes);
+
+    pmm_free(bounce, pages);
+    spinlock_release(&g_ahci_lock);
+    return r;
+}
 
 static int ahci_rw(ahci_device_t *d, uint64_t lba, uint32_t count,
                    void *buf, int write) {
@@ -384,14 +501,37 @@ static int ahci_rw(ahci_device_t *d, uint64_t lba, uint32_t count,
 }
 
 int ahci_read_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, void *buf) {
+    if (d && d->atapi) return ahci_atapi_read(d, lba, count, buf);
     return ahci_rw(d, lba, count, buf, 0);
 }
 int ahci_write_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, const void *buf) {
+    if (d && d->atapi) return -EROFS;
     return ahci_rw(d, lba, count, (void *)buf, 1);
+}
+
+int ahci_eject(ahci_device_t *d) {
+    if (!d || !d->present) return -EINVAL;
+    if (!d->atapi) return -EOPNOTSUPP;
+
+    spinlock_acquire(&g_ahci_lock);
+
+    uint8_t cdb_unlock[16] = {0};
+    cdb_unlock[0] = ATAPI_OP_PREVENT_ALLOW;
+    cdb_unlock[4] = 0x00;
+    (void)ahci_atapi_packet(d, cdb_unlock, 0, 0, 5000000);
+
+    uint8_t cdb[16] = {0};
+    cdb[0] = ATAPI_OP_START_STOP_UNIT;
+    cdb[4] = 0x02;
+    int r = ahci_atapi_packet(d, cdb, 0, 0, 5000000);
+
+    spinlock_release(&g_ahci_lock);
+    return r;
 }
 
 int ahci_flush(ahci_device_t *d) {
     if (!d || !d->present) return -EINVAL;
+    if (d->atapi) return 0;
     spinlock_acquire(&g_ahci_lock);
     ahci_hba_t *hba = d->hba;
     volatile uint8_t *base = hba->abar;
@@ -522,6 +662,15 @@ static int ahci_probe(pci_device_t *pd) {
             d->present = false;
             continue;
         }
+
+        if (d->atapi) {
+            int cap_r = ahci_atapi_read_capacity(d);
+            if (cap_r != 0) {
+                serial_printf("[ahci] port %d: ATAPI READ CAPACITY failed (%d) — no media?\n",
+                              i, cap_r);
+            }
+        }
+
         serial_printf("[ahci] port %d: %s '%s' sectors=%llu (%llu MB)\n",
                       i, d->atapi ? "ATAPI" : "SATA", d->model,
                       (unsigned long long)d->sectors,

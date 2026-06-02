@@ -275,7 +275,7 @@ static void draw_screen(void)
     if (max_top < 0) max_top = 0;
     if (g_top > max_top) g_top = max_top;
 
-    fputs("\x1b[?25l", stdout);
+    fputs("\x1b[?2026h\x1b[?25l", stdout);
     for (int i = 0; i < visible_rows; i++) {
         printf("\x1b[%d;1H\x1b[K", i + 1);
         int idx = g_top + i;
@@ -290,6 +290,7 @@ static void draw_screen(void)
         render_line(&g_doc.lines[idx], width);
     }
     draw_status();
+    fputs("\x1b[?2026l", stdout);
     fflush(stdout);
 }
 
@@ -436,6 +437,16 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (!isatty(0)) {
+        close(0);
+        int tty_fd = open("/dev/tty", O_RDONLY, 0);
+        if (tty_fd < 0) {
+            fputs("less: cannot open /dev/tty\n", stderr);
+            return 1;
+        }
+        if (tty_fd != 0) { dup2(tty_fd, 0); close(tty_fd); }
+    }
+
     enter_raw();
     atexit(restore_term);
     draw_screen();
@@ -450,7 +461,7 @@ int main(int argc, char **argv)
 
         switch (k) {
             case 'q': case 'Q': case 3: g_running = 0; break;
-            case 'h': case 'H': case '?': /* fallthrough handled below */
+            case 'h': case 'H': case '?':
                 if (k == '?') {
                     char pat[200];
                     int n = prompt_line('?', pat, sizeof(pat));
@@ -470,7 +481,7 @@ int main(int argc, char **argv)
                 break;
             case 'j': case 1001: if (g_top < max_top) g_top++; break;
             case 'k': case 1000: if (g_top > 0)       g_top--; break;
-            case ' ': case 1003 /* page down via ESC[C? */: case 2003:
+            case ' ': case 1003: case 2003:
                 g_top += visible_rows;
                 if (g_top > max_top) g_top = max_top;
                 break;

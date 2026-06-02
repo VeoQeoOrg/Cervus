@@ -10,7 +10,7 @@ static const cervus_mount_info_t *find_mount(const cervus_mount_info_t *m, int n
     return NULL;
 }
 
-static int name_is_partition(const char *name)
+static int name_is_partition_str(const char *name)
 {
     for (size_t k = 0; name[k]; k++)
         if (name[k] >= '0' && name[k] <= '9') return 1;
@@ -46,7 +46,7 @@ int main(int argc, char **argv)
     fputs("------  -------  --------  -----------------------\n", stdout);
 
     int found = 0;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 64; i++) {
         cervus_disk_info_t info;
         memset(&info, 0, sizeof(info));
         int r = cervus_disk_info(i, &info);
@@ -57,21 +57,21 @@ int main(int argc, char **argv)
         char sz[16];
         print_size_human(sz, sizeof(sz), info.size_bytes);
 
-        int is_part = name_is_partition(info.name);
+        int is_part = info.is_partition;
         const cervus_mount_info_t *m = is_part
             ? find_mount(mounts, (int)nm, info.name)
             : NULL;
         const char *type_str = !is_part ? "disk" : (m ? m->fstype : "part");
 
-        printf("%-6s  %-7s  %-8s  %s\n",
+        printf("%-8s  %-7s  %-8s  %s\n",
                info.name, sz, type_str, m ? m->path : "");
     }
 
     for (long i = 0; i < nm; i++) {
         const char *dev = mounts[i].device;
-        if (name_is_partition(dev)) continue;
+        if (name_is_partition_str(dev)) continue;
         if (strcmp(dev, "ramfs") != 0 && strcmp(dev, "devfs") != 0) continue;
-        printf("%-6s  %-7s  %-8s  %s\n",
+        printf("%-8s  %-7s  %-8s  %s\n",
                dev, "-", mounts[i].fstype, mounts[i].path);
         found++;
     }

@@ -55,4 +55,9 @@ void fb_init_backbuffer(struct limine_framebuffer *fb);
 void fb_flush(struct limine_framebuffer *fb);
 void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_end);
 
+void      fb_set_backbuffer(uint32_t *buf);
+uint32_t *fb_get_backbuffer(void);
+uint32_t  fb_backbuffer_pitch(void);
+size_t    fb_backbuffer_bytes(void);
+
 #endif

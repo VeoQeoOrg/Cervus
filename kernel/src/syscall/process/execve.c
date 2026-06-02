@@ -100,8 +100,6 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
         memcpy(pmm_phys_to_virt(phys), kbuf + pi * 0x1000, 0x1000);
     }
 
-    serial_printf("[EXECVE] stack built: page_base=0x%llx rsp=0x%llx argc=%d envc=0\n",
-                  (unsigned long long)page_base, (unsigned long long)new_rsp, argc);
     free(kbuf);
     return new_rsp;
 }
@@ -115,7 +113,6 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     char kpath[EXECVE_MAX_PATH];
     if (syscall_strncpy_from_user(kpath, (const char *)path_ptr, sizeof(kpath)) < 0) return -EFAULT;
     if (!kpath[0]) return -ENOENT;
-    serial_printf("[EXECVE] pid=%u execve(\"%s\")\n", t->pid, kpath);
 
     const char *kargv_ptrs[EXECVE_MAX_ARGS + 1];
     char (*kargv_store)[EXECVE_MAX_ARGLEN] = malloc(EXECVE_MAX_ARGS * EXECVE_MAX_ARGLEN);
@@ -226,7 +223,5 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
 
     asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
     vmm_switch_pagemap(t->pagemap);
-    serial_printf("[EXECVE] exec ok: entry=0x%llx rsp=0x%llx name='%s'\n",
-                  elf.entry, new_rsp, t->name);
     return 0;
 }

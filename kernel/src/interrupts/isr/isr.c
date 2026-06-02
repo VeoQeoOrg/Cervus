@@ -134,7 +134,13 @@ static void dump_user_qword_via_task(uint64_t uaddr, const char *label) {
         serial_printf("[ISR-PF] %s virt_to_phys failed for 0x%llx\n", label, uaddr);
         return;
     }
-    volatile uint64_t *p = (volatile uint64_t *)pmm_phys_to_virt(phys & ~7ULL);
+    uintptr_t kva = (uintptr_t)pmm_phys_to_virt(phys & ~7ULL);
+    if ((kva >> 47) != 0 && (kva >> 47) != 0x1FFFFULL) {
+        serial_printf("[ISR-PF] %s kva 0x%llx not canonical (phys=0x%llx) — skip\n",
+                      label, kva, phys);
+        return;
+    }
+    volatile uint64_t *p = (volatile uint64_t *)kva;
     uint64_t v = *p;
     serial_printf("[ISR-PF] %s [0x%llx] = 0x%llx\n", label, uaddr, v);
 }

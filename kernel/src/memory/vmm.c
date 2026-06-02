@@ -289,6 +289,31 @@ void vmm_free_pagemap(vmm_pagemap_t* map)
 }
 uintptr_t kernel_pml4_phys;
 
+static bool cpu_has_pat(void) {
+    uint32_t a, b, c, d;
+    asm volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "0"(1), "2"(0));
+    return (d & (1u << 16)) != 0;
+}
+
+static void pat_setup_wc(void) {
+    if (!cpu_has_pat()) {
+        serial_writestring("VMM: CPU lacks PAT, cache attributes limited to PCD/PWT\n");
+        return;
+    }
+    uint64_t pat = ((uint64_t)0x06 <<  0) |
+                   ((uint64_t)0x04 <<  8) |
+                   ((uint64_t)0x07 << 16) |
+                   ((uint64_t)0x00 << 24) |
+                   ((uint64_t)0x06 << 32) |
+                   ((uint64_t)0x01 << 40) |
+                   ((uint64_t)0x07 << 48) |
+                   ((uint64_t)0x00 << 56);
+    uint32_t lo = (uint32_t)pat;
+    uint32_t hi = (uint32_t)(pat >> 32);
+    asm volatile ("wrmsr" :: "c"(0x277u), "a"(lo), "d"(hi));
+    serial_printf("VMM: PAT programmed (entry 5 = WC), value=0x%llx\n", pat);
+}
+
 void vmm_init(void) {
     uintptr_t cr3;
     asm volatile ("mov %%cr3, %0" : "=r"(cr3));
@@ -296,6 +321,58 @@ void vmm_init(void) {
     kernel_pml4_phys = cr3;
     serial_printf("VMM: kernel pagemap initialized\n");
     serial_printf("VMM: kernel PML4 phys = 0x%llx\n", kernel_pml4_phys);
+    pat_setup_wc();
+}
+
+bool vmm_remap_range_wc(vmm_pagemap_t *map, uintptr_t virt_base, size_t pages) {
+    if (!map) return false;
+    asm volatile ("wbinvd" ::: "memory");
+
+    uintptr_t end = virt_base + (uintptr_t)pages * 4096;
+    uintptr_t v = virt_base;
+    while (v < end) {
+        size_t pml4_i = (v >> 39) & MASK;
+        size_t pdpt_i = (v >> 30) & MASK;
+        size_t pd_i   = (v >> 21) & MASK;
+        size_t pt_i   = (v >> 12) & MASK;
+
+        if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
+        vmm_pte_t *pdpt = (vmm_pte_t *)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
+        if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
+
+        if (pdpt[pdpt_i] & VMM_PSE) {
+            uint64_t e = pdpt[pdpt_i];
+            e &= ~((1ULL << 3) | (1ULL << 4) | (1ULL << 12));
+            e |= (1ULL << 3) | (1ULL << 12);
+            pdpt[pdpt_i] = e;
+            v = (v + 0x40000000ULL) & ~0x3FFFFFFFULL;
+            continue;
+        }
+
+        vmm_pte_t *pd = (vmm_pte_t *)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
+        if (!(pd[pd_i] & VMM_PRESENT)) return false;
+
+        if (pd[pd_i] & VMM_PSE) {
+            uint64_t e = pd[pd_i];
+            e &= ~((1ULL << 3) | (1ULL << 4) | (1ULL << 12));
+            e |= (1ULL << 3) | (1ULL << 12);
+            pd[pd_i] = e;
+            v = (v + 0x200000ULL) & ~0x1FFFFFULL;
+            continue;
+        }
+
+        vmm_pte_t *pt = (vmm_pte_t *)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
+        if (!(pt[pt_i] & VMM_PRESENT)) return false;
+        uint64_t e = pt[pt_i];
+        e &= ~((1ULL << 3) | (1ULL << 4) | (1ULL << 7));
+        e |= (1ULL << 3) | (1ULL << 7);
+        pt[pt_i] = e;
+        v += 4096;
+    }
+
+    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    asm volatile ("wbinvd" ::: "memory");
+    return true;
 }
 
 vmm_pagemap_t* vmm_get_kernel_pagemap(void) {

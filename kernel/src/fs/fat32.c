@@ -1,6 +1,6 @@
 #include "../../include/fs/fat32.h"
 #include "../../include/fs/vfs.h"
-#include "../../include/drivers/blkdev.h"
+#include "../../include/drivers/disk/blkdev.h"
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/syscall/errno.h"
@@ -1021,8 +1021,10 @@ int fat32_format(blkdev_t *dev, const char *label) {
     if (!dev) return -EINVAL;
 
     uint32_t total_sectors = (uint32_t)dev->sector_count;
+    serial_printf("       [FAT32] dev=%s sector_count=%u sector_size=%u\n",
+           dev->name, total_sectors, dev->sector_size);
     if (total_sectors < 65536) {
-        serial_printf("[FAT32] device too small (%u sectors) for FAT32\n", total_sectors);
+        serial_printf("       [FAT32] EINVAL: only %u sectors (need >= 65536)\n", total_sectors);
         return -EINVAL;
     }
 
@@ -1041,22 +1043,25 @@ int fat32_format(blkdev_t *dev, const char *label) {
     uint32_t cluster_count;
     for (fat_size = 1; ; fat_size++) {
         uint32_t total_fat_sectors = fat_size * num_fats;
-        if (total_fat_sectors >= data_sectors) return -EINVAL;
+        if (total_fat_sectors >= data_sectors) {
+            serial_printf("       [FAT32] EINVAL: fat sectors >= data sectors (%u)\n", data_sectors);
+            return -EINVAL;
+        }
         uint32_t remaining = data_sectors - total_fat_sectors;
         cluster_count = remaining / sectors_per_cluster;
         uint32_t need_entries = cluster_count + 2;
         uint32_t need_bytes   = need_entries * 4;
         uint32_t need_sectors = (need_bytes + 511) / 512;
         if (need_sectors <= fat_size) break;
-        if (fat_size > 1024 * 1024) return -EINVAL;
+        if (fat_size > 1024 * 1024) {
+            serial_printf("       [FAT32] EINVAL: fat_size overflow\n");
+            return -EINVAL;
+        }
     }
 
     if (cluster_count < 65525) {
-        serial_printf("[FAT32] ERROR: only %u clusters on %u-sector volume.\n"
-                      "        FAT32 requires >= 65525 clusters.\n"
-                      "        Minimum volume size is ~33 MB with 512-byte clusters.\n"
-                      "        Use a larger partition.\n",
-                      cluster_count, total_sectors);
+        serial_printf("       [FAT32] EINVAL: only %u clusters on %u sectors (need >= 65525)\n",
+               cluster_count, total_sectors);
         return -EINVAL;
     }
 
@@ -1119,7 +1124,7 @@ int fat32_format(blkdev_t *dev, const char *label) {
             uint32_t sector = fat_start;
             serial_printf("[fat32] zeroing FAT#%u: %u sectors starting at LBA %u\n",
                           f, fat_size, fat_start);
-            printf("       FAT#%u: ", f);
+            serial_printf("       FAT#%u: ", f);
             uint32_t last_pct = 0;
             uint32_t spinner = 0;
             while (remaining > 0) {
@@ -1128,7 +1133,7 @@ int fat32_format(blkdev_t *dev, const char *label) {
                 if (r < 0) {
                     serial_printf("[fat32] FAT zero-fill FAILED at LBA %u (batch=%u): %d\n",
                                   sector, batch, r);
-                    printf("\n");
+                    serial_printf("\n");
                     return -EIO;
                 }
                 sector += batch;
@@ -1137,13 +1142,13 @@ int fat32_format(blkdev_t *dev, const char *label) {
                 uint32_t pct = (done * 100) / fat_size;
                 if (pct != last_pct) {
                     const char glyphs[4] = { '|', '/', '-', '\\' };
-                    printf("\r\033[K       %c FAT#%u: %u%%",
+                    serial_printf("\r\033[K       %c FAT#%u: %u%%",
                            glyphs[spinner & 3], f, pct);
                     spinner++;
                     last_pct = pct;
                 }
             }
-            printf("\r\033[K       FAT#%u: done\n", f);
+            serial_printf("\r\033[K       FAT#%u: done\n", f);
             if (dev->ops->flush) dev->ops->flush(dev);
         }
     }
