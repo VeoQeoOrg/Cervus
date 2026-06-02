@@ -259,7 +259,7 @@ static bool extract_limine_hdd_bin(void) {
     return true;
 }
 
-#define LIMINE_VERSION    "12.2.0"
+#define LIMINE_VERSION    "12.3.2"
 #define LIMINE_TARBALL    "limine-binary.tar.gz"
 #define LIMINE_TARBALL_URL \
     "https://github.com/limine-bootloader/limine/releases/download/v" \
