@@ -127,30 +127,9 @@ git clone https://github.com/VeoQeo/Cervus.git
 cd Cervus
 ```
 
-*2. Build everything and launch in QEMU (BIOS):*
+*2. Build everything and launch in QEMU:*
 ```bash
-./build run
-```
-
-*3. The same under UEFI:*
-```bash
-./build run-uefi
-```
-
-*4. Boot from the previously installed disk image, no ISO:*
-```bash
-./build run-installed
-```
-
-*5. Wipe the disk and run the installer again:*
-```bash
-./build run-fresh
-```
-
-*6. Flash the ISO onto a USB drive:*
-**WARNING: This will overwrite all data on the target device.**
-```bash
-sudo ./build flash
+./build 
 ```
 
 A full list of build commands is available via `./build help`.
