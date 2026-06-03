@@ -44,6 +44,16 @@
 #define SYS_FUTEX_WAIT   80
 #define SYS_FUTEX_WAKE   81
 
+#define SYS_UNLINK      100
+#define SYS_RMDIR       101
+#define SYS_MKDIR       102
+#define SYS_RENAME      103
+#define SYS_STATVFS     104
+#define SYS_SYNC        105
+#define SYS_CHDIR       106
+#define SYS_GETCWD      107
+#define SYS_LIST_MOUNTS 108
+
 #define SYS_CERVUS_BASE       512
 
 #define SYS_DBG_PRINT         512
@@ -64,10 +74,6 @@
 #define SYS_DISK_UMOUNT       531
 #define SYS_DISK_FORMAT       532
 #define SYS_DISK_INFO         533
-#define SYS_UNLINK            534
-#define SYS_RMDIR             535
-#define SYS_MKDIR             536
-#define SYS_RENAME            537
 
 #define SYS_DISK_READ_RAW     540
 #define SYS_DISK_WRITE_RAW    541
@@ -76,20 +82,15 @@
 #define SYS_DISK_LIST_PARTS   544
 
 #define SYS_DISK_BIOS_INSTALL 545
-#define SYS_LIST_MOUNTS       546
-#define SYS_STATVFS           547
 #define SYS_DISK_EJECT        548
 #define SYS_DISK_PARTITION_GPT 549
 
 #define SYS_PCI_LIST          550
 #define SYS_USB_LIST          551
-#define SYS_SYNC              552
 #define SYS_VT_SPAWN_POLL     553
 #define SYS_VT_SET_CTTY       554
 #define SYS_VT_CLEAR_SHELL    555
 #define SYS_VT_SWITCH         556
-#define SYS_CHDIR             557
-#define SYS_GETCWD            558
 
 #define SYSCALL_TABLE_SIZE    559
 
