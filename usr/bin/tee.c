@@ -13,8 +13,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tee")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int append = 0;
     int opt;
@@ -31,7 +29,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc && nfd < 32; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         int fl = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
         int fd = open(resolved, fl, 0644);
         if (fd < 0) {

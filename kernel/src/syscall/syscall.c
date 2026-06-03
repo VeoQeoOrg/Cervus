@@ -102,6 +102,8 @@ extern int64_t sys_vt_spawn_poll(void);
 extern int64_t sys_vt_set_ctty(uint64_t);
 extern int64_t sys_vt_clear_shell(uint64_t);
 extern int64_t sys_vt_switch(uint64_t);
+extern int64_t sys_chdir             (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getcwd            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -208,6 +210,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_VT_SET_CTTY]       = _sys_vt_set_ctty,
     [SYS_VT_CLEAR_SHELL]    = _sys_vt_clear_shell,
     [SYS_VT_SWITCH]         = _sys_vt_switch,
+    [SYS_CHDIR]             = sys_chdir,
+    [SYS_GETCWD]            = sys_getcwd,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

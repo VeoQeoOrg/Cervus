@@ -220,7 +220,6 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "man")) return 0;
-    argc = cervus_filter_args(argc, argv);
 
     if (argc < 2) { fputs(USAGE, stderr); return 1; }
 

@@ -50,14 +50,12 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "head")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
 
     int nlines = 10;
     long nbytes = -1;
 
     for (int i = 1; i < argc; i++) {
-        if (!is_shell_flag(argv[i]) &&
-            argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9') {
+        if (argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9') {
             nlines = atoi(argv[i] + 1);
             if (nlines < 0) nlines = 0;
             for (int j = i; j + 1 < argc; j++) argv[j] = argv[j + 1];
@@ -65,7 +63,6 @@ int main(int argc, char **argv)
         }
     }
 
-    argc = cervus_filter_args(argc, argv);
 
     int opt;
     while ((opt = getopt(argc, argv, "n:c:q")) != -1) {
@@ -87,7 +84,7 @@ int main(int argc, char **argv)
 
     for (int i = optind; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         int fd = open(resolved, O_RDONLY);
         if (fd < 0) { fprintf(stderr, "head: cannot open '%s'\n", argv[i]); rc = 1; continue; }
         if (nf > 1) { fputs("==> ", stdout); fputs(argv[i], stdout); fputs(" <==\n", stdout); }

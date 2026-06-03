@@ -15,8 +15,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "touch")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int no_create = 0;
     int opt;
@@ -33,7 +31,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char path[512];
-        resolve_path(cwd, argv[i], path, sizeof(path));
+        snprintf(path, sizeof(path), "%s", argv[i]);
         struct stat st;
         if (stat(path, &st) == 0) {
             if (st.st_type == DT_DIR) {

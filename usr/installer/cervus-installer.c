@@ -1388,13 +1388,14 @@ static int normal_install_flow(void) {
 }
 
 int main(int argc, char **argv) {
-    const char *mode = getenv_argv(argc, argv, "MODE", "");
-    if (strcmp(mode, "live") != 0) {
+    (void)argc; (void)argv;
+    const char *mode = getenv("MODE");
+    if (!mode || strcmp(mode, "live") != 0) {
         fputs(C_RED "cervus-installer: only available in Live mode.\n" C_RESET, stderr);
         return 1;
     }
 
-    const char *boot = getenv_argv(argc, argv, "BOOT_PROMPT", "");
+    const char *boot = getenv("BOOT_PROMPT");
     int boot_mode = (boot && boot[0] == '1');
 
     term_size_query();

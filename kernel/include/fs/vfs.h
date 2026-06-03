@@ -111,8 +111,10 @@ typedef struct {
 
 typedef struct fd_table fd_table_t;
 
+#include "../sched/spinlock.h"
 struct fd_table {
     fd_entry_t entries[TASK_MAX_FDS];
+    spinlock_t lock;
 };
 
 void    vfs_init   (void);

@@ -8,7 +8,8 @@ int64_t sys_open(uint64_t path_ptr, uint64_t flags, uint64_t mode)
     if (!t->fd_table) return -ENOMEM;
 
     char kpath[VFS_MAX_PATH];
-    if (syscall_strncpy_from_user(kpath, (const char *)path_ptr, sizeof(kpath)) < 0) return -EFAULT;
+    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (rp < 0) return rp;
     if (!kpath[0]) return -ENOENT;
 
     vfs_file_t *file = NULL;

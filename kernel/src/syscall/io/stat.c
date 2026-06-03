@@ -5,7 +5,8 @@ int64_t sys_stat(uint64_t path_ptr, uint64_t stat_ptr)
 {
     if (!stat_ptr) return -EINVAL;
     char kpath[VFS_MAX_PATH];
-    if (syscall_strncpy_from_user(kpath, (const char *)path_ptr, sizeof(kpath)) < 0) return -EFAULT;
+    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (rp < 0) return rp;
     vfs_stat_t st;
     int r = vfs_stat(kpath, &st);
     if (r < 0) return (int64_t)r;

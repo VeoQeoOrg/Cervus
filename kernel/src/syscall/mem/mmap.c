@@ -11,12 +11,27 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     if (!(flags & MAP_ANONYMOUS)) return (int64_t)MAP_FAILED;
     if (fd != (uint64_t)-1 && fd != 0) return (int64_t)MAP_FAILED;
     if (!length) return (int64_t)MAP_FAILED;
+    if (length > (1ULL << 40)) return (int64_t)MAP_FAILED;
 
+    if (length + 0xFFFULL < length) return (int64_t)MAP_FAILED;
     size_t pages = (length + 0xFFFULL) >> 12;
+    if (pages == 0 || pages > (1ULL << 28)) return (int64_t)MAP_FAILED;
+
     uintptr_t addr;
     if (flags & MAP_FIXED)       addr = hint & ~0xFFFULL;
     else if (hint)               addr = hint & ~0xFFFULL;
-    else { addr = (t->brk_max - (uint64_t)pages * 0x1000) & ~0xFFFULL; t->brk_max = addr; }
+    else {
+        uint64_t span = (uint64_t)pages * 0x1000;
+        if (t->brk_max < span) return (int64_t)MAP_FAILED;
+        addr = (t->brk_max - span) & ~0xFFFULL;
+        if (addr <= t->brk_current) return (int64_t)MAP_FAILED;
+        t->brk_max = addr;
+    }
+    if (addr < 0x1000ULL) return (int64_t)MAP_FAILED;
+    if (addr >= 0x0000800000000000ULL) return (int64_t)MAP_FAILED;
+    uint64_t end_check = addr + (uint64_t)pages * 0x1000;
+    if (end_check < addr) return (int64_t)MAP_FAILED;
+    if (end_check > 0x0000800000000000ULL) return (int64_t)MAP_FAILED;
 
     uint64_t vf = VMM_PRESENT | VMM_USER;
     if (prot & PROT_WRITE) vf |= VMM_WRITE;

@@ -19,9 +19,11 @@ int64_t sys_disk_read_raw(uint64_t devname_ptr, uint64_t lba, uint64_t count,
     if (strncmp(name, "/dev/", 5) == 0) name += 5;
     blkdev_t *dev = blkdev_get_by_name(name);
     if (!dev) return -ENODEV;
-    if (lba + count > dev->sector_count) return -EINVAL;
+    if (dev->sector_size == 0) return -EIO;
+    if (lba > dev->sector_count || count > dev->sector_count - lba) return -EINVAL;
 
     uint64_t bytes = count * (uint64_t)dev->sector_size;
+    if (bytes / (uint64_t)dev->sector_size != count) return -EINVAL;
     if (!syscall_uptr_validate((void *)buf_ptr, (size_t)bytes)) return -EFAULT;
 
     int r = dev->ops->read_sectors(dev, lba, (uint32_t)count, (void *)buf_ptr);

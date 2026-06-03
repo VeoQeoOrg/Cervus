@@ -8,11 +8,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "mount")) return 0;
-    int real_argc = 0;
-    for (int i = 0; i < argc; i++)
-        if (!is_shell_flag(argv[i])) real_argc++;
-
-    if (real_argc < 3) {
+    if (argc < 3) {
         fputs("Usage: mount <device> <mountpoint>\n"
               "  e.g: mount hda /mnt/disk\n"
               "\nMounts /dev/<device> with Ext2 at <mountpoint>.\n",
@@ -20,14 +16,8 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    const char *devname = NULL, *path = NULL;
-    int ai = 0;
-    for (int i = 0; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        if (ai == 1) devname = argv[i];
-        if (ai == 2) path    = argv[i];
-        ai++;
-    }
+    const char *devname = argv[1];
+    const char *path    = argv[2];
     if (!devname || !path) {
         fputs("mount: missing arguments\n", stderr);
         return 1;

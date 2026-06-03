@@ -86,7 +86,6 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0) { force = 1; continue; }
-        if (is_shell_flag(argv[i])) continue;
         if (!devname) { devname = argv[i]; continue; }
         if (n_specs < MAX_PARTS) specs[n_specs++] = argv[i];
         else { fputs("mkpart: too many partitions (max 4 for MBR)\n", stderr); return 1; }

@@ -10,6 +10,7 @@
 
 #define EXECVE_MAX_PATH   512
 #define EXECVE_MAX_ARGS   128
+#define EXECVE_MAX_ENV    128
 #define EXECVE_MAX_ARGLEN 4096
 #define AT_NULL   0
 #define AT_PHDR   3
@@ -20,13 +21,15 @@
 
 static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
                                     const char *argv[], int argc,
+                                    const char *envp[], int envc,
                                     const elf_load_result_t *elf)
 {
     size_t str_total = 0;
     for (int i = 0; i < argc; i++) str_total += strlen(argv[i]) + 1;
+    for (int i = 0; i < envc; i++) str_total += strlen(envp[i]) + 1;
 
     size_t n_auxv      = 6;
-    size_t ptr_count   = 1 + (size_t)argc + 1 + 1 + (n_auxv * 2);
+    size_t ptr_count   = 1 + (size_t)argc + 1 + (size_t)envc + 1 + (n_auxv * 2);
     size_t frame_bytes = ptr_count * 8;
 
     uintptr_t aligned_top  = stack_top & ~(uintptr_t)0xF;
@@ -54,6 +57,7 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
     memset(kbuf, 0, kbuf_size);
 
     uint64_t argv_user[EXECVE_MAX_ARGS + 1];
+    uint64_t envp_user[EXECVE_MAX_ENV + 1];
     size_t   str_off = 0;
     for (int i = 0; i < argc; i++) {
         size_t slen = strlen(argv[i]) + 1;
@@ -61,12 +65,19 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
         argv_user[i] = strings_base + str_off;
         str_off += slen;
     }
+    for (int i = 0; i < envc; i++) {
+        size_t slen = strlen(envp[i]) + 1;
+        memcpy(kbuf + (strings_base + str_off - page_base), envp[i], slen);
+        envp_user[i] = strings_base + str_off;
+        str_off += slen;
+    }
 
-    uint64_t frame[256];
+    uint64_t frame[512];
     size_t fi = 0;
     frame[fi++] = (uint64_t)argc;
     for (int i = 0; i < argc; i++) frame[fi++] = argv_user[i];
     frame[fi++] = 0;
+    for (int i = 0; i < envc; i++) frame[fi++] = envp_user[i];
     frame[fi++] = 0;
     frame[fi++] = AT_PHDR;   frame[fi++] = elf->load_base + 0x40;
     frame[fi++] = AT_PHENT;  frame[fi++] = 56;
@@ -106,12 +117,12 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
 
 int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
 {
-    (void)envp_ptr;
     task_t *t = syscall_cur_task();
     if (!t || !t->is_userspace) return -EPERM;
 
     char kpath[EXECVE_MAX_PATH];
-    if (syscall_strncpy_from_user(kpath, (const char *)path_ptr, sizeof(kpath)) < 0) return -EFAULT;
+    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (rp < 0) return rp;
     if (!kpath[0]) return -ENOENT;
 
     const char *kargv_ptrs[EXECVE_MAX_ARGS + 1];
@@ -139,26 +150,45 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
         kargv_ptrs[0] = kargv_store[0]; kargv_ptrs[1] = NULL; argc = 1;
     }
 
+    const char *kenvp_ptrs[EXECVE_MAX_ENV + 1];
+    char (*kenvp_store)[EXECVE_MAX_ARGLEN] = malloc(EXECVE_MAX_ENV * EXECVE_MAX_ARGLEN);
+    if (!kenvp_store) { free(kargv_store); return -ENOMEM; }
+    int envc = 0;
+    if (envp_ptr) {
+        for (;;) {
+            if (envc >= EXECVE_MAX_ENV) { free(kargv_store); free(kenvp_store); return -E2BIG; }
+            uint64_t uslot = envp_ptr + (uint64_t)envc * 8;
+            uint64_t eptr  = 0;
+            if (syscall_copy_from_user(&eptr, (const void *)uslot, 8) < 0)
+                { free(kargv_store); free(kenvp_store); return -EFAULT; }
+            if (!eptr) break;
+            if (syscall_strncpy_from_user(kenvp_store[envc], (const char *)eptr, EXECVE_MAX_ARGLEN) < 0)
+                { free(kargv_store); free(kenvp_store); return -EFAULT; }
+            kenvp_ptrs[envc] = kenvp_store[envc]; envc++;
+        }
+    }
+    kenvp_ptrs[envc] = NULL;
+
     vfs_file_t *vfile = NULL;
     int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
-    if (vret < 0) { serial_printf("[EXECVE] open failed: %d\n", vret); free(kargv_store); return (int64_t)vret; }
+    if (vret < 0) { serial_printf("[EXECVE] open failed: %d\n", vret); free(kargv_store); free(kenvp_store); return (int64_t)vret; }
     vfs_stat_t st;
     if (vfs_fstat(vfile, &st) < 0 || st.st_size == 0) {
         serial_printf("[EXECVE] fstat/size failed: path='%s' size=%llu\n",
                       kpath, (unsigned long long)st.st_size);
-        vfs_close(vfile); free(kargv_store); return -EIO;
+        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -EIO;
     }
     size_t fsize = (size_t)st.st_size;
     uint8_t *elf_data = malloc(fsize);
     if (!elf_data) {
         serial_printf("[EXECVE] malloc(%zu) failed for path='%s'\n", fsize, kpath);
-        vfs_close(vfile); free(kargv_store); return -ENOMEM;
+        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOMEM;
     }
     int64_t nr = vfs_read(vfile, elf_data, fsize); vfs_close(vfile);
     if (nr < 0 || (size_t)nr != fsize) {
         serial_printf("[EXECVE] read failed: path='%s' expected=%zu got=%lld\n",
                       kpath, fsize, (long long)nr);
-        free(elf_data); free(kargv_store); return -EIO;
+        free(elf_data); free(kargv_store); free(kenvp_store); return -EIO;
     }
     if (fsize < 4 || elf_data[0] != 0x7F || elf_data[1] != 'E' ||
         elf_data[2] != 'L' || elf_data[3] != 'F') {
@@ -168,7 +198,7 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
                       fsize > 1 ? elf_data[1] : 0,
                       fsize > 2 ? elf_data[2] : 0,
                       fsize > 3 ? elf_data[3] : 0);
-        free(elf_data); free(kargv_store); return -ENOEXEC;
+        free(elf_data); free(kargv_store); free(kenvp_store); return -ENOEXEC;
     }
 
     elf_load_result_t elf = elf_load(elf_data, fsize, 0);
@@ -176,11 +206,12 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     if (elf.error != ELF_OK) {
         serial_printf("[EXECVE] elf_load: %s\n", elf_strerror(elf.error));
         if (elf.pagemap) vmm_free_pagemap(elf.pagemap);
-        free(kargv_store); return -ENOEXEC;
+        free(kargv_store); free(kenvp_store); return -ENOEXEC;
     }
 
-    uintptr_t new_rsp = execve_build_stack(elf.pagemap, elf.stack_top, kargv_ptrs, argc, &elf);
+    uintptr_t new_rsp = execve_build_stack(elf.pagemap, elf.stack_top, kargv_ptrs, argc, kenvp_ptrs, envc, &elf);
     free(kargv_store);
+    free(kenvp_store);
     if (!new_rsp) { vmm_free_pagemap(elf.pagemap); return -ENOMEM; }
 
     if (t->fd_table) fd_table_cloexec(t->fd_table);

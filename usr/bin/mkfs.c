@@ -25,7 +25,6 @@ int main(int argc, char **argv)
             fs = argv[++i];
             continue;
         }
-        if (is_shell_flag(argv[i])) continue;
         if (positional == 0)      devname = argv[i];
         else if (positional == 1) label   = argv[i];
         positional++;

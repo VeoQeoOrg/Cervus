@@ -224,6 +224,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->brk_max         = 0x0000700000000000ULL;
     atomic_init_bool(&t->on_cpu, false);
     strncpy(t->name, name, sizeof(t->name) - 1);
+    t->cwd[0] = '/'; t->cwd[1] = '\0';
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
@@ -256,6 +257,7 @@ task_t* task_fork(task_t* parent) {
     child->uid             = parent->uid;
     child->gid             = parent->gid;
     child->ctty            = parent->ctty;
+    memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;

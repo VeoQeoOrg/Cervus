@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <string.h>
-#include <cervus_util.h>
+#include <unistd.h>
 
 int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        if (is_shell_flag(a)) continue;
         if (strcmp(a, "--logical")  == 0) continue;
         if (strcmp(a, "--physical") == 0) continue;
         if (strcmp(a, "--help") == 0) {
@@ -33,8 +32,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "pwd: too many arguments\n");
         return 1;
     }
-    const char *cwd = get_cwd_flag(argc, argv);
-    if (!cwd || !cwd[0]) cwd = "/";
+    char cwd[512];
+    if (!getcwd(cwd, sizeof(cwd))) { cwd[0] = '/'; cwd[1] = '\0'; }
     puts(cwd);
     return 0;
 }

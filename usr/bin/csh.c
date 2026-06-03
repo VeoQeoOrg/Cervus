@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <errno.h>
 #include <cervus_util.h>
 
 #define CSH_MAX_FSIZE   (1 << 20)
@@ -235,7 +236,7 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r,
         }
         if (*nr < max_r) {
             redirs[*nr].type = rt;
-            resolve_path(g_cwd, target, redirs[*nr].path, CSH_PATH_MAX);
+            snprintf(redirs[*nr].path, CSH_PATH_MAX, "%s", target);
             (*nr)++;
         }
     }
@@ -246,7 +247,7 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r,
 
 static int find_in_path(const char *cmd, char *out, size_t outsz) {
     if (cmd[0] == '/' || cmd[0] == '.') {
-        resolve_path(g_cwd, cmd, out, outsz);
+        snprintf(out, outsz, "%s", cmd);
         struct stat st;
         return stat(out, &st) == 0 && st.st_type != 1;
     }
@@ -349,22 +350,23 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
         exit(127);
     }
 
-    char *real_argv[CSH_MAX_TOKENS + CSH_MAX_VARS + 4];
-    static char _cwd_flag[CSH_PATH_MAX + 16];
-    static char _env_flags[CSH_MAX_VARS][CSH_NAME_MAX + CSH_VAL_MAX + 16];
+    char *real_argv[CSH_MAX_TOKENS + 4];
+    static char _envp[CSH_MAX_VARS][CSH_NAME_MAX + CSH_VAL_MAX + 2];
+    char *real_envp[CSH_MAX_VARS + 1];
 
     int ri = 0;
     real_argv[ri++] = binpath;
     for (int i = 1; i < argc; i++) real_argv[ri++] = argv[i];
-    snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", g_cwd);
-    real_argv[ri++] = _cwd_flag;
-    for (int ei = 0; ei < g_nvars && ri < (int)(sizeof(real_argv)/sizeof(real_argv[0])) - 1; ei++) {
-        if (!g_vars[ei].is_env) continue;
-        snprintf(_env_flags[ei], sizeof(_env_flags[ei]), "--env:%s=%s",
-                 g_vars[ei].name, g_vars[ei].value);
-        real_argv[ri++] = _env_flags[ei];
-    }
     real_argv[ri] = NULL;
+    int ei_out = 0;
+    for (int ei = 0; ei < g_nvars && ei_out < CSH_MAX_VARS; ei++) {
+        if (!g_vars[ei].is_env) continue;
+        snprintf(_envp[ei_out], sizeof(_envp[ei_out]), "%s=%s",
+                 g_vars[ei].name, g_vars[ei].value);
+        real_envp[ei_out] = _envp[ei_out];
+        ei_out++;
+    }
+    real_envp[ei_out] = NULL;
 
     pid_t child = fork();
     if (child < 0) { fputs(C_RED "csh: fork failed\n" C_RESET, stdout); return 1; }
@@ -386,7 +388,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
             dup2(fd, tfd);
             close(fd);
         }
-        execve(binpath, (char *const *)real_argv, NULL);
+        execve(binpath, (char *const *)real_argv, (char *const *)real_envp);
         fputs(C_RED "csh: exec failed: " C_RESET, stdout);
         fputs(binpath, stdout); putchar('\n');
         exit(127);
@@ -403,7 +405,7 @@ static int cond_is_test_op(const char *op) {
 
 static int eval_unary_test(const char *op, const char *arg) {
     char full[CSH_PATH_MAX];
-    resolve_path(g_cwd, arg, full, sizeof(full));
+    snprintf(full, sizeof(full), "%s", arg);
     struct stat st;
     if (stat(full, &st) != 0) return 0;
     if (op[1] == 'e') return 1;
@@ -917,17 +919,15 @@ static int run_script(void) {
         if (strcmp(tok[0], "cd") == 0) {
             const char *path = (n > 1) ? tok[1] : var_get("HOME");
             if (!path || !path[0]) path = "/";
-            char np[CSH_PATH_MAX];
-            resolve_path(g_cwd, path, np, sizeof(np));
-            struct stat st;
-            if (stat(np, &st) != 0 || st.st_type != 1) {
-                fputs(C_RED "cd: not a dir: " C_RESET, stdout);
-                fputs(path, stdout); putchar('\n');
+            if (chdir(path) < 0) {
+                fputs(C_RED "cd: " C_RESET, stdout);
+                fputs(strerror(errno), stdout);
+                fputs(": ", stdout);
+                fputs(path, stdout);
+                putchar('\n');
                 rc_set(1);
             } else {
-                strncpy(g_cwd, np, sizeof(g_cwd) - 1);
-                g_cwd[sizeof(g_cwd) - 1] = '\0';
-                chdir(np);
+                if (!getcwd(g_cwd, sizeof(g_cwd))) { g_cwd[0] = '/'; g_cwd[1] = '\0'; }
                 rc_set(0);
             }
             line_idx++; continue;
@@ -954,37 +954,26 @@ static int run_script(void) {
 }
 
 int main(int argc, char **argv) {
-    const char *cwd = get_cwd_flag(argc, argv);
-    if (cwd && cwd[0]) {
-        strncpy(g_cwd, cwd, sizeof(g_cwd) - 1);
-        g_cwd[sizeof(g_cwd) - 1] = '\0';
-    }
+    if (!getcwd(g_cwd, sizeof(g_cwd))) { g_cwd[0] = '/'; g_cwd[1] = '\0'; }
 
-    const char *p = getenv_argv(argc, argv, "PATH", "");
+    const char *p = getenv("PATH");
     if (p && p[0]) {
         strncpy(g_path_env, p, sizeof(g_path_env) - 1);
         g_path_env[sizeof(g_path_env) - 1] = '\0';
     }
-    const char *h = getenv_argv(argc, argv, "HOME", "/");
-    var_setenv("HOME", h);
+    const char *h = getenv("HOME");
+    var_setenv("HOME", h ? h : "/");
     var_setenv("PATH", g_path_env);
     var_set("status", "0");
 
-    const char *script = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        script = argv[i];
-        break;
-    }
+    const char *script = (argc > 1) ? argv[1] : NULL;
 
     if (!script) {
         fputs(C_CYAN "csh: " C_RESET "Cervus C-shell. Usage: csh <script>\n", stdout);
         return 0;
     }
 
-    char resolved[CSH_PATH_MAX];
-    resolve_path(g_cwd, script, resolved, sizeof(resolved));
-    if (load_script(resolved) < 0) return 2;
+    if (load_script(script) < 0) return 2;
 
     return run_script();
 }

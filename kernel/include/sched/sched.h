@@ -130,6 +130,8 @@ typedef struct task {
 
     uint64_t run_start_ns;
 
+    char cwd[256];
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)

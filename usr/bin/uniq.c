@@ -36,8 +36,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "uniq")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int count_mode = 0, dup_only = 0, uniq_only = 0, ci = 0;
     int opt;
@@ -54,13 +52,13 @@ int main(int argc, char **argv)
     int in_fd = 0, out_fd = 1;
     if (optind < argc && strcmp(argv[optind], "-") != 0) {
         char resolved[512];
-        resolve_path(cwd, argv[optind], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[optind]);
         in_fd = open(resolved, O_RDONLY);
         if (in_fd < 0) { fprintf(stderr, "uniq: cannot open '%s'\n", argv[optind]); return 1; }
     }
     if (optind + 1 < argc) {
         char resolved[512];
-        resolve_path(cwd, argv[optind + 1], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[optind + 1]);
         out_fd = open(resolved, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (out_fd < 0) { fprintf(stderr, "uniq: cannot create '%s'\n", argv[optind + 1]); if (in_fd > 0) close(in_fd); return 1; }
         dup2(out_fd, 1);

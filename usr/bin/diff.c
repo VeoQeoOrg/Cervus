@@ -198,8 +198,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 
 int main(int argc, char **argv) {
     if (cervus_check_help_version(argc, argv, USAGE, "diff")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int brief = 0;
     int opt;
@@ -214,8 +212,8 @@ int main(int argc, char **argv) {
     const char *p2 = argv[optind + 1];
 
     char r1[1024], r2[1024];
-    resolve_path(cwd, p1, r1, sizeof(r1));
-    resolve_path(cwd, p2, r2, sizeof(r2));
+    snprintf(r1, sizeof(r1), "%s", p1);
+    snprintf(r2, sizeof(r2), "%s", p2);
 
     diff_file_t A = {0}, B = {0};
     if (load_file(r1, &A) < 0) { free_file(&A); return 2; }

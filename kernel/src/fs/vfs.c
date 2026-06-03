@@ -460,62 +460,85 @@ fd_table_t *fd_table_clone(const fd_table_t *src) {
     if (!src) return NULL;
     fd_table_t *dst = kzalloc(sizeof(fd_table_t));
     if (!dst) return NULL;
+    uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&src->lock);
     for (int i = 0; i < TASK_MAX_FDS; i++) {
         if (src->entries[i].file) {
             dst->entries[i] = src->entries[i];
             __atomic_fetch_add(&dst->entries[i].file->refcount, 1, __ATOMIC_RELAXED);
         }
     }
+    spinlock_release_irqrestore((spinlock_t *)&src->lock, f);
     return dst;
 }
 
 void fd_table_cloexec(fd_table_t *table) {
     if (!table) return;
+    vfs_file_t *to_free[TASK_MAX_FDS];
+    int n_free = 0;
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
     for (int i = 0; i < TASK_MAX_FDS; i++) {
         if (table->entries[i].file && (table->entries[i].fd_flags & FD_CLOEXEC)) {
-            vfs_file_free(table->entries[i].file);
+            to_free[n_free++] = table->entries[i].file;
             table->entries[i].file     = NULL;
             table->entries[i].fd_flags = 0;
         }
     }
+    spinlock_release_irqrestore(&table->lock, f);
+    for (int i = 0; i < n_free; i++) vfs_file_free(to_free[i]);
 }
 
 void fd_table_destroy(fd_table_t *table) {
     if (!table) return;
+    vfs_file_t *to_free[TASK_MAX_FDS];
+    int n_free = 0;
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
     for (int i = 0; i < TASK_MAX_FDS; i++) {
         if (table->entries[i].file) {
-            vfs_file_free(table->entries[i].file);
+            to_free[n_free++] = table->entries[i].file;
             table->entries[i].file = NULL;
         }
     }
+    spinlock_release_irqrestore(&table->lock, f);
+    for (int i = 0; i < n_free; i++) vfs_file_free(to_free[i]);
     kfree(table);
 }
 
 int fd_alloc(fd_table_t *table, vfs_file_t *file, int min_fd) {
     if (!table || !file) return -EINVAL;
     if (min_fd < 0 || min_fd >= TASK_MAX_FDS) return -EINVAL;
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
     for (int i = min_fd; i < TASK_MAX_FDS; i++) {
         if (!table->entries[i].file) {
             table->entries[i].file     = file;
             table->entries[i].fd_flags = 0;
+            spinlock_release_irqrestore(&table->lock, f);
             return i;
         }
     }
+    spinlock_release_irqrestore(&table->lock, f);
     return -EMFILE;
 }
 
 vfs_file_t *fd_get(const fd_table_t *table, int fd) {
     if (!table || fd < 0 || fd >= TASK_MAX_FDS) return NULL;
-    return table->entries[fd].file;
+    uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&table->lock);
+    vfs_file_t *r = table->entries[fd].file;
+    spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
+    return r;
 }
 
 int fd_close(fd_table_t *table, int fd) {
     if (!table || fd < 0 || fd >= TASK_MAX_FDS) return -EBADF;
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
     vfs_file_t *file = table->entries[fd].file;
-    if (!file) return -EBADF;
-    vfs_file_free(file);
+    if (!file) {
+        spinlock_release_irqrestore(&table->lock, f);
+        return -EBADF;
+    }
     table->entries[fd].file     = NULL;
     table->entries[fd].fd_flags = 0;
+    spinlock_release_irqrestore(&table->lock, f);
+    vfs_file_free(file);
     return 0;
 }
 
@@ -525,29 +548,43 @@ int fd_dup2(fd_table_t *table, int oldfd, int newfd) {
     if (newfd < 0 || newfd >= TASK_MAX_FDS) return -EBADF;
     if (oldfd == newfd) return newfd;
 
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
     vfs_file_t *src = table->entries[oldfd].file;
-    if (!src) return -EBADF;
-
-    if (table->entries[newfd].file)
-        vfs_file_free(table->entries[newfd].file);
-
+    if (!src) {
+        spinlock_release_irqrestore(&table->lock, f);
+        return -EBADF;
+    }
+    vfs_file_t *old_dst = table->entries[newfd].file;
     table->entries[newfd].file     = src;
     table->entries[newfd].fd_flags = 0;
     __atomic_fetch_add(&src->refcount, 1, __ATOMIC_RELAXED);
+    spinlock_release_irqrestore(&table->lock, f);
+    if (old_dst) vfs_file_free(old_dst);
     return newfd;
 }
 
 int fd_set_flags(fd_table_t *table, int fd, int flags) {
     if (!table || fd < 0 || fd >= TASK_MAX_FDS) return -EBADF;
-    if (!table->entries[fd].file) return -EBADF;
+    uint64_t f = spinlock_acquire_irqsave(&table->lock);
+    if (!table->entries[fd].file) {
+        spinlock_release_irqrestore(&table->lock, f);
+        return -EBADF;
+    }
     table->entries[fd].fd_flags = flags;
+    spinlock_release_irqrestore(&table->lock, f);
     return 0;
 }
 
 int fd_get_flags(const fd_table_t *table, int fd) {
     if (!table || fd < 0 || fd >= TASK_MAX_FDS) return -EBADF;
-    if (!table->entries[fd].file) return -EBADF;
-    return table->entries[fd].fd_flags;
+    uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&table->lock);
+    if (!table->entries[fd].file) {
+        spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
+        return -EBADF;
+    }
+    int r = table->entries[fd].fd_flags;
+    spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
+    return r;
 }
 
 int vfs_init_stdio(void *task_ptr) {

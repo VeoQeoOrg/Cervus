@@ -67,7 +67,6 @@ typedef struct {
 } neo_t;
 
 static neo_t E;
-static const char *g_cwd = "/";
 
 static void die(const char *msg)
 {
@@ -438,7 +437,7 @@ static void editor_open(const char *filename)
     memcpy(E.filename, filename, fl + 1);
 
     char full[512];
-    resolve_path(g_cwd, filename, full, sizeof(full));
+    snprintf(full, sizeof(full), "%s", filename);
 
     int fd = open(full, O_RDONLY, 0);
     if (fd < 0) {
@@ -496,7 +495,7 @@ static int editor_save(void)
     }
 
     char full[512];
-    resolve_path(g_cwd, E.filename, full, sizeof(full));
+    snprintf(full, sizeof(full), "%s", E.filename);
 
     if (E.disk_size >= 0) {
         struct stat st;
@@ -1010,7 +1009,6 @@ static void init_editor(void)
 
 int main(int argc, char **argv)
 {
-    g_cwd = get_cwd_flag(argc, argv);
 
     if (!isatty(0)) {
         close(0);
@@ -1027,7 +1025,6 @@ int main(int argc, char **argv)
 
     const char *file_to_open = NULL;
     for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
         file_to_open = argv[i];
         break;
     }

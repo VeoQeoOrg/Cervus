@@ -16,5 +16,7 @@ bool syscall_uptr_validate(const void *ptr, size_t len);
 int  syscall_copy_from_user(void *dst, const void *src, size_t n);
 int  syscall_copy_to_user(void *dst, const void *src, size_t n);
 int  syscall_strncpy_from_user(char *dst, const char *src, size_t max);
+int  syscall_resolve_path_from_user(char *dst, const char *src, size_t max);
+void syscall_path_normalize(char *path);
 
 #endif

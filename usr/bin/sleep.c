@@ -11,7 +11,6 @@ int main(int argc, char **argv)
     if (cervus_check_help_version(argc, argv, USAGE, "sleep")) return 0;
     const char *arg = NULL;
     for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
         arg = argv[i];
         break;
     }

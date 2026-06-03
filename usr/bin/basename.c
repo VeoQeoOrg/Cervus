@@ -13,7 +13,6 @@ int main(int argc, char **argv)
     const char *suffix = NULL;
     int seen = 0;
     for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
         if (seen == 0) { path = argv[i]; seen++; }
         else if (seen == 1) { suffix = argv[i]; seen++; }
     }

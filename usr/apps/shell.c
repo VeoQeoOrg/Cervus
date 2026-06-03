@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
+#include <errno.h>
+#include <string.h>
 #include <cervus_util.h>
 
 static void term_set_shell_mode(void);
@@ -510,11 +512,10 @@ static void do_tab_complete(char *buf, int *len, int *pos, int maxlen) {
             memcpy(raw_dir, word, dlen);
             raw_dir[dlen] = '\0';
             if (raw_dir[0] == '\0') strcpy(raw_dir, "/");
-            resolve_path(cwd, raw_dir, dirp, sizeof(dirp));
+            snprintf(dirp, sizeof(dirp), "%s", raw_dir);
             prefix = last_slash + 1;
         } else {
-            strncpy(dirp, cwd, sizeof(dirp) - 1);
-            dirp[sizeof(dirp) - 1] = '\0';
+            dirp[0] = '.'; dirp[1] = '\0';
         }
         plen = (int)strlen(prefix);
         list_dir_matches(dirp, prefix, plen, matches, &nmatch, 32);
@@ -770,14 +771,15 @@ static int cmd_cd(const char *path) {
         const char *home = env_get("HOME");
         path = (home && home[0]) ? home : "/";
     }
-    char np[VFS_MAX_PATH];
-    resolve_path(cwd, path, np, sizeof(np));
-    struct stat st;
-    if (stat(np, &st) < 0) { fputs(C_RED "cd: not found: " C_RESET, stdout); fputs(path, stdout); putchar(10); return 1; }
-    if (st.st_type != 1)   { fputs(C_RED "cd: not a dir: " C_RESET, stdout); fputs(path, stdout); putchar(10); return 1; }
-    strncpy(cwd, np, sizeof(cwd) - 1);
-    cwd[sizeof(cwd) - 1] = '\0';
-    chdir(np);
+    if (chdir(path) < 0) {
+        fputs(C_RED "cd: " C_RESET, stdout);
+        fputs(strerror(errno), stdout);
+        fputs(": ", stdout);
+        fputs(path, stdout);
+        putchar(10);
+        return 1;
+    }
+    if (!getcwd(cwd, sizeof(cwd))) { cwd[0] = '/'; cwd[1] = '\0'; }
     return 0;
 }
 
@@ -1186,9 +1188,7 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_re
                                     sizeof(redirs[*nredirs].path)) < 0)
                     return -1;
             } else {
-                char resolved[VFS_MAX_PATH];
-                resolve_path(cwd, target, resolved, sizeof(resolved));
-                strncpy(redirs[*nredirs].path, resolved, VFS_MAX_PATH - 1);
+                strncpy(redirs[*nredirs].path, target, VFS_MAX_PATH - 1);
                 redirs[*nredirs].path[VFS_MAX_PATH - 1] = '\0';
             }
             (*nredirs)++;
@@ -1245,18 +1245,14 @@ static int run_single_ex(char *line, int in_child) {
     if (strcmp(cmd, "color")  == 0) return cmd_color(argc, argv);
 
     char binpath[VFS_MAX_PATH];
-    if (cmd[0] == '/') {
+    if (cmd[0] == '/' || cmd[0] == '.') {
         strncpy(binpath, cmd, sizeof(binpath) - 1);
         binpath[sizeof(binpath) - 1] = '\0';
-    } else if (cmd[0] == '.') {
-        resolve_path(cwd, cmd, binpath, sizeof(binpath));
     } else {
         if (!find_in_path(cmd, binpath, sizeof(binpath))) {
-            char t_cwd[VFS_MAX_PATH];
-            resolve_path(cwd, cmd, t_cwd, sizeof(t_cwd));
             struct stat st;
-            if (stat(t_cwd, &st) == 0 && st.st_type != 1) {
-                strncpy(binpath, t_cwd, sizeof(binpath) - 1);
+            if (stat(cmd, &st) == 0 && st.st_type != 1) {
+                strncpy(binpath, cmd, sizeof(binpath) - 1);
                 binpath[sizeof(binpath) - 1] = '\0';
             } else {
                 fputs(C_RED "not found: " C_RESET, stdout); fputs(cmd, stdout); putchar(10); return 127;
@@ -1264,10 +1260,11 @@ static int run_single_ex(char *line, int in_child) {
         }
     }
 
-#define REAL_ARGV_MAX (MAX_ARGS + ENV_MAX_VARS + 4)
+#define REAL_ARGV_MAX (MAX_ARGS + 4)
+#define REAL_ENVP_MAX (ENV_MAX_VARS + 1)
     char *real_argv_buf[REAL_ARGV_MAX];
-    static char _cwd_flag[VFS_MAX_PATH + 8];
-    static char _env_flags[ENV_MAX_VARS][ENV_NAME_MAX + ENV_VAL_MAX + 8];
+    static char _envp_buf[ENV_MAX_VARS][ENV_NAME_MAX + ENV_VAL_MAX + 2];
+    char *real_envp_buf[REAL_ENVP_MAX];
     static char _shebang_interp[VFS_MAX_PATH];
     static char _shebang_arg[VFS_MAX_PATH];
     static char _shebang_script_path[VFS_MAX_PATH];
@@ -1326,14 +1323,15 @@ static int run_single_ex(char *line, int in_child) {
         real_argv_buf[ri++] = binpath;
     }
     for (int i = 1; i < argc; i++) real_argv_buf[ri++] = argv[i];
-    snprintf(_cwd_flag, sizeof(_cwd_flag), "--cwd=%s", cwd);
-    real_argv_buf[ri++] = _cwd_flag;
-    for (int ei = 0; ei < g_env_count && ri < REAL_ARGV_MAX - 1; ei++) {
-        snprintf(_env_flags[ei], sizeof(_env_flags[ei]), "--env:%s=%s",
-                 g_env[ei].name, g_env[ei].value);
-        real_argv_buf[ri++] = _env_flags[ei];
-    }
     real_argv_buf[ri] = NULL;
+    int ei_out = 0;
+    for (int ei = 0; ei < g_env_count && ei_out < REAL_ENVP_MAX - 1; ei++) {
+        snprintf(_envp_buf[ei_out], sizeof(_envp_buf[ei_out]), "%s=%s",
+                 g_env[ei].name, g_env[ei].value);
+        real_envp_buf[ei_out] = _envp_buf[ei_out];
+        ei_out++;
+    }
+    real_envp_buf[ei_out] = NULL;
 
     if (shebang_applied) {
         strncpy(binpath, _shebang_interp, sizeof(binpath) - 1);
@@ -1356,7 +1354,7 @@ static int run_single_ex(char *line, int in_child) {
             }
             dup2(fd, target_fd); close(fd);
         }
-        execve(binpath, (char *const *)real_argv_buf, NULL);
+        execve(binpath, (char *const *)real_argv_buf, (char *const *)real_envp_buf);
         fputs(C_RED "exec failed: " C_RESET, stdout); fputs(binpath, stdout); putchar(10);
         exit(127);
     }
@@ -1387,7 +1385,7 @@ static int run_single_ex(char *line, int in_child) {
             dup2(fd, target_fd);
             close(fd);
         }
-        execve(binpath, (char *const *)real_argv_buf, NULL);
+        execve(binpath, (char *const *)real_argv_buf, (char *const *)real_envp_buf);
         fputs(C_RED "exec failed: " C_RESET, stdout); fputs(binpath, stdout); putchar(10); exit(127);
     }
     int status = 0;
@@ -1532,7 +1530,7 @@ static int sys_disk_umount(const char *path) {
     return (int)syscall1(SYS_DISK_UMOUNT, path);
 }
 
-static int launch_installer_mode(const char *extra_env) {
+static int launch_installer_mode(const char *boot_prompt) {
     const char *path = "/bin/cervus-installer";
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -1540,13 +1538,12 @@ static int launch_installer_mode(const char *extra_env) {
         return -1;
     }
 
-    const char *argv[5];
-    int ai = 0;
-    argv[ai++] = path;
-    argv[ai++] = "--env:MODE=live";
-    argv[ai++] = "--cwd=/";
-    if (extra_env) argv[ai++] = extra_env;
-    argv[ai] = NULL;
+    const char *argv[2] = { path, NULL };
+    const char *envp[4];
+    int ei = 0;
+    envp[ei++] = "MODE=live";
+    if (boot_prompt) envp[ei++] = boot_prompt;
+    envp[ei] = NULL;
 
     term_set_cooked_mode();
     pid_t child = fork();
@@ -1556,7 +1553,8 @@ static int launch_installer_mode(const char *extra_env) {
         return -1;
     }
     if (child == 0) {
-        execve(path, (char *const *)argv, NULL);
+        chdir("/");
+        execve(path, (char *const *)argv, (char *const *)envp);
         fputs(C_RED "  exec cervus-installer failed\n" C_RESET, stdout);
         exit(127);
     }
@@ -1573,7 +1571,7 @@ static int launch_installer(void) {
 }
 
 static int launch_installer_boot(void) {
-    return launch_installer_mode("--env:BOOT_PROMPT=1");
+    return launch_installer_mode("BOOT_PROMPT=1");
 }
 
 static void term_set_shell_mode(void)
@@ -1695,21 +1693,22 @@ int main(int argc, char **argv) {
     }
 
     if (rooted_on_disk) {
-        strncpy(cwd, "/home", sizeof(cwd));
         env_set("HOME", "/home");
         env_set("PATH", "/bin:/apps:/usr/bin");
         env_set("SHELL", "/bin/shell");
+        chdir("/home");
     } else if (disk_mounted) {
-        strncpy(cwd, "/mnt/home", sizeof(cwd));
         env_set("HOME", "/mnt/home");
         env_set("PATH", "/mnt/bin:/mnt/apps:/mnt/usr/bin");
         env_set("SHELL", "/mnt/bin/shell");
+        chdir("/mnt/home");
     } else {
-        strncpy(cwd, "/", sizeof(cwd));
         env_set("HOME", "/");
         env_set("PATH", "/bin:/apps:/usr/bin");
         env_set("SHELL", "/bin/shell");
+        chdir("/");
     }
+    if (!getcwd(cwd, sizeof(cwd))) { cwd[0] = '/'; cwd[1] = '\0'; }
 
     if (rooted_on_disk)              env_set("MODE", "installed");
     else if (disk_mounted)           env_set("MODE", "installed");
@@ -1745,11 +1744,7 @@ int main(int argc, char **argv) {
     for (;;) {
         print_prompt();
         int n = readline_edit(line, LINE_MAX);
-        if (n < 0) {
-            const char *h = env_get("HOME");
-            strncpy(cwd, (h && h[0]) ? h : "/", sizeof(cwd));
-            continue;
-        }
+        if (n < 0) continue;
         int len = (int)strlen(line);
         while (len > 0 && isspace((unsigned char)line[len - 1])) line[--len] = '\0';
         if (len > 0) { hist_push(line); run_command(line); }

@@ -94,27 +94,6 @@ static inline void resolve_path(const char *cwd, const char *path,
 extern int    __cervus_argc;
 extern char **__cervus_argv;
 
-static inline int is_shell_flag(const char *a)
-{
-    if (!a) return 0;
-    if (a[0] == '-' && a[1] == '-' &&
-        a[2] == 'c' && a[3] == 'w' && a[4] == 'd' && a[5] == '=') return 1;
-    if (a[0] == '-' && a[1] == '-' &&
-        a[2] == 'e' && a[3] == 'n' && a[4] == 'v' && a[5] == ':') return 1;
-    return 0;
-}
-
-static inline int cervus_filter_args(int argc, char **argv)
-{
-    int out = 1;
-    for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
-        argv[out++] = argv[i];
-    }
-    argv[out] = (char *)0;
-    return out;
-}
-
 #define CERVUS_VERSION_STR "Cervus 0.0.2"
 
 static inline void __cervus_help_write(const char *s)
@@ -131,7 +110,6 @@ static inline int cervus_check_help_version(int argc, char **argv,
 {
     for (int i = 1; i < argc; i++) {
         if (!argv[i]) continue;
-        if (is_shell_flag(argv[i])) continue;
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-?") == 0) {
             __cervus_help_write(usage);
             return 1;
@@ -204,37 +182,6 @@ static inline const char *cervus_path_danger(const char *path)
         if (pl == lp && strncmp(p, LIST[i].p, lp) == 0) return LIST[i].r;
     }
     return (const char *)0;
-}
-
-static inline const char *get_cwd_flag(int argc, char **argv)
-{
-    (void)argc; (void)argv;
-    for (int i = 1; i < __cervus_argc; i++) {
-        char *a = __cervus_argv[i];
-        if (a && a[0] == '-' && a[1] == '-' &&
-            a[2] == 'c' && a[3] == 'w' && a[4] == 'd' && a[5] == '=')
-            return a + 6;
-    }
-    return "/";
-}
-
-static inline const char *getenv_argv(int argc, char **argv,
-                                      const char *name, const char *def)
-{
-    (void)argc; (void)argv;
-    if (!name) return def;
-    size_t nl = strlen(name);
-    for (int i = 1; i < __cervus_argc; i++) {
-        const char *a = __cervus_argv[i];
-        if (!a) continue;
-        if (a[0] == '-' && a[1] == '-' &&
-            a[2] == 'e' && a[3] == 'n' && a[4] == 'v' && a[5] == ':') {
-            const char *kv = a + 6;
-            if (strncmp(kv, name, nl) == 0 && kv[nl] == '=')
-                return kv + nl + 1;
-        }
-    }
-    return def;
 }
 
 static inline int util_readline(int fd, char *buf, int maxlen)

@@ -63,8 +63,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "sort")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int unique = 0;
     g_numeric = g_reverse = g_fold = 0;
@@ -90,7 +88,7 @@ int main(int argc, char **argv)
         if (!blob) { fputs("sort: oom\n", stderr); return 1; }
         for (int i = optind; i < argc; i++) {
             char resolved[512];
-            resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+            snprintf(resolved, sizeof(resolved), "%s", argv[i]);
             int fd = open(resolved, O_RDONLY);
             if (fd < 0) { fprintf(stderr, "sort: cannot open '%s'\n", argv[i]); free(blob); return 1; }
             char buf[4096]; ssize_t n;

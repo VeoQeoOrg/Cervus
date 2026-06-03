@@ -88,8 +88,10 @@
 #define SYS_VT_SET_CTTY       554
 #define SYS_VT_CLEAR_SHELL    555
 #define SYS_VT_SWITCH         556
+#define SYS_CHDIR             557
+#define SYS_GETCWD            558
 
-#define SYSCALL_TABLE_SIZE    557
+#define SYSCALL_TABLE_SIZE    559
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

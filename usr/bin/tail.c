@@ -86,12 +86,10 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tail")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
     int nlines = 10;
 
     for (int i = 1; i < argc; i++) {
-        if (!is_shell_flag(argv[i]) &&
-            argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9') {
+        if (argv[i][0] == '-' && argv[i][1] >= '0' && argv[i][1] <= '9') {
             nlines = atoi(argv[i] + 1);
             if (nlines < 0) nlines = 0;
             for (int j = i; j + 1 < argc; j++) argv[j] = argv[j + 1];
@@ -99,7 +97,6 @@ int main(int argc, char **argv)
         }
     }
 
-    argc = cervus_filter_args(argc, argv);
 
     int opt;
     while ((opt = getopt(argc, argv, "n:q")) != -1) {
@@ -116,7 +113,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         if (nf > 1) {
             fputs("==> ", stdout);
             fputs(argv[i], stdout);

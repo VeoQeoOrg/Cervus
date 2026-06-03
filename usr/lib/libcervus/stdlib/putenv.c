@@ -2,9 +2,27 @@
 #include <string.h>
 #include <stddef.h>
 
-extern char **__cervus_env_table;
-extern int    __cervus_env_count;
-extern int    __cervus_env_cap;
+extern char **environ;
+static char **owned_env  = NULL;
+static int    owned_cap  = 0;
+static int    owned_used = 0;
+
+static int env_take_ownership(void)
+{
+    if (owned_env && environ == owned_env) return 0;
+    int n = 0;
+    if (environ) while (environ[n]) n++;
+    int cap = n + 16;
+    char **nt = (char **)malloc((size_t)cap * sizeof(char *));
+    if (!nt) return -1;
+    for (int i = 0; i < n; i++) nt[i] = environ[i];
+    nt[n] = NULL;
+    owned_env = nt;
+    owned_cap = cap;
+    owned_used = n;
+    environ = owned_env;
+    return 0;
+}
 
 int putenv(char *str)
 {
@@ -12,19 +30,22 @@ int putenv(char *str)
     char *eq = strchr(str, '=');
     if (!eq) return -1;
     size_t nl = (size_t)(eq - str);
-    for (int i = 0; i < __cervus_env_count; i++) {
-        if (strncmp(__cervus_env_table[i], str, nl) == 0 && __cervus_env_table[i][nl] == '=') {
-            __cervus_env_table[i] = str;
+    if (env_take_ownership() < 0) return -1;
+    for (int i = 0; i < owned_used; i++) {
+        if (strncmp(owned_env[i], str, nl) == 0 && owned_env[i][nl] == '=') {
+            owned_env[i] = str;
             return 0;
         }
     }
-    if (__cervus_env_count >= __cervus_env_cap) {
-        int nc = __cervus_env_cap ? __cervus_env_cap * 2 : 16;
-        char **nt = (char **)realloc(__cervus_env_table, (size_t)nc * sizeof(char *));
+    if (owned_used + 1 >= owned_cap) {
+        int nc = owned_cap * 2;
+        char **nt = (char **)realloc(owned_env, (size_t)nc * sizeof(char *));
         if (!nt) return -1;
-        __cervus_env_table = nt;
-        __cervus_env_cap = nc;
+        owned_env = nt;
+        owned_cap = nc;
+        environ = owned_env;
     }
-    __cervus_env_table[__cervus_env_count++] = str;
+    owned_env[owned_used++] = str;
+    owned_env[owned_used]   = NULL;
     return 0;
 }

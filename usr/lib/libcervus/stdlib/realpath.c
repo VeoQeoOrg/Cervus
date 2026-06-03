@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <stddef.h>
 #include <errno.h>
@@ -14,7 +15,8 @@ char *realpath(const char *path, char *resolved)
         strncpy(out, path, 511);
         out[511] = '\0';
     } else {
-        const char *cwd = __cervus_get_cwd();
+        char cwd[512];
+        if (!getcwd(cwd, sizeof(cwd))) { cwd[0] = '/'; cwd[1] = '\0'; }
         strncpy(out, cwd, 511);
         out[511] = '\0';
         size_t bl = strlen(out);

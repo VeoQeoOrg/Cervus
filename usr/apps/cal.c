@@ -145,7 +145,6 @@ int main(int argc, char **argv)
     int flag_help = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
         if (strcmp(argv[i], "--help") == 0) { flag_help = 1; continue; }
         if (real_argc < 2) args[real_argc] = argv[i];
         real_argc++;

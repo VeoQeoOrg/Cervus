@@ -1,4 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
+#include "../../../include/sched/spinlock.h"
+#include "../../../include/sched/sched.h"
 #include "../../../include/fs/vfs.h"
 #include <string.h>
 #include <stdlib.h>
@@ -9,12 +11,22 @@ typedef struct {
     char     buf[PIPE_BUFSZ];
     uint32_t head, tail;
     int      readers, writers;
+    spinlock_t lock;
+    task_t  *read_waiter;
+    task_t  *write_waiter;
 } pipe_shared_t;
 
 typedef struct {
     pipe_shared_t *shared;
     int            end;
 } pipe_vdata_t;
+
+static void pipe_wake_other(task_t **slot) {
+    task_t *w = *slot;
+    if (!w) return;
+    *slot = NULL;
+    task_unblock(w);
+}
 
 static int64_t pipe_read_op(vnode_t *n, void *buf, size_t len, uint64_t off)
 {
@@ -23,18 +35,36 @@ static int64_t pipe_read_op(vnode_t *n, void *buf, size_t len, uint64_t off)
     pipe_shared_t *ps = vd->shared;
     size_t got = 0;
     char *dst = (char *)buf;
-    while (got < len) {
-        if (ps->head == ps->tail) {
-            if (ps->writers == 0) break;
-            if (got > 0) break;
+    task_t *me = syscall_cur_task();
 
-            task_yield();
-            task_t *me = syscall_cur_task();
-            if (me && me->pending_kill) return got > 0 ? (int64_t)got : -EINTR;
+    while (got < len) {
+        uint64_t f = spinlock_acquire_irqsave(&ps->lock);
+        if (ps->head == ps->tail) {
+            int writers = ps->writers;
+            if (writers == 0 || got > 0) {
+                spinlock_release_irqrestore(&ps->lock, f);
+                break;
+            }
+            if (me && me->pending_kill) {
+                spinlock_release_irqrestore(&ps->lock, f);
+                return -EINTR;
+            }
+            if (me) {
+                ps->read_waiter = me;
+                me->runnable = false;
+                me->state    = TASK_BLOCKED;
+            }
+            spinlock_release_irqrestore(&ps->lock, f);
+            if (me) sched_reschedule();
+            else    task_yield();
             continue;
         }
-        dst[got++] = ps->buf[ps->head];
-        ps->head = (ps->head + 1) % PIPE_BUFSZ;
+        while (got < len && ps->head != ps->tail) {
+            dst[got++] = ps->buf[ps->head];
+            ps->head = (ps->head + 1) % PIPE_BUFSZ;
+        }
+        pipe_wake_other(&ps->write_waiter);
+        spinlock_release_irqrestore(&ps->lock, f);
     }
     return (int64_t)got;
 }
@@ -44,27 +74,42 @@ static int64_t pipe_write_op(vnode_t *n, const void *buf, size_t len, uint64_t o
     (void)off;
     pipe_vdata_t  *vd = (pipe_vdata_t *)n->fs_data;
     pipe_shared_t *ps = vd->shared;
-    if (ps->readers == 0) return -EPIPE;
     const char *src = (const char *)buf;
-    for (size_t i = 0; i < len; i++) {
+    size_t done = 0;
+    task_t *me = syscall_cur_task();
+
+    while (done < len) {
+        uint64_t f = spinlock_acquire_irqsave(&ps->lock);
+        if (ps->readers == 0) {
+            spinlock_release_irqrestore(&ps->lock, f);
+            return (done > 0) ? (int64_t)done : -EPIPE;
+        }
         uint32_t next = (ps->tail + 1) % PIPE_BUFSZ;
-        int spins = 0;
-        while (next == ps->head) {
-            if (ps->readers == 0) return (i > 0) ? (int64_t)i : -EPIPE;
-            task_yield();
-            task_t *me = syscall_cur_task();
-            if (me && me->pending_kill) return (i > 0) ? (int64_t)i : -EINTR;
-            next = (ps->tail + 1) % PIPE_BUFSZ;
-            spins++;
-            if (spins > 10000) break;
-        }
         if (next == ps->head) {
-            return (i > 0) ? (int64_t)i : -EAGAIN;
+            if (me && me->pending_kill) {
+                spinlock_release_irqrestore(&ps->lock, f);
+                return (done > 0) ? (int64_t)done : -EINTR;
+            }
+            if (me) {
+                ps->write_waiter = me;
+                me->runnable = false;
+                me->state    = TASK_BLOCKED;
+            }
+            spinlock_release_irqrestore(&ps->lock, f);
+            if (me) sched_reschedule();
+            else    task_yield();
+            continue;
         }
-        ps->buf[ps->tail] = src[i];
-        ps->tail = next;
+        while (done < len) {
+            uint32_t n2 = (ps->tail + 1) % PIPE_BUFSZ;
+            if (n2 == ps->head) break;
+            ps->buf[ps->tail] = src[done++];
+            ps->tail = n2;
+        }
+        pipe_wake_other(&ps->read_waiter);
+        spinlock_release_irqrestore(&ps->lock, f);
     }
-    return (int64_t)len;
+    return (int64_t)done;
 }
 
 static int pipe_stat_op(vnode_t *n, vfs_stat_t *out)
@@ -81,13 +126,15 @@ static void pipe_unref_op(vnode_t *n)
 {
     pipe_vdata_t  *vd = (pipe_vdata_t *)n->fs_data;
     pipe_shared_t *ps = vd->shared;
-    if (vd->end == 0) ps->readers--;
-    else {
-        ps->writers--;
-    }
 
+    uint64_t f = spinlock_acquire_irqsave(&ps->lock);
+    if (vd->end == 0) ps->readers--;
+    else              ps->writers--;
     int r = ps->readers;
     int w = ps->writers;
+    if (r == 0) pipe_wake_other(&ps->write_waiter);
+    if (w == 0) pipe_wake_other(&ps->read_waiter);
+    spinlock_release_irqrestore(&ps->lock, f);
 
     free(vd); free(n);
 

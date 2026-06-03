@@ -13,7 +13,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "uname")) return 0;
-    argc = cervus_filter_args(argc, argv);
 
     int s = 0, n = 0, r = 0, v = 0, m = 0;
     int opt;

@@ -32,9 +32,6 @@ static int try_path(const char *dir, const char *name, char *out, size_t sz)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "which")) return 0;
-    int orig_argc = argc;
-    char **orig_argv = argv;
-    argc = cervus_filter_args(argc, argv);
 
     int all = 0;
     int opt;
@@ -46,7 +43,8 @@ int main(int argc, char **argv)
     }
     if (optind >= argc) { usage(); return 1; }
 
-    const char *pathvar = getenv_argv(orig_argc, orig_argv, "PATH", "/bin:/apps:/usr/bin");
+    const char *pathvar = getenv("PATH");
+    if (!pathvar || !pathvar[0]) pathvar = "/bin:/apps:/usr/bin";
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char tmp[256];

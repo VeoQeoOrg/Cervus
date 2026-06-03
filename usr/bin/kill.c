@@ -37,7 +37,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "kill")) return 0;
-    argc = cervus_filter_args(argc, argv);
 
     int sig = 15;
 

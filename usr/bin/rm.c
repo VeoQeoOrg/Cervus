@@ -72,8 +72,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "rm")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     rm_opts_t o;
     memset(&o, 0, sizeof(o));
@@ -97,7 +95,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char path[512];
-        resolve_path(cwd, argv[i], path, sizeof(path));
+        snprintf(path, sizeof(path), "%s", argv[i]);
         const char *danger = cervus_path_danger(path);
         if (danger) {
             if (!cervus_confirm("remove", path, danger)) {

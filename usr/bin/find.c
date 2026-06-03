@@ -289,8 +289,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "find")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     find_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -382,7 +380,7 @@ int main(int argc, char **argv)
 
     for (int p = 0; p < npaths; p++) {
         char resolved[512];
-        resolve_path(cwd, paths[p], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", paths[p]);
         struct stat st;
         if (stat(resolved, &st) != 0) {
             fprintf(stderr, "find: '%s': no such file or directory\n", paths[p]);

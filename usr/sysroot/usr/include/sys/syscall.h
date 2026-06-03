@@ -81,6 +81,8 @@
 #define SYS_VT_SET_CTTY     554
 #define SYS_VT_CLEAR_SHELL  555
 #define SYS_VT_SWITCH       556
+#define SYS_CHDIR           557
+#define SYS_GETCWD          558
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

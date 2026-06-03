@@ -35,8 +35,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "mkdir")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int flag_p = 0;
     mode_t mode = 0755;
@@ -55,7 +53,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char path[512];
-        resolve_path(cwd, argv[i], path, sizeof(path));
+        snprintf(path, sizeof(path), "%s", argv[i]);
         int r = flag_p ? mkdir_p(path, mode) : mkdir(path, mode);
         if (r < 0) {
             if (errno == EEXIST && flag_p) continue;

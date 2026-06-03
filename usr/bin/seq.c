@@ -12,7 +12,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "seq")) return 0;
-    argc = cervus_filter_args(argc, argv);
 
     const char *sep = "\n";
     int equal_width = 0;

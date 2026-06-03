@@ -39,8 +39,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "stat")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int terse = 0;
     int opt;
@@ -55,7 +53,7 @@ int main(int argc, char **argv)
     int rc = 0;
     for (int i = optind; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         struct stat st;
         if (stat(resolved, &st) < 0) {
             fprintf(stderr, "stat: cannot stat '%s'\n", argv[i]);

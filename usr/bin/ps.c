@@ -28,7 +28,6 @@ static const char *state_str(uint32_t s)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ps")) return 0;
-    argc = cervus_filter_args(argc, argv);
 
     int full = 0;
     int opt;

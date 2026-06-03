@@ -132,8 +132,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ls")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     ls_opts_t o;
     memset(&o, 0, sizeof(o));
@@ -158,14 +156,14 @@ int main(int argc, char **argv)
     int rc = 0;
 
     if (npaths == 0) {
-        rc = list_dir(cwd, ".", &o, 0);
+        rc = list_dir(".", ".", &o, 0);
         return rc;
     }
 
     int multiple = npaths > 1;
     for (int i = optind; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         struct stat st;
         if (stat(resolved, &st) != 0) {
             fprintf(stderr, "ls: cannot access '%s'\n", argv[i]);

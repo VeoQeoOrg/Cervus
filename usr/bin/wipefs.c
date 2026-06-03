@@ -35,7 +35,6 @@ int main(int argc, char **argv)
     const char *devname = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-f") == 0) { force = 1; continue; }
-        if (is_shell_flag(argv[i])) continue;
         if (!devname) devname = argv[i];
     }
     if (!devname) { fputs(USAGE, stdout); return 1; }

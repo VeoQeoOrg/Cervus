@@ -174,8 +174,6 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "grep")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     grep_opts_t o;
     memset(&o, 0, sizeof(o));
@@ -244,7 +242,7 @@ int main(int argc, char **argv)
     int show_prefix = (nf > 1 || o.recursive) && !o.no_filename;
     for (int i = file_start; i < argc; i++) {
         char resolved[512];
-        resolve_path(cwd, argv[i], resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         grep_path(resolved, pat, &o, show_prefix, &any);
     }
     rc_final = any ? 0 : 1;

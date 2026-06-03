@@ -11,7 +11,6 @@ int main(int argc, char **argv)
     const char *path = NULL;
     int ai = 0;
     for (int i = 0; i < argc; i++) {
-        if (is_shell_flag(argv[i])) continue;
         if (ai == 1) { path = argv[i]; break; }
         ai++;
     }

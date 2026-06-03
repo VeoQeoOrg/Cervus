@@ -4,19 +4,21 @@
 #include <errno.h>
 #include <libcervus.h>
 
-extern char **__cervus_env_table;
-extern int    __cervus_env_count;
-extern int    __cervus_env_cap;
+extern char **environ;
 
 int unsetenv(const char *name)
 {
-    if (!name) { __cervus_errno = EINVAL; return -1; }
+    if (!name || !*name || strchr(name, '=')) { __cervus_errno = EINVAL; return -1; }
+    if (!environ) return 0;
     size_t nl = strlen(name);
-    for (int i = 0; i < __cervus_env_count; i++) {
-        if (strncmp(__cervus_env_table[i], name, nl) == 0 && __cervus_env_table[i][nl] == '=') {
-            __cervus_env_table[i] = __cervus_env_table[--__cervus_env_count];
-            return 0;
+    int rd = 0, wr = 0;
+    while (environ[rd]) {
+        if (strncmp(environ[rd], name, nl) == 0 && environ[rd][nl] == '=') {
+            rd++;
+            continue;
         }
+        environ[wr++] = environ[rd++];
     }
+    environ[wr] = NULL;
     return 0;
 }

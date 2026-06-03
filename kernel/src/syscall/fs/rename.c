@@ -6,9 +6,11 @@ int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
                    uint64_t a4, uint64_t a5, uint64_t a6)
 {
     (void)a3; (void)a4; (void)a5; (void)a6;
-    char oldp[256], newp[256];
-    if (syscall_strncpy_from_user(oldp, (const char *)old_ptr, 256) < 0) return -EFAULT;
-    if (syscall_strncpy_from_user(newp, (const char *)new_ptr, 256) < 0) return -EFAULT;
+    char oldp[VFS_MAX_PATH], newp[VFS_MAX_PATH];
+    int rp1 = syscall_resolve_path_from_user(oldp, (const char *)old_ptr, sizeof(oldp));
+    if (rp1 < 0) return rp1;
+    int rp2 = syscall_resolve_path_from_user(newp, (const char *)new_ptr, sizeof(newp));
+    if (rp2 < 0) return rp2;
 
     vnode_t *src_node = NULL;
     int r = vfs_lookup(oldp, &src_node);

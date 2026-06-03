@@ -391,8 +391,6 @@ int main(int argc, char **argv)
         "  less -N /usr/share/man/man1/find.1\n"
         "  cat big.log | less\n";
     if (cervus_check_help_version(argc, argv, USAGE, "less")) return 0;
-    const char *cwd = get_cwd_flag(argc, argv);
-    argc = cervus_filter_args(argc, argv);
 
     int fd = 0;
     int show_lineno = 0;
@@ -409,7 +407,7 @@ int main(int argc, char **argv)
 
     if (file_arg) {
         char resolved[512];
-        resolve_path(cwd, file_arg, resolved, sizeof(resolved));
+        snprintf(resolved, sizeof(resolved), "%s", file_arg);
         fd = open(resolved, O_RDONLY, 0);
         if (fd < 0) {
             fprintf(stderr, "less: cannot open '%s'\n", file_arg);

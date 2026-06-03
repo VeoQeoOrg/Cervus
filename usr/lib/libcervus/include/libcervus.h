@@ -11,16 +11,7 @@ extern int    __cervus_errno;
 extern int    __cervus_argc;
 extern char **__cervus_argv;
 
-extern char __cervus_cwd[CERVUS_PATH_MAX];
-extern int  __cervus_cwd_inited;
-
-long        __cervus_sys_ret(long r);
-const char *__cervus_get_cwd(void);
-const char *__cervus_resolve(const char *path, char *buf, size_t bufsz);
-
-#define _CERVUS_FILT_MAX 128
-extern char *__cervus_filtered_argv[_CERVUS_FILT_MAX + 1];
-int  __cervus_filter_args(int argc, char **argv);
+long __cervus_sys_ret(long r);
 
 long long __cervus_parse_signed(const char *s, char **end, int base, int is_unsigned);
 
@@ -71,10 +62,6 @@ static inline __mblock_t *__cervus_mb_prev(__mblock_t *b) {
     if (b->prev_size == 0) return (__mblock_t *)0;
     return (__mblock_t *)((char *)b - b->prev_size);
 }
-
-extern char **__cervus_env_table;
-extern int    __cervus_env_count;
-extern int    __cervus_env_cap;
 
 extern void (*__cervus_atexit_fns[])(void);
 extern int   __cervus_atexit_cnt;
