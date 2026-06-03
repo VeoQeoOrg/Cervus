@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
@@ -73,6 +77,33 @@ static void print_mem(void)
                (unsigned long)(used / MiB), (unsigned long)(total / MiB));
 }
 
+static const char *get_shell(void)
+{
+    const char *s = getenv("SHELL");
+    if (s && s[0]) return s;
+    static char buf[256];
+    int fd = open("/etc/shell", O_RDONLY, 0);
+    if (fd < 0) fd = open("/mnt/etc/shell", O_RDONLY, 0);
+    if (fd >= 0) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = '\0';
+            int i = 0;
+            while (buf[i] && buf[i] != '\n' && buf[i] != '\r') i++;
+            buf[i] = '\0';
+            if (buf[0]) return buf;
+        }
+    }
+    return "/bin/csh";
+}
+
+static void print_shell(void)
+{
+    fputs(C_RESET "shell: ", stdout);
+    fputs(get_shell(), stdout);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -83,7 +114,7 @@ int main(int argc, char **argv)
             case 1: fputs("os: Cervus OS", stdout);     break;
             case 2: print_uptime();                     break;
             case 3: print_cpu();                        break;
-            case 4: fputs(C_RESET "shell: CSH", stdout); break;
+            case 4: print_shell();                      break;
             case 5: print_mem();                        break;
         }
         putchar('\n');

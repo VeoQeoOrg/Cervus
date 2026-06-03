@@ -130,10 +130,12 @@ void tty_reset_nonblock(void) {
     g_vtty[cur_vt()].nonblock = 0;
 }
 
+extern void console_reset_attrs(void);
+
 void tty_reset_on_exit(void) {
     int vt = cur_vt();
     g_vtty[vt].nonblock = 0;
-    vt_write(vt, "\x1b[?25h\x1b[0m", 9);
+    if (vt == vt_active()) console_reset_attrs();
 }
 
 static void tty_echo_char(int vt, char c) {
@@ -171,6 +173,7 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out,
         }
         if (me && hpet_is_available()) {
             me->wakeup_time_ns = hpet_elapsed_ns() + 8000000ULL;
+            sched_note_wakeup(me->wakeup_time_ns);
             me->runnable = false;
             me->state = TASK_BLOCKED;
             sched_reschedule();

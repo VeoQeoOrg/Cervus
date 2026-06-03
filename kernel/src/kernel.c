@@ -118,9 +118,15 @@ static void load_elf_module(void) {
 
     serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n", r.entry, r.stack_top);
 
+    uintptr_t init_rsp = elf_build_init_stack(r.pagemap, r.stack_top);
+    if (init_rsp == 0) {
+        serial_writestring("[ELF] init stack build failed\n");
+        return;
+    }
+
     uint64_t cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
 
-    task_t *t = task_create_user("init", r.entry, r.stack_top, cr3, 16, r.pagemap, 0, 0);
+    task_t *t = task_create_user("init", r.entry, init_rsp, cr3, 16, r.pagemap, 0, 0);
 
     if (!t) {
         serial_writestring("[ELF] task_create_user failed\n");

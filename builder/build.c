@@ -35,8 +35,6 @@
 #define SYSROOT_INC      "usr/sysroot/usr/include"
 #define SYSROOT_LIB      "usr/sysroot/usr/lib"
 #define LIBCERVUS_DIR    "usr/lib/libcervus"
-#define SHELL_SRC        "usr/apps/shell.c"
-#define SHELL_ELF        "usr/apps/shell.elf"
 #define INIT_ELF         "usr/apps/init.elf"
 #define INSTALLER_SRC    "usr/installer/cervus-installer.c"
 #define INSTALLER_ELF    "usr/installer/cervus-installer.elf"
@@ -81,7 +79,7 @@ const char *FILES_TO_CLEAN[] = {
     "kernel/.deps-obtained",
     "limine.conf",
     "OS-TREE.txt", "log.txt",
-    SHELL_ELF, INIT_ELF, INSTALLER_ELF,
+    INIT_ELF, INSTALLER_ELF,
     SYSROOT_LIB "/libcervus.a",
     SYSROOT_LIB "/crt0.o",
     SYSROOT_DIR "/usr/bin/tcc",
@@ -1456,10 +1454,6 @@ bool build_initramfs(void) {
                 }
             }
         }
-        if (!any_newer && file_exists(SHELL_ELF) &&
-            get_mtime(SHELL_ELF) > get_mtime(INITRAMFS_TAR)) {
-            any_newer = true;
-        }
         if (!any_newer && file_exists(INIT_ELF) &&
             get_mtime(INIT_ELF) > get_mtime(INITRAMFS_TAR)) {
             any_newer = true;
@@ -1523,15 +1517,20 @@ bool build_initramfs(void) {
         fclose(motd);
     }
 
-    if (file_exists(SHELL_ELF) && file_exists(INIT_ELF)) {
+    FILE *shf = fopen(INITRAMFS_ROOTFS "/etc/shell", "w");
+    if (shf) {
+        fprintf(shf, "/bin/csh\n");
+        fclose(shf);
+    }
+
+    if (file_exists(INIT_ELF)) {
         if (cmd_run(false, "cp %s %s/bin/init", INIT_ELF, INITRAMFS_ROOTFS) != 0) {
             print_color(COLOR_RED, "[initramfs] Failed to copy init.elf -> bin/init");
             return false;
         }
-        cmd_run(false, "cp %s %s/bin/shell", SHELL_ELF, INITRAMFS_ROOTFS);
-        print_color(COLOR_GREEN, "[initramfs] init.elf -> /bin/init, shell.elf -> /bin/shell");
+        print_color(COLOR_GREEN, "[initramfs] init.elf -> /bin/init");
     } else {
-        print_color(COLOR_RED, "[initramfs] init.elf/shell.elf not found - boot will drop to nothing!");
+        print_color(COLOR_RED, "[initramfs] init.elf not found - boot will drop to nothing!");
         FILE *stub = fopen(INITRAMFS_ROOTFS "/bin/.keep", "w");
         if (stub) fclose(stub);
     }
@@ -1556,7 +1555,7 @@ bool build_initramfs(void) {
     ensure_dir(INITRAMFS_ROOTFS "/apps");
     scan_apps();
     for (int i = 0; i < g_naps; i++) {
-        if (strcmp(g_apps[i].name, "shell") == 0) continue;
+        if (strcmp(g_apps[i].name, "init") == 0) continue;
         if (!file_exists(g_apps[i].elf)) continue;
         char dst[512];
         snprintf(dst, sizeof(dst), "%s/apps/%s", INITRAMFS_ROOTFS, g_apps[i].name);

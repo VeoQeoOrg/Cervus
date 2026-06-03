@@ -242,7 +242,7 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         else
             *slash = '\0';
 
-        serial_printf("[VFS] open O_CREAT: parent='%s' name='%s'\n", dirpath, filename);
+        LOG_D("[VFS] open O_CREAT: parent='%s' name='%s'\n", dirpath, filename);
 
         vnode_t *dir = NULL;
         ret = vfs_lookup(dirpath, &dir);
@@ -523,8 +523,13 @@ vfs_file_t *fd_get(const fd_table_t *table, int fd) {
     if (!table || fd < 0 || fd >= TASK_MAX_FDS) return NULL;
     uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&table->lock);
     vfs_file_t *r = table->entries[fd].file;
+    if (r) __atomic_fetch_add(&r->refcount, 1, __ATOMIC_RELAXED);
     spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
     return r;
+}
+
+void fd_put(vfs_file_t *file) {
+    vfs_file_free(file);
 }
 
 int fd_close(fd_table_t *table, int fd) {

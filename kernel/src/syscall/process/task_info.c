@@ -1,5 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/sched/capabilities.h"
+#include "../../../include/memory/vmm.h"
 #include <string.h>
 
 int64_t sys_task_info(uint64_t pid_arg, uint64_t buf_ptr)
@@ -20,6 +21,8 @@ int64_t sys_task_info(uint64_t pid_arg, uint64_t buf_ptr)
     info.state            = (uint32_t)target->state;
     info.priority         = (uint32_t)target->priority;
     info.total_runtime_ns = target->total_runtime;
+    if (target->is_userspace && target->pagemap)
+        info.rss_bytes = vmm_count_user_pages(target->pagemap) * 4096ULL;
     strncpy(info.name, target->name, sizeof(info.name) - 1);
     return syscall_copy_to_user((void *)buf_ptr, &info, sizeof(info));
 }

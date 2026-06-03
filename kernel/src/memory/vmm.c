@@ -16,6 +16,33 @@ static inline void invlpg(void* addr) {
     asm volatile ("invlpg (%0)" :: "r"(addr) : "memory");
 }
 
+uint64_t vmm_count_user_pages(vmm_pagemap_t* map) {
+    if (!map || !map->pml4) return 0;
+    uint64_t pages = 0;
+    for (size_t i = 0; i < 256; i++) {
+        vmm_pte_t e4 = map->pml4[i];
+        if (!(e4 & VMM_PRESENT) || !(e4 & VMM_USER)) continue;
+        vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(e4 & PTE_PHYS_MASK);
+        for (size_t j = 0; j < 512; j++) {
+            vmm_pte_t e3 = pdpt[j];
+            if (!(e3 & VMM_PRESENT) || !(e3 & VMM_USER)) continue;
+            if (e3 & VMM_PSE) { pages += 512UL * 512UL; continue; }
+            vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(e3 & PTE_PHYS_MASK);
+            for (size_t k = 0; k < 512; k++) {
+                vmm_pte_t e2 = pd[k];
+                if (!(e2 & VMM_PRESENT) || !(e2 & VMM_USER)) continue;
+                if (e2 & VMM_PSE) { pages += 512UL; continue; }
+                vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(e2 & PTE_PHYS_MASK);
+                for (size_t l = 0; l < 512; l++) {
+                    vmm_pte_t e1 = pt[l];
+                    if ((e1 & VMM_PRESENT) && (e1 & VMM_USER)) pages++;
+                }
+            }
+        }
+    }
+    return pages;
+}
+
 static vmm_pte_t* alloc_table(void) {
     void* page = pmm_alloc_zero(1);
     if (!page) {

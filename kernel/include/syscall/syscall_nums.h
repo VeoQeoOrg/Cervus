@@ -118,6 +118,7 @@ typedef struct {
     uint32_t state;
     uint32_t priority;
     uint64_t total_runtime_ns;
+    uint64_t rss_bytes;
 } cervus_task_info_t;
 
 typedef struct {

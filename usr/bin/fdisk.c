@@ -45,8 +45,8 @@ static const char *mbr_type_name(uint8_t t) {
         case 0x0B: return "FAT32";
         case 0x0C: return "FAT32 (LBA)";
         case 0x0E: return "FAT16 (LBA)";
-        case 0x82: return "Linux swap";
-        case 0x83: return "Linux";
+        case 0x82: return "Linux-compatible swap";
+        case 0x83: return "Linux-compatible";
         case 0xEE: return "GPT prot";
         case 0xEF: return "EFI System";
         default:   return "?";
@@ -55,8 +55,8 @@ static const char *mbr_type_name(uint8_t t) {
 
 static const char *gpt_guid_name(const uint8_t guid[16]) {
     if (memcmp(guid, GUID_EFI,    16) == 0) return "EFI System";
-    if (memcmp(guid, GUID_LINUX,  16) == 0) return "Linux";
-    if (memcmp(guid, GUID_SWAP,   16) == 0) return "Linux swap";
+    if (memcmp(guid, GUID_LINUX,  16) == 0) return "Linux-compatible";
+    if (memcmp(guid, GUID_SWAP,   16) == 0) return "Linux-compatible swap";
     if (memcmp(guid, GUID_MSDATA, 16) == 0) return "Microsoft data";
     return "Other";
 }

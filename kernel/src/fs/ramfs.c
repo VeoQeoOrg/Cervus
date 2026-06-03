@@ -12,8 +12,9 @@ typedef struct {
 } ramfs_child_t;
 
 typedef struct {
-    uint8_t       *data;
-    size_t         capacity;
+    uint8_t      **chunks;
+    size_t         chunk_count;
+    size_t         chunk_cap;
 
     ramfs_child_t *children;
     int            child_count;
@@ -21,6 +22,42 @@ typedef struct {
 
     uint64_t ino;
 } ramfs_node_t;
+
+static void ramfs_free_chunks(ramfs_node_t *rn) {
+    if (rn->chunks) {
+        for (size_t i = 0; i < rn->chunk_count; i++)
+            if (rn->chunks[i]) pmm_free(rn->chunks[i], 1);
+        kfree(rn->chunks);
+    }
+    rn->chunks      = NULL;
+    rn->chunk_count = 0;
+    rn->chunk_cap   = 0;
+}
+
+static int ramfs_ensure_chunks(ramfs_node_t *rn, size_t need_chunks) {
+    if (need_chunks <= rn->chunk_count) return 0;
+    if (need_chunks > RAMFS_MAX_CHUNKS) return -EFBIG;
+
+    if (need_chunks > rn->chunk_cap) {
+        size_t newcap = rn->chunk_cap ? rn->chunk_cap * 2 : 8;
+        while (newcap < need_chunks) newcap *= 2;
+        uint8_t **nc = kmalloc(newcap * sizeof(uint8_t *));
+        if (!nc) return -ENOMEM;
+        for (size_t i = 0; i < rn->chunk_count; i++) nc[i] = rn->chunks[i];
+        for (size_t i = rn->chunk_count; i < newcap; i++) nc[i] = NULL;
+        if (rn->chunks) kfree(rn->chunks);
+        rn->chunks    = nc;
+        rn->chunk_cap = newcap;
+    }
+
+    for (size_t i = rn->chunk_count; i < need_chunks; i++) {
+        uint8_t *blk = pmm_alloc_zero(1);
+        if (!blk) return -ENOMEM;
+        rn->chunks[i] = blk;
+    }
+    rn->chunk_count = need_chunks;
+    return 0;
+}
 
 static uint64_t g_next_ino = 1;
 static const vnode_ops_t ramfs_file_ops;
@@ -49,7 +86,7 @@ static void ramfs_ref(vnode_t *node) {
 static void ramfs_unref(vnode_t *node) {
     ramfs_node_t *rn = node->fs_data;
 
-    if (rn->data) kfree(rn->data);
+    ramfs_free_chunks(rn);
 
     if (rn->children) {
         for (int i = 0; i < rn->child_count; i++) {
@@ -71,7 +108,22 @@ static int64_t ramfs_file_read(vnode_t *node, void *buf,
     size_t avail = node->size - (size_t)offset;
     if (len > avail) len = avail;
     if (len == 0) return 0;
-    memcpy(buf, rn->data + offset, len);
+
+    uint8_t *dst = buf;
+    size_t pos = (size_t)offset;
+    size_t done = 0;
+    while (done < len) {
+        size_t ci  = pos / RAMFS_CHUNK_SIZE;
+        size_t off = pos % RAMFS_CHUNK_SIZE;
+        size_t n   = RAMFS_CHUNK_SIZE - off;
+        if (n > len - done) n = len - done;
+        if (ci < rn->chunk_count && rn->chunks[ci])
+            memcpy(dst + done, rn->chunks[ci] + off, n);
+        else
+            memset(dst + done, 0, n);
+        done += n;
+        pos  += n;
+    }
     return (int64_t)len;
 }
 
@@ -79,26 +131,26 @@ static int64_t ramfs_file_write(vnode_t *node, const void *buf,
                                  size_t len, uint64_t offset)
 {
     ramfs_node_t *rn = node->fs_data;
+    if (len == 0) return 0;
     size_t end = (size_t)offset + len;
-    if (end > RAMFS_MAX_FILE_SIZE) return -EFBIG;
+    if (end < (size_t)offset) return -EFBIG;
 
-    if (end > rn->capacity) {
-        size_t newcap = (end + 4095) & ~(size_t)4095;
-        if (newcap > RAMFS_MAX_FILE_SIZE) newcap = RAMFS_MAX_FILE_SIZE;
-        uint8_t *newdata = kmalloc(newcap);
-        if (!newdata) return -ENOMEM;
+    size_t need_chunks = (end + RAMFS_CHUNK_SIZE - 1) / RAMFS_CHUNK_SIZE;
+    int r = ramfs_ensure_chunks(rn, need_chunks);
+    if (r < 0) return r;
 
-        size_t copy_size = rn->data ? node->size : 0;
-        if (copy_size > 0)
-            memcpy(newdata, rn->data, copy_size);
-        memset(newdata + copy_size, 0, newcap - copy_size);
-
-        if (rn->data) kfree(rn->data);
-        rn->data     = newdata;
-        rn->capacity = newcap;
+    const uint8_t *src = buf;
+    size_t pos = (size_t)offset;
+    size_t done = 0;
+    while (done < len) {
+        size_t ci  = pos / RAMFS_CHUNK_SIZE;
+        size_t off = pos % RAMFS_CHUNK_SIZE;
+        size_t n   = RAMFS_CHUNK_SIZE - off;
+        if (n > len - done) n = len - done;
+        memcpy(rn->chunks[ci] + off, src + done, n);
+        done += n;
+        pos  += n;
     }
-
-    memcpy(rn->data + offset, buf, len);
     if (end > node->size) node->size = end;
     return (int64_t)len;
 }
@@ -106,13 +158,14 @@ static int64_t ramfs_file_write(vnode_t *node, const void *buf,
 static int ramfs_file_truncate(vnode_t *node, uint64_t new_size) {
     ramfs_node_t *rn = node->fs_data;
     if (new_size == 0) {
-        if (rn->data) {
-            kfree(rn->data);
-            rn->data     = NULL;
-            rn->capacity = 0;
-        }
+        ramfs_free_chunks(rn);
         node->size = 0;
     } else if (new_size < node->size) {
+        size_t keep = (size_t)((new_size + RAMFS_CHUNK_SIZE - 1) / RAMFS_CHUNK_SIZE);
+        for (size_t i = keep; i < rn->chunk_count; i++) {
+            if (rn->chunks[i]) { pmm_free(rn->chunks[i], 1); rn->chunks[i] = NULL; }
+        }
+        if (keep < rn->chunk_count) rn->chunk_count = keep;
         node->size = new_size;
     }
     return 0;

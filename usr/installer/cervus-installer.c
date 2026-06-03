@@ -206,6 +206,13 @@ static void draw_vsplit(void) {
     }
 }
 
+static void redraw_vsplit_row(int row) {
+    if (!g_pane_split) return;
+    if (row < 1 || row > g_rows - 1) return;
+    go_xy(row, g_pane_right_col - 2);
+    fputs(C_GRAY "|" C_RESET, stdout);
+}
+
 static void hide_cursor(void) {
     fflush(stdout);
     static const char seq[] = "\x1b[?25l\x1b[1;1H\x1b[?25l";
@@ -820,15 +827,23 @@ static int g_step_pane_w   = 60;
 static int g_step_rows_avail = 12;
 static int g_step_n       = 0;
 static int g_step_total   = 0;
+static int g_substep_done = 0;
+static int g_substep_total = 0;
+static int g_steps_done = 0;
+static char g_progress_caption[96] = "";
+
+static void draw_progress_bar(void);
 
 static void install_screen_init(int total_steps) {
     g_step_title_row   = 2;
-    g_step_content_row = 5;
+    g_step_content_row = 7;
     g_step_pane_col    = g_pane_left_col;
     g_step_pane_w      = g_pane_left_w;
     g_step_rows_avail  = g_rows - g_step_content_row - 2;
     if (g_step_rows_avail < 4) g_step_rows_avail = 4;
+    g_progress_caption[0] = '\0';
     g_step_n       = 0;
+    g_steps_done   = 0;
     g_step_total   = total_steps;
     g_log_n        = 0;
     g_log_total    = 0;
@@ -840,6 +855,9 @@ static void install_screen_init(int total_steps) {
     draw_vsplit();
     info_box("Help", info_progress);
     hint_line("Installation in progress - do not power off");
+    g_substep_done  = 0;
+    g_substep_total = 0;
+    draw_progress_bar();
     hide_cursor();
     fflush(stdout);
 }
@@ -877,19 +895,98 @@ static void install_redraw_log(void) {
 
 static void step_begin(const char *desc) {
     g_step_n++;
+    g_substep_done  = 0;
+    g_substep_total = 0;
+    snprintf(g_progress_caption, sizeof(g_progress_caption), "%s", desc);
     char buf[96];
     snprintf(buf, sizeof(buf), C_YELLOW " [%d/%d] %s..." C_RESET,
              g_step_n, g_step_total, desc);
     log_append(buf);
     install_redraw_log();
+    draw_progress_bar();
 }
 
 static void step_ok(const char *desc) {
+    g_substep_done  = 0;
+    g_substep_total = 0;
+    if (g_steps_done < g_step_total) g_steps_done++;
+    g_progress_caption[0] = '\0';
     char buf[96];
     snprintf(buf, sizeof(buf), C_GREEN " [%d/%d]" C_RESET " %s " C_GREEN "OK" C_RESET,
              g_step_n, g_step_total, desc);
     log_replace_last(buf);
     install_redraw_log();
+    draw_progress_bar();
+}
+
+static void draw_progress_bar(void) {
+    int pct;
+    if (g_step_total <= 0) {
+        pct = 0;
+    } else {
+        int base = g_steps_done;
+        int frac = 0;
+        if (g_substep_total > 0 && g_substep_done <= g_substep_total)
+            frac = (g_substep_done * 100) / g_substep_total;
+        int p1000 = (base * 1000 + frac * 10) / g_step_total;
+        pct = p1000 / 10;
+        if (pct > 100) pct = 100;
+        if (pct < 0) pct = 0;
+    }
+
+    int row = g_step_title_row + 2;
+    int col = g_step_pane_col;
+    int w   = g_step_pane_w;
+    int bar_w = w - 1;
+    if (bar_w < 12) bar_w = 12;
+    if (bar_w > 90) bar_w = 90;
+
+    int filled = (pct * bar_w) / 100;
+    if (filled > bar_w) filled = bar_w;
+
+    char label[8];
+    int label_len = snprintf(label, sizeof(label), "%d%%", pct);
+    int label_pos = (bar_w - label_len) / 2;
+    if (label_pos < 0) label_pos = 0;
+
+    go_xy(row, col);
+    int in_fill = -1;
+    for (int i = 0; i < bar_w; i++) {
+        int now_fill = (i < filled) ? 1 : 0;
+        if (now_fill != in_fill) {
+            if (now_fill) fputs("\x1b[30;102m", stdout);
+            else          fputs("\x1b[37;100m", stdout);
+            in_fill = now_fill;
+        }
+        char ch = ' ';
+        if (i >= label_pos && i < label_pos + label_len)
+            ch = label[i - label_pos];
+        putchar(ch);
+    }
+    fputs(C_RESET, stdout);
+    for (int i = bar_w; i < w - 1; i++) putchar(' ');
+    redraw_vsplit_row(row);
+
+    go_xy(row + 1, col);
+    int cap_n = 0;
+    int maxc = w - 1;
+    if (g_progress_caption[0]) {
+        fputs(C_GRAY, stdout);
+        for (const char *p = g_progress_caption; *p && cap_n < maxc; p++, cap_n++)
+            putchar(*p);
+        fputs(C_RESET, stdout);
+    }
+    for (int i = cap_n; i < w - 1; i++) putchar(' ');
+    redraw_vsplit_row(row + 1);
+
+    hide_cursor();
+    fflush(stdout);
+}
+
+static void progress_substep(int done, int total) {
+    g_substep_done  = done;
+    g_substep_total = total;
+    draw_progress_bar();
 }
 
 static void step_fail(const char *desc, int rc) {
@@ -898,6 +995,7 @@ static void step_fail(const char *desc, int rc) {
              g_step_n, g_step_total, desc, rc);
     log_replace_last(buf);
     install_redraw_log();
+    draw_progress_bar();
 }
 
 static int ensure_dir(const char *p) {
@@ -980,6 +1078,25 @@ static int should_skip_entry(const char *name) {
     return 0;
 }
 
+static int count_tree(const char *src_dir) {
+    dent_t *entries = malloc(MAX_ENTRIES * sizeof(dent_t));
+    if (!entries) return 0;
+    int n = read_dir_entries(src_dir, entries, MAX_ENTRIES);
+    int total = 0;
+    for (int i = 0; i < n; i++) {
+        if (should_skip_entry(entries[i].d_name)) continue;
+        if (entries[i].d_type == 1) {
+            char sp[512];
+            path_join(src_dir, entries[i].d_name, sp, sizeof(sp));
+            total += count_tree(sp);
+        } else {
+            total++;
+        }
+    }
+    free(entries);
+    return total;
+}
+
 static void copy_tree(const char *src_dir, const char *dst_dir) {
     dent_t *entries = malloc(MAX_ENTRIES * sizeof(dent_t));
     if (!entries) return;
@@ -995,7 +1112,11 @@ static void copy_tree(const char *src_dir, const char *dst_dir) {
             ensure_dir(dp);
             copy_tree(sp, dp);
         } else {
+            snprintf(g_progress_caption, sizeof(g_progress_caption),
+                     "copying %s", dp);
             copy_one_file(sp, dp);
+            g_substep_done++;
+            progress_substep(g_substep_done, g_substep_total);
         }
     }
     free(entries);
@@ -1135,6 +1256,15 @@ static int do_install(const disk_entry_t *d, const layout_t *L) {
         "/mnt/root/usr", NULL
     };
     for (int i = 0; rdirs[i]; i++) ensure_dir(rdirs[i]);
+
+    int total_files = count_tree("/bin") + count_tree("/apps");
+    struct stat ust0;
+    if (stat("/usr", &ust0) == 0) total_files += count_tree("/usr");
+    if (total_files < 1) total_files = 1;
+    g_substep_done  = 0;
+    g_substep_total = total_files;
+    progress_substep(0, total_files);
+
     copy_tree("/bin",  "/mnt/root/bin");
     copy_tree("/apps", "/mnt/root/apps");
     struct stat ust;
@@ -1245,7 +1375,7 @@ static int detect_existing_install(const disk_entry_t *disks, int n) {
         if (stat(devpath, &ds) != 0) continue;
         if (cervus_disk_mount(p2, "/mnt") == 0) {
             struct stat sh;
-            int has_shell = (stat("/mnt/bin/shell", &sh) == 0);
+            int has_shell = (stat("/mnt/bin/csh", &sh) == 0);
             cervus_disk_umount("/mnt");
             if (has_shell) return 1;
         }

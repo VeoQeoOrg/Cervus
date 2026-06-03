@@ -28,6 +28,7 @@ typedef struct {
     uint64_t runtime_ns;
     uint64_t prev_runtime_ns;
     uint64_t cpu_ns_delta;
+    uint64_t rss_bytes;
     char     name[32];
     int      seen;
 } task_row_t;
@@ -209,6 +210,7 @@ static void sample_tasks(uint64_t cur_uptime_ns) {
                           ? info.total_runtime_ns - r->runtime_ns : 0;
         r->prev_runtime_ns = r->runtime_ns;
         r->runtime_ns = info.total_runtime_ns;
+        r->rss_bytes = info.rss_bytes;
         strncpy(r->name, info.name, sizeof(r->name) - 1);
         r->name[sizeof(r->name) - 1] = '\0';
         r->seen = 1;
@@ -259,6 +261,13 @@ static int cmp_name(const void *a, const void *b)
     const task_row_t *x = a, *y = b;
     return strcmp(x->name, y->name);
 }
+static int cmp_mem(const void *a, const void *b)
+{
+    const task_row_t *x = a, *y = b;
+    if (x->rss_bytes != y->rss_bytes)
+        return (y->rss_bytes > x->rss_bytes) ? 1 : -1;
+    return (int)x->pid - (int)y->pid;
+}
 
 static void sort_rows(void)
 {
@@ -266,6 +275,7 @@ static void sort_rows(void)
     if (g_sort == 1) cmp = cmp_runtime;
     else if (g_sort == 2) cmp = cmp_pid;
     else if (g_sort == 3) cmp = cmp_name;
+    else if (g_sort == 4) cmp = cmp_mem;
     qsort(g_rows, g_nrows, sizeof(task_row_t), cmp);
 }
 
@@ -348,7 +358,7 @@ static void draw_screen(uint64_t uptime_ns) {
     printf(" %s / %s\x1b[K\r\n", used_s, total_s);
 
     fputs(C_BOLD, stdout);
-    int line = printf("  PID  PPID  UID  STATE  PRIO  CPU%%   RUNTIME  NAME");
+    int line = printf("  PID  PPID  UID  STATE  PRIO  CPU%%       MEM   RUNTIME  NAME");
     while (line < g_cols) { putchar(' '); line++; }
     fputs(C_RESET, stdout);
     fputs("\x1b[K\r\n", stdout);
@@ -387,18 +397,22 @@ static void draw_screen(uint64_t uptime_ns) {
         char rt[16];
         fmt_runtime(r->runtime_ns, rt, sizeof(rt));
 
+        char mem[16];
+        fmt_bytes(r->rss_bytes, mem, sizeof(mem));
+
         const char *scolor = state_color(r->state);
         const char *sname  = state_name(r->state);
 
         const char *sel_pre = (idx == g_selected) ? "\x1b[7m" : "";
         const char *sel_post = (idx == g_selected) ? C_RESET : "";
 
-        printf("%s%5u %5u %4u  %s%s%s  %4u  %3u.%02u%% %8s  %-.32s%s",
+        printf("%s%5u %5u %4u  %s%s%s  %4u  %3u.%02u%% %9s %8s  %-.32s%s",
                sel_pre,
                (unsigned)r->pid, (unsigned)r->ppid, (unsigned)r->uid,
                scolor, sname, C_RESET,
                (unsigned)r->priority,
                pct_x100 / 100, pct_x100 % 100,
+               mem,
                rt,
                r->name,
                sel_post);
@@ -409,9 +423,9 @@ static void draw_screen(uint64_t uptime_ns) {
     printf("%d;1H", g_term_rows);
     fputs(C_BOLD C_CYAN, stdout);
     if (g_show_help) {
-        fputs(" [q]uit  [k]ill  [p]ause  [s]ort: c=cpu r=run i=pid n=name  [-/+]refresh  [?]hide help", stdout);
+        fputs(" [q]uit  [k]ill  [p]ause  [s]ort: c=cpu r=run i=pid n=name m=mem  [-/+]refresh  [?]hide help", stdout);
     } else {
-        const char *names[] = {"cpu", "runtime", "pid", "name"};
+        const char *names[] = {"cpu", "runtime", "pid", "name", "mem"};
         printf(" sort=%s  refresh=%dms  rows=%d/%d  press [?] for help",
                names[g_sort], g_refresh_ms, g_nrows, g_nrows);
     }
@@ -476,14 +490,16 @@ static void sysmon_snapshot(void) {
         printf("MEM %u.%02u%%  %s / %s\n", p / 100, p % 100, us, ts);
     }
 
-    printf("  PID  PPID  UID  STATE  PRIO  RUNTIME  NAME\n");
+    printf("  PID  PPID  UID  STATE  PRIO       MEM  RUNTIME  NAME\n");
     for (int i = 0; i < g_nrows; i++) {
         task_row_t *r = &g_rows[i];
         char rt[16];
         fmt_runtime(r->runtime_ns, rt, sizeof(rt));
-        printf("%5u %5u %4u  %-5s  %4u  %8s  %s\n",
+        char mem[16];
+        fmt_bytes(r->rss_bytes, mem, sizeof(mem));
+        printf("%5u %5u %4u  %-5s  %4u  %9s  %8s  %s\n",
                (unsigned)r->pid, (unsigned)r->ppid, (unsigned)r->uid,
-               state_name(r->state), (unsigned)r->priority, rt, r->name);
+               state_name(r->state), (unsigned)r->priority, mem, rt, r->name);
     }
     fflush(stdout);
 }
@@ -498,7 +514,8 @@ int main(int argc, char **argv)
         "  q       quit\n"
         "  k       kill selected process\n"
         "  p       pause/resume refresh\n"
-        "  s       cycle sort (cpu/runtime/pid/name)\n"
+        "  s       cycle sort (cpu/runtime/pid/name/mem)\n"
+        "  m       sort by memory (RSS)\n"
         "  + -     change refresh rate\n"
         "  arrows  select process\n"
         "  ?       toggle help line\n";
@@ -538,11 +555,12 @@ int main(int argc, char **argv)
             if (key == 'q' || key == 'Q' || key == 3) { g_running = 0; break; }
             else if (key == '?' || key == 'h' || key == 'H') g_show_help = !g_show_help;
             else if (key == 'p' || key == 'P') g_paused = !g_paused;
-            else if (key == 's' || key == 'S') { g_sort = (g_sort + 1) % 4; resort = 1; }
+            else if (key == 's' || key == 'S') { g_sort = (g_sort + 1) % 5; resort = 1; }
             else if (key == 'c' || key == 'C') { g_sort = 0; resort = 1; }
             else if (key == 'r' || key == 'R') { g_sort = 1; resort = 1; }
             else if (key == 'i' || key == 'I') { g_sort = 2; resort = 1; }
             else if (key == 'n' || key == 'N') { g_sort = 3; resort = 1; }
+            else if (key == 'm' || key == 'M') { g_sort = 4; resort = 1; }
             else if (key == 1000)    { if (g_selected > 0) g_selected--; }
             else if (key == 1001)  { if (g_selected + 1 < g_nrows) g_selected++; }
             else if (key == 1004)  { g_selected -= 10; if (g_selected < 0) g_selected = 0; }

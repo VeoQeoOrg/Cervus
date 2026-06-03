@@ -48,4 +48,21 @@ uint16_t serial_get_default_port(void);
 void serial_set_default_port(uint16_t port);
 void serial_force_unlock(void);
 
+typedef enum {
+    LOG_LEVEL_NONE  = 0,
+    LOG_LEVEL_ERR   = 1,
+    LOG_LEVEL_WARN  = 2,
+    LOG_LEVEL_INFO  = 3,
+    LOG_LEVEL_DEBUG = 4,
+} log_level_t;
+
+void        klog_set_level(log_level_t level);
+log_level_t klog_get_level(void);
+void        serial_printf_lvl(log_level_t level, const char *format, ...);
+
+#define LOG_E(...) serial_printf_lvl(LOG_LEVEL_ERR,   __VA_ARGS__)
+#define LOG_W(...) serial_printf_lvl(LOG_LEVEL_WARN,  __VA_ARGS__)
+#define LOG_I(...) serial_printf_lvl(LOG_LEVEL_INFO,  __VA_ARGS__)
+#define LOG_D(...) serial_printf_lvl(LOG_LEVEL_DEBUG, __VA_ARGS__)
+
 #endif

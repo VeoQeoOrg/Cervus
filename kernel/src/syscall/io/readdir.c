@@ -10,6 +10,7 @@ int64_t sys_readdir(uint64_t fd, uint64_t dirent_ptr)
     if (!f) return -EBADF;
     vfs_dirent_t kd;
     int r = vfs_readdir(f, &kd);
+    fd_put(f);
     if (r < 0) return (int64_t)r;
     return syscall_copy_to_user((void *)dirent_ptr, &kd, sizeof(kd));
 }

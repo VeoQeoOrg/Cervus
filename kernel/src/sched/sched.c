@@ -30,6 +30,18 @@ static spinlock_t pid_lock = SPINLOCK_INIT;
 
 spinlock_t children_lock = SPINLOCK_INIT;
 
+static volatile uint64_t g_earliest_wakeup_ns = UINT64_MAX;
+
+void sched_note_wakeup(uint64_t deadline_ns) {
+    if (deadline_ns == 0) return;
+    uint64_t cur = __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_RELAXED);
+    while (deadline_ns < cur) {
+        if (__atomic_compare_exchange_n(&g_earliest_wakeup_ns, &cur, deadline_ns,
+                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            break;
+    }
+}
+
 extern tss_t* tss[MAX_CPUS];
 
 static inline void fix_gs_base(percpu_t* pc) {
@@ -309,7 +321,7 @@ task_t* task_fork(task_t* parent) {
 
     pid_register(child);
 
-    serial_printf("[FORK-CHK] child=%p rsp=0x%llx stk=0x%llx rip=0x%llx\n",
+    LOG_D("[FORK-CHK] child=%p rsp=0x%llx stk=0x%llx rip=0x%llx\n",
                   (void*)child, child->rsp, child->stack_base, child->user_saved_rip);
 
     enqueue_global(child);
@@ -322,7 +334,7 @@ void task_destroy(task_t* task) {
     uint32_t old_flags = __atomic_fetch_or(&task->flags, TASK_FLAG_DESTROYED, __ATOMIC_ACQ_REL);
     if (old_flags & TASK_FLAG_DESTROYED) return;
 
-    serial_printf("[DESTROY] pid=%u flags=0x%x on_cpu=%d\n",
+    LOG_D("[DESTROY] pid=%u flags=0x%x on_cpu=%d\n",
                   task->pid, task->flags, (int)atomic_load_bool_acq(&task->on_cpu));
 
     pid_unregister(task);
@@ -369,7 +381,7 @@ void task_wakeup_waiters(uint32_t pid) {
         if (t->state != TASK_BLOCKED) continue;
         if (t->wait_for_pid != pid && t->wait_for_pid != (uint32_t)-1) continue;
 
-        serial_printf("[SCHED] wakeup_waiters: waking pid=%u (waited for pid=%u)\n", t->pid, pid);
+        LOG_D("[SCHED] wakeup_waiters: waking pid=%u (waited for pid=%u)\n", t->pid, pid);
 
         t->wait_for_pid = 0;
         t->runnable = true;
@@ -395,7 +407,7 @@ __attribute__((noreturn)) void task_exit(void)
 
     if (!me) kernel_panic("task_exit: no current task");
 
-    serial_printf("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
+    LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
     tty_reset_on_exit();
 
@@ -434,7 +446,7 @@ void task_kill(task_t* target) {
     if (target->state == TASK_ZOMBIE || target->state == TASK_DEAD) return;
     if (target->pending_kill) return;
 
-    serial_printf("[KILL] task_kill pid=%u state=%d cpu=%u\n",
+    LOG_D("[KILL] task_kill pid=%u state=%d cpu=%u\n",
                   target->pid, (int)target->state, lapic_get_id());
     target->exit_code = 130;
     target->pending_kill = true;
@@ -635,6 +647,7 @@ void task_sleep_ns(uint64_t ns) {
     task_t *me = current_task[cpu];
     if (!me) return;
     me->wakeup_time_ns = hpet_elapsed_ns() + ns;
+    sched_note_wakeup(me->wakeup_time_ns);
     me->runnable = false;
     me->state    = TASK_BLOCKED;
     sched_reschedule();
@@ -662,22 +675,34 @@ void task_unblock(task_t* t) {
 }
 
 void sched_wakeup_sleepers(uint64_t now_ns) {
+    if (now_ns < __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_RELAXED))
+        return;
+
     task_t* to_wake[64];
     int     wake_count = 0;
+    uint64_t next_earliest = UINT64_MAX;
 
     uint64_t _irqf = spinlock_acquire_irqsave(&pid_lock);
-    for (uint32_t i = 1; i < MAX_PIDS && wake_count < 64; i++) {
+    for (uint32_t i = 1; i < MAX_PIDS; i++) {
         task_t *t = pid_table[i];
         if (!t) continue;
         if (t->state != TASK_BLOCKED) continue;
         if (t->wakeup_time_ns == 0) continue;
         if (now_ns >= t->wakeup_time_ns) {
-            t->wakeup_time_ns = 0;
-            t->runnable = true;
-            t->state    = TASK_READY;
-            to_wake[wake_count++] = t;
+            if (wake_count < 64) {
+                t->wakeup_time_ns = 0;
+                t->runnable = true;
+                t->state    = TASK_READY;
+                to_wake[wake_count++] = t;
+            } else {
+                if (t->wakeup_time_ns < next_earliest)
+                    next_earliest = t->wakeup_time_ns;
+            }
+        } else if (t->wakeup_time_ns < next_earliest) {
+            next_earliest = t->wakeup_time_ns;
         }
     }
+    __atomic_store_n(&g_earliest_wakeup_ns, next_earliest, __ATOMIC_RELAXED);
     spinlock_release_irqrestore(&pid_lock, _irqf);
 
     for (int i = 0; i < wake_count; i++) {

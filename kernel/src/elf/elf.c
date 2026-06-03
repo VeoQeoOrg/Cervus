@@ -3,8 +3,36 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/paging.h"
 #include "../../include/io/serial.h"
+#include "../../include/fs/vfs.h"
 #include <string.h>
 #include <stdlib.h>
+
+typedef struct {
+    const uint8_t *buf;
+    vfs_file_t    *file;
+    size_t         size;
+} elf_source_t;
+
+static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len) {
+    if (len == 0) return 0;
+    if (off > src->size || off + len > src->size) return -1;
+    if (src->buf) {
+        memcpy(dst, src->buf + off, len);
+        return 0;
+    }
+    if (src->file) {
+        if (vfs_seek(src->file, (int64_t)off, SEEK_SET) < 0) return -1;
+        size_t done = 0;
+        uint8_t *d = dst;
+        while (done < len) {
+            int64_t r = vfs_read(src->file, d + done, len - done);
+            if (r <= 0) return -1;
+            done += (size_t)r;
+        }
+        return 0;
+    }
+    return -1;
+}
 
 #define ELF_PIE_BASE        0x0000000000400000ULL
 #define ELF_USER_STACK_TOP  0x00007FFFFFFFE000ULL
@@ -77,7 +105,7 @@ static bool ensure_page_mapped(vmm_pagemap_t* map, uintptr_t virt, uint64_t flag
 }
 
 static elf_error_t load_segment(vmm_pagemap_t*      map,
-                                const uint8_t*      data,
+                                const elf_source_t* src,
                                 size_t              file_size,
                                 const elf64_phdr_t* phdr,
                                 uintptr_t           load_bias)
@@ -133,14 +161,14 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
                 phys &= ~(uintptr_t)0xFFF;
                 size_t dst_off = cp_start - pv_start;
                 size_t src_off = cp_start - virt_start;
-                memcpy((uint8_t*)pmm_phys_to_virt(phys) + dst_off,
-                       data + phdr->p_offset + src_off,
-                       cp_end - cp_start);
+                if (src_read(src, (uint8_t*)pmm_phys_to_virt(phys) + dst_off,
+                             phdr->p_offset + src_off, cp_end - cp_start) < 0)
+                    return ELF_ERR_TOO_SMALL;
             }
         }
     }
 
-    serial_printf("[ELF] Segment loaded: virt=0x%llx-0x%llx flags=%s%s%s "
+    LOG_D("[ELF] Segment loaded: virt=0x%llx-0x%llx flags=%s%s%s "
                  "phys=<per-page> pages=%zu\n",
                  virt_start, virt_end,
                  (phdr->p_flags & PF_R) ? "R" : "-",
@@ -152,7 +180,7 @@ static elf_error_t load_segment(vmm_pagemap_t*      map,
 
 static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
                                        const elf64_ehdr_t*  ehdr,
-                                       const uint8_t*       bytes,
+                                       const elf_source_t*  src,
                                        size_t               file_size,
                                        uintptr_t            load_bias,
                                        uintptr_t            cur_load_end)
@@ -173,13 +201,15 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
         return cur_load_end;
     }
 
-    serial_printf("[ELF] section scan: e_shnum=%u\n", (unsigned)ehdr->e_shnum);
+    LOG_D("[ELF] section scan: e_shnum=%u\n", (unsigned)ehdr->e_shnum);
 
     uintptr_t new_end = cur_load_end;
 
     for (uint16_t i = 0; i < ehdr->e_shnum; i++) {
-        const elf64_shdr_t* sh = (const elf64_shdr_t*)
-            (bytes + ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * i);
+        elf64_shdr_t shbuf;
+        if (src_read(src, &shbuf, ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * i,
+                     sizeof(shbuf)) < 0) break;
+        const elf64_shdr_t* sh = &shbuf;
 
         if (!(sh->sh_flags & SHF_ALLOC))                  continue;
         if (sh->sh_size == 0)                             continue;
@@ -220,7 +250,7 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
         }
 
         if (added_pages > 0) {
-            serial_printf("[ELF] ORPHAN section #%u type=%u: virt=0x%llx-0x%llx "
+            LOG_D("[ELF] ORPHAN section #%u type=%u: virt=0x%llx-0x%llx "
                           "added=%zu pages flags=%s%s%s\n",
                           (unsigned)i, (unsigned)sh->sh_type,
                           (unsigned long long)s_start,
@@ -242,9 +272,8 @@ static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
                         phys &= ~(uintptr_t)0xFFF;
                         size_t dst_off = cp_start - p;
                         size_t src_off = cp_start - s_start;
-                        memcpy((uint8_t*)pmm_phys_to_virt(phys) + dst_off,
-                               bytes + sh->sh_offset + src_off,
-                               cp_end - cp_start);
+                        src_read(src, (uint8_t*)pmm_phys_to_virt(phys) + dst_off,
+                                 sh->sh_offset + src_off, cp_end - cp_start);
                     }
                 }
             }
@@ -278,19 +307,60 @@ static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
         }
     }
 
-    serial_printf("[ELF] Stack: virt=0x%llx-0x%llx (%zu KiB)\n",
+    LOG_D("[ELF] Stack: virt=0x%llx-0x%llx (%zu KiB)\n",
                  stack_bottom, ELF_USER_STACK_TOP,
                  (page_count * PAGE_SIZE) / 1024);
 
     return (ELF_USER_STACK_TOP - 8) & ~(uintptr_t)0xF;
 }
 
-elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
+static int init_stack_write(vmm_pagemap_t* map, uintptr_t uvaddr,
+                            const void* src, size_t len) {
+    const uint8_t* s = (const uint8_t*)src;
+    while (len > 0) {
+        uintptr_t page = uvaddr & ~(uintptr_t)0xFFF;
+        uintptr_t off  = uvaddr & 0xFFF;
+        uintptr_t phys = 0;
+        if (!vmm_virt_to_phys(map, page, &phys)) return -1;
+        phys &= ~(uintptr_t)0xFFF;
+        size_t chunk = 0x1000 - off;
+        if (chunk > len) chunk = len;
+        memcpy((uint8_t*)pmm_phys_to_virt(phys) + off, s, chunk);
+        uvaddr += chunk;
+        s      += chunk;
+        len    -= chunk;
+    }
+    return 0;
+}
+
+uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top) {
+    static const char argv0[] = "init";
+    uintptr_t str_addr = (stack_top - sizeof(argv0)) & ~(uintptr_t)0xF;
+    if (init_stack_write(map, str_addr, argv0, sizeof(argv0)) != 0) return 0;
+
+    uint64_t frame[4];
+    frame[0] = 1;
+    frame[1] = (uint64_t)str_addr;
+    frame[2] = 0;
+    frame[3] = 0;
+
+    uintptr_t rsp = str_addr - sizeof(frame);
+    rsp = (rsp & ~(uintptr_t)0xF);
+    if (init_stack_write(map, rsp, frame, sizeof(frame)) != 0) return 0;
+    return rsp;
+}
+
+static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz) {
     elf_load_result_t result = {0};
+    size_t size = src->size;
 
-    if (!data) { result.error = ELF_ERR_NULL; return result; }
+    elf64_ehdr_t ehdr_buf;
+    if (src_read(src, &ehdr_buf, 0, sizeof(ehdr_buf)) < 0) {
+        result.error = ELF_ERR_TOO_SMALL;
+        return result;
+    }
+    const elf64_ehdr_t* ehdr = &ehdr_buf;
 
-    const elf64_ehdr_t* ehdr = (const elf64_ehdr_t*)data;
     result.error = elf_validate(ehdr, size);
     if (result.error != ELF_OK) {
         serial_printf("[ELF] Validation failed: %s\n", elf_strerror(result.error));
@@ -298,7 +368,7 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
     }
 
     uintptr_t load_bias = (ehdr->e_type == ET_DYN) ? ELF_PIE_BASE : 0;
-    if (load_bias) serial_printf("[ELF] PIE binary, bias=0x%llx\n", load_bias);
+    if (load_bias) LOG_D("[ELF] PIE binary, bias=0x%llx\n", load_bias);
 
     vmm_pagemap_t* map = vmm_create_pagemap();
     if (!map) {
@@ -308,24 +378,29 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
     }
     result.pagemap = map;
 
-    serial_printf("[ELF] Kernel PML4[256..511] inherited via vmm_create_pagemap\n");
+    LOG_D("[ELF] Kernel PML4[256..511] inherited via vmm_create_pagemap\n");
 
-    const uint8_t*      bytes = (const uint8_t*)data;
-    const elf64_phdr_t* phdrs = (const elf64_phdr_t*)(bytes + ehdr->e_phoff);
     bool has_load = false;
     uintptr_t max_vaddr = 0;
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        const elf64_phdr_t* ph = &phdrs[i];
+        elf64_phdr_t phbuf;
+        if (src_read(src, &phbuf,
+                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
+                     sizeof(phbuf)) < 0) {
+            result.error = ELF_ERR_TOO_SMALL;
+            return result;
+        }
+        const elf64_phdr_t* ph = &phbuf;
         if (ph->p_type != PT_LOAD) continue;
         has_load = true;
 
-        serial_printf("[ELF] PT_LOAD[%u]: off=0x%llx vaddr=0x%llx "
+        LOG_D("[ELF] PT_LOAD[%u]: off=0x%llx vaddr=0x%llx "
                      "filesz=0x%llx memsz=0x%llx flags=0x%x\n",
                      i, ph->p_offset, ph->p_vaddr,
                      ph->p_filesz, ph->p_memsz, ph->p_flags);
 
-        elf_error_t err = load_segment(map, bytes, size, ph, load_bias);
+        elf_error_t err = load_segment(map, src, size, ph, load_bias);
         if (err != ELF_OK) {
             result.error = err;
             return result;
@@ -339,13 +414,13 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
 
     uintptr_t load_end = page_align_up(max_vaddr);
 
-    load_end = cover_orphan_sections(map, ehdr, bytes, size, load_bias, load_end);
+    load_end = cover_orphan_sections(map, ehdr, src, size, load_bias, load_end);
 
     result.entry     = ehdr->e_entry + load_bias;
     result.load_base = load_bias;
     result.load_end  = load_end;
 
-    serial_printf("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
+    LOG_D("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
                   result.entry, result.load_end);
 
     if (stack_sz == 0) stack_sz = ELF_DEFAULT_STACK;
@@ -353,9 +428,23 @@ elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
     result.stack_top  = alloc_user_stack(map, stack_sz);
     if (result.stack_top == 0) { result.error = ELF_ERR_NO_MEM; return result; }
 
-    serial_printf("[ELF] Load complete. entry=0x%llx stack_top=0x%llx\n",
+    LOG_D("[ELF] Load complete. entry=0x%llx stack_top=0x%llx\n",
                  result.entry, result.stack_top);
     return result;
+}
+
+elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
+    elf_load_result_t result = {0};
+    if (!data) { result.error = ELF_ERR_NULL; return result; }
+    elf_source_t src = { .buf = (const uint8_t*)data, .file = NULL, .size = size };
+    return elf_load_core(&src, stack_sz);
+}
+
+elf_load_result_t elf_load_file(void* file, size_t size, size_t stack_sz) {
+    elf_load_result_t result = {0};
+    if (!file) { result.error = ELF_ERR_NULL; return result; }
+    elf_source_t src = { .buf = NULL, .file = (vfs_file_t*)file, .size = size };
+    return elf_load_core(&src, stack_sz);
 }
 
 void elf_unload(elf_load_result_t* result) {
@@ -364,7 +453,7 @@ void elf_unload(elf_load_result_t* result) {
         vmm_free_pagemap(result->pagemap);
         result->pagemap = NULL;
     }
-    serial_printf("[ELF] Process unloaded.\n");
+    LOG_D("[ELF] Process unloaded.\n");
 }
 
 const char* elf_strerror(elf_error_t err) {

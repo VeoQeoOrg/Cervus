@@ -2,6 +2,7 @@
 #include "../../include/console/klog.h"
 #include "../../include/graphics/fb/fb.h"
 #include "../../include/apic/apic.h"
+#include "../../include/io/serial.h"
 #include <string.h>
 #include <stdio.h>
 #include <limine.h>
@@ -85,11 +86,14 @@ static void mon_build_status(char *out, size_t n) {
         out[p] = 0;
         return;
     }
+    static const char *const LVL[] = { "OFF", "ERR", "WARN", "INFO", "DEBUG" };
+    const char *lvl = LVL[klog_get_level()];
     const char *pre = (g_mode == MON_LIVE)
-        ? "  [debug monitor] LIVE   space/PgDn:page  arrows:scroll  /:find  n:next"
-        : "  [debug monitor] PAUSED   space/PgDn:page  arrows:scroll  /:find  n:next  G:live";
+        ? "  [debug monitor] LIVE   space/PgDn:page  arrows:scroll  /:find  n:next  L:level="
+        : "  [debug monitor] PAUSED   arrows:scroll  /:find  n:next  G:live  L:level=";
     size_t p = 0;
     for (const char *q = pre; *q && p < n - 1; q++) out[p++] = *q;
+    for (const char *q = lvl; *q && p < n - 1; q++) out[p++] = *q;
     out[p] = 0;
 }
 
@@ -300,6 +304,13 @@ static void mon_key(char c) {
         case 'G':           g_mode = MON_LIVE; mon_render(1); break;
         case '/':           mon_pause_here(); g_mode = MON_SEARCH; g_qlen = 0; g_query[0] = 0; mon_render(1); break;
         case 'n':           mon_pause_here(); mon_do_search(g_cursor + 1); mon_render(1); break;
+        case 'L': case 'l': {
+            log_level_t lv = klog_get_level();
+            lv = (lv >= LOG_LEVEL_DEBUG) ? LOG_LEVEL_ERR : (log_level_t)(lv + 1);
+            klog_set_level(lv);
+            mon_render(1);
+            break;
+        }
         default: break;
     }
 }

@@ -159,6 +159,7 @@ void sched_print_stats(void);
 void task_yield(void);
 void task_sleep_ns(uint64_t ns);
 void task_sleep_ms(uint64_t ms);
+void sched_note_wakeup(uint64_t deadline_ns);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
 

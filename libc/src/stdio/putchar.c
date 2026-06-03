@@ -99,7 +99,7 @@ static void commit_dirty(void) {
         return;
     }
     if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
-    if (hpet_is_available()) {
+    if (!g_need_redraw && hpet_is_available()) {
         unsigned long long now = hpet_elapsed_ns();
         if (now - g_last_flush_ns < CONSOLE_FLUSH_INTERVAL_NS) return;
     }
@@ -154,8 +154,9 @@ void scroll_screen(int lines) {
             for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
         }
         if (!g_offscreen && global_framebuffer) {
-            g_need_redraw = 1;
+            console_redraw_grid();
             mark_dirty(0, global_framebuffer->height);
+            g_need_redraw = 0;
         }
         return;
     }
@@ -298,6 +299,10 @@ static void handle_sgr(void) {
         }
         else if (p >= 40 && p <= 47) {
             uint32_t c = ansi_color(p-40, 0);
+            if (ps_reverse) text_color = c; else bg_color = c;
+        }
+        else if (p >= 100 && p <= 107) {
+            uint32_t c = ansi_color(p-100, 1);
             if (ps_reverse) text_color = c; else bg_color = c;
         }
     }
@@ -585,4 +590,16 @@ void console_reset_state(void) {
     ps_state = PS_NORMAL; ps_nparams = 0; ps_cur = 0; ps_bold = 0; ps_reverse = 0;
     for (int i = 0; i < ESC_MAX_PARAMS; i++) ps_params[i] = -1;
     saved_cx = 0; saved_cy = 0;
+}
+
+void console_reset_attrs(void) {
+    text_color = COLOR_WHITE;
+    bg_color = COLOR_BLACK;
+    cursor_visible = 1;
+    autowrap = 1;
+    ps_state = PS_NORMAL;
+    ps_nparams = 0;
+    ps_cur = 0;
+    ps_bold = 0;
+    ps_reverse = 0;
 }

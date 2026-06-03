@@ -150,6 +150,7 @@ void        fd_table_destroy(fd_table_t *table);
 
 int         fd_alloc    (fd_table_t *table, vfs_file_t *file, int min_fd);
 vfs_file_t *fd_get      (const fd_table_t *table, int fd);
+void        fd_put      (vfs_file_t *file);
 int         fd_close    (fd_table_t *table, int fd);
 int         fd_dup2     (fd_table_t *table, int oldfd, int newfd);
 int         fd_set_flags(fd_table_t *table, int fd, int flags);

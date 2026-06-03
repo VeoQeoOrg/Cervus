@@ -179,30 +179,17 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
         vfs_close(vfile); free(kargv_store); free(kenvp_store); return -EIO;
     }
     size_t fsize = (size_t)st.st_size;
-    uint8_t *elf_data = malloc(fsize);
-    if (!elf_data) {
-        serial_printf("[EXECVE] malloc(%zu) failed for path='%s'\n", fsize, kpath);
-        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOMEM;
-    }
-    int64_t nr = vfs_read(vfile, elf_data, fsize); vfs_close(vfile);
-    if (nr < 0 || (size_t)nr != fsize) {
-        serial_printf("[EXECVE] read failed: path='%s' expected=%zu got=%lld\n",
-                      kpath, fsize, (long long)nr);
-        free(elf_data); free(kargv_store); free(kenvp_store); return -EIO;
-    }
-    if (fsize < 4 || elf_data[0] != 0x7F || elf_data[1] != 'E' ||
-        elf_data[2] != 'L' || elf_data[3] != 'F') {
+    uint8_t magic[4] = {0};
+    int64_t mr = vfs_read(vfile, magic, 4);
+    if (mr != 4 || magic[0] != 0x7F || magic[1] != 'E' ||
+        magic[2] != 'L' || magic[3] != 'F') {
         serial_printf("[EXECVE] not an ELF: path='%s' magic=%02x%02x%02x%02x\n",
-                      kpath,
-                      fsize > 0 ? elf_data[0] : 0,
-                      fsize > 1 ? elf_data[1] : 0,
-                      fsize > 2 ? elf_data[2] : 0,
-                      fsize > 3 ? elf_data[3] : 0);
-        free(elf_data); free(kargv_store); free(kenvp_store); return -ENOEXEC;
+                      kpath, magic[0], magic[1], magic[2], magic[3]);
+        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOEXEC;
     }
 
-    elf_load_result_t elf = elf_load(elf_data, fsize, 0);
-    free(elf_data);
+    elf_load_result_t elf = elf_load_file(vfile, fsize, 0);
+    vfs_close(vfile);
     if (elf.error != ELF_OK) {
         serial_printf("[EXECVE] elf_load: %s\n", elf_strerror(elf.error));
         if (elf.pagemap) vmm_free_pagemap(elf.pagemap);

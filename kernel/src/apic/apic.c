@@ -228,31 +228,74 @@ void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags) {
     ioapic_redirect_irq((uint8_t)gsi, vector, redir_flags);
 }
 
-void apic_timer_calibrate(void) {
-    if (!hpet_is_available()) return;
+static uint32_t apic_calibrate_pit(void) {
+    const uint32_t PIT_HZ      = 1193182;
+    const uint32_t WAIT_MS     = 50;
+    uint32_t pit_count = (uint32_t)((uint64_t)PIT_HZ * WAIT_MS / 1000);
+    if (pit_count > 0xFFFF) pit_count = 0xFFFF;
 
-    uint64_t measurement_time_ns = 10000000ULL;
-    uint64_t hpet_ticks_needed = (measurement_time_ns * 1000000ULL) / hpet_period;
+    uint8_t pcb = inb(0x61);
+    pcb = (pcb & ~0x02) | 0x01;
+    outb(0x61, pcb);
+
+    outb(0x43, 0xB0);
+    outb(0x42, (uint8_t)(pit_count & 0xFF));
+    outb(0x42, (uint8_t)((pit_count >> 8) & 0xFF));
+
+    uint8_t t = inb(0x61) & ~0x01;
+    outb(0x61, t);
+    outb(0x61, t | 0x01);
 
     lapic_write(LAPIC_TIMER_DCR, 0x3);
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
     lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);
-    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
-    lapic_write(LAPIC_TIMER, 0xFF);
 
-    uint64_t hpet_start = hpet_read_counter();
-    uint64_t hpet_target = hpet_start + hpet_ticks_needed;
+    while (!(inb(0x61) & 0x20)) asm volatile("pause");
 
-    while (hpet_read_counter() < hpet_target) asm volatile("pause");
-
-    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
     uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
 
-    if (remaining == 0 || remaining == 0xFFFFFFFF) return;
+    if (remaining == 0 || remaining == 0xFFFFFFFF) return 0;
 
     uint32_t ticks_elapsed = 0xFFFFFFFF - remaining;
-    uint32_t ticks_per_10ms = (uint32_t)((ticks_elapsed * 10000000ULL) / measurement_time_ns);
+    return ticks_elapsed / WAIT_MS;
+}
 
-    if (ticks_per_10ms == 0) return;
+void apic_timer_calibrate(void) {
+    uint32_t ticks_per_1ms = 0;
 
-    lapic_timer_init(0x20, ticks_per_10ms, true, 0x3);
+    if (hpet_is_available()) {
+        uint64_t measurement_time_ns = 10000000ULL;
+        uint64_t hpet_ticks_needed = (measurement_time_ns * 1000000ULL) / hpet_period;
+
+        lapic_write(LAPIC_TIMER_DCR, 0x3);
+        lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);
+        lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
+        lapic_write(LAPIC_TIMER, 0xFF);
+
+        uint64_t hpet_start = hpet_read_counter();
+        uint64_t hpet_target = hpet_start + hpet_ticks_needed;
+
+        while (hpet_read_counter() < hpet_target) asm volatile("pause");
+
+        lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
+        uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
+
+        if (remaining != 0 && remaining != 0xFFFFFFFF) {
+            uint32_t ticks_elapsed = 0xFFFFFFFF - remaining;
+            ticks_per_1ms = (uint32_t)((ticks_elapsed * 1000000ULL) / measurement_time_ns);
+        }
+    }
+
+    if (ticks_per_1ms == 0) {
+        serial_printf("[APIC] HPET unavailable/failed; calibrating timer via PIT\n");
+        ticks_per_1ms = apic_calibrate_pit();
+    }
+
+    if (ticks_per_1ms == 0) {
+        serial_printf("[APIC] WARNING: timer calibration failed; using fallback count\n");
+        ticks_per_1ms = 10000;
+    }
+
+    lapic_timer_init(0x20, ticks_per_1ms, true, 0x3);
 }

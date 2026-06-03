@@ -116,7 +116,7 @@ static int mkdir_p(const char *abspath) {
 static int write_file(const char *abspath, const void *data,
                       size_t size, uint32_t mode)
 {
-    serial_printf("[initramfs] write_file '%s' size=%zu\n", abspath, size);
+    LOG_D("[initramfs] write_file '%s' size=%zu\n", abspath, size);
 
     char parent[VFS_MAX_PATH];
     strncpy(parent, abspath, sizeof(parent) - 1);
@@ -130,16 +130,16 @@ static int write_file(const char *abspath, const void *data,
     if (last_slash) {
         *last_slash = '\0';
         if (strlen(parent) > 0) {
-            serial_printf("[initramfs]   ensuring parent dir '%s'\n", parent);
+            LOG_D("[initramfs]   ensuring parent dir '%s'\n", parent);
 
             vnode_t *check = NULL;
             int lr = vfs_lookup(parent, &check);
-            serial_printf("[initramfs]   vfs_lookup('%s') before mkdir_p = %d\n", parent, lr);
+            LOG_D("[initramfs]   vfs_lookup('%s') before mkdir_p = %d\n", parent, lr);
             if (lr == 0) {
-                serial_printf("[initramfs]   parent exists, type=%d\n", check->type);
+                LOG_D("[initramfs]   parent exists, type=%d\n", check->type);
                 vnode_unref(check);
             } else {
-                serial_printf("[initramfs]   parent not found, calling mkdir_p\n");
+                LOG_D("[initramfs]   parent not found, calling mkdir_p\n");
                 int mr = mkdir_p(parent);
                 if (mr < 0) {
                     serial_printf("[initramfs]   mkdir_p('%s') failed: %d\n", parent, mr);
@@ -147,9 +147,9 @@ static int write_file(const char *abspath, const void *data,
                     return mr;
                 }
                 lr = vfs_lookup(parent, &check);
-                serial_printf("[initramfs]   vfs_lookup('%s') after mkdir_p = %d\n", parent, lr);
+                LOG_D("[initramfs]   vfs_lookup('%s') after mkdir_p = %d\n", parent, lr);
                 if (lr == 0) {
-                    serial_printf("[initramfs]   parent now exists, type=%d\n", check->type);
+                    LOG_D("[initramfs]   parent now exists, type=%d\n", check->type);
                     vnode_unref(check);
                 } else {
                     serial_printf("[initramfs]   ERROR: parent still not found after mkdir_p!\n");
@@ -163,7 +163,7 @@ static int write_file(const char *abspath, const void *data,
 
     vfs_file_t *file = NULL;
     int ret = vfs_open(abspath, O_WRONLY | O_CREAT | O_TRUNC, mode ? mode : 0644, &file);
-    serial_printf("[initramfs]   vfs_open('%s') = %d\n", abspath, ret);
+    LOG_D("[initramfs]   vfs_open('%s') = %d\n", abspath, ret);
 
     if (ret < 0) {
         serial_printf("[initramfs] open '%s' failed: %d\n", abspath, ret);
@@ -178,7 +178,7 @@ static int write_file(const char *abspath, const void *data,
                           abspath, (long long)w);
             return (int)w;
         }
-        serial_printf("[initramfs]   wrote %lld bytes\n", (long long)w);
+        LOG_D("[initramfs]   wrote %lld bytes\n", (long long)w);
     } else {
         vfs_close(file);
     }
@@ -192,14 +192,14 @@ int initramfs_mount(const void *data, size_t size) {
     const uint8_t *end = ptr + size;
     int files_ok = 0, dirs_ok = 0, skipped = 0, errors = 0;
 
-    serial_printf("[initramfs] parsing TAR @ %p, size=%zu\n", data, size);
+    LOG_D("[initramfs] parsing TAR @ %p, size=%zu\n", data, size);
 
     {
         vnode_t *root_check = NULL;
         int r = vfs_lookup("/", &root_check);
-        serial_printf("[initramfs] pre-parse: vfs_lookup('/') = %d\n", r);
+        LOG_D("[initramfs] pre-parse: vfs_lookup('/') = %d\n", r);
         if (r == 0) {
-            serial_printf("[initramfs] pre-parse: root type=%d refcnt=%d\n",
+            LOG_D("[initramfs] pre-parse: root type=%d refcnt=%d\n",
                           root_check->type, root_check->refcount);
             vnode_unref(root_check);
         }
@@ -208,7 +208,7 @@ int initramfs_mount(const void *data, size_t size) {
         for (int i = 0; test_dirs[i]; i++) {
             vnode_t *n = NULL;
             int rv = vfs_lookup(test_dirs[i], &n);
-            serial_printf("[initramfs] pre-parse: vfs_lookup('%s') = %d\n", test_dirs[i], rv);
+            LOG_D("[initramfs] pre-parse: vfs_lookup('%s') = %d\n", test_dirs[i], rv);
             if (rv == 0) vnode_unref(n);
         }
     }
@@ -253,7 +253,7 @@ int initramfs_mount(const void *data, size_t size) {
         char abspath[VFS_MAX_PATH];
         path_normalize(raw, abspath, sizeof(abspath));
 
-        serial_printf("[initramfs] entry: raw='%s' -> abs='%s' type='%c' size=%llu\n",
+        LOG_D("[initramfs] entry: raw='%s' -> abs='%s' type='%c' size=%llu\n",
                       raw, abspath, hdr->typeflag ? hdr->typeflag : '0',
                       (unsigned long long)file_size);
 
@@ -265,7 +265,7 @@ int initramfs_mount(const void *data, size_t size) {
             if (strcmp(abspath, "/") != 0) {
                 int r = mkdir_p(abspath);
                 if (r == 0) {
-                    serial_printf("[initramfs] dir  %s\n", abspath);
+                    LOG_D("[initramfs] dir  %s\n", abspath);
                     dirs_ok++;
                 } else {
                     serial_printf("[initramfs] dir  %s FAILED: %d\n", abspath, r);
@@ -281,7 +281,7 @@ int initramfs_mount(const void *data, size_t size) {
             int r = write_file(abspath, filedata, (size_t)file_size,
                                mode ? mode : 0644);
             if (r == 0) {
-                serial_printf("[initramfs] file %s (%llu bytes)\n",
+                LOG_D("[initramfs] file %s (%llu bytes)\n",
                               abspath, (unsigned long long)file_size);
                 files_ok++;
             } else {
@@ -291,12 +291,12 @@ int initramfs_mount(const void *data, size_t size) {
         }
 
         case '2':
-            serial_printf("[initramfs] skip symlink %s\n", abspath);
+            LOG_D("[initramfs] skip symlink %s\n", abspath);
             skipped++;
             break;
 
         default:
-            serial_printf("[initramfs] skip type='%c' %s\n",
+            LOG_D("[initramfs] skip type='%c' %s\n",
                           hdr->typeflag ? hdr->typeflag : '0', abspath);
             skipped++;
             break;

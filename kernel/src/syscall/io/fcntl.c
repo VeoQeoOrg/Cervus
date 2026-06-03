@@ -12,11 +12,14 @@ int64_t sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
     if (!t || !t->fd_table) return -EBADF;
     vfs_file_t *f = fd_get(t->fd_table, (int)fd);
     if (!f) return -EBADF;
+    int64_t r;
     switch (cmd) {
-        case F_GETFD: return (int64_t)fd_get_flags(t->fd_table, (int)fd);
-        case F_SETFD: return (int64_t)fd_set_flags(t->fd_table, (int)fd, (int)arg);
-        case F_GETFL: return (int64_t)f->flags;
-        case F_SETFL: f->flags = (f->flags & O_ACCMODE) | ((int)arg & ~O_ACCMODE); return 0;
-        default: return -EINVAL;
+        case F_GETFD: r = (int64_t)fd_get_flags(t->fd_table, (int)fd); break;
+        case F_SETFD: r = (int64_t)fd_set_flags(t->fd_table, (int)fd, (int)arg); break;
+        case F_GETFL: r = (int64_t)f->flags; break;
+        case F_SETFL: f->flags = (f->flags & O_ACCMODE) | ((int)arg & ~O_ACCMODE); r = 0; break;
+        default: r = -EINVAL; break;
     }
+    fd_put(f);
+    return r;
 }

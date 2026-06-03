@@ -10,6 +10,7 @@ int64_t sys_fstat(uint64_t fd, uint64_t stat_ptr)
     if (!f) return -EBADF;
     vfs_stat_t st;
     int r = vfs_fstat(f, &st);
+    fd_put(f);
     if (r < 0) return (int64_t)r;
     return syscall_copy_to_user((void *)stat_ptr, &st, sizeof(st));
 }

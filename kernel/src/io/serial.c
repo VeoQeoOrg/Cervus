@@ -11,6 +11,17 @@
 
 static volatile uint8_t serial_lock = 0;
 static uint16_t default_serial_port = 0;
+static log_level_t g_log_level = LOG_LEVEL_INFO;
+
+void klog_set_level(log_level_t level) {
+    if (level < LOG_LEVEL_NONE) level = LOG_LEVEL_NONE;
+    if (level > LOG_LEVEL_DEBUG) level = LOG_LEVEL_DEBUG;
+    g_log_level = level;
+}
+
+log_level_t klog_get_level(void) {
+    return g_log_level;
+}
 
 static void serial_log_emit(const char *buf, size_t len) {
     if (!buf || len == 0) return;
@@ -587,6 +598,19 @@ void serial_printf_port(uint16_t port, const char* format, ...) {
 }
 
 void serial_printf(const char* format, ...) {
+    char buf[1024];
+    va_list args;
+    va_start(args, format);
+    int n = vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    if (n < 0) return;
+    size_t len = (size_t)n;
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    serial_log_emit(buf, len);
+}
+
+void serial_printf_lvl(log_level_t level, const char* format, ...) {
+    if (level > g_log_level) return;
     char buf[1024];
     va_list args;
     va_start(args, format);

@@ -92,7 +92,7 @@ limine.conf         boot config
 | *Bootloader* | Done | Limine BIOS + UEFI |
 | *Graphics / PSF font* | Done | Framebuffer, text rendering |
 | *Memory (PMM/VMM)* | Done | Bitmap PMM, 4-level paging VMM |
-| *Interrupts (IDT)*на гитхабе лимин на ветке v12.x свежий релиз 12.2.0, но он не смог собраться | Done | Exceptions and IRQs |
+| *Interrupts (IDT)* | Done | Exceptions and IRQs |
 | *ACPI* | Partial | Table parsing, SDT discovery; reset path pending |
 | *APIC / IOAPIC* | Done | Per-CPU LAPIC, IRQ routing |
 | *Timers (HPET / APIC)* | Done | Periodic and one-shot |

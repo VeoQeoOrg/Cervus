@@ -36,12 +36,6 @@ static void print_percent(uint64_t used, uint64_t total)
     printf("%3lu.%lu%%", (unsigned long)(p10 / 10), (unsigned long)(p10 % 10));
 }
 
-static const cervus_mount_info_t *find_mount_for_device(const cervus_mount_info_t *m, int n, const char *dev)
-{
-    for (int i = 0; i < n; i++) if (strcmp(m[i].device, dev) == 0) return &m[i];
-    return NULL;
-}
-
 static const char *type_to_name(uint8_t t)
 {
     switch (t) {
@@ -54,8 +48,8 @@ static const char *type_to_name(uint8_t t)
         case 0x0B: return "FAT32";
         case 0x0C: return "FAT32 (LBA)";
         case 0x0E: return "FAT16 (LBA)";
-        case 0x82: return "Linux swap";
-        case 0x83: return "Linux";
+        case 0x82: return "Linux-compatible swap";
+        case 0x83: return "Linux-compatible";
         case 0xA5: return "FreeBSD";
         case 0xEE: return "GPT protective";
         case 0xEF: return "EFI System";
@@ -116,8 +110,8 @@ static void print_disk(const cervus_disk_info_t *d,
                 ? (read_mbr_types(d->name, sec_size, ty, st, ct, bt) == 0)
                 : 0;
 
-    fputs("  " C_BOLD "NAME    TYPE             LBA START   SECTORS    SIZE      BOOT" C_RESET "\n", stdout);
-    fputs("  -------------------------------------------------------------------\n", stdout);
+    fputs("  " C_BOLD "NAME    TYPE                     LBA START   SECTORS    SIZE      BOOT" C_RESET "\n", stdout);
+    fputs("  ---------------------------------------------------------------------------\n", stdout);
 
     int any_part = 0;
     for (int i = 0; i < nparts; i++) {
@@ -146,7 +140,7 @@ static void print_disk(const cervus_disk_info_t *d,
             sectors = ct[p->part_num - 1];
 
         uint64_t sz = sectors * (uint64_t)sec_size;
-        printf("  %-6s  %02x %-14s  %10lu  %9lu  %6lu M  %s\n",
+        printf("  %-6s  %02x %-21s  %10lu  %9lu  %6lu M  %s\n",
                p->part_name, t, type_to_name(t),
                (unsigned long)lba, (unsigned long)sectors,
                (unsigned long)(sz / (1024 * 1024)),
@@ -159,24 +153,33 @@ static void print_disk(const cervus_disk_info_t *d,
     fputs("  " C_BOLD "DEVICE    FSTYPE    MOUNTPOINT" C_RESET "\n", stdout);
     fputs("  -----------------------------------------------\n", stdout);
     int any_mount = 0;
-    for (int i = 0; i < nparts; i++) {
-        const cervus_part_info_t *p = &parts[i];
-        if (strcmp(p->disk_name, d->name) != 0) continue;
-        const cervus_mount_info_t *m = find_mount_for_device(mounts, nmounts, p->part_name);
-        if (!m) continue;
+    for (int i = 0; i < nmounts; i++) {
+        const cervus_mount_info_t *m = &mounts[i];
+        int belongs = 0;
+        if (strcmp(m->device, d->name) == 0) belongs = 1;
+        for (int j = 0; !belongs && j < nparts; j++) {
+            if (strcmp(parts[j].disk_name, d->name) != 0) continue;
+            if (strcmp(parts[j].part_name, m->device) == 0) belongs = 1;
+        }
+        if (!belongs) continue;
         any_mount = 1;
-        printf("  %-8s  %-8s  %s\n", m->device, m->fstype, m->path);
+        printf("  " C_GREEN "%-8s" C_RESET "  %-8s  " C_BOLD "%s" C_RESET "\n",
+               m->device, m->fstype, m->path);
     }
-    if (!any_mount) fputs("  (no partitions of this disk are mounted)\n", stdout);
+    if (!any_mount) fputs("  " C_GRAY "(no partitions of this disk are mounted)" C_RESET "\n", stdout);
     putchar('\n');
 
     fputs(C_BOLD C_CYAN "Filesystem usage" C_RESET "\n", stdout);
     int any_fs = 0;
-    for (int i = 0; i < nparts; i++) {
-        const cervus_part_info_t *p = &parts[i];
-        if (strcmp(p->disk_name, d->name) != 0) continue;
-        const cervus_mount_info_t *m = find_mount_for_device(mounts, nmounts, p->part_name);
-        if (!m) continue;
+    for (int i = 0; i < nmounts; i++) {
+        const cervus_mount_info_t *m = &mounts[i];
+        int belongs = 0;
+        if (strcmp(m->device, d->name) == 0) belongs = 1;
+        for (int j = 0; !belongs && j < nparts; j++) {
+            if (strcmp(parts[j].disk_name, d->name) != 0) continue;
+            if (strcmp(parts[j].part_name, m->device) == 0) belongs = 1;
+        }
+        if (!belongs) continue;
         cervus_statvfs_t s;
         if (cervus_statvfs(m->path, &s) < 0) continue;
         any_fs = 1;

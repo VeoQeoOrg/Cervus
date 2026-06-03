@@ -110,6 +110,8 @@ typedef struct {
 } elf_load_result_t;
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);
+elf_load_result_t elf_load_file(void* file, size_t size, size_t stack_sz);
+uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top);
 
 void elf_unload(elf_load_result_t* result);
 

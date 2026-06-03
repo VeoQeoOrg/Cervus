@@ -23,14 +23,19 @@ static void parse_partition_name(const char *name, char *disk_out, size_t disk_c
     disk_out[base_len] = '\0';
 }
 
+#define DISK_LIST_PARTS_MAX 64
+
 int64_t sys_disk_list_parts(uint64_t out_ptr, uint64_t max,
                             uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6)
 {
     (void)a3; (void)a4; (void)a5; (void)a6;
-    if (!syscall_uptr_validate((void *)out_ptr, sizeof(cervus_part_info_t))) return -EFAULT;
     if (max == 0) return -EINVAL;
+    if (max > DISK_LIST_PARTS_MAX) max = DISK_LIST_PARTS_MAX;
+    if (!syscall_uptr_validate((void *)out_ptr, (size_t)max * sizeof(cervus_part_info_t)))
+        return -EFAULT;
 
-    cervus_part_info_t *out = (cervus_part_info_t *)out_ptr;
+    cervus_part_info_t out_buf[DISK_LIST_PARTS_MAX];
+    cervus_part_info_t *out = out_buf;
     int total = blkdev_count();
     uint64_t written = 0;
 
@@ -58,6 +63,11 @@ int64_t sys_disk_list_parts(uint64_t out_ptr, uint64_t max,
         info.bootable     = d->is_partition ? d->part_bootable  : 0;
         memcpy(&out[written], &info, sizeof(info));
         written++;
+    }
+    if (written > 0) {
+        if (syscall_copy_to_user((void *)out_ptr, out_buf,
+                                 (size_t)written * sizeof(cervus_part_info_t)) < 0)
+            return -EFAULT;
     }
     return (int64_t)written;
 }

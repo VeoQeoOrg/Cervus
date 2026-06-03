@@ -25,6 +25,18 @@ static const char *state_str(uint32_t s)
     }
 }
 
+static void fmt_mem(uint64_t b, char *out, size_t n)
+{
+    if (b >= 1024ULL * 1024)
+        snprintf(out, n, "%llu.%lluM",
+                 (unsigned long long)(b / (1024 * 1024)),
+                 (unsigned long long)((b % (1024 * 1024)) * 10 / (1024 * 1024)));
+    else if (b >= 1024)
+        snprintf(out, n, "%lluK", (unsigned long long)(b / 1024));
+    else
+        snprintf(out, n, "%lluB", (unsigned long long)b);
+}
+
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ps")) return 0;
@@ -40,8 +52,8 @@ int main(int argc, char **argv)
     }
 
     if (full) {
-        fputs("  PID  PPID  UID  STATE    PRIO  RUNTIME(ns)        NAME\n", stdout);
-        fputs("  ---  ----  ---  -------  ----  ----------------   ----------------\n", stdout);
+        fputs("  PID  PPID  UID  STATE    PRIO       MEM  RUNTIME(ns)        NAME\n", stdout);
+        fputs("  ---  ----  ---  -------  ----  --------  ----------------   ----------------\n", stdout);
     } else {
         fputs("  PID  STATE    NAME\n", stdout);
         fputs("  ---  -------  ----------------\n", stdout);
@@ -57,9 +69,11 @@ int main(int argc, char **argv)
         if (dup) continue;
         if (nseen < 512) seen[nseen++] = info.pid;
         if (full) {
-            printf("  %4u  %4u  %3u  %s  %4u  %16llu   %s\n",
+            char mem[16];
+            fmt_mem(info.rss_bytes, mem, sizeof(mem));
+            printf("  %4u  %4u  %3u  %s  %4u  %8s  %16llu   %s\n",
                    (unsigned)info.pid, (unsigned)info.ppid, (unsigned)info.uid,
-                   state_str(info.state), (unsigned)info.priority,
+                   state_str(info.state), (unsigned)info.priority, mem,
                    (unsigned long long)info.total_runtime_ns, info.name);
         } else {
             printf("  %4u  %s  %s\n",

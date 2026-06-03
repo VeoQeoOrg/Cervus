@@ -15,17 +15,21 @@ int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count)
     char kbuf[4097];
     if (file) {
         size_t total = 0;
+        int64_t err = 0;
         while (total < count) {
             size_t chunk = count - total;
             if (chunk > 4096) chunk = 4096;
-            if (syscall_copy_from_user(kbuf, (const char *)buf_ptr + total, chunk) < 0)
-                return total ? (int64_t)total : -EFAULT;
+            if (syscall_copy_from_user(kbuf, (const char *)buf_ptr + total, chunk) < 0) {
+                err = -EFAULT; break;
+            }
             int64_t w = vfs_write(file, kbuf, chunk);
-            if (w < 0) return total ? (int64_t)total : w;
+            if (w < 0) { err = w; break; }
             total += (size_t)w;
             if ((size_t)w < chunk) break;
         }
-        return (int64_t)total;
+        fd_put(file);
+        if (total) return (int64_t)total;
+        return err;
     }
 
     if (fd != 1 && fd != 2) return -EBADF;

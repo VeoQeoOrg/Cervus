@@ -49,6 +49,6 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
             return (int64_t)MAP_FAILED;
         }
     }
-    serial_printf("[SYSCALL] mmap: addr=0x%llx pages=%zu prot=0x%llx\n", addr, pages, prot);
+    LOG_D("[SYSCALL] mmap: addr=0x%llx pages=%zu prot=0x%llx\n", addr, pages, prot);
     return (int64_t)addr;
 }

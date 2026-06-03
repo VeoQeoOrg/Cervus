@@ -16,6 +16,7 @@ int64_t sys_sleep_ns(uint64_t ns)
 
     uint64_t now = hpet_elapsed_ns();
     me->wakeup_time_ns = now + ns;
+    sched_note_wakeup(me->wakeup_time_ns);
     me->runnable = false;
     me->state    = TASK_BLOCKED;
 

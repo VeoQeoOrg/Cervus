@@ -44,28 +44,33 @@ int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr)
 
     size_t out_sz = ioctl_out_size(request);
     size_t in_sz  = ioctl_in_size(request);
+    int64_t r;
 
     if (arg_ptr) {
         size_t validate_sz = out_sz > in_sz ? out_sz : in_sz;
         if (validate_sz == 0) validate_sz = IOCTL_KBUF_MAX;
-        if (!syscall_uptr_validate((void *)arg_ptr, validate_sz))
-            return -EFAULT;
+        if (!syscall_uptr_validate((void *)arg_ptr, validate_sz)) {
+            r = -EFAULT; goto out;
+        }
     }
 
     char kbuf[IOCTL_KBUF_MAX];
     memset(kbuf, 0, sizeof(kbuf));
 
     if (arg_ptr && in_sz > 0) {
-        if (syscall_copy_from_user(kbuf, (const void *)arg_ptr, in_sz) < 0)
-            return -EFAULT;
+        if (syscall_copy_from_user(kbuf, (const void *)arg_ptr, in_sz) < 0) {
+            r = -EFAULT; goto out;
+        }
     }
 
-    int64_t r = vfs_ioctl(f, request, arg_ptr ? (void *)kbuf : (void *)0);
-    if (r < 0) return r;
+    r = vfs_ioctl(f, request, arg_ptr ? (void *)kbuf : (void *)0);
+    if (r < 0) goto out;
 
     if (arg_ptr && out_sz > 0) {
         if (syscall_copy_to_user((void *)arg_ptr, kbuf, out_sz) < 0)
-            return -EFAULT;
+            r = -EFAULT;
     }
+out:
+    fd_put(f);
     return r;
 }
