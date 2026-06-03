@@ -412,6 +412,34 @@ int64_t vfs_ioctl(vfs_file_t *file, uint64_t req, void *arg) {
     return file->vnode->ops->ioctl(file->vnode, req, arg);
 }
 
+int vfs_ftruncate(vfs_file_t *file, uint64_t new_size) {
+    if (!file || !file->vnode) return -EBADF;
+    if (file->vnode->type == VFS_NODE_DIR) return -EISDIR;
+    if (!file->vnode->ops || !file->vnode->ops->truncate) return -EINVAL;
+    int r = file->vnode->ops->truncate(file->vnode, new_size);
+    if (r == 0) file->vnode->size = new_size;
+    return r;
+}
+
+int vfs_truncate(const char *path, uint64_t new_size) {
+    if (!path) return -EINVAL;
+    vnode_t *node = NULL;
+    int ret = vfs_lookup(path, &node);
+    if (ret < 0) return ret;
+    if (node->type == VFS_NODE_DIR) { vnode_unref(node); return -EISDIR; }
+    if (!node->ops || !node->ops->truncate) { vnode_unref(node); return -EINVAL; }
+    ret = node->ops->truncate(node, new_size);
+    if (ret == 0) node->size = new_size;
+    vnode_unref(node);
+    return ret;
+}
+
+int vfs_fsync(vfs_file_t *file) {
+    if (!file || !file->vnode) return -EBADF;
+    vfs_sync_all();
+    return 0;
+}
+
 int vfs_readdir(vfs_file_t *file, vfs_dirent_t *out) {
     if (!file || !file->vnode || !out) return -EBADF;
     if (file->vnode->type != VFS_NODE_DIR) return -ENOTDIR;
@@ -449,6 +477,47 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     ret = dir->ops->mkdir(dir, dirname, mode);
     vnode_unref(dir);
     return ret;
+}
+
+int vfs_symlink(const char *target, const char *linkpath) {
+    if (!target || !linkpath) return -EINVAL;
+    char dirpath[VFS_MAX_PATH];
+    strncpy(dirpath, linkpath, VFS_MAX_PATH - 1);
+    dirpath[VFS_MAX_PATH - 1] = '\0';
+
+    char *slash = NULL;
+    for (int i = (int)strlen(dirpath) - 1; i >= 0; i--) {
+        if (dirpath[i] == '/') { slash = &dirpath[i]; break; }
+    }
+    if (!slash) return -EINVAL;
+
+    char name[VFS_MAX_NAME];
+    strncpy(name, slash + 1, VFS_MAX_NAME - 1);
+    name[VFS_MAX_NAME - 1] = '\0';
+    if (name[0] == '\0') return -EINVAL;
+
+    if (slash == dirpath) dirpath[1] = '\0';
+    else                  *slash     = '\0';
+
+    vnode_t *dir = NULL;
+    int ret = vfs_lookup(dirpath, &dir);
+    if (ret < 0) return ret;
+    if (!dir->ops || !dir->ops->symlink) { vnode_unref(dir); return -ENOSYS; }
+    ret = dir->ops->symlink(dir, name, target);
+    vnode_unref(dir);
+    return ret;
+}
+
+int64_t vfs_readlink(const char *path, char *buf, size_t bufsiz) {
+    if (!path || !buf || bufsiz == 0) return -EINVAL;
+    vnode_t *node = NULL;
+    int ret = vfs_lookup(path, &node);
+    if (ret < 0) return ret;
+    if (node->type != VFS_NODE_SYMLINK) { vnode_unref(node); return -EINVAL; }
+    if (!node->ops || !node->ops->readlink) { vnode_unref(node); return -ENOSYS; }
+    int64_t n = node->ops->readlink(node, buf, bufsiz);
+    vnode_unref(node);
+    return n;
 }
 
 fd_table_t *fd_table_create(void) {

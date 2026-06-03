@@ -132,6 +132,9 @@ typedef struct task {
 
     char cwd[256];
 
+    uint32_t pgid;
+    uint32_t sid;
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)

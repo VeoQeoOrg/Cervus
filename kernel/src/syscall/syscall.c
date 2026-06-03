@@ -104,6 +104,17 @@ extern int64_t sys_vt_clear_shell(uint64_t);
 extern int64_t sys_vt_switch(uint64_t);
 extern int64_t sys_chdir             (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getcwd            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_truncate  (uint64_t, uint64_t);
+extern int64_t sys_ftruncate (uint64_t, uint64_t);
+extern int64_t sys_fsync     (uint64_t);
+extern int64_t sys_fdatasync (uint64_t);
+extern int64_t sys_getdents  (uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getpgid   (uint64_t);
+extern int64_t sys_setpgid   (uint64_t, uint64_t);
+extern int64_t sys_getsid    (uint64_t);
+extern int64_t sys_setsid    (void);
+extern int64_t sys_symlink   (uint64_t, uint64_t);
+extern int64_t sys_readlink  (uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -142,6 +153,13 @@ W0(sys_vt_spawn_poll)
 W1(sys_vt_set_ctty)
 W1(sys_vt_clear_shell)
 W1(sys_vt_switch)
+
+W2(sys_truncate)    W2(sys_ftruncate)
+W1(sys_fsync)       W1(sys_fdatasync)
+W3(sys_getdents)
+W1(sys_getpgid)     W2(sys_setpgid)
+W1(sys_getsid)      W0(sys_setsid)
+W2(sys_symlink)     W3(sys_readlink)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -212,6 +230,17 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_VT_SWITCH]         = _sys_vt_switch,
     [SYS_CHDIR]             = sys_chdir,
     [SYS_GETCWD]            = sys_getcwd,
+    [SYS_TRUNCATE]          = _sys_truncate,
+    [SYS_FTRUNCATE]         = _sys_ftruncate,
+    [SYS_FSYNC]             = _sys_fsync,
+    [SYS_FDATASYNC]         = _sys_fdatasync,
+    [SYS_GETDENTS]          = _sys_getdents,
+    [SYS_GETPGID]           = _sys_getpgid,
+    [SYS_SETPGID]           = _sys_setpgid,
+    [SYS_GETSID]            = _sys_getsid,
+    [SYS_SETSID]            = _sys_setsid,
+    [SYS_SYMLINK]           = _sys_symlink,
+    [SYS_READLINK]          = _sys_readlink,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
