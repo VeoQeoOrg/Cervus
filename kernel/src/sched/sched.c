@@ -215,6 +215,8 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->pid             = task_alloc_pid();
     if (!t->pid) { free(t); return NULL; }
     t->ppid            = 0;
+    t->pgid            = t->pid;
+    t->sid             = t->pid;
     t->uid             = uid;
     t->gid             = gid;
     t->capabilities    = cap_initial(uid);
@@ -263,6 +265,8 @@ task_t* task_fork(task_t* parent) {
     child->pid = task_alloc_pid();
     if (!child->pid) { free(child); return NULL; }
     child->ppid            = parent->pid;
+    child->pgid            = parent->pgid;
+    child->sid             = parent->sid;
     child->priority        = parent->priority;
     child->is_userspace    = parent->is_userspace;
     strncpy(child->name, parent->name, sizeof(child->name)-1);

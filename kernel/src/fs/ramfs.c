@@ -20,6 +20,8 @@ typedef struct {
     int            child_count;
     int            child_cap;
 
+    char          *link_target;
+
     uint64_t ino;
 } ramfs_node_t;
 
@@ -87,6 +89,7 @@ static void ramfs_unref(vnode_t *node) {
     ramfs_node_t *rn = node->fs_data;
 
     ramfs_free_chunks(rn);
+    if (rn->link_target) kfree(rn->link_target);
 
     if (rn->children) {
         for (int i = 0; i < rn->child_count; i++) {
@@ -313,6 +316,53 @@ static int ramfs_dir_unlink(vnode_t *dir, const char *name) {
     return -ENOENT;
 }
 
+static int64_t ramfs_readlink(vnode_t *node, char *buf, size_t bufsiz) {
+    ramfs_node_t *rn = node->fs_data;
+    if (!rn->link_target) return -EINVAL;
+    size_t n = strlen(rn->link_target);
+    if (n > bufsiz) n = bufsiz;
+    memcpy(buf, rn->link_target, n);
+    return (int64_t)n;
+}
+
+static const vnode_ops_t ramfs_symlink_ops = {
+    .stat     = ramfs_stat,
+    .ref      = ramfs_ref,
+    .unref    = ramfs_unref,
+    .readlink = ramfs_readlink,
+};
+
+static int ramfs_dir_symlink(vnode_t *dir, const char *name, const char *target) {
+    vnode_t *existing = NULL;
+    if (ramfs_dir_lookup(dir, name, &existing) == 0) {
+        vnode_unref(existing);
+        return -EEXIST;
+    }
+
+    vnode_t *child = ramfs_alloc_vnode(VFS_NODE_SYMLINK, 0777);
+    if (!child) return -ENOMEM;
+
+    ramfs_node_t *rn = child->fs_data;
+    size_t tl = strlen(target);
+    rn->link_target = kmalloc(tl + 1);
+    if (!rn->link_target) { kfree(rn); kfree(child); return -ENOMEM; }
+    memcpy(rn->link_target, target, tl + 1);
+
+    child->ops      = &ramfs_symlink_ops;
+    child->size     = tl;
+    child->refcount = 1;
+
+    int ret = ramfs_dir_add_child(dir, name, child);
+    if (ret < 0) {
+        kfree(rn->link_target);
+        kfree(rn);
+        kfree(child);
+        return ret;
+    }
+    vnode_unref(child);
+    return 0;
+}
+
 static const vnode_ops_t ramfs_dir_ops = {
     .lookup  = ramfs_dir_lookup,
     .readdir = ramfs_dir_readdir,
@@ -322,6 +372,7 @@ static const vnode_ops_t ramfs_dir_ops = {
     .stat    = ramfs_stat,
     .ref     = ramfs_ref,
     .unref   = ramfs_unref,
+    .symlink = ramfs_dir_symlink,
 };
 
 vnode_t *ramfs_create_root(void) {

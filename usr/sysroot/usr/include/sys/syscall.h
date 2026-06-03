@@ -18,6 +18,10 @@
 #define SYS_CAP_DROP         12
 #define SYS_TASK_INFO        13
 #define SYS_EXECVE           14
+#define SYS_GETPGID          15
+#define SYS_SETPGID          16
+#define SYS_GETSID           17
+#define SYS_SETSID           18
 
 #define SYS_READ             20
 #define SYS_WRITE            21
@@ -32,6 +36,7 @@
 #define SYS_PIPE             30
 #define SYS_FCNTL            31
 #define SYS_READDIR          32
+#define SYS_GETDENTS         33
 
 #define SYS_MMAP             40
 #define SYS_MUNMAP           41
@@ -55,6 +60,12 @@
 #define SYS_CHDIR           106
 #define SYS_GETCWD          107
 #define SYS_LIST_MOUNTS     108
+#define SYS_TRUNCATE        109
+#define SYS_FTRUNCATE       110
+#define SYS_FSYNC           111
+#define SYS_FDATASYNC       112
+#define SYS_SYMLINK         113
+#define SYS_READLINK        114
 
 #define SYS_DBG_PRINT       512
 #define SYS_TASK_KILL       515

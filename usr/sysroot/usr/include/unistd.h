@@ -34,6 +34,18 @@ char   *getcwd(char *buf, size_t size);
 int     symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 
+int     truncate(const char *path, off_t length);
+int     ftruncate(int fd, off_t length);
+int     fsync(int fd);
+int     fdatasync(int fd);
+long    getdents(int fd, void *buf, unsigned long count);
+
+pid_t   getpgid(pid_t pid);
+int     setpgid(pid_t pid, pid_t pgid);
+pid_t   getpgrp(void);
+pid_t   getsid(pid_t pid);
+pid_t   setsid(void);
+
 pid_t   getpid(void);
 pid_t   getppid(void);
 uid_t   getuid(void);
