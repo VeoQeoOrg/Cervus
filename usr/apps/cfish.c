@@ -11,7 +11,7 @@
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
-// Константы
+
 #ifndef VFS_MAX_PATH
 #define VFS_MAX_PATH 512
 #endif
@@ -21,13 +21,13 @@
 #define MAX_Z_DIRS 50
 #define MAX_CMD_LEN 256
 
-// Структуры
+
 typedef struct {
     char path[VFS_MAX_PATH];
     int count;
 } z_dir_t;
 
-// Глобальные переменные
+
 static char cwd[VFS_MAX_PATH];
 static int last_rc = 0;
 static char history[MAX_HISTORY][MAX_CMD_LEN];
@@ -35,7 +35,7 @@ static int hist_cnt = 0;
 static z_dir_t z_db[MAX_Z_DIRS];
 static int z_cnt = 0;
 
-// --- ТЕРМИНАЛ ---
+
 static void raw_mode(int enable) {
     struct termios t;
     if (tcgetattr(0, &t) < 0) return;
@@ -44,11 +44,11 @@ static void raw_mode(int enable) {
     tcsetattr(0, TCSANOW, &t);
 }
 
-// --- УТИЛИТЫ ---
+
 static int is_executable(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
-    return (st.st_type == 0); // В Cervus 0 - файл, 1 - папка
+    return (st.st_type == 0); 
 }
 
 static void track_dir(const char *path) {
@@ -80,7 +80,7 @@ static int tokenize(char *line, char **argv) {
     return argc;
 }
 
-// --- АВТОДОПОЛНЕНИЕ ---
+
 static void do_complete(char *buf, int *len, int *pos) {
     char *last_word = strrchr(buf, ' ');
     last_word = last_word ? last_word + 1 : buf;
@@ -109,23 +109,23 @@ static void do_complete(char *buf, int *len, int *pos) {
     }
 }
 
-// --- ОТРИСОВКА ---
+
 static void refresh_line(const char *buf, int pos) {
-    printf("\r\x1b[K"); // Очистить строку
-    // Prompt
+    printf("\r\x1b[K"); 
+    
     printf("%s %s%s%s > ", 
         last_rc == 0 ? C_GREEN "✔" : C_RED "✘",
         C_BLUE, strncmp(cwd, "/home", 5) == 0 ? "~" : cwd, C_RESET);
     
-    // Простая подсветка (команда желтая)
+    
     printf("%s%s%s", C_YELLOW, buf, C_RESET);
     
-    // Вернуть курсор на место
+    
     int move = strlen(buf) - pos;
     if (move > 0) printf("\x1b[%dD", move);
 }
 
-// --- ИСПОЛНЕНИЕ ---
+
 static int execute_command(int argc, char **argv) {
     if (argc == 0) return 0;
 
@@ -145,7 +145,7 @@ static int execute_command(int argc, char **argv) {
 
     if (strcmp(argv[0], "exit") == 0) exit(0);
 
-    // Поиск внешней программы
+    
     char binpath[VFS_MAX_PATH];
     int found = 0;
     if (argv[0][0] == '/' || argv[0][0] == '.') {
@@ -164,7 +164,7 @@ static int execute_command(int argc, char **argv) {
         return 127;
     }
 
-    // Запуск
+    
     pid_t pid = fork();
     if (pid == 0) {
         char cwd_flag[VFS_MAX_PATH + 10];
@@ -185,7 +185,7 @@ static int execute_command(int argc, char **argv) {
     return 1;
 }
 
-// --- MAIN ---
+
 int main(int argc, char **argv) {
     if (getcwd(cwd, VFS_MAX_PATH) == NULL) strcpy(cwd, "/");
     
@@ -219,13 +219,13 @@ int main(int argc, char **argv) {
                 memmove(line + pos - 1, line + pos, len - pos + 1);
                 len--; pos--;
             }
-        } else if (c == 27) { // ESC / Arrows
+        } else if (c == 27) { 
             char seq[2];
             if (read(0, &seq[0], 1) > 0 && read(0, &seq[1], 1) > 0) {
-                if (seq[1] == 'A' && hist_cnt > 0) { // UP
+                if (seq[1] == 'A' && hist_cnt > 0) { 
                     if (h_idx > 0) h_idx--;
                     if (h_idx >= 0) { strcpy(line, history[h_idx]); len = pos = strlen(line); }
-                } else if (seq[1] == 'B') { // DOWN
+                } else if (seq[1] == 'B') { 
                     if (h_idx < hist_cnt - 1) { h_idx++; strcpy(line, history[h_idx]); }
                     else { h_idx = hist_cnt; line[0] = 0; }
                     len = pos = strlen(line);
