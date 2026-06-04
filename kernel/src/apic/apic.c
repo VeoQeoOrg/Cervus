@@ -26,6 +26,13 @@ static irq_override_t g_irq_overrides[MAX_IRQ_OVERRIDES];
 static int g_irq_override_count = 0;
 
 uint64_t g_hpet_boot_counter = 0;
+uint64_t g_tsc_khz = 0;
+
+static inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    asm volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
 
 static inline uintptr_t phys_to_virt(uintptr_t phys) {
     return phys + pmm_get_hhdm_offset();
@@ -101,6 +108,16 @@ uint64_t hpet_elapsed_ns(void) {
     if (!hpet_is_available()) return 0;
     uint64_t delta = hpet_read_counter() - g_hpet_boot_counter;
     return (delta * (uint64_t)hpet_period) / 1000000ULL;
+}
+
+uint64_t g_tsc_boot = 0;
+
+uint64_t tsc_elapsed_ns(void) {
+    if (g_tsc_khz == 0 || g_tsc_boot == 0) return 0;
+    uint64_t delta = rdtsc() - g_tsc_boot;
+    uint64_t mhz = g_tsc_khz / 1000;
+    if (mhz == 0) mhz = 1;
+    return (delta * 1000ULL) / mhz;
 }
 
 void hpet_sleep_ns(uint64_t nanoseconds) {
@@ -250,10 +267,16 @@ static uint32_t apic_calibrate_pit(void) {
     lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
     lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);
 
+    uint64_t tsc_start = rdtsc();
+
     while (!(inb(0x61) & 0x20)) asm volatile("pause");
 
+    uint64_t tsc_end = rdtsc();
     uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
     lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
+
+    if (tsc_end > tsc_start)
+        g_tsc_khz = (tsc_end - tsc_start) / WAIT_MS;
 
     if (remaining == 0 || remaining == 0xFFFFFFFF) return 0;
 
@@ -287,15 +310,20 @@ void apic_timer_calibrate(void) {
         }
     }
 
-    if (ticks_per_1ms == 0) {
-        serial_printf("[APIC] HPET unavailable/failed; calibrating timer via PIT\n");
-        ticks_per_1ms = apic_calibrate_pit();
+    if (ticks_per_1ms == 0 || g_tsc_khz == 0) {
+        if (ticks_per_1ms == 0)
+            serial_printf("[APIC] HPET unavailable/failed; calibrating timer via PIT\n");
+        uint32_t pit_ticks = apic_calibrate_pit();
+        if (ticks_per_1ms == 0) ticks_per_1ms = pit_ticks;
     }
 
     if (ticks_per_1ms == 0) {
         serial_printf("[APIC] WARNING: timer calibration failed; using fallback count\n");
         ticks_per_1ms = 10000;
     }
+
+    g_tsc_boot = rdtsc();
+    serial_printf("[APIC] TSC frequency: %llu kHz\n", (unsigned long long)g_tsc_khz);
 
     lapic_timer_init(0x20, ticks_per_1ms, true, 0x3);
 }

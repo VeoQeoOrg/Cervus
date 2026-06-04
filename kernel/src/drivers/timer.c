@@ -13,6 +13,7 @@ static volatile uint64_t ticks = 0;
 volatile uint32_t g_ctrlc_pending = 0;
 extern task_t* task_find_foreground(void);
 extern void    task_kill(task_t* target);
+extern void    task_kill_foreground_group(task_t* fg);
 extern void    sched_wakeup_sleepers(uint64_t now_ns);
 
 DEFINE_IRQ(0x20, timer_handler)
@@ -37,15 +38,15 @@ DEFINE_IRQ(0x20, timer_handler)
         if (isig) {
             vt_write(vt, "^C\n", 3);
             task_t *fg = task_find_foreground();
-            if (fg) task_kill(fg);
+            if (fg) task_kill_foreground_group(fg);
             else    tty_vt_input(vt, 0x03);
         } else {
             tty_vt_input(vt, 0x03);
         }
     }
 
-    if (cpu == 0 && hpet_is_available()) {
-        sched_wakeup_sleepers(hpet_elapsed_ns());
+    if (cpu == 0) {
+        sched_wakeup_sleepers(sched_now_ns());
     }
 
     if (cpu == 0) {
@@ -126,6 +127,13 @@ bool timer_init(void) {
 
 uint64_t timer_get_ticks(void) {
     return ticks;
+}
+
+uint64_t sched_now_ns(void) {
+    if (hpet_is_available()) return hpet_elapsed_ns();
+    uint64_t tsc = tsc_elapsed_ns();
+    if (tsc) return tsc;
+    return ticks * 1000000ULL;
 }
 
 void timer_sleep_ms(uint64_t milliseconds) {

@@ -7,6 +7,7 @@
 #include "../include/smp/smp.h"
 #include "../include/smp/percpu.h"
 #include "../include/apic/apic.h"
+#include "../include/drivers/timer.h"
 #include "../include/gdt/gdt.h"
 #include "../include/fs/vfs.h"
 #include "../include/panic/panic.h"
@@ -75,6 +76,18 @@ uint32_t task_alloc_pid(void) {
 task_t* task_find_by_pid(uint32_t pid) {
     if (pid == 0 || pid >= MAX_PIDS) return NULL;
     return pid_table[pid];
+}
+
+int task_collect_pids(uint32_t *out, int max) {
+    if (!out || max <= 0) return 0;
+    uint64_t f = spinlock_acquire_irqsave(&pid_lock);
+    int n = 0;
+    for (uint32_t i = 1; i < MAX_PIDS && n < max; i++) {
+        task_t *t = pid_table[i];
+        if (t && t->state != TASK_DEAD) out[n++] = i;
+    }
+    spinlock_release_irqrestore(&pid_lock, f);
+    return n;
 }
 
 static void pid_register(task_t* t) {
@@ -204,6 +217,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+    t->create_time_ns = sched_now_ns();
     pid_register(t);
     enqueue_global(t);
     return t;
@@ -253,6 +267,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
 
     t->flags |= TASK_FLAG_OWN_PAGEMAP;
 
+    t->create_time_ns = sched_now_ns();
     pid_register(t);
     enqueue_global(t);
     return t;
@@ -315,6 +330,7 @@ task_t* task_fork(task_t* parent) {
     child->state    = TASK_READY;
     child->runnable = true;
     child->parent   = parent;
+    child->create_time_ns = sched_now_ns();
 
     {
         uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
@@ -400,7 +416,6 @@ void task_wakeup_waiters(uint32_t pid) {
 }
 
 extern void tty_reset_nonblock(void);
-extern void tty_reset_on_exit(void);
 
 __attribute__((noreturn)) void task_exit(void)
 {
@@ -413,7 +428,7 @@ __attribute__((noreturn)) void task_exit(void)
 
     LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
-    tty_reset_on_exit();
+    tty_reset_nonblock();
 
     task_t* init = task_find_by_pid(1);
     if (init && init != me) {
@@ -502,6 +517,27 @@ task_t* task_find_foreground(void) {
         return NULL;
     }
     return t;
+}
+
+static void task_kill_subtree(task_t *root) {
+    if (!root) return;
+    uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+    task_t *child = root->children;
+    spinlock_release_irqrestore(&children_lock, _cf);
+    while (child) {
+        task_t *next = child->sibling;
+        task_kill_subtree(child);
+        child = next;
+    }
+    task_kill(root);
+}
+
+void task_kill_foreground_group(task_t *fg) {
+    if (!fg) return;
+    task_t *root = fg;
+    while (root->parent && root->parent->ppid != 1 && root->parent->pid != 1)
+        root = root->parent;
+    task_kill_subtree(root);
 }
 
 static task_t* sched_pick_next(uint32_t cpu) {
@@ -610,8 +646,8 @@ void sched_reschedule(void) {
         }
     }
 
-    if (hpet_is_available()) {
-        uint64_t now = hpet_elapsed_ns();
+    {
+        uint64_t now = sched_now_ns();
         if (old && old != &idle_tasks[cpu] && old->run_start_ns > 0 && now > old->run_start_ns)
             old->total_runtime += (now - old->run_start_ns);
         next->run_start_ns = now;
@@ -646,11 +682,10 @@ void task_yield(void) {
 
 void task_sleep_ns(uint64_t ns) {
     if (ns == 0) return;
-    if (!hpet_is_available()) { task_yield(); return; }
     uint32_t cpu = lapic_get_id();
     task_t *me = current_task[cpu];
     if (!me) return;
-    me->wakeup_time_ns = hpet_elapsed_ns() + ns;
+    me->wakeup_time_ns = sched_now_ns() + ns;
     sched_note_wakeup(me->wakeup_time_ns);
     me->runnable = false;
     me->state    = TASK_BLOCKED;

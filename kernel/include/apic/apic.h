@@ -94,6 +94,7 @@ void apic_timer_calibrate(void);
 uint64_t hpet_read_counter(void);
 uint64_t hpet_get_frequency(void);
 uint64_t hpet_elapsed_ns(void);
+uint64_t tsc_elapsed_ns(void);
 void hpet_sleep_ns(uint64_t nanoseconds);
 void hpet_sleep_us(uint64_t microseconds);
 void hpet_sleep_ms(uint64_t milliseconds);

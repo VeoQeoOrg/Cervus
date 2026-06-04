@@ -21,6 +21,7 @@ int64_t sys_task_info(uint64_t pid_arg, uint64_t buf_ptr)
     info.state            = (uint32_t)target->state;
     info.priority         = (uint32_t)target->priority;
     info.total_runtime_ns = target->total_runtime;
+    info.create_time_ns   = target->create_time_ns;
     if (target->is_userspace && target->pagemap)
         info.rss_bytes = vmm_count_user_pages(target->pagemap) * 4096ULL;
     strncpy(info.name, target->name, sizeof(info.name) - 1);

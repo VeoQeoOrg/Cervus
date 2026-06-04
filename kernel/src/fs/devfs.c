@@ -130,14 +130,6 @@ void tty_reset_nonblock(void) {
     g_vtty[cur_vt()].nonblock = 0;
 }
 
-extern void console_reset_attrs(void);
-
-void tty_reset_on_exit(void) {
-    int vt = cur_vt();
-    g_vtty[vt].nonblock = 0;
-    if (vt == vt_active()) console_reset_attrs();
-}
-
 static void tty_echo_char(int vt, char c) {
     if (c == '\b' || c == 0x7F) {
         vt_write(vt, "\b \b", 3);

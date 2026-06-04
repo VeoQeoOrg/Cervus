@@ -59,6 +59,7 @@ typedef struct {
     uint32_t priority;
     uint64_t total_runtime_ns;
     uint64_t rss_bytes;
+    uint64_t create_time_ns;
 } cervus_task_info_t;
 
 typedef struct {
@@ -68,6 +69,15 @@ typedef struct {
     uint64_t usable_bytes;
     uint64_t page_size;
 } cervus_meminfo_t;
+
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint64_t phys_addr;
+    uint64_t size_bytes;
+} cervus_fb_info_t;
 
 typedef struct {
     int64_t tv_sec;
@@ -212,5 +222,11 @@ pid_t    waitpid(pid_t pid, int *status, int options);
 pid_t    wait(int *status);
 
 ssize_t  cervus_dbg_print(const char *buf, size_t n);
+
+int      cervus_fb_info(cervus_fb_info_t *out);
+long     cervus_fb_blit(const void *buf, unsigned x, unsigned y, unsigned w, unsigned h);
+void    *cervus_fb_map(void);
+int      cervus_fb_acquire(void);
+int      cervus_fb_release(void);
 
 #endif

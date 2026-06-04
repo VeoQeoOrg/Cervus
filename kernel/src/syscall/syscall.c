@@ -115,6 +115,11 @@ extern int64_t sys_getsid    (uint64_t);
 extern int64_t sys_setsid    (void);
 extern int64_t sys_symlink   (uint64_t, uint64_t);
 extern int64_t sys_readlink  (uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fb_info   (uint64_t);
+extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fb_map    (uint64_t);
+extern int64_t sys_fb_acquire(void);
+extern int64_t sys_fb_release(void);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -122,6 +127,7 @@ typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t
 #define W1(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)b;(void)c;(void)d;(void)e;(void)f;return fn(a);}
 #define W2(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)c;(void)d;(void)e;(void)f;return fn(a,b);}
 #define W3(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return fn(a,b,c);}
+#define W5(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)f;return fn(a,b,c,d,e);}
 #define W6(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){return fn(a,b,c,d,e,f);}
 
 W1(sys_exit)        W1(sys_exit_group)
@@ -160,6 +166,8 @@ W3(sys_getdents)
 W1(sys_getpgid)     W2(sys_setpgid)
 W1(sys_getsid)      W0(sys_setsid)
 W2(sys_symlink)     W3(sys_readlink)
+W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
+W0(sys_fb_acquire)  W0(sys_fb_release)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -241,6 +249,11 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SETSID]            = _sys_setsid,
     [SYS_SYMLINK]           = _sys_symlink,
     [SYS_READLINK]          = _sys_readlink,
+    [SYS_FB_INFO]           = _sys_fb_info,
+    [SYS_FB_BLIT]           = _sys_fb_blit,
+    [SYS_FB_MAP]            = _sys_fb_map,
+    [SYS_FB_ACQUIRE]        = _sys_fb_acquire,
+    [SYS_FB_RELEASE]        = _sys_fb_release,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

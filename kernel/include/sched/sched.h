@@ -135,6 +135,8 @@ typedef struct task {
     uint32_t pgid;
     uint32_t sid;
 
+    uint64_t create_time_ns;
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -173,6 +175,7 @@ void    task_kill(task_t* task);
 void    task_destroy(task_t* task);
 task_t* task_fork(task_t* parent);
 task_t* task_find_by_pid(uint32_t pid);
+int task_collect_pids(uint32_t *out, int max);
 uint32_t task_alloc_pid(void);
 void    task_reparent(task_t* child, task_t* new_parent);
 

@@ -103,7 +103,13 @@
 #define SYS_VT_CLEAR_SHELL    555
 #define SYS_VT_SWITCH         556
 
-#define SYSCALL_TABLE_SIZE    559
+#define SYS_FB_INFO           560
+#define SYS_FB_BLIT           561
+#define SYS_FB_MAP            562
+#define SYS_FB_ACQUIRE        563
+#define SYS_FB_RELEASE        564
+
+#define SYSCALL_TABLE_SIZE    565
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
@@ -121,6 +127,15 @@
 #define CLOCK_MONOTONIC  1
 
 typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t bpp;
+    uint64_t phys_addr;
+    uint64_t size_bytes;
+} cervus_fb_info_t;
+
+typedef struct {
     uint32_t pid;
     uint32_t ppid;
     uint32_t uid;
@@ -131,6 +146,7 @@ typedef struct {
     uint32_t priority;
     uint64_t total_runtime_ns;
     uint64_t rss_bytes;
+    uint64_t create_time_ns;
 } cervus_task_info_t;
 
 typedef struct {

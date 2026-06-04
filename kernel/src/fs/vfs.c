@@ -661,6 +661,20 @@ int fd_get_flags(const fd_table_t *table, int fd) {
     return r;
 }
 
+int vfs_fd_info(const fd_table_t *table, int fd, int *out_type, int *out_oflags) {
+    if (!table || fd < 0 || fd >= TASK_MAX_FDS) return -EBADF;
+    uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&table->lock);
+    vfs_file_t *file = table->entries[fd].file;
+    if (!file) {
+        spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
+        return -EBADF;
+    }
+    if (out_type)   *out_type   = file->vnode ? (int)file->vnode->type : -1;
+    if (out_oflags) *out_oflags = file->flags;
+    spinlock_release_irqrestore((spinlock_t *)&table->lock, f);
+    return 0;
+}
+
 int vfs_init_stdio(void *task_ptr) {
     task_t *t = (task_t *)task_ptr;
     if (!t || !t->fd_table) return -EINVAL;

@@ -1,5 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/apic/apic.h"
+#include "../../../include/drivers/timer.h"
 #include "../../../include/io/ports.h"
 #include <stdbool.h>
 
@@ -83,7 +84,7 @@ static void _ensure_rtc_base(void)
     int64_t t = _rtc_read_unix();
     if (t > 0) {
         g_rtc_base_sec    = t;
-        g_rtc_base_ns     = hpet_elapsed_ns();
+        g_rtc_base_ns     = sched_now_ns();
         g_rtc_initialized = true;
     }
 }
@@ -96,21 +97,21 @@ int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
     cervus_timespec_t ts;
 
     if (id == 1) {
-        uint64_t ns   = hpet_elapsed_ns();
+        uint64_t ns   = sched_now_ns();
         ts.tv_sec     = (int64_t)(ns / 1000000000ULL);
         ts.tv_nsec    = (int64_t)(ns % 1000000000ULL);
     } else {
         _ensure_rtc_base();
 
         if (g_rtc_initialized) {
-            uint64_t now_ns  = hpet_elapsed_ns();
+            uint64_t now_ns  = sched_now_ns();
             uint64_t delta   = now_ns - g_rtc_base_ns;
             int64_t  real_s  = g_rtc_base_sec + (int64_t)(delta / 1000000000ULL);
             uint64_t real_ns = delta % 1000000000ULL;
             ts.tv_sec  = real_s;
             ts.tv_nsec = (int64_t)real_ns;
         } else {
-            uint64_t ns  = hpet_elapsed_ns();
+            uint64_t ns  = sched_now_ns();
             ts.tv_sec    = (int64_t)(ns / 1000000000ULL);
             ts.tv_nsec   = (int64_t)(ns % 1000000000ULL);
         }

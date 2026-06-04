@@ -112,6 +112,16 @@ void console_flush_pending(void) {
     do_flush_now();
 }
 
+void console_force_full_redraw(void) {
+    if (g_offscreen || !global_framebuffer) return;
+    console_redraw_grid();
+    g_need_redraw = 0;
+    dirty_y_min = 0xFFFFFFFFu;
+    dirty_y_max = 0;
+    fb_flush(global_framebuffer);
+    if (hpet_is_available()) g_last_flush_ns = hpet_elapsed_ns();
+}
+
 void putchar_flush_begin(void) {
     flush_inhibit++;
 }

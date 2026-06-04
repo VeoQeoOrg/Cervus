@@ -31,6 +31,7 @@ retry:;
             task_set_foreground((uint32_t)pid_arg);
 
         sched_reschedule();
+        if (parent->pending_kill) return -EINTR;
         goto retry;
     }
 

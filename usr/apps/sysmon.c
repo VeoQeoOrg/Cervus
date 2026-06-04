@@ -29,6 +29,7 @@ typedef struct {
     uint64_t prev_runtime_ns;
     uint64_t cpu_ns_delta;
     uint64_t rss_bytes;
+    uint64_t create_time_ns;
     char     name[32];
     int      seen;
 } task_row_t;
@@ -42,7 +43,7 @@ static int g_paused  = 0;
 static int g_sort = 0;
 static int g_selected = 0;
 static int g_scroll = 0;
-static int g_refresh_ms = 1000;
+static int g_refresh_ms = 100;
 static int g_show_help = 0;
 
 static task_row_t g_rows[MAX_TASKS];
@@ -211,6 +212,7 @@ static void sample_tasks(uint64_t cur_uptime_ns) {
         r->prev_runtime_ns = r->runtime_ns;
         r->runtime_ns = info.total_runtime_ns;
         r->rss_bytes = info.rss_bytes;
+        r->create_time_ns = info.create_time_ns;
         strncpy(r->name, info.name, sizeof(r->name) - 1);
         r->name[sizeof(r->name) - 1] = '\0';
         r->seen = 1;
@@ -296,12 +298,34 @@ static void fmt_bytes(uint64_t b, char *out, size_t n)
 
 static void fmt_runtime(uint64_t ns, char *out, size_t n)
 {
+    uint64_t cs = ns / 10000000ULL;
+    uint64_t hh = cs / 360000ULL;
+    if (hh > 0) {
+        uint64_t mm = (cs / 6000ULL) % 60;
+        snprintf(out, n, "%lluh%02llum", (unsigned long long)hh, (unsigned long long)mm);
+    } else {
+        uint64_t mm = cs / 6000ULL;
+        uint64_t ss = (cs / 100ULL) % 60;
+        uint64_t hund = cs % 100;
+        snprintf(out, n, "%llu:%02llu.%02llu",
+                 (unsigned long long)mm, (unsigned long long)ss, (unsigned long long)hund);
+    }
+}
+
+static void fmt_elapsed(uint64_t ns, char *out, size_t n)
+{
     uint64_t s = ns / 1000000000ULL;
-    uint64_t hh = s / 3600;
+    uint64_t d = s / 86400;
+    uint64_t hh = (s / 3600) % 24;
     uint64_t mm = (s / 60) % 60;
     uint64_t ss = s % 60;
-    if (hh > 0) snprintf(out, n, "%2lluh%02llum", (unsigned long long)hh, (unsigned long long)mm);
-    else        snprintf(out, n, "%2llum%02llus", (unsigned long long)mm, (unsigned long long)ss);
+    if (d > 0)
+        snprintf(out, n, "%llud%02lluh", (unsigned long long)d, (unsigned long long)hh);
+    else if (hh > 0)
+        snprintf(out, n, "%llu:%02llu:%02llu",
+                 (unsigned long long)hh, (unsigned long long)mm, (unsigned long long)ss);
+    else
+        snprintf(out, n, "%llu:%02llu", (unsigned long long)mm, (unsigned long long)ss);
 }
 
 static void draw_bar(int width, unsigned pct_x100, const char *color)
@@ -358,7 +382,7 @@ static void draw_screen(uint64_t uptime_ns) {
     printf(" %s / %s\x1b[K\r\n", used_s, total_s);
 
     fputs(C_BOLD, stdout);
-    int line = printf("  PID  PPID  UID  STATE  PRIO  CPU%%       MEM   RUNTIME  NAME");
+    int line = printf("  PID  PPID  UID  STATE  PRIO  CPU%%       MEM  RUNTIME    ELAPSED  NAME");
     while (line < g_cols) { putchar(' '); line++; }
     fputs(C_RESET, stdout);
     fputs("\x1b[K\r\n", stdout);
@@ -397,6 +421,10 @@ static void draw_screen(uint64_t uptime_ns) {
         char rt[16];
         fmt_runtime(r->runtime_ns, rt, sizeof(rt));
 
+        char el[16];
+        uint64_t elapsed = (uptime_ns > r->create_time_ns) ? (uptime_ns - r->create_time_ns) : 0;
+        fmt_elapsed(elapsed, el, sizeof(el));
+
         char mem[16];
         fmt_bytes(r->rss_bytes, mem, sizeof(mem));
 
@@ -406,7 +434,7 @@ static void draw_screen(uint64_t uptime_ns) {
         const char *sel_pre = (idx == g_selected) ? "\x1b[7m" : "";
         const char *sel_post = (idx == g_selected) ? C_RESET : "";
 
-        printf("%s%5u %5u %4u  %s%s%s  %4u  %3u.%02u%% %9s %8s  %-.32s%s",
+        printf("%s%5u %5u %4u  %s%s%s  %4u  %3u.%02u%% %9s %8s %10s  %-.32s%s",
                sel_pre,
                (unsigned)r->pid, (unsigned)r->ppid, (unsigned)r->uid,
                scolor, sname, C_RESET,
@@ -414,6 +442,7 @@ static void draw_screen(uint64_t uptime_ns) {
                pct_x100 / 100, pct_x100 % 100,
                mem,
                rt,
+               el,
                r->name,
                sel_post);
         fputs("\x1b[K\r\n", stdout);
@@ -423,11 +452,11 @@ static void draw_screen(uint64_t uptime_ns) {
     printf("%d;1H", g_term_rows);
     fputs(C_BOLD C_CYAN, stdout);
     if (g_show_help) {
-        fputs(" [q]uit  [k]ill  [p]ause  [s]ort: c=cpu r=run i=pid n=name m=mem  [-/+]refresh  [?]hide help", stdout);
+        fputs(" [q]uit  [k]ill  [p]ause  [s]ort: c=cpu r=run i=pid n=name m=mem  [?]hide help", stdout);
     } else {
         const char *names[] = {"cpu", "runtime", "pid", "name", "mem"};
-        printf(" sort=%s  refresh=%dms  rows=%d/%d  press [?] for help",
-               names[g_sort], g_refresh_ms, g_nrows, g_nrows);
+        printf(" sort=%s  rows=%d/%d  press [?] for help",
+               names[g_sort], g_nrows, g_nrows);
     }
     fputs(C_RESET "\x1b[K\x1b[?2026l", stdout);
     fflush(stdout);
@@ -549,7 +578,6 @@ int main(int argc, char **argv)
         int key;
         int redraw = 0;
         int resort = 0;
-        int resched = 0;
         while (read_key_nonblock(&key)) {
             redraw = 1;
             if (key == 'q' || key == 'Q' || key == 3) { g_running = 0; break; }
@@ -565,12 +593,6 @@ int main(int argc, char **argv)
             else if (key == 1001)  { if (g_selected + 1 < g_nrows) g_selected++; }
             else if (key == 1004)  { g_selected -= 10; if (g_selected < 0) g_selected = 0; }
             else if (key == 1005)  { g_selected += 10; if (g_selected >= g_nrows) g_selected = g_nrows - 1; }
-            else if (key == '+' || key == '=') {
-                if (g_refresh_ms >= 200) { g_refresh_ms -= 100; resched = 1; }
-            }
-            else if (key == '-' || key == '_') {
-                if (g_refresh_ms < 10000) { g_refresh_ms += 100; resched = 1; }
-            }
             else if (key == 'k' || key == 'K') {
                 if (g_selected >= 0 && g_selected < g_nrows) {
                     task_row_t *r = &g_rows[g_selected];
@@ -593,7 +615,6 @@ int main(int argc, char **argv)
             }
         }
         if (resort) sort_rows();
-        if (resched) next_sample = ns_now() + (uint64_t)g_refresh_ms * 1000000ULL;
         if (redraw) draw_screen(ns_now());
 
         uint64_t now = ns_now();
@@ -605,7 +626,7 @@ int main(int argc, char **argv)
             draw_screen(now);
             next_sample = now + (uint64_t)g_refresh_ms * 1000000ULL;
         }
-        cervus_nanosleep(50000000ULL);
+        cervus_nanosleep(15000000ULL);
     }
 
     restore_term();

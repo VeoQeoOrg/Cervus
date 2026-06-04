@@ -28,6 +28,7 @@
 #include "../include/fs/vfs.h"
 #include "../include/fs/ramfs.h"
 #include "../include/fs/devfs.h"
+#include "../include/fs/procfs.h"
 #include "../include/fs/initramfs.h"
 #include "../include/drivers/disk/ata.h"
 #include "../include/drivers/disk/blkdev.h"
@@ -276,6 +277,11 @@ void kernel_main(void) {
     vfs_mount("/dev", devroot);
     vfs_set_mount_info("/dev", "devfs", "devfs");
     serial_writestring("devfs [OK]\n");
+
+    vnode_t *procroot = procfs_create_root();
+    vfs_mount("/proc", procroot);
+    vfs_set_mount_info("/proc", "procfs", "procfs");
+    serial_writestring("procfs [OK]\n");
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");

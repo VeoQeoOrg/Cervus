@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
+#include <sys/cervus.h>
 #include <errno.h>
 #include <cervus_util.h>
 
@@ -76,6 +77,24 @@ static char g_cwd[CSH_PATH_MAX] = "/";
 static char g_path_env[CSH_VAL_MAX] = "/bin:/apps:/usr/bin";
 static int  g_last_rc = 0;
 
+static uint32_t g_rand_state = 0;
+
+static uint32_t csh_rand(void) {
+    uint32_t x = g_rand_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    g_rand_state = x;
+    return x;
+}
+
+static void csh_rand_seed(void) {
+    uint64_t s = cervus_uptime_ns();
+    s ^= (uint64_t)getpid() << 16;
+    g_rand_state = (uint32_t)(s ^ (s >> 32));
+    if (g_rand_state == 0) g_rand_state = 0x1234567u;
+}
+
 static int var_find(const char *name) {
     for (int i = 0; i < g_nvars; i++)
         if (strcmp(g_vars[i].name, name) == 0) return i;
@@ -83,6 +102,11 @@ static int var_find(const char *name) {
 }
 
 static const char *var_get(const char *name) {
+    if (strcmp(name, "RANDOM") == 0) {
+        static char rbuf[16];
+        snprintf(rbuf, sizeof(rbuf), "%u", csh_rand() % 32768u);
+        return rbuf;
+    }
     int i = var_find(name);
     if (i >= 0) return g_vars[i].value;
     return "";
@@ -276,6 +300,7 @@ static int find_in_path(const char *cmd, char *out, size_t outsz) {
 }
 
 static int exec_external(int argc, char **argv, redir_t *redirs, int nr);
+static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[], int *nfree);
 
 #define CSH_PIPELINE_MAX 16
 
@@ -328,7 +353,12 @@ static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
             if (parse_redirects(sub_argv, &sub_n, rd, CSH_REDIRS_MAX, &nr) < 0) exit(1);
             if (sub_n == 0) exit(0);
 
-            int rc = exec_external(sub_n, sub_argv, rd, nr);
+            char *gtok[CSH_MAX_TOKENS * 4];
+            char *gfree[CSH_MAX_TOKENS * 4];
+            int   ngfree = 0;
+            int   gn = glob_expand(sub_argv, sub_n, gtok, CSH_MAX_TOKENS * 4, gfree, &ngfree);
+
+            int rc = exec_external(gn, gtok, rd, nr);
             exit(rc);
         }
         pids[i] = pid;
@@ -343,6 +373,49 @@ static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
         if (i == nseg - 1) last_rc = (st >> 8) & 0xFF;
     }
     return last_rc;
+}
+
+#define CSH_MAX_JOBS 32
+static const char *g_bg_cmd = NULL;
+
+typedef struct {
+    pid_t pid;
+    int   jid;
+    int   running;
+    char  cmd[128];
+} csh_job_t;
+
+static csh_job_t g_jobs[CSH_MAX_JOBS];
+static int g_njobs = 0;
+static int g_next_jid = 1;
+
+static int job_add(pid_t pid, const char *cmd) {
+    if (g_njobs >= CSH_MAX_JOBS) return -1;
+    csh_job_t *j = &g_jobs[g_njobs++];
+    j->pid = pid;
+    j->jid = g_next_jid++;
+    j->running = 1;
+    snprintf(j->cmd, sizeof(j->cmd), "%s", cmd);
+    return j->jid;
+}
+
+static void job_remove(int idx) {
+    for (int i = idx; i < g_njobs - 1; i++) g_jobs[i] = g_jobs[i + 1];
+    g_njobs--;
+}
+
+static void jobs_reap(int verbose) {
+    for (int i = 0; i < g_njobs; ) {
+        int status = 0;
+        pid_t r = waitpid(g_jobs[i].pid, &status, WNOHANG);
+        if (r == g_jobs[i].pid) {
+            if (verbose)
+                printf("[%d] Done    %s\n", g_jobs[i].jid, g_jobs[i].cmd);
+            job_remove(i);
+        } else {
+            i++;
+        }
+    }
 }
 
 static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
@@ -396,6 +469,11 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
         fputs(binpath, stdout); putchar('\n');
         exit(127);
     }
+    if (g_bg_cmd) {
+        int jid = job_add(child, g_bg_cmd);
+        if (jid > 0) printf("[%d] %d\n", jid, (int)child);
+        return 0;
+    }
     int status = 0;
     waitpid(child, &status, 0);
     return (status >> 8) & 0xFF;
@@ -417,6 +495,8 @@ static int eval_unary_test(const char *op, const char *arg) {
     return 0;
 }
 
+static long csh_eval_int(const char *expr);
+
 static int eval_cond_tokens(char **toks, int n) {
     int i = 0;
     if (i < n && strcmp(toks[i], "(") == 0) i++;
@@ -435,6 +515,10 @@ static int eval_cond_tokens(char **toks, int n) {
         const char *b  = toks[i + 2];
         if (strcmp(op, "==") == 0) return strcmp(a, b) == 0;
         if (strcmp(op, "!=") == 0) return strcmp(a, b) != 0;
+        if (strcmp(op, "<")  == 0) return csh_eval_int(a) <  csh_eval_int(b);
+        if (strcmp(op, ">")  == 0) return csh_eval_int(a) >  csh_eval_int(b);
+        if (strcmp(op, "<=") == 0) return csh_eval_int(a) <= csh_eval_int(b);
+        if (strcmp(op, ">=") == 0) return csh_eval_int(a) >= csh_eval_int(b);
     }
     if (span == 1) {
         return toks[i][0] != '\0';
@@ -509,6 +593,150 @@ static int is_skipping(void) {
             t == BLK_FOREACH_SKIP || t == BLK_WHILE_SKIP)
             return 1;
     }
+    return 0;
+}
+
+static void eval_skip_ws(const char **p) {
+    while (**p == ' ' || **p == '\t') (*p)++;
+}
+
+static long eval_expr_bor(const char **p);
+
+static long eval_primary(const char **p) {
+    eval_skip_ws(p);
+    if (**p == '(') {
+        (*p)++;
+        long v = eval_expr_bor(p);
+        eval_skip_ws(p);
+        if (**p == ')') (*p)++;
+        return v;
+    }
+    if (**p == '-') { (*p)++; return -eval_primary(p); }
+    if (**p == '+') { (*p)++; return  eval_primary(p); }
+    if (**p == '~') { (*p)++; return ~eval_primary(p); }
+    if (**p == '!') { (*p)++; return !eval_primary(p); }
+    int base = 10;
+    if ((*p)[0] == '0' && ((*p)[1] == 'x' || (*p)[1] == 'X')) { base = 16; *p += 2; }
+    long v = 0;
+    while (1) {
+        char c = **p;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (base == 16 && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (base == 16 && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else break;
+        v = v * base + d;
+        (*p)++;
+    }
+    return v;
+}
+
+static long eval_expr_mul(const char **p) {
+    long v = eval_primary(p);
+    while (1) {
+        eval_skip_ws(p);
+        char c = **p;
+        if (c == '*') { (*p)++; v = v * eval_primary(p); }
+        else if (c == '/') { (*p)++; long r = eval_primary(p); v = r ? v / r : 0; }
+        else if (c == '%') { (*p)++; long r = eval_primary(p); v = r ? v % r : 0; }
+        else break;
+    }
+    return v;
+}
+
+static long eval_expr_add(const char **p) {
+    long v = eval_expr_mul(p);
+    while (1) {
+        eval_skip_ws(p);
+        char c = **p;
+        if (c == '+') { (*p)++; v = v + eval_expr_mul(p); }
+        else if (c == '-') { (*p)++; v = v - eval_expr_mul(p); }
+        else break;
+    }
+    return v;
+}
+
+static long eval_expr_shift(const char **p) {
+    long v = eval_expr_add(p);
+    while (1) {
+        eval_skip_ws(p);
+        if ((*p)[0] == '<' && (*p)[1] == '<') { *p += 2; v = v << eval_expr_add(p); }
+        else if ((*p)[0] == '>' && (*p)[1] == '>') { *p += 2; v = v >> eval_expr_add(p); }
+        else break;
+    }
+    return v;
+}
+
+static long eval_expr_band(const char **p) {
+    long v = eval_expr_shift(p);
+    while (1) {
+        eval_skip_ws(p);
+        if (**p == '&' && (*p)[1] != '&') { (*p)++; v = v & eval_expr_shift(p); }
+        else break;
+    }
+    return v;
+}
+
+static long eval_expr_bxor(const char **p) {
+    long v = eval_expr_band(p);
+    while (1) {
+        eval_skip_ws(p);
+        if (**p == '^') { (*p)++; v = v ^ eval_expr_band(p); }
+        else break;
+    }
+    return v;
+}
+
+static long eval_expr_bor(const char **p) {
+    long v = eval_expr_bxor(p);
+    while (1) {
+        eval_skip_ws(p);
+        if (**p == '|' && (*p)[1] != '|') { (*p)++; v = v | eval_expr_bxor(p); }
+        else break;
+    }
+    return v;
+}
+
+static long csh_eval_int(const char *expr) {
+    const char *p = expr;
+    return eval_expr_bor(&p);
+}
+
+static int run_at(char **tok, int n) {
+    if (n < 2) { fputs(C_RED "csh: @ needs a variable\n" C_RESET, stdout); return 1; }
+    const char *name = tok[1];
+
+    if (n == 3 && (strcmp(tok[2], "++") == 0 || strcmp(tok[2], "--") == 0)) {
+        long cur = atol(var_get(name));
+        cur += (tok[2][0] == '+') ? 1 : -1;
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%ld", cur);
+        var_set(name, buf);
+        return 0;
+    }
+
+    if (n < 4) { fputs(C_RED "csh: bad @ syntax\n" C_RESET, stdout); return 1; }
+
+    const char *op = tok[2];
+    char expr[CSH_LINE_MAX];
+    expr[0] = '\0';
+    for (int i = 3; i < n; i++) {
+        if (i > 3) strncat(expr, " ", CSH_LINE_MAX - strlen(expr) - 1);
+        strncat(expr, tok[i], CSH_LINE_MAX - strlen(expr) - 1);
+    }
+    long rhs = csh_eval_int(expr);
+    long result;
+    if (strcmp(op, "=") == 0)       result = rhs;
+    else if (strcmp(op, "+=") == 0) result = atol(var_get(name)) + rhs;
+    else if (strcmp(op, "-=") == 0) result = atol(var_get(name)) - rhs;
+    else if (strcmp(op, "*=") == 0) result = atol(var_get(name)) * rhs;
+    else if (strcmp(op, "/=") == 0) { long c = atol(var_get(name)); result = rhs ? c / rhs : 0; }
+    else if (strcmp(op, "%=") == 0) { long c = atol(var_get(name)); result = rhs ? c % rhs : 0; }
+    else { fputs(C_RED "csh: bad @ operator\n" C_RESET, stdout); return 1; }
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%ld", result);
+    var_set(name, buf);
     return 0;
 }
 
@@ -591,15 +819,6 @@ static int run_unsetenv(char **tok, int n) {
         }
     }
     return rc;
-}
-
-static int run_echo_builtin(char **tok, int n) {
-    for (int i = 1; i < n; i++) {
-        if (i > 1) putchar(' ');
-        fputs(tok[i], stdout);
-    }
-    putchar('\n');
-    return 0;
 }
 
 #define ALIAS_MAX        32
@@ -754,10 +973,14 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "unset/unsetenv" C_RESET " N  delete a variable\n", stdout);
     fputs("  " C_BOLD "alias" C_RESET " N=V        define alias  (" C_BOLD "unalias" C_RESET " N)\n", stdout);
     fputs("  " C_BOLD "history" C_RESET " [N|-c]   show last N entries or clear (-c)\n", stdout);
+    fputs("  " C_BOLD "jobs/fg/bg" C_RESET " [%N]  background jobs control\n", stdout);
     fputs("  " C_BOLD "color" C_RESET " [name]     set input text color (saved on disk)\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     fputs("  " C_BOLD "Scripts:" C_RESET "  if/else/endif  foreach/end  while/end  break  continue\n", stdout);
+    fputs("  " C_BOLD "Math:" C_RESET "  @ x = expr   (+ - * / %  & | ^ ~ << >>  ( ) hex)   @ x ++/--\n", stdout);
+    fputs("  " C_BOLD "Compare:" C_RESET "  == != < > <= >=   " C_BOLD "Random:" C_RESET " $RANDOM (0..32767)\n", stdout);
+    fputs("  " C_BOLD "Glob:" C_RESET "  * ? [...]   " C_BOLD "Background:" C_RESET " cmd &\n", stdout);
     fputs("  " C_BOLD "Operators:" C_RESET "  " C_YELLOW ";" C_RESET "   " C_YELLOW "&&" C_RESET "   " C_YELLOW "||" C_RESET "   " C_YELLOW "|" C_RESET "   " C_YELLOW ">" C_RESET "   " C_YELLOW ">>" C_RESET "   " C_YELLOW "<" C_RESET "\n", stdout);
     fputs("  " C_BOLD "Tab" C_RESET "          smart completion (cycle, colored, autosuggest)\n", stdout);
     fputs("  " C_BOLD "Ctrl+A/E" C_RESET "     beginning/end of line  " C_BOLD "Ctrl+K/U/W" C_RESET " delete\n", stdout);
@@ -768,6 +991,121 @@ static void cmd_help(void) {
 
 static void hist_clear(void);
 static void hist_print(int limit);
+
+static int glob_match(const char *pat, const char *str) {
+    while (*pat) {
+        if (*pat == '*') {
+            while (*pat == '*') pat++;
+            if (!*pat) return 1;
+            for (const char *s = str; ; s++) {
+                if (glob_match(pat, s)) return 1;
+                if (!*s) return 0;
+            }
+        } else if (*pat == '?') {
+            if (!*str) return 0;
+            pat++; str++;
+        } else if (*pat == '[') {
+            const char *p = pat + 1;
+            int neg = 0;
+            if (*p == '!' || *p == '^') { neg = 1; p++; }
+            int matched = 0;
+            char c = *str;
+            while (*p && *p != ']') {
+                if (p[1] == '-' && p[2] && p[2] != ']') {
+                    if (c >= p[0] && c <= p[2]) matched = 1;
+                    p += 3;
+                } else {
+                    if (c == *p) matched = 1;
+                    p++;
+                }
+            }
+            if (*p == ']') p++;
+            if (!c || matched == neg) return 0;
+            pat = p; str++;
+        } else {
+            if (*pat != *str) return 0;
+            pat++; str++;
+        }
+    }
+    return *str == 0;
+}
+
+static int has_glob_chars(const char *s) {
+    for (; *s; s++)
+        if (*s == '*' || *s == '?' || *s == '[') return 1;
+    return 0;
+}
+
+static int glob_token(const char *pat, char *out[], int max) {
+    char dirbuf[CSH_PATH_MAX];
+    const char *slash = NULL;
+    for (const char *p = pat; *p; p++) if (*p == '/') slash = p;
+
+    const char *dirpath;
+    const char *fpat;
+    char prefix[CSH_PATH_MAX];
+    if (slash) {
+        size_t dl = (size_t)(slash - pat);
+        if (dl >= sizeof(dirbuf)) return 0;
+        if (dl == 0) { dirbuf[0] = '/'; dirbuf[1] = '\0'; }
+        else { memcpy(dirbuf, pat, dl); dirbuf[dl] = '\0'; }
+        dirpath = dirbuf;
+        fpat = slash + 1;
+        snprintf(prefix, sizeof(prefix), "%.*s/", (int)dl, pat);
+    } else {
+        dirpath = ".";
+        fpat = pat;
+        prefix[0] = '\0';
+    }
+
+    if (!has_glob_chars(fpat)) return 0;
+
+    DIR *d = opendir(dirpath);
+    if (!d) return 0;
+    struct dirent *de;
+    int count = 0;
+    while (count < max && (de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.' && fpat[0] != '.') continue;
+        if (!glob_match(fpat, de->d_name)) continue;
+        char full[CSH_PATH_MAX];
+        snprintf(full, sizeof(full), "%s%s", prefix, de->d_name);
+        char *dup = malloc(strlen(full) + 1);
+        if (!dup) break;
+        strcpy(dup, full);
+        out[count++] = dup;
+    }
+    closedir(d);
+
+    for (int i = 0; i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(out[i], out[j]) > 0) {
+                char *t = out[i]; out[i] = out[j]; out[j] = t;
+            }
+        }
+    }
+    return count;
+}
+
+static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[], int *nfree) {
+    int oi = 0;
+    *nfree = 0;
+    for (int i = 0; i < n && oi < max - 1; i++) {
+        if (i > 0 && has_glob_chars(tok[i])) {
+            char *matches[256];
+            int m = glob_token(tok[i], matches, 256);
+            if (m > 0) {
+                for (int k = 0; k < m && oi < max - 1; k++) {
+                    out[oi++] = matches[k];
+                    if (*nfree < max) freelist[(*nfree)++] = matches[k];
+                }
+                continue;
+            }
+        }
+        out[oi++] = tok[i];
+    }
+    out[oi] = NULL;
+    return oi;
+}
 
 static int exec_tokens(char **tok, int n) {
     if (n <= 0) return g_last_rc;
@@ -787,6 +1125,44 @@ static int exec_tokens(char **tok, int n) {
         hist_print(n > 1 ? atoi(tok[1]) : 0);
         rc_set(0); return 0;
     }
+    if (strcmp(tok[0], "jobs") == 0) {
+        jobs_reap(0);
+        for (int i = 0; i < g_njobs; i++)
+            printf("[%d] %s  %s\n", g_jobs[i].jid,
+                   g_jobs[i].running ? "Running" : "Stopped", g_jobs[i].cmd);
+        rc_set(0); return 0;
+    }
+    if (strcmp(tok[0], "fg") == 0) {
+        int idx = -1;
+        if (n > 1) {
+            int jid = atoi(tok[1][0] == '%' ? tok[1] + 1 : tok[1]);
+            for (int i = 0; i < g_njobs; i++) if (g_jobs[i].jid == jid) { idx = i; break; }
+        } else if (g_njobs > 0) {
+            idx = g_njobs - 1;
+        }
+        if (idx < 0) { fputs(C_RED "fg: no such job\n" C_RESET, stdout); rc_set(1); return 1; }
+        pid_t pid = g_jobs[idx].pid;
+        printf("%s\n", g_jobs[idx].cmd);
+        job_remove(idx);
+        int status = 0;
+        waitpid(pid, &status, 0);
+        int rc = (status >> 8) & 0xFF;
+        rc_set(rc);
+        return rc;
+    }
+    if (strcmp(tok[0], "bg") == 0) {
+        int idx = -1;
+        if (n > 1) {
+            int jid = atoi(tok[1][0] == '%' ? tok[1] + 1 : tok[1]);
+            for (int i = 0; i < g_njobs; i++) if (g_jobs[i].jid == jid) { idx = i; break; }
+        } else if (g_njobs > 0) {
+            idx = g_njobs - 1;
+        }
+        if (idx < 0) { fputs(C_RED "bg: no such job\n" C_RESET, stdout); rc_set(1); return 1; }
+        g_jobs[idx].running = 1;
+        printf("[%d]+ %s &\n", g_jobs[idx].jid, g_jobs[idx].cmd);
+        rc_set(0); return 0;
+    }
 
     {
         int pipe_idx[CSH_PIPELINE_MAX];
@@ -801,6 +1177,7 @@ static int exec_tokens(char **tok, int n) {
         }
     }
 
+    if (strcmp(tok[0], "@") == 0)        { int rc = run_at(tok, n);       rc_set(rc); return rc; }
     if (strcmp(tok[0], "set") == 0)      { int rc = run_set(tok, n);      rc_set(rc); return rc; }
     if (strcmp(tok[0], "unset") == 0)    { int rc = run_unset(tok, n);    rc_set(rc); return rc; }
     if (strcmp(tok[0], "setenv") == 0)   { int rc = run_setenv(tok, n);   rc_set(rc); return rc; }
@@ -825,20 +1202,26 @@ static int exec_tokens(char **tok, int n) {
         return rc;
     }
 
-    if (strcmp(tok[0], "echo") == 0) {
-        redir_t rd[CSH_REDIRS_MAX]; int nr = 0;
-        int nn = n;
-        if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr) < 0) { rc_set(1); return 1; }
-        int rc = (nr == 0) ? run_echo_builtin(tok, nn) : exec_external(nn, tok, rd, nr);
-        rc_set(rc);
-        return rc;
+    if (strcmp(tok[0], "exit") == 0 || strcmp(tok[0], "quit") == 0) {
+        int code = (n > 1) ? atoi(tok[1]) : g_last_rc;
+        if (isatty(0)) fputs(C_CYAN "Goodbye!\n" C_RESET, stdout);
+        fflush(stdout);
+        exit(code);
     }
 
     redir_t rd[CSH_REDIRS_MAX]; int nr = 0;
     int nn = n;
     if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr) < 0) { rc_set(1); return 1; }
     if (nn == 0) return g_last_rc;
-    int rc = exec_external(nn, tok, rd, nr);
+
+    char *gtok[CSH_MAX_TOKENS * 4];
+    char *gfree[CSH_MAX_TOKENS * 4];
+    int   ngfree = 0;
+    int   gn = glob_expand(tok, nn, gtok, CSH_MAX_TOKENS * 4, gfree, &ngfree);
+
+    int rc = exec_external(gn, gtok, rd, nr);
+
+    for (int i = 0; i < ngfree; i++) free(gfree[i]);
     rc_set(rc);
     return rc;
 }
@@ -884,11 +1267,22 @@ static int run_command_line(const char *line) {
             if (ops[i] == CSH_CH_AND && rc != 0) continue;
             if (ops[i] == CSH_CH_OR  && rc == 0) continue;
         }
+        int bg = 0;
+        size_t el = strlen(s);
+        if (el > 0 && s[el - 1] == '&') {
+            bg = 1;
+            s[el - 1] = '\0';
+            while (el > 1 && isspace((unsigned char)s[el - 2])) { s[--el - 1] = '\0'; }
+        }
+
         strncpy(g_rcl_work, s, CSH_LINE_MAX - 1);
         g_rcl_work[CSH_LINE_MAX - 1] = '\0';
         int n = tokenize(g_rcl_work, g_rcl_tok, CSH_MAX_TOKENS);
         if (n <= 0) continue;
+
+        if (bg) g_bg_cmd = s;
         rc = exec_tokens(g_rcl_tok, n);
+        g_bg_cmd = NULL;
     }
     return rc;
 }
@@ -1432,6 +1826,7 @@ static const char *display_path(void) {
 }
 
 static void print_prompt(void) {
+    fputs("\x1b[0m\x1b[?25h", stdout);
     if (term_get_cursor_col() != 0) putchar('\n');
     fputs("\r\x1b[K", stdout);
     const char *dp = display_path();
@@ -1615,7 +2010,8 @@ static int gather_matches(const char *buf, int pos, char matches[][256],
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, max);
         }
         const char *builtins[] = {"help","exit","cd","export","setenv","unset","unsetenv",
-                                  "alias","unalias","history","clear","color","set",NULL};
+                                  "alias","unalias","history","clear","color","set",
+                                  "jobs","fg","bg",NULL};
         for (int i = 0; builtins[i] && nmatch < max; i++)
             if (strncmp(builtins[i], word, wlen) == 0) {
                 strncpy(matches[nmatch], builtins[i], 255);
@@ -1968,6 +2364,7 @@ static int interactive_main(void) {
 
     char line[CSH_LINE_MAX];
     for (;;) {
+        jobs_reap(1);
         print_prompt();
         int n = readline_edit(line, CSH_LINE_MAX);
         if (n < 0) break;
@@ -2036,6 +2433,7 @@ int main(int argc, char **argv) {
     }
     if (!var_get("HOME")[0]) var_setenv("HOME", "/");
     var_set("status", "0");
+    csh_rand_seed();
 
     if (argc > 2 && strcmp(argv[1], "-c") == 0) {
         run_command_line(argv[2]);

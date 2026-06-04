@@ -96,6 +96,12 @@
 #define SYS_VT_CLEAR_SHELL  555
 #define SYS_VT_SWITCH       556
 
+#define SYS_FB_INFO         560
+#define SYS_FB_BLIT         561
+#define SYS_FB_MAP          562
+#define SYS_FB_ACQUIRE      563
+#define SYS_FB_RELEASE      564
+
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
            uint64_t a4, uint64_t a5, uint64_t a6)
