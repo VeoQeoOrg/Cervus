@@ -43,5 +43,20 @@ int nanosleep(const struct timespec *req, struct timespec *rem);
 int clock_gettime(int clk, struct timespec *tp);
 
 static inline long difftime_l(time_t a, time_t b) { return (long)(a - b); }
+#define difftime(a, b) ((double)((a) - (b)))
+
+static inline struct tm *gmtime_r(const time_t *timep, struct tm *result) {
+    struct tm *tmp = gmtime(timep);
+    if (!tmp) return NULL;
+    *result = *tmp;
+    return result;
+}
+
+static inline struct tm *localtime_r(const time_t *timep, struct tm *result) {
+    struct tm *tmp = localtime(timep);
+    if (!tmp) return NULL;
+    *result = *tmp;
+    return result;
+}
 
 #endif

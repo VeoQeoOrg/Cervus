@@ -1577,6 +1577,24 @@ bool build_initramfs(void) {
             print_color(COLOR_RED, "[initramfs] failed to copy installer");
     }
 
+    if (file_exists("micropython/ports/unix/build-minimal/micropython")) {
+        char dst[512];
+        snprintf(dst, sizeof(dst), "%s/bin/micropython", INITRAMFS_ROOTFS);
+        if (cmd_run(false, "cp %s %s", "micropython/ports/unix/build-minimal/micropython", dst) == 0)
+            print_color(COLOR_GREEN, "[initramfs] micropython -> rootfs/bin/micropython");
+        else
+            print_color(COLOR_RED, "[initramfs] failed to copy micropython");
+    }
+
+    if (file_exists("luajit/src/luajit")) {
+        char dst[512];
+        snprintf(dst, sizeof(dst), "%s/bin/luajit", INITRAMFS_ROOTFS);
+        if (cmd_run(false, "cp %s %s", "luajit/src/luajit", dst) == 0)
+            print_color(COLOR_GREEN, "[initramfs] luajit -> rootfs/bin/luajit");
+        else
+            print_color(COLOR_RED, "[initramfs] failed to copy luajit");
+    }
+
     if (file_exists(SYSROOT_DIR "/usr")) {
         print_color(COLOR_CYAN, "[initramfs] Copying sysroot -> rootfs/usr...");
         ensure_dir(INITRAMFS_ROOTFS "/usr");

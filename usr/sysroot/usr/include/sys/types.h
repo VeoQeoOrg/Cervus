@@ -14,5 +14,6 @@ typedef uint32_t dev_t;
 typedef uint64_t blkcnt_t;
 typedef uint64_t blksize_t;
 typedef int64_t  time_t;
+typedef uint32_t nlink_t;
 
 #endif

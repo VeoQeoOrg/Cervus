@@ -56,6 +56,19 @@ int    ferror(FILE *stream);
 void   clearerr(FILE *stream);
 int    fileno(FILE *stream);
 
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
+static inline int setvbuf(FILE *stream, char *buf, int mode, size_t size) {
+    (void)stream; (void)buf; (void)mode; (void)size;
+    return 0;
+}
+#define getc(f) fgetc(f)
+#define putc(c, f) fputc(c, f)
+#define fseeko(f, o, w) fseek(f, (long)(o), w)
+#define ftello(f) ftell(f)
+
 FILE  *popen(const char *cmd, const char *type);
 int    pclose(FILE *stream);
 

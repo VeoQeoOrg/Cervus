@@ -66,6 +66,7 @@ int   brk(void *addr);
 
 void  sched_yield_cervus(void);
 int   sched_yield(void);
+static inline int fsync(int fd) { (void)fd; return 0; }
 
 int   isatty(int fd);
 long  pathconf(const char *path, int name);

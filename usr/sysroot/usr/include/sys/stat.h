@@ -40,6 +40,11 @@ struct stat {
     gid_t    st_gid;
     off_t    st_size;
     blkcnt_t st_blocks;
+    dev_t    st_dev;
+    nlink_t  st_nlink;
+    time_t   st_atime;
+    time_t   st_mtime;
+    time_t   st_ctime;
 };
 
 int stat(const char *path, struct stat *out);
