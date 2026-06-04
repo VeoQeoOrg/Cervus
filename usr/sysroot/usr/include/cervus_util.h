@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #define C_RESET  "\x1b[0m"
 #define C_BOLD   "\x1b[1m"
