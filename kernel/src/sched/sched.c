@@ -21,6 +21,8 @@
 task_t* ready_queues[MAX_PRIORITY + 1] = {0};
 task_t* current_task[MAX_CPUS] = {0};
 
+static volatile uint32_t g_foreground_pid[VT_COUNT];
+
 static task_t  idle_tasks[MAX_CPUS];
 static task_t  bootstrap_tasks[MAX_CPUS];
 static volatile uint64_t reschedule_calls = 0;
@@ -428,7 +430,8 @@ __attribute__((noreturn)) void task_exit(void)
 
     LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
-    tty_reset_nonblock();
+    if (me->ctty >= 0 && me->ctty < VT_COUNT && g_foreground_pid[me->ctty] == me->pid)
+        tty_reset_nonblock();
 
     task_t* init = task_find_by_pid(1);
     if (init && init != me) {
@@ -486,8 +489,6 @@ void task_kill(task_t* target) {
         }
     }
 }
-
-static volatile uint32_t g_foreground_pid[VT_COUNT];
 
 static int caller_ctty(void) {
     percpu_t *pc = get_percpu();

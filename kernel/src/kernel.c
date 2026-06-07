@@ -217,7 +217,7 @@ static bool find_installed_root(char *out, size_t out_cap) {
 
 void kernel_main(void) {
     serial_initialize(COM1, 115200);
-    serial_writestring("\n=== SERIAL PORT INITIALIZED ===\n");
+    serial_writestring("\nCervus serial console ready\n");
 
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
         serial_writestring("ERROR: Unsupported Limine base revision\n");
@@ -309,37 +309,34 @@ void kernel_main(void) {
         }
     }
 
-    printf("Kernel initialized successfully!\n\n");
-    printf("Framebuffer: %dx%d, %d bpp\n", global_framebuffer->width, global_framebuffer->height, global_framebuffer->bpp);
-    printf("\nMemory Information:\n");
-    printf("HHDM offset: 0x%llx\n", hhdm_request.response->offset);
-    printf("Memory map entries: %llu\n", memmap_request.response->entry_count);
+    printf("Cervus/x86_64 kernel booting\n");
+    printf("framebuffer: %dx%d %d bpp\n",
+           global_framebuffer->width, global_framebuffer->height,
+           global_framebuffer->bpp);
     pmm_print_stats();
+    printf("hhdm offset 0x%llx, %llu memory map entries\n",
+           (unsigned long long)hhdm_request.response->offset,
+           (unsigned long long)memmap_request.response->entry_count);
 
     smp_print_info_fb();
-    printf("\nSystem: %u CPU cores detected\n\n", smp_get_cpu_count());
-    syscall_init();
+    printf("%u cpu%s configured\n", smp_get_cpu_count(),
+           smp_get_cpu_count() == 1 ? "" : "s");
 
+    syscall_init();
     disk_init();
-    serial_writestring("Disk subsystem [OK]\n");
 
     xhci_init();
-    if (xhci_controller_count() > 0)
-        serial_printf("USB XHCI [OK] (%d controller(s))\n", xhci_controller_count());
-    else
-        serial_writestring("USB XHCI [none detected]\n");
-
     ehci_init();
-    if (ehci_controller_count() > 0)
-        serial_printf("USB EHCI [OK] (%d controller(s))\n", ehci_controller_count());
-    else
-        serial_writestring("USB EHCI [none detected]\n");
-
     uhci_init();
-    if (uhci_controller_count() > 0)
-        serial_printf("USB UHCI [OK] (%d controller(s))\n", uhci_controller_count());
-    else
-        serial_writestring("USB UHCI [none detected]\n");
+    {
+        int xn = xhci_controller_count();
+        int en = ehci_controller_count();
+        int un = uhci_controller_count();
+        if (xn) printf("usb: xhci, %d controller%s\n", xn, xn == 1 ? "" : "s");
+        if (en) printf("usb: ehci, %d controller%s\n", en, en == 1 ? "" : "s");
+        if (un) printf("usb: uhci, %d controller%s\n", un, un == 1 ? "" : "s");
+        if (!xn && !en && !un) printf("usb: no controllers detected\n");
+    }
 
     bool has_initramfs_module = (module_request.response &&
                                   module_request.response->module_count >= 2);
@@ -350,7 +347,7 @@ void kernel_main(void) {
     } else {
         skip_initramfs = find_installed_root(root_name, sizeof(root_name));
         if (skip_initramfs) {
-            printf("[boot] installed Cervus detected on %s -- booting from disk\n", root_name);
+            printf("root: %s (installed system)\n", root_name);
         } else {
             serial_writestring("[boot] no installed system detected, using initramfs\n");
         }
@@ -385,10 +382,14 @@ void kernel_main(void) {
         struct limine_file *tar = module_request.response->modules[1];
         serial_printf("[initramfs] module: '%s' size=%llu\n", tar->path, tar->size);
         int r = initramfs_mount(tar->address, (size_t)tar->size);
-        if (r == 0)
+        if (r == 0) {
+            printf("root: initramfs (%llu KiB)\n",
+                   (unsigned long long)(tar->size / 1024));
             serial_writestring("[initramfs] mounted OK\n");
-        else
+        } else {
+            printf("root: initramfs mount failed (%d)\n", r);
             serial_printf("[initramfs] mount FAILED: %d\n", r);
+        }
     } else if (!skip_initramfs) {
         serial_writestring("[initramfs] no TAR module (modules[1] missing)\n");
     }
@@ -400,7 +401,7 @@ void kernel_main(void) {
     sched_init();
     sched_notify_ready();
     timer_sleep_ms(10);
-    clear_screen();
+    printf("starting init...\n\n");
     load_elf_module();
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();

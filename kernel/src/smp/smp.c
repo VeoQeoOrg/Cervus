@@ -11,6 +11,7 @@
 #include "../../include/sse/sse.h"
 #include "../../include/sched/sched.h"
 #include "../include/syscall/syscall.h"
+#include "../../include/panic/panic.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -226,6 +227,11 @@ void smp_init(struct limine_mp_response* mp_response) {
         tss[i]->ist[1] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[2] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
+        if (!tss[i]->rsp0 || !tss[i]->ist[0] || !tss[i]->ist[1] ||
+            !tss[i]->ist[2] || !tss[i]->ist[3]) {
+            kernel_panic("SMP: out of memory allocating TSS/IST stacks "
+                         "(not enough usable RAM for this CPU count)");
+        }
         tss[i]->iobase = sizeof(tss_t);
 
         serial_printf("TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
@@ -319,13 +325,12 @@ void smp_print_info(void) {
 }
 
 void smp_print_info_fb(void) {
-    printf("[SMP] CPU Information \n");
-    printf("Total CPUs: %u\n",  smp_info.cpu_count);
-    printf("Online CPUs: %u\n", smp_info.online_count);
-    printf("BSP APIC ID: %u\n", smp_info.bsp_lapic_id);
-    const char* states[] = {"UNINITIALIZED","BOOTED","ONLINE","OFFLINE","FAULTED"};
-    for (uint32_t i = 0; i < smp_info.cpu_count; i++)
-        printf("CPU[%u]: APIC ID: %u, State: %s, BSP: %s\n",
-               i, smp_info.cpus[i].lapic_id, states[smp_info.cpus[i].state],
-               smp_info.cpus[i].is_bsp ? "YES" : "NO");
+    for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
+        int online = smp_info.cpus[i].state == 2;
+        printf("cpu%u: %s, apic id %u%s\n",
+               i,
+               smp_info.cpus[i].is_bsp ? "BSP" : "AP",
+               smp_info.cpus[i].lapic_id,
+               online ? "" : " (offline)");
+    }
 }

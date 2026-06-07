@@ -962,6 +962,7 @@ static int cmd_export(int argc, char *argv[]) {
 }
 
 static int cmd_color(int argc, char **argv);
+static int cmd_cursor(int argc, char **argv);
 
 static void cmd_help(void) {
     putchar(10);
@@ -974,7 +975,8 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "alias" C_RESET " N=V        define alias  (" C_BOLD "unalias" C_RESET " N)\n", stdout);
     fputs("  " C_BOLD "history" C_RESET " [N|-c]   show last N entries or clear (-c)\n", stdout);
     fputs("  " C_BOLD "jobs/fg/bg" C_RESET " [%N]  background jobs control\n", stdout);
-    fputs("  " C_BOLD "color" C_RESET " [name]     set input text color (saved on disk)\n", stdout);
+    fputs("  " C_BOLD "color" C_RESET " [name|#RRGGBB|R,G,B]  input text color (saved)\n", stdout);
+    fputs("  " C_BOLD "cursor" C_RESET " [block|underline|bar]  cursor shape (saved)\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
     fputs("  " C_BOLD "Scripts:" C_RESET "  if/else/endif  foreach/end  while/end  break  continue\n", stdout);
@@ -1120,6 +1122,7 @@ static int exec_tokens(char **tok, int n) {
     if (strcmp(tok[0], "unalias") == 0) { int rc = cmd_unalias(n, tok); rc_set(rc); return rc; }
     if (strcmp(tok[0], "export") == 0)  { int rc = cmd_export(n, tok);  rc_set(rc); return rc; }
     if (strcmp(tok[0], "color") == 0)   { int rc = cmd_color(n, tok);   rc_set(rc); return rc; }
+    if (strcmp(tok[0], "cursor") == 0)  { int rc = cmd_cursor(n, tok);  rc_set(rc); return rc; }
     if (strcmp(tok[0], "history") == 0) {
         if (n > 1 && strcmp(tok[1], "-c") == 0) { hist_clear(); rc_set(0); return 0; }
         hist_print(n > 1 ? atoi(tok[1]) : 0);
@@ -1712,26 +1715,28 @@ static void hist_clear(void) {
 }
 
 #define COLOR_NAME_MAX 16
-#define COLOR_SEQ_MAX  16
+#define COLOR_SEQ_MAX  32
 
 static char g_color_name[COLOR_NAME_MAX] = "default";
 static char g_color_seq [COLOR_SEQ_MAX]  = "";
 static char g_color_file[CSH_PATH_MAX]   = "";
 
+static int  g_cursor_shape = 1;
+static char g_cursor_file[CSH_PATH_MAX] = "";
+
 typedef struct { const char *name; const char *seq; } color_entry_t;
 
 static const color_entry_t COLOR_TABLE[] = {
-    { "default", ""             },
-    { "white",   ""             },
-    { "red",     "\x1b[1;31m"   },
-    { "green",   "\x1b[1;32m"   },
-    { "yellow",  "\x1b[1;33m"   },
-    { "blue",    "\x1b[1;34m"   },
-    { "magenta", "\x1b[1;35m"   },
-    { "cyan",    "\x1b[1;36m"   },
-    { "gray",    "\x1b[90m"     },
-    { "bold",    "\x1b[1m"      },
-    { NULL,      NULL           },
+    { "default", ""           },
+    { "white",   ""           },
+    { "red",     "\x1b[31m"   },
+    { "green",   "\x1b[32m"   },
+    { "yellow",  "\x1b[33m"   },
+    { "blue",    "\x1b[34m"   },
+    { "magenta", "\x1b[35m"   },
+    { "cyan",    "\x1b[36m"   },
+    { "gray",    "\x1b[90m"   },
+    { NULL,      NULL         },
 };
 
 static const char *color_lookup_seq(const char *name) {
@@ -1747,12 +1752,59 @@ static void color_apply(const char *name, const char *seq) {
     g_color_seq[COLOR_SEQ_MAX - 1] = '\0';
 }
 
+static int color_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int color_parse_rgb(const char *arg, int *r, int *g, int *b) {
+    if (arg[0] == '#') {
+        const char *h = arg + 1;
+        int len = (int)strlen(h);
+        if (len == 6) {
+            int v[6];
+            for (int i = 0; i < 6; i++) { v[i] = color_hex_digit(h[i]); if (v[i] < 0) return -1; }
+            *r = v[0] * 16 + v[1]; *g = v[2] * 16 + v[3]; *b = v[4] * 16 + v[5];
+            return 0;
+        } else if (len == 3) {
+            int v[3];
+            for (int i = 0; i < 3; i++) { v[i] = color_hex_digit(h[i]); if (v[i] < 0) return -1; }
+            *r = v[0] * 17; *g = v[1] * 17; *b = v[2] * 17;
+            return 0;
+        }
+        return -1;
+    }
+    if (strchr(arg, ',')) {
+        char buf[64];
+        strncpy(buf, arg, sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *p1 = strtok(buf, ",");
+        char *p2 = strtok(NULL, ",");
+        char *p3 = strtok(NULL, ",");
+        if (!p1 || !p2 || !p3) return -1;
+        *r = atoi(p1); *g = atoi(p2); *b = atoi(p3);
+        if (*r < 0 || *r > 255 || *g < 0 || *g > 255 || *b < 0 || *b > 255) return -1;
+        return 0;
+    }
+    return -1;
+}
+
+static int color_too_dark(int r, int g, int b) {
+    int lum = (r * 299 + g * 587 + b * 114) / 1000;
+    return lum < 48;
+}
+
 static void color_save(void) {
     if (!g_color_file[0]) return;
     int fd = open(g_color_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return;
     int n = (int)strlen(g_color_name);
     write(fd, g_color_name, n);
+    write(fd, "\n", 1);
+    int sn = (int)strlen(g_color_seq);
+    write(fd, g_color_seq, sn);
     write(fd, "\n", 1);
     close(fd);
 }
@@ -1762,6 +1814,7 @@ static void color_load(void) {
     int fd = open(g_color_file, O_RDONLY, 0);
     if (fd < 0) return;
     char name[COLOR_NAME_MAX];
+    char seq[COLOR_SEQ_MAX];
     int  i = 0;
     char c;
     while (i < COLOR_NAME_MAX - 1 && read(fd, &c, 1) > 0) {
@@ -1769,10 +1822,84 @@ static void color_load(void) {
         name[i++] = c;
     }
     name[i] = '\0';
+    i = 0;
+    while (i < COLOR_SEQ_MAX - 1 && read(fd, &c, 1) > 0) {
+        if (c == '\n' || c == '\r') break;
+        seq[i++] = c;
+    }
+    seq[i] = '\0';
     close(fd);
     if (!name[0]) return;
-    const char *seq = color_lookup_seq(name);
-    if (seq) color_apply(name, seq);
+    if (strcmp(name, "custom") == 0 && seq[0]) {
+        color_apply(name, seq);
+        return;
+    }
+    const char *tseq = color_lookup_seq(name);
+    if (tseq) color_apply(name, tseq);
+}
+
+static const char *cursor_shape_name(int shape) {
+    if (shape == 0) return "block";
+    if (shape == 2) return "bar";
+    return "underline";
+}
+
+static void cursor_apply(int shape) {
+    g_cursor_shape = shape;
+    int q = (shape == 0) ? 2 : (shape == 2) ? 6 : 4;
+    char seq[16];
+    int n = snprintf(seq, sizeof(seq), "\x1b[%d q", q);
+    write(1, seq, n);
+}
+
+static void cursor_save(void) {
+    if (!g_cursor_file[0]) return;
+    int fd = open(g_cursor_file, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return;
+    const char *nm = cursor_shape_name(g_cursor_shape);
+    write(fd, nm, (int)strlen(nm));
+    write(fd, "\n", 1);
+    close(fd);
+}
+
+static void cursor_load(void) {
+    if (!g_cursor_file[0]) return;
+    int fd = open(g_cursor_file, O_RDONLY, 0);
+    if (fd < 0) return;
+    char nm[16];
+    int i = 0; char c;
+    while (i < (int)sizeof(nm) - 1 && read(fd, &c, 1) > 0) {
+        if (c == '\n' || c == '\r') break;
+        nm[i++] = c;
+    }
+    nm[i] = '\0';
+    close(fd);
+    if (strcmp(nm, "block") == 0)     cursor_apply(0);
+    else if (strcmp(nm, "bar") == 0)  cursor_apply(2);
+    else if (strcmp(nm, "underline") == 0) cursor_apply(1);
+}
+
+static int cmd_cursor(int argc, char **argv) {
+    if (argc < 2) {
+        fputs("  current: ", stdout);
+        fputs(cursor_shape_name(g_cursor_shape), stdout);
+        fputs("\n  available: block underline bar\n", stdout);
+        return 0;
+    }
+    const char *name = argv[1];
+    int shape;
+    if      (strcmp(name, "block") == 0)     shape = 0;
+    else if (strcmp(name, "underline") == 0) shape = 1;
+    else if (strcmp(name, "bar") == 0 || strcmp(name, "beam") == 0) shape = 2;
+    else {
+        fputs(C_RED "cursor: unknown shape: " C_RESET, stdout);
+        fputs(name, stdout);
+        fputs("\n  use: block underline bar\n", stdout);
+        return 1;
+    }
+    cursor_apply(shape);
+    cursor_save();
+    return 0;
 }
 
 static int cmd_color(int argc, char **argv) {
@@ -1796,11 +1923,25 @@ static int cmd_color(int argc, char **argv) {
     }
     const char *name = argv[1];
     if (strcmp(name, "reset") == 0) name = "default";
+
+    int r, g, b;
+    if (color_parse_rgb(name, &r, &g, &b) == 0) {
+        if (color_too_dark(r, g, b)) {
+            fputs(C_RED "color: too dark, would be invisible on black background\n" C_RESET, stdout);
+            return 1;
+        }
+        char seq[COLOR_SEQ_MAX];
+        snprintf(seq, sizeof(seq), "\x1b[38;2;%d;%d;%dm", r, g, b);
+        color_apply("custom", seq);
+        color_save();
+        return 0;
+    }
+
     const char *seq = color_lookup_seq(name);
     if (!seq) {
         fputs(C_RED "color: unknown color: " C_RESET, stdout);
         fputs(name, stdout);
-        putchar('\n');
+        fputs("\n  use a name, #RRGGBB, or R,G,B\n", stdout);
         return 1;
     }
     color_apply(name, seq);
@@ -2010,7 +2151,7 @@ static int gather_matches(const char *buf, int pos, char matches[][256],
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, max);
         }
         const char *builtins[] = {"help","exit","cd","export","setenv","unset","unsetenv",
-                                  "alias","unalias","history","clear","color","set",
+                                  "alias","unalias","history","clear","color","cursor","set",
                                   "jobs","fg","bg",NULL};
         for (int i = 0; builtins[i] && nmatch < max; i++)
             if (strncmp(builtins[i], word, wlen) == 0) {
@@ -2185,7 +2326,9 @@ static int readline_edit(char *buf, int maxlen) {
     for (;;) {
         draw_autosuggest(buf, len, pos);
         char c;
-        if (read(0, &c, 1) <= 0) return -1;
+        ssize_t rr = read(0, &c, 1);
+        if (rr == 0) return -1;
+        if (rr < 0) { cervus_nanosleep(10000000ULL); continue; }
 
         if (c != '\t') tab_reset();
 
@@ -2339,6 +2482,8 @@ static void interactive_init_paths(void) {
         hist_load(g_hist_path);
         path_join(h, ".color", g_color_file, sizeof(g_color_file));
         color_load();
+        path_join(h, ".cursor", g_cursor_file, sizeof(g_cursor_file));
+        cursor_load();
     }
 }
 

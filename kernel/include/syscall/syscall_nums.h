@@ -109,7 +109,9 @@
 #define SYS_FB_ACQUIRE        563
 #define SYS_FB_RELEASE        564
 
-#define SYSCALL_TABLE_SIZE    565
+#define SYS_MOUSE_STATE       565
+
+#define SYSCALL_TABLE_SIZE    566
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
@@ -161,6 +163,12 @@ typedef struct {
     uint64_t usable_bytes;
     uint64_t page_size;
 } cervus_meminfo_t;
+
+typedef struct {
+    int32_t  x, y;
+    uint8_t  btn_left, btn_right, btn_middle;
+    int8_t   scroll;
+} cervus_mouse_info_t;
 
 typedef struct __attribute__((packed)) {
     uint8_t  boot_flag;

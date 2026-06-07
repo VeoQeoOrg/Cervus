@@ -954,11 +954,14 @@ static int xhci_probe(pci_device_t *pd) {
                   c->hccparams1 & 1, (c->hccparams1 >> 2) & 1,
                   ((c->hccparams1 >> 16) & 0xFFFF) << 2);
 
+    printf("[xhci] probe: slots=%u ports=%u, halting...\n", c->max_slots, c->max_ports);
     (void)xhci_halt(c);
     if (xhci_reset(c) < 0) {
         serial_writestring("[xhci] reset timeout\n");
+        printf("[xhci] RESET TIMEOUT\n");
         return -EIO;
     }
+    printf("[xhci] reset ok, alloc rings...\n");
 
     uint32_t cfg = op_r32(c, XHCI_OP_CONFIG);
     cfg = (cfg & ~0xFFu) | c->max_slots;
@@ -977,8 +980,10 @@ static int xhci_probe(pci_device_t *pd) {
 
     xhci_setup_rings(c);
 
+    printf("[xhci] rings ok, starting...\n");
     if (xhci_start(c) < 0) {
         serial_writestring("[xhci] start (USBCMD.RS) timeout\n");
+        printf("[xhci] START TIMEOUT\n");
         return -EIO;
     }
     serial_writestring("[xhci] controller running\n");
@@ -986,7 +991,9 @@ static int xhci_probe(pci_device_t *pd) {
     serial_writestring("[xhci] port snapshot (only those with device/connected):\n");
     xhci_dump_ports(c);
 
+    printf("[xhci] enumerating ports...\n");
     xhci_enumerate_ports(c);
+    printf("[xhci] ports enumerated\n");
 
     if (pd->cap_msix_off && pd->msix_table_size >= 1) {
         op_w32(c, XHCI_OP_USBSTS, USBSTS_EINT);

@@ -71,6 +71,12 @@ typedef struct {
 } cervus_meminfo_t;
 
 typedef struct {
+    int32_t  x, y;
+    uint8_t  btn_left, btn_right, btn_middle;
+    int8_t   scroll;
+} cervus_mouse_info_t;
+
+typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t pitch;
@@ -169,6 +175,7 @@ uint64_t cervus_cap_get(void);
 int      cervus_cap_drop(uint64_t mask);
 
 int      cervus_meminfo(cervus_meminfo_t *out);
+int      cervus_mouse_state(cervus_mouse_info_t *out);
 uint64_t cervus_uptime_ns(void);
 int      cervus_clock_gettime(int id, cervus_timespec_t *ts);
 int      cervus_nanosleep(uint64_t ns);

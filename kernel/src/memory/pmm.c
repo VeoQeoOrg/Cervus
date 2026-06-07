@@ -371,51 +371,33 @@ size_t    pmm_get_used_pages(void)            {
     return u;
 }
 
-static void _print_size(size_t bytes, const char *label) {
-    uint64_t v = (uint64_t)bytes;
-    const char *unit;
-    uint64_t whole, frac;
-
-    if (v >= 1024ULL * 1024 * 1024) {
-        whole = v / (1024ULL * 1024 * 1024);
-        frac  = (v % (1024ULL * 1024 * 1024)) * 100 / (1024ULL * 1024 * 1024);
-        unit  = "GiB";
-    } else if (v >= 1024ULL * 1024) {
-        whole = v / (1024ULL * 1024);
-        frac  = (v % (1024ULL * 1024)) * 100 / (1024ULL * 1024);
-        unit  = "MiB";
-    } else if (v >= 1024ULL) {
-        whole = v / 1024;
-        frac  = (v % 1024) * 100 / 1024;
-        unit  = "KiB";
-    } else {
-        whole = v; frac = 0; unit = "B";
-    }
-    printf("  %-16s %llu.%02llu %s\n", label,
-           (unsigned long long)whole, (unsigned long long)frac, unit);
-    serial_printf("  %-16s %llu.%02llu %s\n", label,
-           (unsigned long long)whole, (unsigned long long)frac, unit);
+static void _print_mem_line(const char *label, uint64_t bytes) {
+    uint64_t mib = bytes / (1024ULL * 1024);
+    printf("%s = %llu (%llu MiB)\n", label,
+           (unsigned long long)bytes, (unsigned long long)mib);
+    serial_printf("%s = %llu (%llu MiB)\n", label,
+           (unsigned long long)bytes, (unsigned long long)mib);
 }
 
 void pmm_print_stats(void) {
-    size_t usable_bytes = g_buddy.usable_pages * PAGE_SIZE;
-    size_t free_bytes   = g_buddy.free_pages   * PAGE_SIZE;
-    size_t total_bytes  = g_buddy.total_pages  * PAGE_SIZE;
-    size_t used_bytes   = usable_bytes > free_bytes   ? usable_bytes - free_bytes   : 0;
-    size_t reserved     = total_bytes  > usable_bytes ? total_bytes  - usable_bytes : 0;
+    uint64_t usable_bytes = (uint64_t)g_buddy.usable_pages * PAGE_SIZE;
+    uint64_t free_bytes   = (uint64_t)g_buddy.free_pages   * PAGE_SIZE;
+    uint64_t total_bytes  = (uint64_t)g_buddy.total_pages  * PAGE_SIZE;
+    uint64_t used_bytes   = usable_bytes > free_bytes ? usable_bytes - free_bytes : 0;
 
-    serial_printf("\n=== Physical Memory ===\n");
-    printf("\n=== Physical Memory ===\n");
-    _print_size(usable_bytes, "Usable RAM:");
-    _print_size(free_bytes,   "Free RAM:");
-    _print_size(used_bytes,   "Used (kernel):");
-    _print_size(reserved,     "Reserved/MMIO:");
-    serial_printf("  %-16s %u bytes\n", "Page size:", (unsigned)PAGE_SIZE);
-    printf("  %-16s %u bytes\n", "Page size:", (unsigned)PAGE_SIZE);
-    serial_printf("=======================\n");
-    printf("=======================\n");
+    _print_mem_line("real memory ", total_bytes);
+    _print_mem_line("avail memory", usable_bytes);
 
-    serial_printf("[PMM] buddy free-list:\n");
+    printf("kernel uses %llu KiB, %llu MiB free, %u-byte pages\n",
+           (unsigned long long)(used_bytes / 1024),
+           (unsigned long long)(free_bytes / (1024 * 1024)),
+           (unsigned)PAGE_SIZE);
+    serial_printf("kernel uses %llu KiB, %llu MiB free, %u-byte pages\n",
+           (unsigned long long)(used_bytes / 1024),
+           (unsigned long long)(free_bytes / (1024 * 1024)),
+           (unsigned)PAGE_SIZE);
+
+    serial_printf("pmm: buddy free-list:\n");
     for (int o = 0; o < PMM_MAX_ORDER_NR; o++) {
         if (g_buddy.orders[o].count)
             serial_printf("  order %2d (%4zu KiB): %zu blocks\n",

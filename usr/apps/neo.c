@@ -709,6 +709,13 @@ static char *prompt_cb(const char *prompt_fmt, void (*callback)(char *, int))
     for (;;) {
         set_status(prompt_fmt, buf);
         refresh_screen();
+
+        int slen = (int)strlen(E.statusmsg);
+        if (slen > E.screencols) slen = E.screencols;
+        char curbuf[32];
+        int cn = snprintf(curbuf, sizeof(curbuf), "\x1b[%d;%dH", E.screenrows + 2, slen + 1);
+        write(1, curbuf, cn);
+
         int c = read_key();
         if (c == KEY_DEL || c == KEY_CTRL('h') || c == KEY_BACKSPACE) {
             if (buflen > 0) buf[--buflen] = '\0';

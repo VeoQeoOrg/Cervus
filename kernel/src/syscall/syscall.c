@@ -120,6 +120,7 @@ extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fb_map    (uint64_t);
 extern int64_t sys_fb_acquire(void);
 extern int64_t sys_fb_release(void);
+extern int64_t sys_mouse_state(uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -167,7 +168,7 @@ W1(sys_getpgid)     W2(sys_setpgid)
 W1(sys_getsid)      W0(sys_setsid)
 W2(sys_symlink)     W3(sys_readlink)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
-W0(sys_fb_acquire)  W0(sys_fb_release)
+W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -254,6 +255,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FB_MAP]            = _sys_fb_map,
     [SYS_FB_ACQUIRE]        = _sys_fb_acquire,
     [SYS_FB_RELEASE]        = _sys_fb_release,
+    [SYS_MOUSE_STATE]       = _sys_mouse_state,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
