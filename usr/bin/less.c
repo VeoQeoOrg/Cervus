@@ -223,8 +223,13 @@ static void draw_status(void)
 static void render_line(const line_t *L, int width)
 {
     if (!g_re_ready || !g_search_pat[0]) {
-        size_t n = L->size;
-        if ((int)n > width) n = (size_t)width;
+        size_t n = 0;
+        int cols = 0;
+        while (n < L->size && cols < width) {
+            if (((unsigned char)L->data[n] & 0xC0) != 0x80) cols++;
+            n++;
+        }
+        while (n < L->size && ((unsigned char)L->data[n] & 0xC0) == 0x80) n++;
         fwrite(L->data, 1, n, stdout);
         fputs("\x1b[K", stdout);
         return;

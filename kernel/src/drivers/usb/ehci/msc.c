@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/ehci.h"
+#include "../../../../include/drivers/usb/usb_msc.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
 #include "../../../../include/fs/vfs.h"
@@ -15,29 +16,8 @@ extern void devfs_register(const char *name, vnode_t *node);
 #define EHCI_MAX_MSC          4
 #define EHCI_MSC_MAX_SECT     32
 
-#define CBW_SIGNATURE         0x43425355u
-#define CSW_SIGNATURE         0x53425355u
-
-typedef struct __attribute__((packed)) {
-    uint32_t signature;
-    uint32_t tag;
-    uint32_t data_length;
-    uint8_t  flags;
-    uint8_t  lun;
-    uint8_t  cb_length;
-    uint8_t  cb[16];
-} ehci_cbw_t;
-_Static_assert(sizeof(ehci_cbw_t) == 31, "ehci cbw size");
-
-typedef struct __attribute__((packed)) {
-    uint32_t signature;
-    uint32_t tag;
-    uint32_t data_residue;
-    uint8_t  status;
-} ehci_csw_t;
-_Static_assert(sizeof(ehci_csw_t) == 13, "ehci csw size");
-
 typedef struct ehci_msc {
+    usb_msc_dev_t mscdev;
     ehci_controller_t *ctl;
     uint8_t   addr;
     uint8_t   speed;
@@ -48,12 +28,6 @@ typedef struct ehci_msc {
 
     ehci_qh_t *in_qh, *out_qh;
     uintptr_t  in_qh_phys, out_qh_phys;
-
-    uint32_t  tag;
-    uint64_t  lba_count;
-    uint32_t  block_size;
-    char      vendor[9];
-    char      product[17];
 
     blkdev_t  blkdev;
     vnode_t   vnode;
@@ -105,9 +79,11 @@ static int link_bulk_qh(ehci_msc_t *m, bool in_dir) {
     return 0;
 }
 
-static int bulk_xfer(ehci_msc_t *m, bool dir_in,
-                     uintptr_t buf_phys, uint32_t len, uint32_t timeout_ms)
+static int ehci_msc_bulk(void *dev, bool dir_in, void *virt, uintptr_t buf_phys,
+                         uint32_t len, uint32_t timeout_ms)
 {
+    (void)virt;
+    ehci_msc_t *m = (ehci_msc_t *)dev;
     ehci_qh_t *qh    = dir_in ? m->in_qh   : m->out_qh;
     uint32_t  *dt_ptr= dir_in ? &m->in_dt_bit : &m->out_dt_bit;
     if (!qh) return -EIO;
@@ -181,7 +157,9 @@ static int bulk_xfer(ehci_msc_t *m, bool dir_in,
     return r;
 }
 
-static void msc_reset_recovery(ehci_msc_t *m) {
+static void ehci_msc_clear_halt(void *dev, bool dir_in) {
+    (void)dir_in;
+    ehci_msc_t *m = (ehci_msc_t *)dev;
     uint8_t clr_in[8]  = { 0x02, 0x01, 0x00, 0x00,
                            (uint8_t)(m->in_ep | 0x80), 0x00, 0x00, 0x00 };
     (void)ehci_control_xfer(m->ctl, m->addr, m->speed, 64, clr_in, NULL, 0, false);
@@ -196,187 +174,20 @@ static void msc_reset_recovery(ehci_msc_t *m) {
     serial_printf("[ehci-msc] clear-halt recovery done (addr=%u)\n", m->addr);
 }
 
-static int msc_scsi(ehci_msc_t *m, const uint8_t *cdb, uint8_t cdb_len,
-                    bool data_in, uintptr_t data_phys, uint32_t data_len,
-                    uint8_t *scsi_status)
-{
-    if (cdb_len == 0 || cdb_len > 16) return -EINVAL;
-
-    uintptr_t cbw_phys, csw_phys;
-    ehci_cbw_t *cbw = (ehci_cbw_t *)dma_alloc_coherent_low(64, &cbw_phys);
-    if (!cbw || cbw_phys >= 0xFFFFFFFFULL) return -ENOMEM;
-    ehci_csw_t *csw = (ehci_csw_t *)dma_alloc_coherent_low(64, &csw_phys);
-    if (!csw || csw_phys >= 0xFFFFFFFFULL) { dma_free_coherent(cbw, 64); return -ENOMEM; }
-
-    memset(cbw, 0, sizeof(*cbw));
-    memset(csw, 0, sizeof(*csw));
-
-    uint32_t tag = ++m->tag;
-    cbw->signature   = CBW_SIGNATURE;
-    cbw->tag         = tag;
-    cbw->data_length = data_len;
-    cbw->flags       = data_in ? 0x80 : 0x00;
-    cbw->lun         = 0;
-    cbw->cb_length   = cdb_len;
-    memcpy(cbw->cb, cdb, cdb_len);
-
-    int r = bulk_xfer(m, false, cbw_phys, sizeof(*cbw), 5000);
-    if (r < 0) goto out;
-
-    if (data_len > 0 && data_phys != 0) {
-        r = bulk_xfer(m, data_in, data_phys, data_len, 60000);
-        if (r < 0) goto out;
-    }
-
-    r = bulk_xfer(m, true, csw_phys, sizeof(*csw), 60000);
-    if (r < 0) goto out;
-
-    if (csw->signature != CSW_SIGNATURE || csw->tag != tag) {
-        serial_printf("[ehci-msc] bad CSW sig=0x%x tag=%u (expected %u)\n",
-                      csw->signature, csw->tag, tag);
-        r = -EIO;
-        goto out;
-    }
-    if (scsi_status) *scsi_status = csw->status;
-    r = 0;
-out:
-    if (r == -EIO) msc_reset_recovery(m);
-    dma_free_coherent(cbw, 64);
-    dma_free_coherent(csw, 64);
-    return r;
-}
-
-static int msc_inquiry(ehci_msc_t *m) {
-    uintptr_t bp;
-    uint8_t *buf = (uint8_t *)dma_alloc_coherent_low(64, &bp);
-    if (!buf || bp >= 0xFFFFFFFFULL) return -ENOMEM;
-    memset(buf, 0, 64);
-    uint8_t cdb[6] = { 0x12, 0, 0, 0, 36, 0 };
-    uint8_t st = 0xFF;
-    int r = msc_scsi(m, cdb, 6, true, bp, 36, &st);
-    if (r == 0 && st == 0) {
-        memcpy(m->vendor,  buf + 8,  8);  m->vendor[8]  = 0;
-        memcpy(m->product, buf + 16, 16); m->product[16] = 0;
-        for (int i = 7;  i >= 0 && m->vendor[i]  == ' '; i--) m->vendor[i]  = 0;
-        for (int i = 15; i >= 0 && m->product[i] == ' '; i--) m->product[i] = 0;
-    } else {
-        r = (r < 0) ? r : -EIO;
-    }
-    dma_free_coherent(buf, 64);
-    return r;
-}
-
-static int msc_test_unit_ready(ehci_msc_t *m) {
-    uint8_t cdb[6] = { 0x00, 0, 0, 0, 0, 0 };
-    for (int i = 0; i < 5; i++) {
-        uint8_t st = 0xFF;
-        int r = msc_scsi(m, cdb, 6, true, 0, 0, &st);
-        if (r == 0 && st == 0) return 0;
-        if (r == 0 && st != 0) {
-            uint8_t rs_cdb[6] = { 0x03, 0, 0, 0, 18, 0 };
-            uintptr_t rsp;
-            uint8_t *rs = (uint8_t *)dma_alloc_coherent_low(64, &rsp);
-            if (rs && rsp < 0xFFFFFFFFULL) {
-                memset(rs, 0, 64);
-                uint8_t rss = 0;
-                msc_scsi(m, rs_cdb, 6, true, rsp, 18, &rss);
-                dma_free_coherent(rs, 64);
-            }
-        }
-        hpet_sleep_ms(100);
-    }
-    return -EIO;
-}
-
-static int msc_read_capacity(ehci_msc_t *m) {
-    uintptr_t bp;
-    uint8_t *buf = (uint8_t *)dma_alloc_coherent_low(64, &bp);
-    if (!buf || bp >= 0xFFFFFFFFULL) return -ENOMEM;
-    memset(buf, 0, 64);
-    uint8_t cdb[10] = { 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    uint8_t st = 0xFF;
-    int r = msc_scsi(m, cdb, 10, true, bp, 8, &st);
-    if (r == 0 && st == 0) {
-        uint32_t last_lba = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16) |
-                            ((uint32_t)buf[2] << 8)  |  (uint32_t)buf[3];
-        uint32_t bs       = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16) |
-                            ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
-        m->lba_count  = (uint64_t)last_lba + 1;
-        m->block_size = bs ? bs : 512;
-    } else {
-        r = (r < 0) ? r : -EIO;
-    }
-    dma_free_coherent(buf, 64);
-    return r;
-}
-
-static int msc_rw10(ehci_msc_t *m, uint64_t lba, uint32_t count,
-                    void *buf, bool is_write)
-{
-    if (!m->ready) return -EIO;
-    if (count == 0) return 0;
-    uint32_t done = 0;
-    while (done < count) {
-        uint32_t chunk = count - done;
-        if (chunk > EHCI_MSC_MAX_SECT) chunk = EHCI_MSC_MAX_SECT;
-        uint32_t bytes = chunk * m->block_size;
-
-        uintptr_t dph;
-        uint8_t *dbuf = (uint8_t *)dma_alloc_coherent_low(bytes, &dph);
-        if (!dbuf) return -ENOMEM;
-        if (dph >= 0xFFFFFFFFULL) { dma_free_coherent(dbuf, bytes); return -ENOMEM; }
-
-        if (is_write) memcpy(dbuf, (uint8_t *)buf + (size_t)done * m->block_size, bytes);
-
-        uint64_t lba_cur = lba + done;
-        uint8_t cdb[10] = {
-            (uint8_t)(is_write ? 0x2A : 0x28), 0,
-            (uint8_t)(lba_cur >> 24), (uint8_t)(lba_cur >> 16),
-            (uint8_t)(lba_cur >> 8),  (uint8_t)lba_cur,
-            0,
-            (uint8_t)(chunk >> 8), (uint8_t)chunk,
-            0
-        };
-        uint8_t st = 0xFF;
-        int r = 0;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            st = 0xFF;
-            r = msc_scsi(m, cdb, 10, !is_write, dph, bytes, &st);
-            if (r == 0 && st == 0) break;
-            if (r < 0) break;
-            hpet_sleep_ms(10);
-        }
-        if (r < 0 || st != 0) {
-            serial_printf("[ehci-msc] %s LBA %llu failed after retries (r=%d st=%u)\n",
-                          is_write ? "WRITE" : "READ",
-                          (unsigned long long)lba_cur, r, st);
-            dma_free_coherent(dbuf, bytes);
-            return (r < 0) ? r : -EIO;
-        }
-        if (!is_write) memcpy((uint8_t *)buf + (size_t)done * m->block_size, dbuf, bytes);
-        dma_free_coherent(dbuf, bytes);
-        done += chunk;
-    }
-    return 0;
-}
-
-static int msc_sync_cache(ehci_msc_t *m) {
-    if (!m || !m->ready) return 0;
-    uint8_t cdb[10] = { 0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    uint8_t st = 0xFF;
-    int r = msc_scsi(m, cdb, 10, true, 0, 0, &st);
-    if (r < 0) return r;
-    return (st == 0) ? 0 : -EIO;
-}
-
 static int msc_blk_read(blkdev_t *dev, uint64_t lba, uint32_t count, void *buf) {
-    return msc_rw10((ehci_msc_t *)dev->priv, lba, count, buf, false);
+    ehci_msc_t *m = (ehci_msc_t *)dev->priv;
+    if (!m->ready) return -EIO;
+    return usb_msc_rw10(&m->mscdev, lba, count, buf, false);
 }
 static int msc_blk_write(blkdev_t *dev, uint64_t lba, uint32_t count, const void *buf) {
-    return msc_rw10((ehci_msc_t *)dev->priv, lba, count, (void *)buf, true);
+    ehci_msc_t *m = (ehci_msc_t *)dev->priv;
+    if (!m->ready) return -EIO;
+    return usb_msc_rw10(&m->mscdev, lba, count, (void *)buf, true);
 }
 static int msc_blk_flush(blkdev_t *dev) {
-    return msc_sync_cache((ehci_msc_t *)dev->priv);
+    ehci_msc_t *m = (ehci_msc_t *)dev->priv;
+    if (!m->ready) return 0;
+    return usb_msc_sync_cache(&m->mscdev);
 }
 static const blkdev_ops_t g_ehci_msc_blkdev_ops = {
     .read_sectors  = msc_blk_read,
@@ -439,20 +250,26 @@ int ehci_msc_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
     m->out_mps  = info->out_mps;
     m->slot_idx = idx;
 
+    m->mscdev.ops.dev        = m;
+    m->mscdev.ops.bulk       = ehci_msc_bulk;
+    m->mscdev.ops.clear_halt = ehci_msc_clear_halt;
+    m->mscdev.max_sect       = EHCI_MSC_MAX_SECT;
+    m->mscdev.timeout_ms     = 60000;
+
     if (link_bulk_qh(m, true)  < 0) return -ENOMEM;
     if (link_bulk_qh(m, false) < 0) return -ENOMEM;
 
     m->active = true;
 
-    if (msc_inquiry(m) < 0) {
+    if (usb_msc_inquiry(&m->mscdev) < 0) {
         serial_printf("[ehci-msc] INQUIRY failed for addr=%u\n", addr);
         return -EIO;
     }
-    if (msc_test_unit_ready(m) < 0) {
+    if (usb_msc_test_unit_ready(&m->mscdev) < 0) {
         serial_printf("[ehci-msc] TEST UNIT READY failed for addr=%u\n", addr);
         return -EIO;
     }
-    if (msc_read_capacity(m) < 0) {
+    if (usb_msc_read_capacity(&m->mscdev) < 0) {
         serial_printf("[ehci-msc] READ CAPACITY failed for addr=%u\n", addr);
         return -EIO;
     }
@@ -463,13 +280,13 @@ int ehci_msc_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
     memset(bd, 0, sizeof(*bd));
     strncpy(bd->name, m->name, BLKDEV_NAME_MAX - 1);
     snprintf(bd->model, BLKDEV_MODEL_MAX, "%s %s",
-             m->vendor[0]  ? m->vendor  : "USB",
-             m->product[0] ? m->product : "Mass Storage");
+             m->mscdev.vendor[0]  ? m->mscdev.vendor  : "USB",
+             m->mscdev.product[0] ? m->mscdev.product : "Mass Storage");
     bd->present      = true;
     bd->is_partition = false;
-    bd->sector_count = m->lba_count;
-    bd->sector_size  = m->block_size;
-    bd->size_bytes   = m->lba_count * (uint64_t)m->block_size;
+    bd->sector_count = m->mscdev.lba_count;
+    bd->sector_size  = m->mscdev.block_size;
+    bd->size_bytes   = m->mscdev.lba_count * (uint64_t)m->mscdev.block_size;
     bd->ops          = &g_ehci_msc_blkdev_ops;
     bd->priv         = m;
 
@@ -489,9 +306,9 @@ int ehci_msc_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
     }
     m->registered = true;
     m->ready = true;
-    serial_printf("[ehci-msc] /dev/%s: %s %s — %llu sectors x %u (%llu MB)\n",
-                  m->name, m->vendor, m->product,
-                  (unsigned long long)m->lba_count, m->block_size,
+    serial_printf("[ehci-msc] /dev/%s: %s %s - %llu sectors x %u (%llu MB)\n",
+                  m->name, m->mscdev.vendor, m->mscdev.product,
+                  (unsigned long long)m->mscdev.lba_count, m->mscdev.block_size,
                   (unsigned long long)(bd->size_bytes / (1024 * 1024)));
 
     partition_scan(bd);

@@ -172,6 +172,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
 
 __attribute__((noreturn)) void task_exit(void);
 void    task_kill(task_t* task);
+void    task_kill_subtree(task_t* root);
 void    task_destroy(task_t* task);
 task_t* task_fork(task_t* parent);
 task_t* task_find_by_pid(uint32_t pid);

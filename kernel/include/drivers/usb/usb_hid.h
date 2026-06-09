@@ -25,4 +25,6 @@ void usb_hid_kbd_state_init(usb_hid_kbd_state_t *s);
 void usb_hid_kbd_process_report(usb_hid_kbd_state_t *s, const uint8_t *report);
 void usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n);
 
+void usb_hid_mouse_process_report(const uint8_t *report, int len);
+
 #endif

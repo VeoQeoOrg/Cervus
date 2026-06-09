@@ -110,8 +110,9 @@
 #define SYS_FB_RELEASE        564
 
 #define SYS_MOUSE_STATE       565
+#define SYS_KEYMAP_CONFIG     566
 
-#define SYSCALL_TABLE_SIZE    566
+#define SYSCALL_TABLE_SIZE    567
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

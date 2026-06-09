@@ -108,6 +108,7 @@ typedef struct uhci_controller {
 
 typedef struct {
     bool     is_kbd;
+    bool     is_mouse;
     uint8_t  intf;
     uint8_t  in_ep;
     uint16_t in_mps;

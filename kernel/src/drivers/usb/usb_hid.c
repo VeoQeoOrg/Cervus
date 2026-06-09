@@ -1,4 +1,6 @@
 #include "../../../include/drivers/usb/usb_hid.h"
+#include "../../../include/drivers/mouse.h"
+#include "../../../include/drivers/keymap.h"
 #include "../../../include/apic/apic.h"
 #include <string.h>
 
@@ -61,7 +63,10 @@ static void emit_one(uint8_t usage, uint8_t modifier) {
         case 0x4B: console_input_char('\x1b'); console_input_char('['); console_input_char('5'); console_input_char('~'); return;
         case 0x4E: console_input_char('\x1b'); console_input_char('['); console_input_char('6'); console_input_char('~'); return;
         case 0x4C: console_input_char('\x1b'); console_input_char('['); console_input_char('3'); console_input_char('~'); return;
-        case 0x39: g_caps_lock = !g_caps_lock; return;
+        case 0x39:
+            if (keymap_get_toggle_key() == KMAP_TOGGLE_CAPSLOCK) keymap_toggle();
+            else g_caps_lock = !g_caps_lock;
+            return;
     }
     if (usage == 0) return;
 
@@ -79,7 +84,10 @@ static void emit_one(uint8_t usage, uint8_t modifier) {
         console_input_char((char)ctrl_char);
         return;
     }
-    console_input_char(base);
+    if (keymap_is_alt())
+        keymap_emit(base, console_input_char);
+    else
+        console_input_char(base);
 }
 
 void usb_hid_kbd_state_init(usb_hid_kbd_state_t *s) {
@@ -88,6 +96,17 @@ void usb_hid_kbd_state_init(usb_hid_kbd_state_t *s) {
 
 void usb_hid_kbd_process_report(usb_hid_kbd_state_t *s, const uint8_t *report) {
     uint8_t mod = report[0];
+    uint8_t prev_mod = s->prev_report[0];
+    int tk = keymap_get_toggle_key();
+    if (tk == KMAP_TOGGLE_ALT_SHIFT) {
+        bool now_t = (mod & 0x44) && (mod & 0x22);
+        bool was_t = (prev_mod & 0x44) && (prev_mod & 0x22);
+        if (now_t && !was_t) keymap_toggle();
+    } else if (tk == KMAP_TOGGLE_CTRL_SHIFT) {
+        bool now_t = (mod & 0x11) && (mod & 0x22);
+        bool was_t = (prev_mod & 0x11) && (prev_mod & 0x22);
+        if (now_t && !was_t) keymap_toggle();
+    }
     s->cur_modifier = mod;
     uint64_t now = hpet_elapsed_ns();
 
@@ -137,4 +156,19 @@ void usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n) {
             s->held[k].next_emit_ns = target;
         }
     }
+}
+
+void usb_hid_mouse_process_report(const uint8_t *report, int len) {
+    if (!report || len < 3) return;
+
+    uint8_t buttons = report[0];
+    bool bl = (buttons & 0x01) != 0;
+    bool br = (buttons & 0x02) != 0;
+    bool bm = (buttons & 0x04) != 0;
+
+    int32_t dx = (int32_t)(int8_t)report[1];
+    int32_t dy = (int32_t)(int8_t)report[2];
+    int32_t wheel = (len >= 4) ? (int32_t)(int8_t)report[3] : 0;
+
+    mouse_inject_rel(dx, dy, bl, br, bm, wheel);
 }

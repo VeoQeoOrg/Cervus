@@ -401,7 +401,7 @@ static bool build_one_app(const app_entry_t *e) {
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
         " -fno-pie -fno-pic"
-        " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2"
+        " -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2"
         " -mno-red-zone"
         " -O0 -g"
         " -nostdinc -isystem " SYSROOT_INC
@@ -491,7 +491,7 @@ static bool build_one_bin_app(const app_entry_t *e) {
     int ret = cmd_run(false,
         "gcc -ffreestanding -nostdlib -static -fno-stack-protector"
         " -fno-pie -fno-pic"
-        " -mno-sse -mno-sse2 -mno-mmx -mno-avx -mno-avx2"
+        " -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2"
         " -mno-red-zone"
         " -O0 -g"
         " -nostdinc -isystem " SYSROOT_INC

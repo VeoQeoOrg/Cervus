@@ -222,12 +222,21 @@ static void ahci_setup_port(ahci_hba_t *hba, int port, ahci_device_t *d) {
     ahci_port_start(base, port);
 }
 
+static void ahci_port_recover(volatile uint8_t *base, int port) {
+    prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+    prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
+    ahci_port_stop(base, port);
+    prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+    prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
+    ahci_port_start(base, port);
+}
+
 static int ahci_issue_cmd(ahci_hba_t *hba, ahci_device_t *d, int slot,
                           uint32_t timeout_loops) {
     volatile uint8_t *base = hba->abar;
     int port = d->port_idx;
 
-    for (uint32_t i = 0; i < 1000000; i++) {
+    for (uint32_t i = 0; i < 200000; i++) {
         uint32_t tfd = prt_r32(base, port, PRT_TFD);
         if (!(tfd & (ATA_BSY | ATA_DRQ))) break;
         io_pause();
@@ -239,14 +248,21 @@ static int ahci_issue_cmd(ahci_hba_t *hba, ahci_device_t *d, int slot,
         uint32_t ci = prt_r32(base, port, PRT_CI);
         if ((ci & (1u << slot)) == 0) {
             uint32_t tfd = prt_r32(base, port, PRT_TFD);
-            if (tfd & ATA_ERR) return -EIO;
+            if (tfd & ATA_ERR) {
+                prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+                prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
+                return -EIO;
+            }
             return 0;
         }
         if (prt_r32(base, port, PRT_IS) & (1u << 30)) {
+            ahci_port_recover(base, port);
             return -EIO;
         }
         for (int k = 0; k < 16; k++) io_pause();
     }
+    prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+    prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
     return -ETIMEDOUT;
 }
 
@@ -354,13 +370,13 @@ static int ahci_atapi_packet(ahci_device_t *d, const uint8_t cdb[16],
     fis->pm       = 0x80;
     fis->command  = ATA_CMD_PACKET;
     fis->featurel = buf_bytes ? 0x01 : 0x00;
-    fis->lba1     = (uint8_t)(buf_bytes & 0xFF);
-    fis->lba2     = (uint8_t)((buf_bytes >> 8) & 0xFF);
+    fis->lba1     = 0;
+    fis->lba2     = 0;
 
     return ahci_issue_cmd(hba, d, slot, timeout_loops);
 }
 
-static int ahci_atapi_read_capacity(ahci_device_t *d) {
+int ahci_atapi_read_capacity(ahci_device_t *d) {
     uint8_t cdb[16] = {0};
     cdb[0] = ATAPI_OP_READ_CAPACITY;
 
@@ -368,19 +384,77 @@ static int ahci_atapi_read_capacity(ahci_device_t *d) {
     if (!buf) return -ENOMEM;
     uintptr_t buf_phys = pmm_virt_to_phys(buf);
 
-    spinlock_acquire(&g_ahci_lock);
-    int r = ahci_atapi_packet(d, cdb, buf_phys, 8, 5000000);
-    spinlock_release(&g_ahci_lock);
-    if (r != 0) { pmm_free(buf, 1); return r; }
+    uint32_t max_lba = 0, block_size = 0;
 
-    uint32_t max_lba    = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16)
-                        | ((uint32_t)buf[2] << 8)  |  (uint32_t)buf[3];
-    uint32_t block_size = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16)
-                        | ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
+    for (int attempt = 0; attempt < 12; attempt++) {
+        memset(buf, 0, 16);
+        spinlock_acquire(&g_ahci_lock);
+        int r = ahci_atapi_packet(d, cdb, buf_phys, 8, 1000000);
+        spinlock_release(&g_ahci_lock);
+
+        if (r == 0) {
+            max_lba    = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16)
+                       | ((uint32_t)buf[2] << 8)  |  (uint32_t)buf[3];
+            block_size = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16)
+                       | ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
+            if (max_lba != 0 && max_lba != 0xFFFFFFFFu && block_size != 0)
+                break;
+        }
+
+        uint8_t sense_cdb[16] = {0};
+        sense_cdb[0] = 0x03;
+        sense_cdb[4] = 18;
+        memset(buf, 0, 18);
+        spinlock_acquire(&g_ahci_lock);
+        (void)ahci_atapi_packet(d, sense_cdb, buf_phys, 18, 1000000);
+        spinlock_release(&g_ahci_lock);
+
+        for (int dly = 0; dly < 3000000; dly++) io_pause();
+    }
+
+    if (max_lba == 0 || block_size == 0 || max_lba == 0xFFFFFFFFu) {
+        for (int attempt = 0; attempt < 4; attempt++) {
+            uint8_t fcdb[16] = {0};
+            fcdb[0] = 0x23;
+            fcdb[8] = 252;
+            memset(buf, 0, 252);
+            spinlock_acquire(&g_ahci_lock);
+            int r = ahci_atapi_packet(d, fcdb, buf_phys, 252, 1000000);
+            spinlock_release(&g_ahci_lock);
+
+            if (r == 0) {
+                uint32_t cur_nblocks = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16)
+                                     | ((uint32_t)buf[6] << 8)  |  (uint32_t)buf[7];
+                uint32_t cur_blen    = ((uint32_t)buf[9] << 16) | ((uint32_t)buf[10] << 8)
+                                     |  (uint32_t)buf[11];
+
+                uint8_t list_len = buf[3];
+                uint32_t best = 0, best_blen = 0;
+                for (int off = 12; off + 8 <= 4 + list_len && off + 8 <= 252; off += 8) {
+                    uint32_t nb = ((uint32_t)buf[off] << 24) | ((uint32_t)buf[off+1] << 16)
+                                | ((uint32_t)buf[off+2] << 8) | (uint32_t)buf[off+3];
+                    uint8_t  ty = buf[off+4] & 0x03;
+                    uint32_t bl = ((uint32_t)buf[off+5] << 16) | ((uint32_t)buf[off+6] << 8)
+                                | (uint32_t)buf[off+7];
+                    if (ty == 2 && nb != 0 && nb < 0xFFFFFFFFu) { best = nb; best_blen = bl; }
+                }
+
+                uint32_t use_nb = best ? best : cur_nblocks;
+                uint32_t use_bl = best ? best_blen : cur_blen;
+                if (use_nb != 0 && use_nb != 0xFFFFFFFFu) {
+                    if (use_bl == 0) use_bl = ATAPI_SECTOR_SIZE;
+                    max_lba    = use_nb - 1;
+                    block_size = use_bl;
+                    break;
+                }
+            }
+            for (int dly = 0; dly < 3000000; dly++) io_pause();
+        }
+    }
 
     pmm_free(buf, 1);
 
-    if (block_size == 0 || max_lba == 0xFFFFFFFFu) {
+    if (block_size == 0 || max_lba == 0 || max_lba == 0xFFFFFFFFu) {
         d->sectors    = 0;
         d->size_bytes = 0;
         return -EIO;
@@ -389,6 +463,44 @@ static int ahci_atapi_read_capacity(ahci_device_t *d) {
     d->sectors    = (uint64_t)max_lba + 1;
     d->size_bytes = d->sectors * (uint64_t)block_size;
     return 0;
+}
+
+int ahci_atapi_test_unit_ready(ahci_device_t *d, uint8_t *out_key,
+                               uint8_t *out_asc, uint8_t *out_ascq) {
+    if (out_key)  *out_key  = 0;
+    if (out_asc)  *out_asc  = 0;
+    if (out_ascq) *out_ascq = 0;
+
+    uint8_t cdb[16] = {0};
+    cdb[0] = 0x00;
+    spinlock_acquire(&g_ahci_lock);
+    int r = ahci_atapi_packet(d, cdb, 0, 0, 200000);
+    spinlock_release(&g_ahci_lock);
+    if (r == 0) return 0;
+
+    uint8_t *sbuf = (uint8_t *)pmm_alloc_zero(1);
+    if (!sbuf) return r;
+    uintptr_t sphys = pmm_virt_to_phys(sbuf);
+    memset(sbuf, 0, 18);
+    uint8_t scdb[16] = {0};
+    scdb[0] = 0x03;
+    scdb[4] = 18;
+    spinlock_acquire(&g_ahci_lock);
+    int sr = ahci_atapi_packet(d, scdb, sphys, 18, 500000);
+    spinlock_release(&g_ahci_lock);
+
+    uint8_t key = sbuf[2] & 0x0F;
+    uint8_t asc = sbuf[12];
+    uint8_t ascq = sbuf[13];
+    pmm_free(sbuf, 1);
+
+    if (sr == 0) {
+        if (out_key)  *out_key  = key;
+        if (out_asc)  *out_asc  = asc;
+        if (out_ascq) *out_ascq = ascq;
+    }
+
+    return r;
 }
 
 static int ahci_atapi_read(ahci_device_t *d, uint64_t lba, uint32_t count, void *buf) {
@@ -424,8 +536,35 @@ static int ahci_atapi_read(ahci_device_t *d, uint64_t lba, uint32_t count, void 
     cdb[7] = (uint8_t)((count >> 8) & 0xFF);
     cdb[8] = (uint8_t)( count       & 0xFF);
 
-    int r = ahci_atapi_packet(d, cdb, bounce_phys, bytes, 10000000);
-    if (r == 0) memcpy(buf, bounce, bytes);
+    int r = -EIO;
+    for (int attempt = 0; attempt < 10; attempt++) {
+        r = ahci_atapi_packet(d, cdb, bounce_phys, bytes, 10000000);
+        if (r == 0) {
+            memcpy(buf, bounce, bytes);
+            break;
+        }
+
+        uint8_t scdb[16] = {0};
+        scdb[0] = 0x03;
+        scdb[4] = 18;
+        memset(bounce, 0, 18);
+        int sr = ahci_atapi_packet(d, scdb, bounce_phys, 18, 1000000);
+        uint8_t key = 0, asc = 0;
+        if (sr == 0) {
+            uint8_t *s = (uint8_t *)bounce;
+            key = s[2] & 0x0F; asc = s[12];
+        }
+
+        int retryable = (key == 2) ||
+                        (key == 6 && asc == 0x28) ||
+                        (key == 3 && asc == 0x11);
+        if (retryable) {
+            int loops = (key == 3) ? 12000000 : 3000000;
+            for (int dly = 0; dly < loops; dly++) io_pause();
+            continue;
+        }
+        break;
+    }
 
     pmm_free(bounce, pages);
     spinlock_release(&g_ahci_lock);
@@ -658,9 +797,14 @@ static int ahci_probe(pci_device_t *pd) {
 
         int ir = ahci_identify(&g_hba, d);
         if (ir != 0) {
-            serial_printf("[ahci] port %d: identify failed (%d)\n", i, ir);
-            d->present = false;
-            continue;
+            if (d->atapi) {
+                serial_printf("[ahci] port %d: ATAPI identify failed (%d) — empty drive, keeping for hotplug\n",
+                              i, ir);
+            } else {
+                serial_printf("[ahci] port %d: identify failed (%d)\n", i, ir);
+                d->present = false;
+                continue;
+            }
         }
 
         if (d->atapi) {

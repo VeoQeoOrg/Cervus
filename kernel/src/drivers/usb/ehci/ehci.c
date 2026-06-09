@@ -1,4 +1,6 @@
 #include "../../../../include/drivers/usb/ehci.h"
+#include "../../../../include/drivers/usb/usb_config.h"
+#include "../../../../include/drivers/usb/usb_enum.h"
 #include "../../../../include/drivers/pci.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
@@ -441,87 +443,19 @@ static const char *usb_class_name(uint8_t c) {
     }
 }
 
-static const char *xfer_type_name(uint8_t attr) {
-    switch (attr & 0x3) {
-        case 0: return "Control";
-        case 1: return "Isoch";
-        case 2: return "Bulk";
-        case 3: return "Interrupt";
-        default: return "?";
-    }
-}
 
-static void ehci_parse_config(const uint8_t *buf, uint16_t total,
-                              ehci_msc_info_t *msc_out,
-                              ehci_hid_info_t *hid_out)
-{
-    if (msc_out) memset(msc_out, 0, sizeof(*msc_out));
-    if (hid_out) memset(hid_out, 0, sizeof(*hid_out));
-    if (total < 9) return;
-    uint8_t n_intf = buf[4];
-    uint8_t cfg_val = buf[5];
-    serial_printf("[ehci]   config #%u: %u interface(s)  attrs=0x%02x  power=%u mA\n",
-                  cfg_val, n_intf, buf[7], (unsigned)buf[8] * 2);
+typedef struct {
+    ehci_controller_t *ctl;
+    uint8_t  addr;
+    uint8_t  speed;
+    uint16_t mps;
+} ehci_ctrl_handle_t;
 
-    bool in_msc_intf = false;
-    bool in_kbd_intf = false;
-    uint8_t cur_intf = 0;
-
-    uint16_t pos = 9;
-    while (pos + 2 <= total) {
-        uint8_t blen  = buf[pos];
-        uint8_t btype = buf[pos + 1];
-        if (blen < 2 || pos + blen > total) break;
-        if (btype == 0x04 && blen >= 9) {
-            uint8_t inum  = buf[pos + 2];
-            uint8_t alt   = buf[pos + 3];
-            uint8_t neps  = buf[pos + 4];
-            uint8_t cls   = buf[pos + 5];
-            uint8_t sub   = buf[pos + 6];
-            uint8_t proto = buf[pos + 7];
-            serial_printf("[ehci]     interface %u.%u: class=0x%02x (%s) "
-                          "sub=0x%02x proto=0x%02x  endpoints=%u\n",
-                          inum, alt, cls, usb_class_name(cls), sub, proto, neps);
-            cur_intf = inum;
-            in_msc_intf = (cls == 0x08 && sub == 0x06 && proto == 0x50 && alt == 0);
-            in_kbd_intf = (cls == 0x03 && sub == 0x01 && proto == 0x01 && alt == 0);
-            if (in_msc_intf && msc_out && !msc_out->is_msc) {
-                msc_out->is_msc = true;
-                msc_out->intf   = inum;
-            }
-            if (in_kbd_intf && hid_out && !hid_out->is_kbd) {
-                hid_out->is_kbd = true;
-                hid_out->intf   = inum;
-            }
-        } else if (btype == 0x05 && blen >= 7) {
-            uint8_t addr = buf[pos + 2];
-            uint8_t attr = buf[pos + 3];
-            uint16_t mps = (uint16_t)buf[pos + 4] | ((uint16_t)buf[pos + 5] << 8);
-            uint8_t  ivl = buf[pos + 6];
-            uint8_t  num = addr & 0x0F;
-            const char *dir = (addr & 0x80) ? "IN" : "OUT";
-            serial_printf("[ehci]       ep %u %s  type=%s  mps=%u  interval=%u\n",
-                          num, dir, xfer_type_name(attr), mps & 0x7FF, ivl);
-            if (in_msc_intf && msc_out && (attr & 0x3) == 2 &&
-                msc_out->intf == cur_intf) {
-                if ((addr & 0x80) && msc_out->in_ep == 0) {
-                    msc_out->in_ep  = num;
-                    msc_out->in_mps = mps & 0x7FF;
-                } else if (!(addr & 0x80) && msc_out->out_ep == 0) {
-                    msc_out->out_ep  = num;
-                    msc_out->out_mps = mps & 0x7FF;
-                }
-            }
-            if (in_kbd_intf && hid_out && (attr & 0x3) == 3 &&
-                (addr & 0x80) && hid_out->in_ep == 0 &&
-                hid_out->intf == cur_intf) {
-                hid_out->in_ep    = num;
-                hid_out->in_mps   = mps & 0x7FF;
-                hid_out->interval = ivl;
-            }
-        }
-        pos += blen;
-    }
+static int ehci_enum_control(void *h, const uint8_t setup[8],
+                             void *data, uint16_t len, bool in) {
+    ehci_ctrl_handle_t *eh = (ehci_ctrl_handle_t *)h;
+    return ehci_control_xfer(eh->ctl, eh->addr, eh->speed, eh->mps,
+                             setup, data, len, in);
 }
 
 void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
@@ -530,12 +464,12 @@ void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                                  uint8_t parent_port, uint8_t depth,
                                  uint32_t route_string)
 {
-    uint8_t setup_dev[8] = { 0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 18, 0x00 };
+    ehci_ctrl_handle_t eh = { c, addr, speed, 64 };
+    usb_ctrl_ops_t ops = { &eh, ehci_enum_control };
+
     uint8_t desc[18] = {0};
-    int r = ehci_control_xfer(c, addr, speed, 64, setup_dev, desc, 18, true);
+    int r = usb_get_device_descriptor(&ops, desc);
     if (r < 0) {
-        serial_printf("[ehci] %s addr %u: GET_DESCRIPTOR(DEVICE) failed (%d)\n",
-               label, addr, r);
         serial_printf("[ehci] %s addr %u: GET_DESCRIPTOR(DEVICE) failed (%d)\n",
                       label, addr, r);
         return;
@@ -583,52 +517,47 @@ void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
 
     if (n_cfg == 0) return;
 
-    uint8_t cfg_hdr[9] = {0};
-    uint8_t setup_chdr[8] = { 0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 9, 0x00 };
-    r = ehci_control_xfer(c, addr, speed, ep0_mps, setup_chdr, cfg_hdr, 9, true);
-    if (r < 0) {
-        serial_printf("[ehci]   GET_DESCRIPTOR(config hdr): failed (%d)\n", r);
-        return;
-    }
-    uint16_t total = (uint16_t)cfg_hdr[2] | ((uint16_t)cfg_hdr[3] << 8);
-    uint8_t cfg_value = cfg_hdr[5];
-    if (total < 9 || total > 1024) {
-        serial_printf("[ehci]   bogus wTotalLength=%u\n", total);
-        return;
-    }
+    eh.mps = ep0_mps;
 
     uint8_t cfg_full[1024];
-    if (total > sizeof(cfg_full)) total = sizeof(cfg_full);
-    uint8_t setup_cfull[8] = { 0x80, 0x06, 0x00, 0x02, 0x00, 0x00,
-                               (uint8_t)(total & 0xFF), (uint8_t)(total >> 8) };
-    r = ehci_control_xfer(c, addr, speed, ep0_mps,
-                          setup_cfull, cfg_full, total, true);
+    uint16_t total = 0;
+    uint8_t cfg_value = 0;
+    r = usb_get_config(&ops, cfg_full, sizeof(cfg_full), &total, &cfg_value);
     if (r < 0) {
-        serial_printf("[ehci]   GET_DESCRIPTOR(config full): failed (%d)\n", r);
+        serial_printf("[ehci]   GET_DESCRIPTOR(config): failed (%d)\n", r);
         return;
     }
+    usb_ifaces_t ifaces;
+    usb_parse_config(cfg_full, total, &ifaces);
+
     ehci_msc_info_t msc_info;
     ehci_hid_info_t hid_info;
-    ehci_parse_config(cfg_full, total, &msc_info, &hid_info);
-
-    if (pd && total >= 9 + 9) {
-        for (uint16_t pos = 9; pos + 9 <= total; ) {
-            uint8_t blen = cfg_full[pos];
-            uint8_t btyp = cfg_full[pos + 1];
-            if (blen < 2 || pos + blen > total) break;
-            if (btyp == 0x04 && blen >= 9 && cfg_full[pos + 3] == 0) {
-                pd->intf_class = cfg_full[pos + 5];
-                pd->intf_sub   = cfg_full[pos + 6];
-                pd->intf_proto = cfg_full[pos + 7];
-                break;
-            }
-            pos += blen;
-        }
+    memset(&msc_info, 0, sizeof(msc_info));
+    memset(&hid_info, 0, sizeof(hid_info));
+    if (ifaces.msc.present) {
+        msc_info.is_msc  = true;
+        msc_info.intf    = ifaces.msc.intf;
+        msc_info.in_ep   = ifaces.msc.in_ep;
+        msc_info.in_mps  = ifaces.msc.in_mps;
+        msc_info.out_ep  = ifaces.msc.out_ep;
+        msc_info.out_mps = ifaces.msc.out_mps;
+    }
+    if (ifaces.hid.present) {
+        hid_info.is_kbd   = !ifaces.hid.is_mouse;
+        hid_info.is_mouse = ifaces.hid.is_mouse;
+        hid_info.intf     = ifaces.hid.intf;
+        hid_info.in_ep    = ifaces.hid.in_ep;
+        hid_info.in_mps   = ifaces.hid.in_mps;
+        hid_info.interval = ifaces.hid.interval;
     }
 
-    uint8_t setup_setcfg[8] = { 0x00, 0x09, cfg_value, 0x00, 0x00, 0x00, 0x00, 0x00 };
-    r = ehci_control_xfer(c, addr, speed, ep0_mps,
-                          setup_setcfg, NULL, 0, false);
+    if (pd) {
+        pd->intf_class = ifaces.first_class;
+        pd->intf_sub   = ifaces.first_sub;
+        pd->intf_proto = ifaces.first_proto;
+    }
+
+    r = usb_set_configuration(&ops, cfg_value);
     if (r < 0) {
         serial_printf("[ehci]   SET_CONFIGURATION %u: failed (%d)\n", cfg_value, r);
         return;
@@ -646,12 +575,13 @@ void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                       msc_info.out_ep, msc_info.out_mps, maxlun);
         if (ehci_msc_setup(c, addr, speed, &msc_info) < 0)
             serial_writestring("[ehci]   MSC setup failed\n");
-    } else if (hid_info.is_kbd && hid_info.in_ep) {
-        serial_printf("[ehci]   HID kbd: intf=%u IN=ep%u (mps=%u, interval=%u)\n",
+    } else if ((hid_info.is_kbd || hid_info.is_mouse) && hid_info.in_ep) {
+        serial_printf("[ehci]   HID %s: intf=%u IN=ep%u (mps=%u, interval=%u)\n",
+                      hid_info.is_mouse ? "mouse" : "kbd",
                       hid_info.intf, hid_info.in_ep, hid_info.in_mps,
                       hid_info.interval);
         if (ehci_hid_kbd_setup(c, addr, speed, &hid_info) < 0)
-            serial_writestring("[ehci]   HID kbd setup failed\n");
+            serial_writestring("[ehci]   HID setup failed\n");
     } else if (desc[4] == 0x09 || (pd && pd->intf_class == 0x09)) {
         if (speed == EHCI_SPEED_HS) {
             if (ehci_hub_setup(c, addr, root_port, parent_addr,

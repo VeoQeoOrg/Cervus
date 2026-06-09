@@ -1,11 +1,11 @@
 #include "../../../include/syscall/syscall_internal.h"
-#include "../../../include/drivers/ps2.h"
+#include "../../../include/drivers/mouse.h"
 
 int64_t sys_mouse_state(uint64_t buf_ptr)
 {
     if (!buf_ptr) return -EINVAL;
 
-    const mouse_state_t *m = ps2_mouse_get_state();
+    const mouse_state_t *m = mouse_get_state();
     if (!m) return -ENODEV;
 
     cervus_mouse_info_t info;

@@ -1,5 +1,7 @@
 #include "../../../../include/drivers/usb/xhci.h"
 #include "../../../../include/drivers/usb/usb_hid.h"
+#include "../../../../include/drivers/usb/usb_config.h"
+#include "../../../../include/drivers/usb/usb_enum.h"
 #include "../../../../include/drivers/pci.h"
 #include "../../../../include/memory/dma.h"
 #include "../../../../include/memory/pmm.h"
@@ -524,27 +526,6 @@ int xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
     return 0;
 }
 
-int xhci_get_descriptor(xhci_controller_t *c, uint8_t slot_id,
-                               xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
-                               uint16_t *enq, uint8_t *cyc,
-                               uint8_t type, uint8_t index, uint16_t length,
-                               void *out)
-{
-    uint16_t wValue = ((uint16_t)type << 8) | index;
-    return xhci_control_xfer(c, slot_id, ep0_ring, ep0_phys, enq, cyc,
-                             0x80, USB_GET_DESCRIPTOR,
-                             wValue, 0, length, out);
-}
-
-int xhci_set_configuration(xhci_controller_t *c, uint8_t slot_id,
-                                  xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
-                                  uint16_t *enq, uint8_t *cyc,
-                                  uint8_t cfg_value)
-{
-    return xhci_control_xfer(c, slot_id, ep0_ring, ep0_phys, enq, cyc,
-                             0x00, USB_SET_CONFIGURATION,
-                             (uint16_t)cfg_value, 0, 0, NULL);
-}
 
 static const char *usb_class_name(uint8_t c) {
     switch (c) {
@@ -689,6 +670,29 @@ static void xhci_irq_handler(void *ctx) {
     xhci_drain_events(c);
 }
 
+typedef struct {
+    xhci_controller_t *ctl;
+    uint8_t     slot_id;
+    xhci_trb_t *ep0_ring;
+    uintptr_t   ep0_phys;
+    uint16_t   *enq;
+    uint8_t    *cyc;
+} xhci_ctrl_handle_t;
+
+static int xhci_enum_control(void *h, const uint8_t setup[8],
+                             void *data, uint16_t len, bool in) {
+    (void)in; (void)len;
+    xhci_ctrl_handle_t *xh = (xhci_ctrl_handle_t *)h;
+    uint8_t  bmReqType = setup[0];
+    uint8_t  bRequest  = setup[1];
+    uint16_t wValue    = (uint16_t)setup[2] | ((uint16_t)setup[3] << 8);
+    uint16_t wIndex    = (uint16_t)setup[4] | ((uint16_t)setup[5] << 8);
+    uint16_t wLength   = (uint16_t)setup[6] | ((uint16_t)setup[7] << 8);
+    return xhci_control_xfer(xh->ctl, xh->slot_id, xh->ep0_ring, xh->ep0_phys,
+                             xh->enq, xh->cyc, bmReqType, bRequest,
+                             wValue, wIndex, wLength, data);
+}
+
 void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
                       const char *path_label)
 {
@@ -714,9 +718,11 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
 
     uint16_t enq = 0;
     uint8_t  cyc = 1;
+    xhci_ctrl_handle_t xh = { c, slot_id, ep0_ring, ep0_phys, &enq, &cyc };
+    usb_ctrl_ops_t ops = { &xh, xhci_enum_control };
+
     uint8_t  desc[18];
-    if (xhci_get_descriptor(c, slot_id, ep0_ring, ep0_phys, &enq, &cyc,
-                            USB_DESC_DEVICE, 0, 18, desc) < 0)
+    if (usb_get_device_descriptor(&ops, desc) < 0)
         return;
 
     uint16_t bcd_usb = (uint16_t)desc[2] | ((uint16_t)desc[3] << 8);
@@ -737,55 +743,27 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
 
     if (n_cfg == 0) return;
 
-    uint8_t cfg_hdr[9];
-    if (xhci_get_descriptor(c, slot_id, ep0_ring, ep0_phys, &enq, &cyc,
-                            USB_DESC_CONFIGURATION, 0, 9, cfg_hdr) < 0) {
-        serial_writestring("[xhci]   GET_DESCRIPTOR(config hdr): failed\n");
-        return;
-    }
-    uint16_t total = (uint16_t)cfg_hdr[2] | ((uint16_t)cfg_hdr[3] << 8);
-    uint8_t  cfg_value = cfg_hdr[5];
-    if (total < 9) {
-        serial_printf("[xhci]   bogus wTotalLength=%u\n", total);
-        return;
-    }
-
     uint8_t cfg_full[512];
-    if (total > sizeof(cfg_full)) {
-        serial_printf("[xhci]   config too large (%u bytes), truncating\n", total);
-        total = sizeof(cfg_full);
-    }
-    if (xhci_get_descriptor(c, slot_id, ep0_ring, ep0_phys, &enq, &cyc,
-                            USB_DESC_CONFIGURATION, 0, total, cfg_full) < 0) {
-        serial_writestring("[xhci]   GET_DESCRIPTOR(config full): failed\n");
+    uint16_t total = 0;
+    uint8_t  cfg_value = 0;
+    if (usb_get_config(&ops, cfg_full, sizeof(cfg_full), &total, &cfg_value) < 0) {
+        serial_writestring("[xhci]   GET_DESCRIPTOR(config): failed\n");
         return;
     }
 
     xhci_parse_config(cfg_full, total);
 
-    if (xhci_set_configuration(c, slot_id, ep0_ring, ep0_phys, &enq, &cyc,
-                               cfg_value) < 0) {
+    if (usb_set_configuration(&ops, cfg_value) < 0) {
         serial_writestring("[xhci]   SET_CONFIGURATION: failed\n");
         return;
     }
     serial_printf("[xhci]   SET_CONFIGURATION %u: ok\n", cfg_value);
 
-    uint8_t intf_cls = 0, intf_sub = 0, intf_proto = 0;
-    if (total >= 9) {
-        uint16_t pos = 9;
-        while (pos + 2 <= total) {
-            uint8_t blen  = cfg_full[pos];
-            uint8_t btype = cfg_full[pos + 1];
-            if (blen < 2 || pos + blen > total) break;
-            if (btype == USB_DESC_INTERFACE && blen >= 9) {
-                intf_cls   = cfg_full[pos + 5];
-                intf_sub   = cfg_full[pos + 6];
-                intf_proto = cfg_full[pos + 7];
-                break;
-            }
-            pos += blen;
-        }
-    }
+    usb_ifaces_t ifaces;
+    usb_parse_config(cfg_full, total, &ifaces);
+    uint8_t intf_cls   = ifaces.first_class;
+    uint8_t intf_sub   = ifaces.first_sub;
+    uint8_t intf_proto = ifaces.first_proto;
 
     int dev_idx = -1;
     for (int i = 0; i < g_usb_count; i++) {
@@ -827,17 +805,29 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         return;
     }
 
-    usb_kbd_match_t kbd;
-    xhci_hid_scan(cfg_full, total, &kbd);
-    if (kbd.found) {
+    if (ifaces.hid.present && ifaces.hid.in_ep) {
+        usb_kbd_match_t kbd;
+        memset(&kbd, 0, sizeof(kbd));
+        kbd.found       = true;
+        kbd.is_mouse    = ifaces.hid.is_mouse;
+        kbd.intf        = ifaces.hid.intf;
+        kbd.ep_addr     = ifaces.hid.in_ep | 0x80;
+        kbd.ep_mps      = ifaces.hid.in_mps;
+        kbd.ep_interval = ifaces.hid.interval;
         if (xhci_hid_kbd_register(c, slot_id, topo->root_hub_port, topo->speed,
                                   ep0_ring, ep0_phys, &enq, &cyc, &kbd) < 0)
-            serial_writestring("[xhci]   HID kbd register failed\n");
+            serial_writestring("[xhci]   HID register failed\n");
     }
 
-    usb_msc_match_t msc;
-    xhci_msc_scan(cfg_full, total, &msc);
-    if (msc.found) {
+    if (ifaces.msc.present && ifaces.msc.in_ep && ifaces.msc.out_ep) {
+        usb_msc_match_t msc;
+        memset(&msc, 0, sizeof(msc));
+        msc.found    = true;
+        msc.intf     = ifaces.msc.intf;
+        msc.in_addr  = ifaces.msc.in_ep | 0x80;
+        msc.out_addr = ifaces.msc.out_ep;
+        msc.in_mps   = ifaces.msc.in_mps;
+        msc.out_mps  = ifaces.msc.out_mps;
         if (xhci_msc_register(c, slot_id, topo->root_hub_port, topo->speed,
                               &msc) < 0)
             serial_writestring("[xhci]   MSC register failed\n");

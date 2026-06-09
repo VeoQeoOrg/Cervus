@@ -10,6 +10,7 @@
 #include "../../../include/fs/vfs.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/memory/pmm.h"
+#include "../../../include/sched/sched.h"
 #include "../../../include/syscall/errno.h"
 #include <stdio.h>
 #include <string.h>
@@ -102,6 +103,99 @@ static const vnode_ops_t blk_vnode_ops = {
 #define MAX_DISK_VNODES (ATA_MAX_DRIVES + AHCI_MAX_DEVICES + NVME_MAX_TOTAL_NS)
 static vnode_t g_blk_vnodes[MAX_DISK_VNODES];
 static uint64_t g_blk_ino_base = 200;
+
+static blkdev_t *disk_find_ahci_blkdev(ahci_device_t *adev) {
+    for (int i = 0; i < AHCI_MAX_DEVICES; i++) {
+        if (g_ahci_blkdevs[i].ops && g_ahci_blkdevs[i].priv == adev)
+            return &g_ahci_blkdevs[i];
+    }
+    return NULL;
+}
+
+static const char *atapi_state_str(int tur, uint8_t key, uint8_t asc, uint8_t ascq) {
+    if (tur == 0)                                   return "ready";
+    if (tur == -110)                                return "busy / no response (spinning up?)";
+    if (key == 2 && asc == 0x3A)                    return "no medium (tray empty)";
+    if (key == 2 && asc == 0x04 && ascq == 0x01)    return "becoming ready (spinning up)";
+    if (key == 2 && asc == 0x04 && ascq == 0x02)    return "tray open / start needed";
+    if (key == 2 && asc == 0x04)                    return "not ready";
+    if (key == 6 && asc == 0x28)                    return "media changed (disc inserted)";
+    if (key == 6 && asc == 0x29)                    return "reset / power-on";
+    if (key == 6)                                   return "unit attention";
+    if (key == 2)                                   return "not ready";
+    if (key == 0 && asc == 0)                       return "command failed (no sense / transfer error)";
+    return "error";
+}
+
+static void disk_media_worker(void *arg) {
+    (void)arg;
+    serial_writestring("[disk-media] media-change poller started\n");
+    uint32_t last_state[AHCI_MAX_DEVICES];
+    for (int i = 0; i < AHCI_MAX_DEVICES; i++) last_state[i] = 0xFFFFFFFFu;
+    int spin_ticks = 0;
+
+    for (;;) {
+        spin_ticks = 0;
+        int n = ahci_device_count();
+        for (int i = 0; i < n && i < AHCI_MAX_DEVICES; i++) {
+            ahci_device_t *adev = ahci_get_device(i);
+            if (!adev || !adev->present || !adev->atapi) continue;
+
+            blkdev_t *bd = disk_find_ahci_blkdev(adev);
+            if (!bd) continue;
+
+            uint64_t prev = bd->sector_count;
+
+            uint8_t key = 0, asc = 0, ascq = 0;
+            int tur = ahci_atapi_test_unit_ready(adev, &key, &asc, &ascq);
+
+            uint32_t state = ((uint32_t)(tur == 0) << 24) |
+                             ((uint32_t)key << 16) | ((uint32_t)asc << 8) | ascq;
+            int changed = (state != last_state[i]);
+            if (changed) {
+                last_state[i] = state;
+                serial_printf("[disk-media] %s: %s (key=%u ASC=%02x ASCQ=%02x)\n",
+                              bd->name, atapi_state_str(tur, key, asc, ascq),
+                              key, asc, ascq);
+            }
+
+            if (key == 2 && asc == 0x04)
+                spin_ticks = 4;
+
+            uint64_t now = 0;
+            if (tur == 0) {
+                int cr = ahci_atapi_read_capacity(adev);
+                now = adev->sectors;
+                if (cr != 0 && changed)
+                    serial_printf("[disk-media] %s: ready but READ CAPACITY failed (%d)\n",
+                                  bd->name, cr);
+            } else {
+                adev->sectors = 0;
+                adev->size_bytes = 0;
+            }
+
+            if (now != prev) {
+                bd->sector_count = now;
+                bd->size_bytes   = adev->size_bytes;
+                if (now > 0 && prev == 0) {
+                    bd->present = true;
+                    serial_printf("[disk-media] /dev/%s: media inserted (%llu MB, %llu sectors)\n",
+                                  bd->name,
+                                  (unsigned long long)(bd->size_bytes / (1024 * 1024)),
+                                  (unsigned long long)now);
+                    if (!adev->atapi) partition_scan(bd);
+                } else if (now == 0 && prev > 0) {
+                    partition_remove_children(bd);
+                    serial_printf("[disk-media] /dev/%s: media removed\n", bd->name);
+                }
+            }
+        }
+        if (spin_ticks > 0)
+            task_sleep_ms(3000);
+        else
+            task_sleep_ms(1500);
+    }
+}
 
 void disk_init(void) {
     serial_writestring("[disk] initializing...\n");
@@ -239,6 +333,24 @@ void disk_init(void) {
 
     if (count == 0) serial_writestring("[disk] no disks available\n");
     else serial_printf("[disk] %d disk(s) ready\n", count);
+}
+
+void disk_start_media_worker(void) {
+    static int started = 0;
+    if (started) return;
+
+    int has_atapi = 0;
+    int na = ahci_device_count();
+    for (int i = 0; i < na; i++) {
+        ahci_device_t *ad = ahci_get_device(i);
+        if (ad && ad->atapi) { has_atapi = 1; break; }
+    }
+    serial_printf("[disk] AHCI devices=%d, ATAPI present=%s -> media worker %s\n",
+                  na, has_atapi ? "yes" : "no", has_atapi ? "started" : "skipped");
+    if (has_atapi) {
+        started = 1;
+        task_create("disk_media", disk_media_worker, NULL, 1);
+    }
 }
 
 static const char *strip_dev_prefix(const char *name) {

@@ -10,18 +10,16 @@ SYNOPSIS
        int  vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
 
 DESCRIPTION
-       libcervus implements an integer-only printf family suitable for
-       freestanding user code built with -mno-sse. Variadic doubles
-       cannot be passed in such code, so %f / %e / %g require an SSE
-       build of the application.
+       libcervus implements a printf family for freestanding user code.
+       Userspace programs are built with SSE enabled, so floating point
+       conversions (%f / %e / %g) and variadic doubles work normally.
 
 SUPPORTED CONVERSIONS
        %d %i %u %o %x %X     signed/unsigned integers
        %ld %lu %lx %lld %llu %llx
                              long and long long variants
        %s %c %p              string, char, pointer
-       %f %e %g %F %E %G     floating point (only when caller is built
-                             with SSE enabled)
+       %f %e %g %F %E %G     floating point
        %%                    literal percent
 
 FLAGS

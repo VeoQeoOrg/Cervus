@@ -140,13 +140,62 @@ int psf_validate(void) {
     return 0;
 }
 
-void fb_draw_char(struct limine_framebuffer *fb, char c, uint32_t x, uint32_t y, uint32_t color) {
+#define CP_MAP_SIZE 0x600
+
+static uint16_t g_cp2glyph[CP_MAP_SIZE];
+static int      g_cp_map_ready = 0;
+
+static void build_unicode_map(void) {
+    for (uint32_t i = 0; i < CP_MAP_SIZE; i++) g_cp2glyph[i] = 0xFFFF;
+
     const uint8_t *raw = get_font_data();
-    uint32_t headersize = 32;
-    uint32_t charsiz = *(uint32_t*)(raw + 20);
+    uint32_t headersize = *(const uint32_t *)(raw + 8);
+    uint32_t flags      = *(const uint32_t *)(raw + 12);
+    uint32_t nglyph     = *(const uint32_t *)(raw + 16);
+    uint32_t charsiz    = *(const uint32_t *)(raw + 20);
+
+    if (!(flags & 1)) { g_cp_map_ready = 1; return; }
+
+    const uint8_t *ut  = raw + headersize + (size_t)nglyph * charsiz;
+    const uint8_t *end = raw + get_font_data_size();
+
+    uint32_t glyph = 0;
+    const uint8_t *p = ut;
+    while (p < end && glyph < nglyph) {
+        while (p < end && *p != 0xFF) {
+            if (*p == 0xFE) { p++; continue; }
+            uint32_t cp = 0;
+            uint8_t b = *p;
+            if (b < 0x80) { cp = b; p += 1; }
+            else if ((b & 0xE0) == 0xC0 && p + 1 < end) {
+                cp = ((uint32_t)(b & 0x1F) << 6) | (p[1] & 0x3F); p += 2;
+            } else if ((b & 0xF0) == 0xE0 && p + 2 < end) {
+                cp = ((uint32_t)(b & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6)
+                   | (p[2] & 0x3F); p += 3;
+            } else { p += 1; continue; }
+            if (cp < CP_MAP_SIZE && g_cp2glyph[cp] == 0xFFFF)
+                g_cp2glyph[cp] = (uint16_t)glyph;
+        }
+        if (p < end) p++;
+        glyph++;
+    }
+    g_cp_map_ready = 1;
+}
+
+static uint32_t codepoint_to_glyph(uint32_t cp) {
+    if (cp < 128) return cp;
+    if (!g_cp_map_ready) build_unicode_map();
+    if (cp < CP_MAP_SIZE && g_cp2glyph[cp] != 0xFFFF) return g_cp2glyph[cp];
+    return '?';
+}
+
+void fb_draw_char(struct limine_framebuffer *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color) {
+    const uint8_t *raw = get_font_data();
+    uint32_t headersize = *(const uint32_t *)(raw + 8);
+    uint32_t charsiz = *(const uint32_t *)(raw + 20);
     uint8_t *glyphs = (uint8_t*)raw + headersize;
 
-    uint32_t glyph_index = ((uint8_t)c < 128) ? (uint8_t)c : '?';
+    uint32_t glyph_index = codepoint_to_glyph(cp);
     if (glyph_index >= 512) glyph_index = '?';
 
     uint8_t *glyph = &glyphs[glyph_index * charsiz];
@@ -170,7 +219,7 @@ void fb_draw_string(struct limine_framebuffer *fb, const char *str, uint32_t x, 
     if (!psf_validate()) return;
     while (*str) {
         if (*str == '\n') { x = orig_x; y += 16; }
-        else { fb_draw_char(fb, *str, x, y, color); x += 8; }
+        else { fb_draw_char(fb, (uint8_t)*str, x, y, color); x += 8; }
         str++;
     }
 }

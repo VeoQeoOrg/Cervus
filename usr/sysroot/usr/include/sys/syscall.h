@@ -102,6 +102,7 @@
 #define SYS_FB_ACQUIRE      563
 #define SYS_FB_RELEASE      564
 #define SYS_MOUSE_STATE     565
+#define SYS_KEYMAP_CONFIG   566
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

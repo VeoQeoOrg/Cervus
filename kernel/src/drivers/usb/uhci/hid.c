@@ -24,6 +24,7 @@ typedef struct uhci_hid_kbd {
 
     usb_hid_kbd_state_t state;
     bool       active;
+    bool       is_mouse;
 } uhci_hid_kbd_t;
 
 static uhci_hid_kbd_t g_hid_kbds[UHCI_MAX_HID];
@@ -61,6 +62,7 @@ int uhci_hid_kbd_setup(uhci_controller_t *c, uint8_t addr, bool low_speed,
     k->in_mps    = info->in_mps ? info->in_mps : 8;
     k->low_speed = low_speed ? 1 : 0;
     k->dt        = 0;
+    k->is_mouse  = info->is_mouse;
     usb_hid_kbd_state_init(&k->state);
 
     k->report_buf = (uint8_t *)dma_alloc_coherent_low(64, &k->report_phys);
@@ -87,7 +89,8 @@ int uhci_hid_kbd_setup(uhci_controller_t *c, uint8_t addr, bool low_speed,
 
     hid_kbd_arm(k);
 
-    serial_printf("[uhci-hid] kbd registered addr=%u ep=%u (%s)\n",
+    serial_printf("[uhci-hid] %s registered addr=%u ep=%u (%s)\n",
+                  info->is_mouse ? "mouse" : "kbd",
                   addr, info->in_ep, low_speed ? "LS" : "FS");
     return 0;
 }
@@ -101,8 +104,12 @@ static void hid_kbd_poll(uhci_hid_kbd_t *k) {
                 TD_STATUS_CRC | TD_STATUS_BITSTUF))) {
         uint32_t got = TD_ACT_LEN(st) + 1;
         if (got > 8) got = 8;
-        if (got >= USB_HID_REPORT_LEN)
-            usb_hid_kbd_process_report(&k->state, k->report_buf);
+        if (k->is_mouse) {
+            if (got >= 3) usb_hid_mouse_process_report(k->report_buf, (int)got);
+        } else {
+            if (got >= USB_HID_REPORT_LEN)
+                usb_hid_kbd_process_report(&k->state, k->report_buf);
+        }
         k->dt ^= 1;
     }
     hid_kbd_arm(k);

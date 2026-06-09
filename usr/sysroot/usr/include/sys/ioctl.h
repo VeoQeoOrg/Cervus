@@ -6,6 +6,7 @@
 
 #define TIOCGWINSZ   0x5413
 #define TIOCSWINSZ   0x5414
+#define TIOCGCURSOR  0x5480
 #define TIOCGPGRP    0x540F
 #define TIOCSPGRP    0x5410
 #define TIOCGPTN     0x80045430
@@ -22,6 +23,11 @@ struct winsize {
     uint16_t ws_col;
     uint16_t ws_xpixel;
     uint16_t ws_ypixel;
+};
+
+struct cursor_pos {
+    uint32_t row;
+    uint32_t col;
 };
 
 int ioctl(int fd, unsigned long request, ...);

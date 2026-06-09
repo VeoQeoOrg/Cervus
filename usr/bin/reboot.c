@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 
     if (confirm_prompt()) {
         putchar('\n');
-        fputs(C_YELLOW "Rebooting Cervus OS..." C_RESET "\n", stdout);
+        fputs(C_YELLOW "Rebooting..." C_RESET "\n", stdout);
         fputs(C_GRAY "Sending reboot signal..." C_RESET "\n", stdout);
         int ret = cervus_reboot();
         if (ret < 0) {

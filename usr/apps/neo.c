@@ -162,10 +162,13 @@ static void get_window_size(void)
     if (E.screenrows < 1) E.screenrows = 1;
 }
 
+static int utf8_cont(unsigned char b) { return (b & 0xC0) == 0x80; }
+
 static int row_cx_to_rx(neo_row_t *row, int cx)
 {
     int rx = 0;
     for (int j = 0; j < cx && j < row->size; j++) {
+        if (utf8_cont((unsigned char)row->chars[j])) continue;
         if (row->chars[j] == '\t') rx += (NEO_TABSTOP - (rx % NEO_TABSTOP));
         else rx++;
     }
@@ -177,6 +180,7 @@ static int row_rx_to_cx(neo_row_t *row, int rx)
     int cur_rx = 0;
     int cx;
     for (cx = 0; cx < row->size; cx++) {
+        if (utf8_cont((unsigned char)row->chars[cx])) continue;
         if (row->chars[cx] == '\t') cur_rx += (NEO_TABSTOP - (cur_rx % NEO_TABSTOP));
         else cur_rx++;
         if (cur_rx > rx) return cx;
@@ -332,8 +336,9 @@ static void editor_delete_char(void)
 
     neo_row_t *r = &E.row[E.cy];
     if (E.cx > 0) {
-        row_delete_char(r, E.cx - 1);
-        E.cx--;
+        int start = E.cx - 1;
+        while (start > 0 && utf8_cont((unsigned char)r->chars[start])) start--;
+        while (E.cx > start) { row_delete_char(r, E.cx - 1); E.cx--; }
     } else {
         E.cx = E.row[E.cy - 1].size;
         row_append_string(&E.row[E.cy - 1], r->chars, r->size);
@@ -348,6 +353,8 @@ static void editor_delete_char_forward(void)
     neo_row_t *r = &E.row[E.cy];
     if (E.cx < r->size) {
         row_delete_char(r, E.cx);
+        while (E.cx < r->size && utf8_cont((unsigned char)r->chars[E.cx]))
+            row_delete_char(r, E.cx);
     } else if (E.cy + 1 < E.numrows) {
         neo_row_t *nx = &E.row[E.cy + 1];
         row_append_string(r, nx->chars, nx->size);
@@ -613,10 +620,21 @@ static void draw_rows(abuf_t *ab)
                 ab_append(ab, "~", 1);
             }
         } else {
-            int len = E.row[filerow].rsize - E.coloff;
-            if (len < 0) len = 0;
-            if (len > limit) len = limit;
-            ab_append(ab, E.row[filerow].render + E.coloff, len);
+            const char *rnd = E.row[filerow].render;
+            int rsz = E.row[filerow].rsize;
+            int byte_off = 0, vis = 0;
+            while (byte_off < rsz && vis < E.coloff) {
+                if (!utf8_cont((unsigned char)rnd[byte_off])) vis++;
+                byte_off++;
+            }
+            while (byte_off < rsz && utf8_cont((unsigned char)rnd[byte_off])) byte_off++;
+            int len = 0, cols = 0;
+            while (byte_off + len < rsz && cols < limit) {
+                if (!utf8_cont((unsigned char)rnd[byte_off + len])) cols++;
+                len++;
+            }
+            while (byte_off + len < rsz && utf8_cont((unsigned char)rnd[byte_off + len])) len++;
+            ab_append(ab, rnd + byte_off, len);
         }
         ab_append(ab, "\x1b[K", 3);
     }
@@ -718,7 +736,11 @@ static char *prompt_cb(const char *prompt_fmt, void (*callback)(char *, int))
 
         int c = read_key();
         if (c == KEY_DEL || c == KEY_CTRL('h') || c == KEY_BACKSPACE) {
-            if (buflen > 0) buf[--buflen] = '\0';
+            if (buflen > 0) {
+                buflen--;
+                while (buflen > 0 && utf8_cont((unsigned char)buf[buflen])) buflen--;
+                buf[buflen] = '\0';
+            }
         } else if (c == KEY_ESC) {
             set_status("");
             E.statusmsg_visible = 0;
@@ -732,7 +754,7 @@ static char *prompt_cb(const char *prompt_fmt, void (*callback)(char *, int))
                 if (callback) callback(buf, c);
                 return buf;
             }
-        } else if (!iscntrl(c) && c < 128) {
+        } else if (c < 1000 && (c >= 0x80 || !iscntrl(c))) {
             if (buflen + 1 >= bufcap) {
                 bufcap *= 2;
                 char *nb = malloc(bufcap);
@@ -757,11 +779,17 @@ static void move_cursor(int key)
     neo_row_t *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
     switch (key) {
         case KEY_ARROW_LEFT:
-            if (E.cx > 0) E.cx--;
+            if (E.cx > 0) {
+                E.cx--;
+                while (E.cx > 0 && utf8_cont((unsigned char)row->chars[E.cx])) E.cx--;
+            }
             else if (E.cy > 0) { E.cy--; E.cx = E.row[E.cy].size; }
             break;
         case KEY_ARROW_RIGHT:
-            if (row && E.cx < row->size) E.cx++;
+            if (row && E.cx < row->size) {
+                E.cx++;
+                while (E.cx < row->size && utf8_cont((unsigned char)row->chars[E.cx])) E.cx++;
+            }
             else if (row && E.cx == row->size) { E.cy++; E.cx = 0; }
             break;
         case KEY_ARROW_UP:
@@ -986,8 +1014,8 @@ static int process_key(void)
             break;
 
         default:
-            if (c >= 32 && c < 127) editor_insert_char(c);
-            else if (c == '\t')     editor_insert_char('\t');
+            if (c == '\t')               editor_insert_char('\t');
+            else if (c >= 32 && c < 1000) editor_insert_char(c);
             break;
     }
     E.quit_pending = 0;

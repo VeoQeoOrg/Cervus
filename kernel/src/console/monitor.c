@@ -43,7 +43,7 @@ static void mon_draw_line(uint32_t row, const char *s, uint32_t fg, uint32_t bg)
     uint32_t cols = mon_cols();
     uint32_t x = 0;
     for (uint32_t i = 0; i < cols && s[i]; i++) {
-        fb_draw_char(global_framebuffer, s[i], x, y, fg);
+        fb_draw_char(global_framebuffer, (uint8_t)s[i], x, y, fg);
         x += 8;
     }
 }
@@ -74,7 +74,7 @@ static void mon_draw_hl(uint32_t row, const char *s, int is_cursor) {
         uint32_t fg = base_fg, bg = base_bg;
         if (i < (uint32_t)sizeof(hit) && hit[i]) { fg = MON_HIT_FG; bg = MON_HIT_BG; }
         if (bg != base_bg) fb_fill_rect(global_framebuffer, i * 8, y, 8, 16, bg);
-        fb_draw_char(global_framebuffer, s[i], i * 8, y, fg);
+        fb_draw_char(global_framebuffer, (uint8_t)s[i], i * 8, y, fg);
     }
 }
 

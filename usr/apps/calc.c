@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <readline.h>
 #include <cervus_util.h>
 
 #define SCALE   1000000LL
@@ -139,57 +140,27 @@ static void calc_help(void)
     putchar('\n');
 }
 
-static int readline_calc(char *buf, int maxlen)
-{
-    int i = 0;
-    for (;;) {
-        char c;
-        ssize_t r = read(0, &c, 1);
-        if (r <= 0) {
-            buf[i] = '\0';
-            return (i > 0) ? i : -1;
-        }
-        if (c == '\r') continue;
-        if (c == '\n') {
-            write(1, "\n", 1);
-            buf[i] = '\0';
-            return i;
-        }
-        if (c == '\b' || c == 0x7F) {
-            if (i > 0) {
-                i--;
-                write(1, "\b \b", 3);
-            }
-            continue;
-        }
-        if (c == 0x03) {
-            write(1, "^C\n", 3);
-            buf[0] = '\0';
-            return 0;
-        }
-        if (c >= 0x20 && c < 0x7F && i < maxlen - 1) {
-            buf[i++] = c;
-            write(1, &c, 1);
-        }
-    }
-}
-
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
     fputs(C_CYAN "Cervus calc" C_RESET " - fixed-point (6 digits). "
           "Type " C_BOLD "help" C_RESET " for examples, " C_BOLD "q" C_RESET " to exit.\n", stdout);
 
-    char line[256];
     for (;;) {
-        fputs("calc> ", stdout);
-        int n = readline_calc(line, sizeof(line));
-        if (n < 0) { putchar('\n'); break; }
+        char *rl = readline("calc> ");
+        if (!rl) { putchar('\n'); break; }
+        char line[256];
+        strncpy(line, rl, sizeof(line) - 1);
+        line[sizeof(line) - 1] = '\0';
+        free(rl);
+
+        int n = (int)strlen(line);
         while (n > 0 && isspace((unsigned char)line[n - 1])) line[--n] = '\0';
         if (n == 0) continue;
         if (strcmp(line, "q") == 0 || strcmp(line, "quit") == 0 ||
             strcmp(line, "exit") == 0) break;
         if (strcmp(line, "help") == 0) { calc_help(); continue; }
+        readline_add_history(line);
 
         p = line;
         int err = 0;

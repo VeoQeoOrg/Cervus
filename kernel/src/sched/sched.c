@@ -192,7 +192,7 @@ void sched_init(void) {
         }
         current_task[i] = NULL;
     }
-    serial_writestring("Scheduler initialized (PREEMPTIVE SMP MODE)\n");
+    serial_writestring("Scheduler initialized\n");
 }
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
@@ -520,7 +520,7 @@ task_t* task_find_foreground(void) {
     return t;
 }
 
-static void task_kill_subtree(task_t *root) {
+void task_kill_subtree(task_t *root) {
     if (!root) return;
     uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
     task_t *child = root->children;

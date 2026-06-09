@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 
     if (confirm_prompt()) {
         putchar('\n');
-        fputs(C_YELLOW "Shutting down Cervus OS..." C_RESET "\n", stdout);
+        fputs(C_YELLOW "Shutting down..." C_RESET "\n", stdout);
         fputs(C_GRAY "Sending ACPI shutdown signal..." C_RESET "\n", stdout);
         int ret = cervus_shutdown();
         if (ret < 0) {

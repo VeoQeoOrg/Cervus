@@ -13,6 +13,8 @@ extern struct limine_framebuffer *global_framebuffer;
 
 static int  cursor_visible      = 1;
 static int  cursor_shape        = 1;
+static uint32_t utf8_acc        = 0;
+static int      utf8_need       = 0;
 static int  scroll_buffer_index = 0;
 static int  total_scroll_lines  = 0;
 static int  flush_inhibit       = 0;
@@ -67,7 +69,7 @@ void console_redraw_grid(void) {
             uint32_t x = col * 8, y = row * 16;
             fb_fill_rect(global_framebuffer, x, y, 8, 16, c->bg);
             if (c->ch && c->ch != ' ')
-                fb_draw_char(global_framebuffer, (char)c->ch, x, y, c->fg);
+                fb_draw_char(global_framebuffer, c->ch, x, y, c->fg);
         }
     }
 }
@@ -227,7 +229,7 @@ static void draw_cursor_at(uint32_t x, uint32_t y) {
     if (cursor_shape == 0) {
         fb_fill_rect(global_framebuffer, x, y, 8, 16, text_color);
         if (ch && ch != ' ')
-            fb_draw_char(global_framebuffer, (char)ch, x, y, bg);
+            fb_draw_char(global_framebuffer, ch, x, y, bg);
         fb_flush_lines(global_framebuffer, y, y + 16);
     } else if (cursor_shape == 2) {
         for (uint32_t row = 0; row < 16; row++) {
@@ -252,7 +254,7 @@ static void erase_cursor_at(uint32_t x, uint32_t y) {
     cell_cell_at(x, y, &ch, &fg, &bg);
     fb_fill_rect(global_framebuffer, x, y, 8, 16, bg);
     if (ch && ch != ' ')
-        fb_draw_char(global_framebuffer, (char)ch, x, y, fg);
+        fb_draw_char(global_framebuffer, ch, x, y, fg);
     fb_flush_lines(global_framebuffer, y, y + 16);
 }
 
@@ -383,14 +385,14 @@ static void clear_cell(uint32_t x, uint32_t y) {
     fb_fill_rect(global_framebuffer, x, y, 8, 16, bg_color);
 }
 
-static void draw_and_advance(char c) {
+static void draw_and_advance(uint32_t cp) {
     if (!global_framebuffer) return;
     uint32_t sh = get_screen_height();
     uint32_t sw = get_screen_width();
-    grid_put(cursor_x / 8, cursor_y / 16, (uint8_t)c, text_color, bg_color);
+    grid_put(cursor_x / 8, cursor_y / 16, cp, text_color, bg_color);
     if (!g_offscreen) {
         fb_fill_rect(global_framebuffer, cursor_x, cursor_y, 8, 16, bg_color);
-        fb_draw_char(global_framebuffer, c, cursor_x, cursor_y, text_color);
+        fb_draw_char(global_framebuffer, cp, cursor_x, cursor_y, text_color);
         flush_region(cursor_y, 16);
     }
     if (!autowrap && cursor_x + 8 >= sw) return;
@@ -426,7 +428,21 @@ int putchar(int c) {
             }
             break;
         default:
-            if (ch >= 32 && ch <= 126) draw_and_advance((char)ch);
+            if (ch >= 32 && ch <= 126) {
+                utf8_need = 0;
+                draw_and_advance(ch);
+            } else if (utf8_need > 0 && (ch & 0xC0) == 0x80) {
+                utf8_acc = (utf8_acc << 6) | (ch & 0x3F);
+                if (--utf8_need == 0) draw_and_advance(utf8_acc);
+            } else if ((ch & 0xE0) == 0xC0) {
+                utf8_acc = ch & 0x1F; utf8_need = 1;
+            } else if ((ch & 0xF0) == 0xE0) {
+                utf8_acc = ch & 0x0F; utf8_need = 2;
+            } else if ((ch & 0xF8) == 0xF0) {
+                utf8_acc = ch & 0x07; utf8_need = 3;
+            } else {
+                utf8_need = 0;
+            }
             break;
         }
         break;

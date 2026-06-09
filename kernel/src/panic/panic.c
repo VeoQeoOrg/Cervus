@@ -29,7 +29,7 @@ static void fb_puts_col(const char *s, uint32_t col) {
     if (!g_fb) return;
     while (*s) {
         if (*s == '\n') { fb_nl(); s++; continue; }
-        fb_draw_char(g_fb, *s, fb_x, fb_y, col);
+        fb_draw_char(g_fb, (uint8_t)*s, fb_x, fb_y, col);
         fb_x += 9;
         if (fb_x + 9 > (uint32_t)g_fb->width) fb_nl();
         s++;

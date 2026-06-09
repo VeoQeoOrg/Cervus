@@ -46,6 +46,9 @@ struct ahci_hba {
 void ahci_init(void);
 int  ahci_device_count(void);
 ahci_device_t *ahci_get_device(int index);
+int  ahci_atapi_read_capacity(ahci_device_t *d);
+int  ahci_atapi_test_unit_ready(ahci_device_t *d, uint8_t *out_key,
+                                uint8_t *out_asc, uint8_t *out_ascq);
 
 int ahci_read_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, void *buf);
 int ahci_write_sectors(ahci_device_t *d, uint64_t lba, uint32_t count, const void *buf);

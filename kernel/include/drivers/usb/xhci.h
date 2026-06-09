@@ -161,6 +161,7 @@ typedef struct {
 
 typedef struct {
     bool     found;
+    bool     is_mouse;
     uint8_t  intf;
     uint8_t  ep_addr;
     uint16_t ep_mps;
@@ -189,14 +190,6 @@ int  xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
                        uint8_t bmRequestType, uint8_t bRequest,
                        uint16_t wValue, uint16_t wIndex, uint16_t wLength,
                        void *data_out);
-int  xhci_get_descriptor(xhci_controller_t *c, uint8_t slot_id,
-                         xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
-                         uint16_t *enq, uint8_t *cyc,
-                         uint8_t type, uint8_t index, uint16_t length,
-                         void *out);
-int  xhci_set_configuration(xhci_controller_t *c, uint8_t slot_id,
-                            xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
-                            uint16_t *enq, uint8_t *cyc, uint8_t cfg_value);
 void xhci_drain_events(xhci_controller_t *c);
 
 int  xhci_hcd_register_usb_dev(xhci_controller_t *c, uint8_t slot_id,
@@ -212,7 +205,6 @@ int  xhci_hcd_find_hub_child(xhci_controller_t *c, uint32_t hub_route,
 uint8_t xhci_hcd_slot_at_index(int idx);
 void xhci_hcd_disconnect_subtree(uint8_t root_slot);
 
-void xhci_hid_scan(const uint8_t *buf, uint16_t total, usb_kbd_match_t *m);
 int  xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                            uint8_t port_id, uint8_t speed,
                            xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
@@ -222,7 +214,6 @@ void xhci_hid_kbd_tick(void);
 void xhci_hid_kbd_disconnect_slot(uint8_t slot_id);
 bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci);
 
-void xhci_msc_scan(const uint8_t *buf, uint16_t total, usb_msc_match_t *m);
 int  xhci_msc_register(xhci_controller_t *c, uint8_t slot_id,
                        uint8_t port_id, uint8_t speed,
                        const usb_msc_match_t *match);

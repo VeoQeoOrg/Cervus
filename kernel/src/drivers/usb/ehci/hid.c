@@ -23,6 +23,7 @@ typedef struct ehci_hid_kbd {
     uint32_t   dt_bit;
     usb_hid_kbd_state_t state;
     bool       active;
+    bool       is_mouse;
 } ehci_hid_kbd_t;
 
 static ehci_hid_kbd_t g_hid_kbds[EHCI_MAX_HID];
@@ -49,7 +50,7 @@ int ehci_hid_kbd_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                        const ehci_hid_info_t *info)
 {
     if (speed != EHCI_SPEED_HS) {
-        serial_writestring("[ehci-hid] only HS keyboards supported\n");
+        serial_writestring("[ehci-hid] only HS devices supported\n");
         return -ENXIO;
     }
 
@@ -81,12 +82,13 @@ int ehci_hid_kbd_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
         if (!k->qh || k->qh_phys >= 0xFFFFFFFFULL) return -ENOMEM;
     }
 
-    k->ctl    = c;
-    k->addr   = addr;
-    k->intf   = info->intf;
-    k->in_ep  = info->in_ep;
-    k->in_mps = info->in_mps;
-    k->dt_bit = 0;
+    k->ctl      = c;
+    k->addr     = addr;
+    k->intf     = info->intf;
+    k->in_ep    = info->in_ep;
+    k->in_mps   = info->in_mps;
+    k->dt_bit   = 0;
+    k->is_mouse = info->is_mouse;
     usb_hid_kbd_state_init(&k->state);
     memset(k->report_buf, 0, 64);
 
@@ -120,7 +122,8 @@ int ehci_hid_kbd_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
 
     hid_kbd_arm(k);
 
-    serial_printf("[ehci-hid] kbd registered (addr=%u intf=%u ep=%u mps=%u)\n",
+    serial_printf("[ehci-hid] %s registered (addr=%u intf=%u ep=%u mps=%u)\n",
+                  info->is_mouse ? "mouse" : "kbd",
                   addr, info->intf, info->in_ep, info->in_mps);
     return 0;
 }
@@ -134,8 +137,12 @@ static void hid_kbd_poll(ehci_hid_kbd_t *k) {
                  QTD_STATUS_XACTERR | QTD_STATUS_MISSED))) {
         uint32_t residue = (tok >> QTD_TBT_SHIFT) & 0x7FFF;
         uint32_t got = (residue < 8) ? (8 - residue) : 0;
-        if (got >= USB_HID_REPORT_LEN)
-            usb_hid_kbd_process_report(&k->state, k->report_buf);
+        if (k->is_mouse) {
+            if (got >= 3) usb_hid_mouse_process_report(k->report_buf, (int)got);
+        } else {
+            if (got >= USB_HID_REPORT_LEN)
+                usb_hid_kbd_process_report(&k->state, k->report_buf);
+        }
     }
     k->dt_bit = k->qh->overlay_token & QTD_DT;
     hid_kbd_arm(k);

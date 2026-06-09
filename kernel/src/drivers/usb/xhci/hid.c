@@ -1,5 +1,6 @@
 #include "../../../../include/drivers/usb/xhci.h"
 #include "../../../../include/drivers/usb/usb_hid.h"
+#include "../../../../include/drivers/mouse.h"
 #include "../../../../include/memory/dma.h"
 #include "../../../../include/io/serial.h"
 #include "../../../../include/syscall/errno.h"
@@ -25,6 +26,7 @@ typedef struct {
     uintptr_t  buf_phys;
     usb_hid_kbd_state_t state;
     bool       active;
+    bool       is_mouse;
 } xhci_hid_kbd_t;
 
 static xhci_hid_kbd_t g_hid_kbds[XHCI_MAX_HID];
@@ -124,37 +126,6 @@ static int hid_set_idle(xhci_controller_t *c, uint8_t slot_id,
                              0x21, 0x0A, wValue, intf, 0, NULL);
 }
 
-void xhci_hid_scan(const uint8_t *buf, uint16_t total, usb_kbd_match_t *m) {
-    m->found = false;
-    if (total < 9) return;
-    uint16_t pos = 9;
-    bool in_kbd = false;
-    while (pos + 2 <= total) {
-        uint8_t blen  = buf[pos];
-        uint8_t btype = buf[pos + 1];
-        if (blen < 2 || pos + blen > total) break;
-        if (btype == USB_DESC_INTERFACE && blen >= 9) {
-            uint8_t cls   = buf[pos + 5];
-            uint8_t sub   = buf[pos + 6];
-            uint8_t proto = buf[pos + 7];
-            in_kbd = (cls == 0x03 && sub == 0x01 && proto == 0x01);
-            if (in_kbd) m->intf = buf[pos + 2];
-        } else if (btype == USB_DESC_ENDPOINT && blen >= 7 && in_kbd && !m->found) {
-            uint8_t addr = buf[pos + 2];
-            uint8_t attr = buf[pos + 3];
-            uint16_t mps = (uint16_t)buf[pos + 4] | ((uint16_t)buf[pos + 5] << 8);
-            if ((addr & 0x80) && (attr & 0x3) == 3) {
-                m->ep_addr     = addr;
-                m->ep_mps      = mps & 0x7FF;
-                m->ep_interval = buf[pos + 6];
-                m->found       = true;
-                return;
-            }
-        }
-        pos += blen;
-    }
-}
-
 int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                           uint8_t port_id, uint8_t speed,
                           xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
@@ -202,10 +173,12 @@ int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
     k->buf          = buf;
     k->buf_phys     = buf_phys;
     k->active       = true;
+    k->is_mouse     = m->is_mouse;
 
     hid_post_normal(k);
 
-    serial_printf("[xhci]   HID kbd attached: slot=%u dci=%u mps=%u ivl=%u\n",
+    serial_printf("[xhci]   HID %s attached: slot=%u dci=%u mps=%u ivl=%u\n",
+                  m->is_mouse ? "mouse" : "kbd",
                   slot_id, ep_dci, m->ep_mps, m->ep_interval);
     return 0;
 }
@@ -230,7 +203,10 @@ bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci) {
     for (int i = 0; i < g_hid_count; i++) {
         xhci_hid_kbd_t *k = &g_hid_kbds[i];
         if (k->active && k->slot_id == slot_id && k->ep_dci == dci) {
-            usb_hid_kbd_process_report(&k->state, k->buf);
+            if (k->is_mouse)
+                usb_hid_mouse_process_report(k->buf, XHCI_HID_REPORT_LEN);
+            else
+                usb_hid_kbd_process_report(&k->state, k->buf);
             hid_post_normal(k);
             return true;
         }
