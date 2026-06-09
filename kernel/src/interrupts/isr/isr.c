@@ -114,7 +114,7 @@ static void dump_rip_bytes_safe(uint64_t rip) {
 static void dump_user_qword_via_task(uint64_t uaddr, const char *label) {
     percpu_t *pc = get_percpu();
     task_t   *me = pc ? (task_t *)pc->current_task : NULL;
-    if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
+    if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
     if (!me || !me->pagemap) {
         serial_printf("[ISR-PF] %s: no task/pagemap\n", label);
         return;
@@ -148,7 +148,7 @@ static void dump_user_qword_via_task(uint64_t uaddr, const char *label) {
 static __attribute__((noreturn)) void kill_current_task(int exit_code) {
     percpu_t *pc = get_percpu();
     task_t   *me = pc ? (task_t *)pc->current_task : NULL;
-    if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
+    if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
     if (me) me->exit_code = exit_code;
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
     task_exit();
@@ -200,6 +200,22 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                               regs->rip);
                 kill_current_task(139);
             }
+            {
+                struct { uint16_t size; uint64_t base; } __attribute__((packed)) gd;
+                asm volatile("sgdt %0" : "=m"(gd));
+                serial_printf("[GPF] GDTR base=0x%llx limit=0x%x ERR=0x%llx\n",
+                              gd.base, gd.size, regs->error);
+                uint64_t sel = regs->error & 0xFFF8ull;
+                if (sel && sel + 7 <= gd.size && gd.base >= 0xffff800000000000ull) {
+                    uint64_t desc = *(uint64_t *)(gd.base + sel);
+                    serial_printf("[GPF] GDT[0x%llx] = 0x%016llx\n", sel, desc);
+                }
+                if (regs->rsp >= 0xffff800000000000ull) {
+                    uint64_t *sp = (uint64_t *)regs->rsp;
+                    for (int qi = 0; qi < 6; qi++)
+                        serial_printf("[GPF] rsp[+%d] = 0x%016llx\n", qi * 8, sp[qi]);
+                }
+            }
             kernel_panic_regs("General Protection Fault (kernel)", regs);
 
         case EXCEPTION_PAGE_FAULT: {
@@ -208,7 +224,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
             if ((regs->cs & 3) == 3) {
                 percpu_t *pc = get_percpu();
                 task_t   *me = pc ? (task_t *)pc->current_task : NULL;
-                if (!me) { uint32_t cpu = lapic_get_id(); me = current_task[cpu]; }
+                if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
                 serial_printf("[ISR] Page Fault in userspace: RIP=0x%llx CR2=0x%llx ERR=0x%llx task='%s' pid=%u\n",
                               regs->rip, cr2val, regs->error,
                               me ? me->name : "?", me ? me->pid : 0);

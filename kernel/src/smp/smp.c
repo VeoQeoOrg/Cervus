@@ -24,6 +24,7 @@ extern struct {
 
 static smp_info_t smp_info = {0};
 static volatile uint32_t ap_online_count = 0;
+static uint32_t expected_online = 1;
 tlb_shootdown_t tlb_shootdown_queue[MAX_CPUS] = {0};
 
 volatile uint32_t sched_ready_flag = 0;
@@ -48,12 +49,19 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
     uint32_t lapic_id = lapic_get_id();
     smp_info_t* info = smp_get_info();
     uint32_t my_index = 0;
+    bool found = false;
     for (uint32_t i = 0; i < info->cpu_count; i++) {
         if (info->cpus[i].lapic_id == lapic_id && !info->cpus[i].is_bsp) {
             my_index = i;
             info->cpus[i].state = CPU_ONLINE;
+            found = true;
             break;
         }
+    }
+    if (!found || !tss[my_index]) {
+        serial_printf("[SMP ERROR] AP LAPIC %u: no CPU slot/TSS, halting this core\n",
+                      lapic_id);
+        for (;;) asm volatile ("cli; hlt");
     }
     load_tss(info->cpus[my_index].tss_selector);
     serial_printf("TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
@@ -134,6 +142,10 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
     for (uint64_t i = 0; i < mp_response->cpu_count; i++) {
         struct limine_mp_info* cpu = mp_response->cpus[i];
         if (cpu->lapic_id == bsp_lapic_id) continue;
+        if (info->cpus[i].state == CPU_FAULTED || !tss[i]) {
+            serial_printf("[SMP] Skipping CPU %lu (no TSS/stacks)\n", i);
+            continue;
+        }
 
         uint64_t stack_top = smp_allocate_stack(i, AP_STACK_SIZE);
         if (stack_top == 0) {
@@ -167,8 +179,10 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
             serial_printf("[SMP WARNING] Only %u/%u AP(s) online (timeout)\n",
                           online, ap_count);
         info->online_count = 1 + online;
+        expected_online    = 1 + online;
     } else {
         serial_writestring("[SMP] No APs to boot\n");
+        expected_online = 1;
     }
 
     serial_writestring("[SMP] AP Boot Sequence Complete \n\n");
@@ -219,8 +233,16 @@ void smp_init(struct limine_mp_response* mp_response) {
         if (smp_info.cpus[i].is_bsp) { bsp_index = i; break; }
 
     for (uint32_t i = 0; i < smp_info.cpu_count; i++) {
+        bool is_bsp_cpu = (i == bsp_index);
         tss[i] = (tss_t *)calloc(1, sizeof(tss_t));
-        if (!tss[i]) { serial_printf("[SMP ERROR] FAILED to allocate TSS for CPU %u\n", i); continue; }
+        if (!tss[i]) {
+            if (is_bsp_cpu)
+                kernel_panic("SMP: out of memory allocating BSP TSS");
+            serial_printf("[SMP WARNING] no memory for CPU %u TSS, "
+                          "disabling this core\n", i);
+            smp_info.cpus[i].state = CPU_FAULTED;
+            continue;
+        }
 
         tss[i]->rsp0   = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[0] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
@@ -229,8 +251,14 @@ void smp_init(struct limine_mp_response* mp_response) {
         tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         if (!tss[i]->rsp0 || !tss[i]->ist[0] || !tss[i]->ist[1] ||
             !tss[i]->ist[2] || !tss[i]->ist[3]) {
-            kernel_panic("SMP: out of memory allocating TSS/IST stacks "
-                         "(not enough usable RAM for this CPU count)");
+            if (is_bsp_cpu)
+                kernel_panic("SMP: out of memory allocating BSP TSS/IST stacks");
+            serial_printf("[SMP WARNING] no memory for CPU %u kernel stacks, "
+                          "disabling this core\n", i);
+            free(tss[i]);
+            tss[i] = NULL;
+            smp_info.cpus[i].state = CPU_FAULTED;
+            continue;
         }
         tss[i]->iobase = sizeof(tss_t);
 
@@ -271,6 +299,7 @@ void smp_init(struct limine_mp_response* mp_response) {
 
     smp_print_info();
     init_percpu_regions();
+    tsc_calibrate_bsp();
     smp_boot_aps(mp_response);
     set_percpu_base(percpu_regions[bsp_index]);
     serial_printf("PerCPU base set for BSP %u: 0x%llx\n",
@@ -298,9 +327,14 @@ cpu_info_t* smp_get_current_cpu(void) {
 
 void smp_wait_for_ready(void) {
     serial_writestring("Waiting until all APs are fully ready...\n");
-    while (smp_get_online_count() < smp_get_cpu_count())
+    uint64_t timeout = 50000000;
+    while (smp_get_online_count() < expected_online && timeout--)
         asm volatile ("pause");
-    serial_writestring("All APs ready.\n");
+    if (smp_get_online_count() < expected_online)
+        serial_printf("[SMP WARNING] Only %u/%u CPU(s) ready, continuing anyway\n",
+                      smp_get_online_count(), expected_online);
+    else
+        serial_writestring("All APs ready.\n");
 }
 
 uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index) {

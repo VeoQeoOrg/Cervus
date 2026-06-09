@@ -4,6 +4,7 @@
 #include "../../include/acpi/acpi.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/vmm.h"
+#include "../../include/smp/percpu.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -118,6 +119,77 @@ uint64_t tsc_elapsed_ns(void) {
     uint64_t mhz = g_tsc_khz / 1000;
     if (mhz == 0) mhz = 1;
     return (delta * 1000ULL) / mhz;
+}
+
+uint64_t tsc_read(void) {
+    return rdtsc();
+}
+
+void tsc_recalibrate(uint64_t new_khz) {
+    if (new_khz == 0 || g_tsc_khz == 0) return;
+    uint64_t cur = tsc_elapsed_ns();
+    uint64_t mhz = new_khz / 1000;
+    if (mhz == 0) mhz = 1;
+    uint64_t now = rdtsc();
+    g_tsc_khz  = new_khz;
+    g_tsc_boot = now - (cur * mhz) / 1000ULL;
+}
+
+#define MSR_TSC_DEADLINE     0x6E0
+#define LAPIC_TIMER_TSC_DDL  (1u << 18)
+
+static bool g_deadline_mode = false;
+
+DEFINE_PER_CPU(uint64_t, g_ddl_next) = 0;
+
+static inline void apic_wrmsr(uint32_t msr, uint64_t val) {
+    asm volatile("wrmsr" :: "c"(msr), "a"((uint32_t)val),
+                            "d"((uint32_t)(val >> 32)));
+}
+
+static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d) {
+    asm volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf));
+}
+
+bool tsc_deadline_supported(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, &a, &b, &c, &d);
+    if (!(c & (1u << 24))) return false;
+    cpuid(0x80000000, &a, &b, &c, &d);
+    if (a < 0x80000007) return false;
+    cpuid(0x80000007, &a, &b, &c, &d);
+    return (d & (1u << 8)) != 0;
+}
+
+bool apic_deadline_active(void) {
+    return g_deadline_mode;
+}
+
+void apic_deadline_rearm(void) {
+    uint64_t period = g_tsc_khz;
+    if (period == 0) return;
+
+    percpu_t *pc = get_percpu();
+    uint64_t now = rdtsc();
+    uint64_t next;
+
+    if (pc) {
+        uint64_t *slot = per_cpu_ptr(g_ddl_next, pc);
+        next = *slot + period;
+        if (next <= now || next > now + period * 4)
+            next = now + period;
+        *slot = next;
+    } else {
+        next = now + period;
+    }
+    apic_wrmsr(MSR_TSC_DEADLINE, next);
+}
+
+static void apic_deadline_start(uint32_t vector) {
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED);
+    lapic_write(LAPIC_TIMER, (vector & 0xFF) | LAPIC_TIMER_TSC_DDL);
+    asm volatile("mfence" ::: "memory");
+    apic_wrmsr(MSR_TSC_DEADLINE, rdtsc() + g_tsc_khz);
 }
 
 void hpet_sleep_ns(uint64_t nanoseconds) {
@@ -245,7 +317,7 @@ void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags) {
     ioapic_redirect_irq((uint8_t)gsi, vector, redir_flags);
 }
 
-static uint32_t apic_calibrate_pit(void) {
+static uint32_t apic_calibrate_pit_once(uint64_t *out_tsc_khz) {
     const uint32_t PIT_HZ      = 1193182;
     const uint32_t WAIT_MS     = 50;
     uint32_t pit_count = (uint32_t)((uint64_t)PIT_HZ * WAIT_MS / 1000);
@@ -275,8 +347,8 @@ static uint32_t apic_calibrate_pit(void) {
     uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
     lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
 
-    if (tsc_end > tsc_start)
-        g_tsc_khz = (tsc_end - tsc_start) / WAIT_MS;
+    if (out_tsc_khz && tsc_end > tsc_start)
+        *out_tsc_khz = (tsc_end - tsc_start) / WAIT_MS;
 
     if (remaining == 0 || remaining == 0xFFFFFFFF) return 0;
 
@@ -284,10 +356,68 @@ static uint32_t apic_calibrate_pit(void) {
     return ticks_elapsed / WAIT_MS;
 }
 
+static uint32_t apic_calibrate_pit(void) {
+    uint64_t best_khz   = 0;
+    uint32_t best_ticks = 0;
+    for (int round = 0; round < 3; round++) {
+        uint64_t khz = 0;
+        uint32_t ticks = apic_calibrate_pit_once(&khz);
+        if (khz && (best_khz == 0 || khz < best_khz))
+            best_khz = khz;
+        if (ticks && (best_ticks == 0 || ticks < best_ticks))
+            best_ticks = ticks;
+    }
+    if (best_khz && g_tsc_khz == 0)
+        g_tsc_khz = best_khz;
+    return best_ticks;
+}
+
+void tsc_calibrate_bsp(void) {
+    if (g_tsc_khz != 0) return;
+    uint64_t best = 0;
+    for (int round = 0; round < 3; round++) {
+        uint64_t khz = 0;
+        (void)apic_calibrate_pit_once(&khz);
+        if (khz && (best == 0 || khz < best)) best = khz;
+    }
+    if (best) {
+        g_tsc_khz  = best;
+        g_tsc_boot = rdtsc();
+        serial_printf("[APIC] TSC calibrated on BSP: %llu kHz (min of 3 rounds)\n",
+                      (unsigned long long)best);
+    } else {
+        serial_printf("[APIC] WARNING: BSP TSC calibration failed\n");
+    }
+}
+
+static uint32_t apic_calibrate_lapic_via_tsc(void) {
+    if (g_tsc_khz == 0) return 0;
+
+    const uint32_t WAIT_MS = 10;
+    uint64_t tsc_window = g_tsc_khz * WAIT_MS;
+
+    lapic_write(LAPIC_TIMER_DCR, 0x3);
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
+    lapic_write(LAPIC_TIMER_ICR, 0xFFFFFFFF);
+
+    uint64_t tsc_start = rdtsc();
+    while (rdtsc() - tsc_start < tsc_window) asm volatile("pause");
+
+    uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
+    lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
+
+    if (remaining == 0 || remaining == 0xFFFFFFFF) return 0;
+    return (0xFFFFFFFF - remaining) / WAIT_MS;
+}
+
 void apic_timer_calibrate(void) {
     uint32_t ticks_per_1ms = 0;
 
-    if (hpet_is_available()) {
+    if (g_tsc_khz != 0) {
+        ticks_per_1ms = apic_calibrate_lapic_via_tsc();
+    }
+
+    if (ticks_per_1ms == 0 && hpet_is_available()) {
         uint64_t measurement_time_ns = 10000000ULL;
         uint64_t hpet_ticks_needed = (measurement_time_ns * 1000000ULL) / hpet_period;
 
@@ -312,7 +442,7 @@ void apic_timer_calibrate(void) {
 
     if (ticks_per_1ms == 0 || g_tsc_khz == 0) {
         if (ticks_per_1ms == 0)
-            serial_printf("[APIC] HPET unavailable/failed; calibrating timer via PIT\n");
+            serial_printf("[APIC] no TSC/HPET base; calibrating timer via PIT\n");
         uint32_t pit_ticks = apic_calibrate_pit();
         if (ticks_per_1ms == 0) ticks_per_1ms = pit_ticks;
     }
@@ -322,8 +452,19 @@ void apic_timer_calibrate(void) {
         ticks_per_1ms = 10000;
     }
 
-    g_tsc_boot = rdtsc();
-    serial_printf("[APIC] TSC frequency: %llu kHz\n", (unsigned long long)g_tsc_khz);
+    if (g_tsc_boot == 0 && g_tsc_khz != 0)
+        g_tsc_boot = rdtsc();
+
+    if (g_tsc_khz != 0 && tsc_deadline_supported()) {
+        g_deadline_mode = true;
+        serial_printf("[APIC] LAPIC timer: TSC-deadline mode (TSC %llu kHz)\n",
+                      (unsigned long long)g_tsc_khz);
+        apic_deadline_start(0x20);
+        return;
+    }
+
+    serial_printf("[APIC] LAPIC timer: %u ticks/ms periodic (TSC %llu kHz)\n",
+                  ticks_per_1ms, (unsigned long long)g_tsc_khz);
 
     lapic_timer_init(0x20, ticks_per_1ms, true, 0x3);
 }

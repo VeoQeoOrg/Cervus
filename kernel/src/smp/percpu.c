@@ -1,11 +1,11 @@
 #include "../../include/smp/percpu.h"
 #include "../../include/smp/smp.h"
+#include "../../include/apic/apic.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include <string.h>
 #include <stdlib.h>
 
-extern uintptr_t __percpu_start;
 extern uintptr_t __percpu_end;
 
 PERCPU_SECTION percpu_t percpu = {0};
@@ -40,7 +40,7 @@ void init_percpu_regions(void) {
     g_has_fsgsbase = detect_fsgsbase();
     serial_printf("[PerCPU] FSGSBASE: %s\n", g_has_fsgsbase ? "YES" : "NO (using MSR fallback)");
 
-    size_t percpu_size = &__percpu_end - &__percpu_start;
+    size_t percpu_size = (uintptr_t)&__percpu_end - (uintptr_t)&__percpu_start;
     serial_printf("PerCPU size: %zu bytes\n", percpu_size);
 
     smp_info_t* info = smp_get_info();
@@ -54,12 +54,23 @@ void init_percpu_regions(void) {
         memcpy(region, &__percpu_start, percpu_size);
 
         percpu_regions[i] = (percpu_t*)region;
-        percpu_regions[i]->cpu_id = info->cpus[i].lapic_id;
+        percpu_regions[i]->cpu_id    = info->cpus[i].lapic_id;
+        percpu_regions[i]->cpu_index = i;
         percpu_regions[i]->syscall_kernel_rsp = 0;
         percpu_regions[i]->syscall_user_rsp   = 0;
 
         serial_printf("PerCPU region for CPU %u at 0x%llx\n", i, (uint64_t)region);
     }
+}
+
+uint32_t smp_cpu_index(void) {
+    percpu_t* pc = get_percpu();
+    if (pc) return pc->cpu_index;
+    uint32_t id = lapic_get_id();
+    smp_info_t* info = smp_get_info();
+    for (uint32_t i = 0; i < info->cpu_count; i++)
+        if (info->cpus[i].lapic_id == id) return i;
+    return 0;
 }
 
 percpu_t* get_percpu(void) {

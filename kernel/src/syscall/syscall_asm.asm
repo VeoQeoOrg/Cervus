@@ -123,6 +123,13 @@ syscall_entry:
     shr  r9, 47
     jnz  .sysret_bad_rsp
 
+    xor  rdx, rdx
+    xor  rsi, rsi
+    xor  rdi, rdi
+    xor  r8,  r8
+    xor  r9,  r9
+    xor  r10, r10
+
     swapgs
     o64 sysret
 

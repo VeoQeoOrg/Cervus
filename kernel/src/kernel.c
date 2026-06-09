@@ -150,6 +150,7 @@ static void load_elf_module(void) {
     ehci_start_worker();
     uhci_start_worker();
     disk_start_media_worker();
+    timer_start_recal_task();
 
     console_boot_logging_off();
 }

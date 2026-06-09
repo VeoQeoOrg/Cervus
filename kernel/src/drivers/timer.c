@@ -1,4 +1,5 @@
 #include "../include/drivers/timer.h"
+#include "../include/time/clocksource.h"
 #include "../include/apic/apic.h"
 #include "../include/io/serial.h"
 #include "../include/interrupts/interrupts.h"
@@ -19,9 +20,10 @@ extern void    sched_wakeup_sleepers(uint64_t now_ns);
 DEFINE_IRQ(0x20, timer_handler)
 {
     ticks++;
+    if (apic_deadline_active()) apic_deadline_rearm();
     lapic_eoi();
 
-    uint32_t cpu = lapic_get_id();
+    uint32_t cpu = smp_cpu_index();
     task_t* current = current_task[cpu];
     percpu_t* pc = get_percpu();
 
@@ -54,6 +56,7 @@ DEFINE_IRQ(0x20, timer_handler)
         extern void monitor_tick(void);
         vt_tick_flush();
         monitor_tick();
+        if ((ticks & 2047) == 0) clocksource_watchdog_tick();
     }
 
     if (!current) return;
@@ -86,6 +89,8 @@ bool timer_init(void) {
 
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
+
+    clocksource_init();
 
     serial_writestring("Timer subsystem initialized\n");
 
@@ -129,39 +134,54 @@ uint64_t timer_get_ticks(void) {
     return ticks;
 }
 
+static void tsc_recal_task(void *arg) {
+    (void)arg;
+    task_sleep_ms(2000);
+
+    uint64_t h0 = hpet_elapsed_ns();
+    uint64_t t0 = tsc_read();
+    task_sleep_ms(1000);
+    uint64_t h1 = hpet_elapsed_ns();
+    uint64_t t1 = tsc_read();
+
+    uint64_t dh = h1 - h0;
+    if (dh < 500000000ULL) return;
+
+    uint64_t new_khz = (t1 - t0) * 1000000ULL / dh;
+    int64_t ppm = ((int64_t)new_khz - (int64_t)g_tsc_khz) * 1000000 / (int64_t)g_tsc_khz;
+    serial_printf("[time] TSC recal vs HPET: %llu -> %llu kHz (%lld ppm)\n",
+                  (unsigned long long)g_tsc_khz, (unsigned long long)new_khz,
+                  (long long)ppm);
+
+    if (ppm != 0 && ppm > -50000 && ppm < 50000)
+        tsc_recalibrate(new_khz);
+}
+
+void timer_start_recal_task(void) {
+    if (!hpet_is_available() || g_tsc_khz == 0) return;
+    task_create("tsc_recal", tsc_recal_task, NULL, 1);
+}
+
 uint64_t sched_now_ns(void) {
-    if (hpet_is_available()) return hpet_elapsed_ns();
-    uint64_t tsc = tsc_elapsed_ns();
-    if (tsc) return tsc;
-    return ticks * 1000000ULL;
-}
-
-void timer_sleep_ms(uint64_t milliseconds) {
-    if (hpet_is_available()) {
-        hpet_sleep_ms(milliseconds);
-    } else {
-        volatile uint64_t i;
-        for (i = 0; i < milliseconds * 1000; i++) {
-            asm volatile("pause");
-        }
-    }
-}
-
-void timer_sleep_us(uint64_t microseconds) {
-    if (hpet_is_available()) {
-        hpet_sleep_us(microseconds);
-    } else {
-        volatile uint64_t i;
-        for (i = 0; i < microseconds; i++) {
-            asm volatile("pause");
-        }
-    }
+    return clocksource_now_ns();
 }
 
 void timer_sleep_ns(uint64_t nanoseconds) {
-    if (hpet_is_available()) {
-        hpet_sleep_ns(nanoseconds);
-    } else {
-        timer_sleep_us(nanoseconds / 1000);
+    uint64_t t0 = clocksource_now_ns();
+    if (t0 == 0 && clocksource_now_ns() == 0) {
+        volatile uint64_t i;
+        for (i = 0; i < nanoseconds / 1000; i++)
+            asm volatile("pause");
+        return;
     }
+    uint64_t t1 = t0 + nanoseconds;
+    while (clocksource_now_ns() < t1) asm volatile("pause");
+}
+
+void timer_sleep_ms(uint64_t milliseconds) {
+    timer_sleep_ns(milliseconds * 1000000ULL);
+}
+
+void timer_sleep_us(uint64_t microseconds) {
+    timer_sleep_ns(microseconds * 1000ULL);
 }

@@ -354,14 +354,26 @@ bool ps2_init(void) {
 
     ps2_send_cmd(PS2_CMD_SELF_TEST);
     uint8_t result = ps2_recv_data();
-    if (result != 0x55) { serial_printf("[PS2] Self-test FAILED (0x%02x)\n", result); return false; }
-    serial_writestring("[PS2] Self-test PASSED\n");
+    if (result == 0xFF) {
+        serial_writestring("[PS2] Controller not responding (no i8042?), skipping PS/2\n");
+        return false;
+    }
+    if (result != 0x55)
+        serial_printf("[PS2] Self-test returned 0x%02x (expected 0x55), continuing anyway\n",
+                      result);
+    else
+        serial_writestring("[PS2] Self-test PASSED\n");
     ps2_send_cmd(PS2_CMD_WRITE_CONFIG);
     ps2_send_data(cfg);
 
     ps2_send_cmd(PS2_CMD_TEST_PORT1);
-    bool kb_ok = (ps2_recv_data() == 0x00);
+    uint8_t port1_res = ps2_recv_data();
+    bool kb_ok = (port1_res == 0x00);
     serial_printf("[PS2] Port 1 (keyboard): %s\n", kb_ok ? "OK" : "FAIL");
+    if (!kb_ok && port1_res != 0xFF) {
+        serial_printf("[PS2] Port 1 test=0x%02x, trying keyboard anyway\n", port1_res);
+        kb_ok = true;
+    }
 
     ps2_send_cmd(PS2_CMD_TEST_PORT2);
     bool mouse_ok = (ps2_recv_data() == 0x00);

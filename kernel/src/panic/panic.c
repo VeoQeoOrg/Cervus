@@ -10,6 +10,14 @@
 
 extern struct limine_framebuffer *global_framebuffer;
 
+static uint32_t panic_cpu_index(void) {
+    uint32_t id = lapic_get_id();
+    smp_info_t *info = smp_get_info();
+    for (uint32_t i = 0; i < info->cpu_count && i < MAX_CPUS; i++)
+        if (info->cpus[i].lapic_id == id) return i;
+    return 0;
+}
+
 #define COL_BG      0x000080
 #define COL_WHITE   0xFFFFFF
 #define COL_YELLOW  0xFFFF00
@@ -94,7 +102,7 @@ static void draw_panic_screen(const char *msg, struct int_frame_t *regs) {
     if (regs) {
         percpu_t *pc = get_percpu();
         task_t   *t  = pc ? (task_t *)pc->current_task : NULL;
-        uint32_t  cpu = lapic_get_id();
+        uint32_t  cpu = panic_cpu_index();
         if (!t) t = current_task[cpu];
 
         fb_puts_col("CPU: ", COL_GRAY); fb_putdec(cpu); fb_puts("\n");
@@ -156,7 +164,7 @@ static void serial_panic_dump(const char *msg, struct int_frame_t *regs) {
     serial_printf("            KERNEL PANIC            \n");
     serial_printf("Reason: %s\n", msg);
 
-    uint32_t cpu = lapic_get_id();
+    uint32_t cpu = panic_cpu_index();
     serial_printf("CPU:    %u\n", cpu);
 
     percpu_t *pc = get_percpu();

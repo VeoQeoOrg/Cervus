@@ -4,13 +4,23 @@
 #include <stdint.h>
 #include "../include/smp/smp.h"
 
-#define PERCPU_SECTION __attribute__((section(".percpu")))
+#define PERCPU_SECTION __attribute__((section(".percpu.head")))
+
+extern uintptr_t __percpu_start;
+
+#define DEFINE_PER_CPU(type, name)  __attribute__((section(".percpu"))) type name
+#define DECLARE_PER_CPU(type, name) extern type name
+
+#define per_cpu_offset(name) ((uintptr_t)&(name) - (uintptr_t)&__percpu_start)
+#define per_cpu_ptr(name, region) \
+    ((__typeof__(&(name)))((char *)(region) + per_cpu_offset(name)))
+#define this_cpu_ptr(name) per_cpu_ptr(name, get_percpu())
 
 typedef struct {
     uint64_t syscall_kernel_rsp;
     uint64_t syscall_user_rsp;
     uint32_t cpu_id;
-    uint32_t _pad;
+    uint32_t cpu_index;
     void* current_task;
     uint64_t some_counter;
     bool need_resched;
@@ -50,6 +60,7 @@ percpu_t* get_percpu(void);
 percpu_t* get_percpu_mut(void);
 void init_percpu_regions(void);
 void set_percpu_base(percpu_t* base);
+uint32_t smp_cpu_index(void);
 #define current_cpu_id() (get_percpu()->cpu_id)
 
 #endif

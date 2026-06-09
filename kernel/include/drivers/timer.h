@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 bool timer_init(void);
+void timer_start_recal_task(void);
 
 uint64_t timer_get_ticks(void);
 

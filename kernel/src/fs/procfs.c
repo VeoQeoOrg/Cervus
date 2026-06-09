@@ -6,6 +6,8 @@
 #include "../../include/fs/procfs.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/smp/smp.h"
+#include "../../include/smp/percpu.h"
+#include "../../include/time/clocksource.h"
 #include "../../include/apic/apic.h"
 #include "../../include/drivers/timer.h"
 #include "../../include/sched/sched.h"
@@ -83,13 +85,67 @@ static int gen_loadavg(char *buf, size_t max) {
                     runnable, runnable, runnable, runnable, n);
 }
 
+static uint64_t g_drift_t0_tsc   = 0;
+static uint64_t g_drift_t0_hpet  = 0;
+static uint64_t g_drift_t0_ticks = 0;
+static int      g_drift_armed    = 0;
+
+static int64_t drift_ppm(uint64_t a, uint64_t b) {
+    if (b == 0) return 0;
+    int64_t diff = (int64_t)a - (int64_t)b;
+    return (diff * 1000000) / (int64_t)b;
+}
+
+static int gen_timedrift(char *buf, size_t max) {
+    uint64_t tsc   = tsc_elapsed_ns();
+    uint64_t hpet  = hpet_is_available() ? hpet_elapsed_ns() : 0;
+    uint64_t lapic = timer_get_ticks() * 1000000ULL;
+
+    if (!g_drift_armed) {
+        g_drift_t0_tsc   = tsc;
+        g_drift_t0_hpet  = hpet;
+        g_drift_t0_ticks = lapic;
+        g_drift_armed    = 1;
+        return snprintf(buf, max,
+            "snapshot armed (tsc=%llu hpet=%llu lapic=%llu ns)\n"
+            "read again later to see drift\n",
+            (unsigned long long)tsc, (unsigned long long)hpet,
+            (unsigned long long)lapic);
+    }
+
+    uint64_t d_tsc   = tsc   - g_drift_t0_tsc;
+    uint64_t d_hpet  = hpet  - g_drift_t0_hpet;
+    uint64_t d_lapic = lapic - g_drift_t0_ticks;
+
+    uint64_t ref = hpet ? d_hpet : d_tsc;
+    const char *refname = hpet ? "hpet" : "tsc";
+
+    return snprintf(buf, max,
+        "interval:  %llu.%03llu s (ref=%s)\n"
+        "tsc:       %llu ns  drift=%lld ppm\n"
+        "hpet:      %llu ns  drift=%lld ppm\n"
+        "lapic1ms:  %llu ns  drift=%lld ppm\n",
+        (unsigned long long)(ref / 1000000000ULL),
+        (unsigned long long)((ref / 1000000ULL) % 1000ULL),
+        refname,
+        (unsigned long long)d_tsc,   (long long)drift_ppm(d_tsc, ref),
+        (unsigned long long)d_hpet,  (long long)drift_ppm(d_hpet, ref),
+        (unsigned long long)d_lapic, (long long)drift_ppm(d_lapic, ref));
+}
+
+static int gen_clocksource(char *buf, size_t max) {
+    return clocksource_list(buf, (int)max);
+}
+
 static proc_file_t g_proc_files[] = {
-    { "meminfo", gen_meminfo, {0} },
-    { "cpuinfo", gen_cpuinfo, {0} },
-    { "uptime",  gen_uptime,  {0} },
-    { "loadavg", gen_loadavg, {0} },
-    { "version", gen_version, {0} },
-    { "mounts",  gen_mounts,  {0} },
+    { "meminfo",     gen_meminfo,     {0} },
+    { "cpuinfo",     gen_cpuinfo,     {0} },
+    { "uptime",      gen_uptime,      {0} },
+    { "loadavg",     gen_loadavg,     {0} },
+    { "version",     gen_version,     {0} },
+    { "mounts",      gen_mounts,      {0} },
+    { "timedrift",   gen_timedrift,   {0} },
+    { "clocksource", gen_clocksource, {0} },
 };
 #define PROC_NFILES (sizeof(g_proc_files) / sizeof(g_proc_files[0]))
 
@@ -355,7 +411,7 @@ static int procroot_lookup(vnode_t *dir, const char *name, vnode_t **out) {
         }
     }
     if (strcmp(name, "self") == 0) {
-        task_t *me = current_task[lapic_get_id()];
+        task_t *me = current_task[smp_cpu_index()];
         if (me) return make_piddir(me->pid, out);
         return -ENOENT;
     }

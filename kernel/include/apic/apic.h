@@ -90,6 +90,13 @@ void ioapic_unmask_irq(uint8_t irq);
 
 void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags);
 void apic_timer_calibrate(void);
+extern uint64_t g_tsc_khz;
+void tsc_calibrate_bsp(void);
+uint64_t tsc_read(void);
+void tsc_recalibrate(uint64_t new_khz);
+bool tsc_deadline_supported(void);
+bool apic_deadline_active(void);
+void apic_deadline_rearm(void);
 
 uint64_t hpet_read_counter(void);
 uint64_t hpet_get_frequency(void);
