@@ -1,0 +1,46 @@
+# fz configuration file
+
+# Copyright (c) 2026 ForgeZero
+
+source_dirs:
+  - builder
+# Explicit source files (overrides source_dirs if set)
+# source_files:
+#   - boot.asm
+#   - main.c
+
+exclude:
+  - test_*
+  - temp/
+  - "*.bak"
+
+# include:
+#   - "*.asm"
+#   - "*.c"
+
+# libs:
+#   - m
+#   - c
+
+output: build
+# Linking mode: auto (gcc -> gcc -no-pie -> ld), c (gcc only), raw (ld only)
+mode: auto
+
+# Emit debug information
+debug: false
+
+# Print executed commands
+verbose: false
+
+# Keep intermediate object files
+keep_obj: false
+
+# Disable incremental cache
+no_cache: false
+
+# Custom flags for assembler, C compiler, and linker
+flags:
+    cc: ["-O2"]
+
+# Path to .fzignore file (default: .fzignore)
+ignore_file: .fzignore
