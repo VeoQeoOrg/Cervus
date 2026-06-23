@@ -448,6 +448,11 @@ __attribute__((noreturn)) void task_exit(void)
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
+    if (me->fd_table) {
+        fd_table_destroy(me->fd_table);
+        me->fd_table = NULL;
+    }
+
     me->runnable = false;
     me->state = TASK_ZOMBIE;
     me->cr3 = 0;
@@ -505,6 +510,15 @@ void task_set_foreground(uint32_t pid) {
 void task_clear_foreground_if(uint32_t pid) {
     int vt = caller_ctty();
     if (g_foreground_pid[vt] == pid) g_foreground_pid[vt] = 0;
+}
+
+void task_reassign_foreground(uint32_t dead_pid, task_t *parent) {
+    int vt = caller_ctty();
+    if (g_foreground_pid[vt] != dead_pid) return;
+    if (parent && parent->ppid != 1 && parent->pid != 1)
+        g_foreground_pid[vt] = parent->pid;
+    else
+        g_foreground_pid[vt] = 0;
 }
 
 task_t* task_find_foreground(void) {

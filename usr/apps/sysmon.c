@@ -578,7 +578,9 @@ int main(int argc, char **argv)
         int key;
         int redraw = 0;
         int resort = 0;
+        int got_key = 0;
         while (read_key_nonblock(&key)) {
+            got_key = 1;
             redraw = 1;
             if (key == 'q' || key == 'Q' || key == 3) { g_running = 0; break; }
             else if (key == '?' || key == 'h' || key == 'H') g_show_help = !g_show_help;
@@ -626,7 +628,7 @@ int main(int argc, char **argv)
             draw_screen(now);
             next_sample = now + (uint64_t)g_refresh_ms * 1000000ULL;
         }
-        cervus_nanosleep(15000000ULL);
+        if (!got_key) cervus_nanosleep(10000000ULL);
     }
 
     restore_term();

@@ -179,6 +179,15 @@ time_t get_mtime(const char *path) {
     return 0;
 }
 
+static bool elf_up_to_date(const char *src, const char *elf) {
+    if (!file_exists(elf)) return false;
+    time_t et = get_mtime(elf);
+    if (get_mtime(src) > et) return false;
+    if (get_mtime(SYSROOT_LIB "/libcervus.a") > et) return false;
+    if (get_mtime(SYSROOT_LIB "/crt0.o") > et) return false;
+    return true;
+}
+
 void rm_rf(const char *path) {
     if (file_exists(path)) {
         print_color(COLOR_BLUE, "Removing %s", path);
@@ -258,7 +267,7 @@ static bool extract_limine_hdd_bin(void) {
     return true;
 }
 
-#define LIMINE_VERSION    "12.3.2"
+#define LIMINE_VERSION    "12.3.3"
 #define LIMINE_TARBALL    "limine-binary.tar.gz"
 #define LIMINE_TARBALL_URL \
     "https://github.com/limine-bootloader/limine/releases/download/v" \
@@ -299,7 +308,6 @@ bool build_limine(void) {
 void ensure_linker_script(void) {
     ensure_dir("kernel/linker-scripts");
     const char *lds_path = "kernel/linker-scripts/x86_64.lds";
-    if (file_exists(lds_path)) return;
 
     const char *script =
 "OUTPUT_FORMAT(elf64-x86-64)\n"
@@ -335,6 +343,7 @@ void ensure_linker_script(void) {
 "        *(.data .data.*)\n"
 "        . = ALIGN(4096);\n"
 "        __percpu_start = .;\n"
+"        KEEP(*(.percpu.head))\n"
 "        KEEP(*(.percpu .percpu.*))\n"
 "        . = ALIGN(4096);\n"
 "        __percpu_end = .;\n"
@@ -356,7 +365,7 @@ typedef struct {
     char name[256];
 } app_entry_t;
 
-#define MAX_APPS 64
+#define MAX_APPS 256
 static app_entry_t g_apps[MAX_APPS];
 static int         g_naps = 0;
 
@@ -393,7 +402,7 @@ static int scan_apps(void) {
 }
 
 static bool build_one_app(const app_entry_t *e) {
-    if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
+    if (elf_up_to_date(e->src, e->elf)) {
         print_color(COLOR_GREEN, "[ELF] %s is up to date", e->elf);
         return true;
     }
@@ -483,7 +492,7 @@ static int scan_bin_apps(void) {
 }
 
 static bool build_one_bin_app(const app_entry_t *e) {
-    if (file_exists(e->elf) && get_mtime(e->src) <= get_mtime(e->elf)) {
+    if (elf_up_to_date(e->src, e->elf)) {
         print_color(COLOR_GREEN, "[bin] %s is up to date", e->elf);
         return true;
     }
@@ -566,6 +575,7 @@ static bool need_rebuild(const char *src, const char *obj) {
     if (!file_exists(obj)) return true;
     return get_mtime_safe(src) > get_mtime_safe(obj);
 }
+
 
 typedef struct {
     char **items;

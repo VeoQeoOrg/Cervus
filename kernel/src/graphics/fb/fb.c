@@ -64,7 +64,7 @@ static inline uint32_t fb_get_pitch(struct limine_framebuffer *fb) {
 
 void fb_flush(struct limine_framebuffer *fb) {
     if (!fb || !g_backbuf) return;
-    memcpy(fb->address, g_backbuf, (size_t)g_bb_pitch * g_bb_h * sizeof(uint32_t));
+    fb_flush_lines(fb, 0, g_bb_h);
 }
 
 void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_end) {

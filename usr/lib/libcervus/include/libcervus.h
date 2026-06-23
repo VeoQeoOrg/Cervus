@@ -25,6 +25,8 @@ struct __cervus_FILE {
     size_t buf_pos;
 };
 
+int __cervus_fflush(struct __cervus_FILE *s);
+
 struct __cervus_DIR {
     int fd;
     struct dirent buf;

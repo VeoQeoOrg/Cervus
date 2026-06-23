@@ -25,15 +25,20 @@ static inline void ata_cpu_relax(void) {
     asm volatile("pause" ::: "memory");
 }
 
+extern uint64_t clocksource_now_ns(void);
+
 static void ata_soft_reset(uint16_t ctrl) {
     outb(ctrl, 0x04);
     ata_io_wait(ctrl);
     outb(ctrl, 0x00);
     ata_io_wait(ctrl);
 
-    for (int i = 0; i < 2000000; i++) {
+    uint64_t deadline = clocksource_now_ns() + 1000000000ULL;
+    for (;;) {
         uint8_t s = inb(ctrl);
         if (!(s & ATA_SR_BSY)) return;
+        if (s == 0xFF) return;
+        if (clocksource_now_ns() > deadline) return;
         ata_io_wait(ctrl);
         ata_cpu_relax();
     }
@@ -42,31 +47,33 @@ static void ata_soft_reset(uint16_t ctrl) {
 static int ata_wait_ready(uint16_t io, uint16_t ctrl, int timeout_us) {
     (void)io;
     ata_io_wait(ctrl);
-    for (int i = 0; i < timeout_us; i++) {
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)timeout_us * 1000ULL;
+    for (;;) {
         uint8_t s = inb(ctrl + ATA_REG_ALT_STATUS);
         if (!(s & ATA_SR_BSY)) {
             if (s & ATA_SR_ERR) return -EIO;
             if (s & ATA_SR_DF)  return -EIO;
             return 0;
         }
+        if (clocksource_now_ns() > deadline) return -ETIMEDOUT;
         ata_io_wait(ctrl);
         ata_cpu_relax();
     }
-    return -ETIMEDOUT;
 }
 
 static int ata_wait_drq(uint16_t io, uint16_t ctrl, int timeout_us) {
     (void)io;
     ata_io_wait(ctrl);
-    for (int i = 0; i < timeout_us; i++) {
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)timeout_us * 1000ULL;
+    for (;;) {
         uint8_t s = inb(ctrl + ATA_REG_ALT_STATUS);
         if (s & ATA_SR_ERR) return -EIO;
         if (s & ATA_SR_DF)  return -EIO;
         if (!(s & ATA_SR_BSY) && (s & ATA_SR_DRQ)) return 0;
+        if (clocksource_now_ns() > deadline) return -ETIMEDOUT;
         ata_io_wait(ctrl);
         ata_cpu_relax();
     }
-    return -ETIMEDOUT;
 }
 
 static void ata_fix_string(char *dst, const uint16_t *src, int words) {
@@ -97,14 +104,16 @@ static bool ata_identify_drive(uint16_t io, uint16_t ctrl, uint8_t drv_sel, ata_
     ata_io_wait(ctrl);
 
     uint8_t status = inb(io + ATA_REG_STATUS);
-    if (status == 0) return false;
+    if (status == 0 || status == 0xFF) return false;
 
-    for (int i = 0; i < 1000000; i++) {
+    uint64_t bsy_deadline = clocksource_now_ns() + 500000000ULL;
+    for (;;) {
         status = inb(io + ATA_REG_STATUS);
+        if (status == 0xFF) return false;
         if (!(status & ATA_SR_BSY)) break;
+        if (clocksource_now_ns() > bsy_deadline) return false;
         ata_cpu_relax();
     }
-    if (status & ATA_SR_BSY) return false;
 
     uint8_t lm = inb(io + ATA_REG_LBA_MID);
     uint8_t lh = inb(io + ATA_REG_LBA_HI);
@@ -119,13 +128,14 @@ static bool ata_identify_drive(uint16_t io, uint16_t ctrl, uint8_t drv_sel, ata_
         return false;
     }
 
-    for (int i = 0; i < 1000000; i++) {
+    uint64_t drq_deadline = clocksource_now_ns() + 500000000ULL;
+    for (;;) {
         status = inb(io + ATA_REG_STATUS);
         if (status & ATA_SR_ERR) return false;
         if (status & ATA_SR_DRQ) break;
+        if (clocksource_now_ns() > drq_deadline) return false;
         ata_cpu_relax();
     }
-    if (!(status & ATA_SR_DRQ)) return false;
 
     for (int i = 0; i < 256; i++)
         out->identify[i] = inw(io + ATA_REG_DATA);
@@ -320,7 +330,7 @@ static int ata_dma_xfer_once(ata_drive_t *drv, uint64_t lba, uint32_t count,
     outb(bmr + BMR_CMD, cmd_byte | BMR_CMD_START);
 
     LOG_D("[ATA-DMA] BMR start, polling...\n");
-    uint64_t deadline = hpet_elapsed_ns() + 3000000000ULL;
+    uint64_t deadline = clocksource_now_ns() + 3000000000ULL;
     uint32_t poll_iter = 0;
     uint8_t  last_st = 0, last_sr = 0;
     for (;;) {
@@ -341,7 +351,7 @@ static int ata_dma_xfer_once(ata_drive_t *drv, uint64_t lba, uint32_t count,
         if (++poll_iter % 100000 == 0)
             LOG_D("[ATA-DMA] poll iter=%u st=0x%02x sr=0x%02x\n",
                           poll_iter, st, sr);
-        if (hpet_elapsed_ns() > deadline) {
+        if (clocksource_now_ns() > deadline) {
             serial_printf("[ATA-DMA] TIMEOUT after %u iter st=0x%02x sr=0x%02x\n",
                           poll_iter, last_st, last_sr);
             outb(bmr + BMR_CMD, 0);

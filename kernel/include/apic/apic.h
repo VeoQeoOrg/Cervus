@@ -95,6 +95,7 @@ void tsc_calibrate_bsp(void);
 uint64_t tsc_read(void);
 void tsc_recalibrate(uint64_t new_khz);
 bool tsc_deadline_supported(void);
+bool tsc_is_invariant(void);
 bool apic_deadline_active(void);
 void apic_deadline_rearm(void);
 

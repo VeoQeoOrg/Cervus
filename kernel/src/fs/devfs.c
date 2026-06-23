@@ -70,6 +70,7 @@ typedef struct {
     size_t   line_len, line_read;
     int      line_eof;
     int      nonblock;
+    task_t  *reader;
 } vt_tty_t;
 
 static vt_tty_t g_vtty[VT_COUNT];
@@ -98,6 +99,11 @@ void tty_vt_input(int vt, char c) {
     if (next != t->r_head) {
         t->ring[t->r_tail] = c;
         t->r_tail = next;
+    }
+    task_t *r = t->reader;
+    if (r) {
+        t->reader = NULL;
+        task_unblock(r);
     }
 }
 
@@ -163,12 +169,22 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out,
         } else if (vt != vt_active() && *cursor_on) {
             *cursor_on = 0;
         }
-        if (me && hpet_is_available()) {
-            me->wakeup_time_ns = hpet_elapsed_ns() + 8000000ULL;
-            sched_note_wakeup(me->wakeup_time_ns);
+        if (me) {
+            t->reader = me;
+            if (!ring_empty(t) && vt == vt_active()) {
+                t->reader = NULL;
+                continue;
+            }
+            if (half_tick) {
+                me->wakeup_time_ns = hpet_elapsed_ns() + 300000000ULL;
+                sched_note_wakeup(me->wakeup_time_ns);
+            } else {
+                me->wakeup_time_ns = 0;
+            }
             me->runnable = false;
             me->state = TASK_BLOCKED;
             sched_reschedule();
+            t->reader = NULL;
         } else {
             task_yield();
         }

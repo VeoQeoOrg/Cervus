@@ -300,29 +300,49 @@ void acpi_shutdown(void) {
 
     asm volatile("cli");
 
-    uint16_t pm1a_value = (s5_slp_typa << 10) | (1 << 13);
-    outw(fadt->pm1a_control_block, pm1a_value);
+    uint16_t pm1a_value = (uint16_t)((s5_slp_typa << 10) | (1 << 13));
+    uint16_t pm1b_value = (uint16_t)((s5_slp_typb << 10) | (1 << 13));
+
+    if (fadt->pm1a_control_block) {
+        uint16_t cur = inw(fadt->pm1a_control_block);
+        pm1a_value = (uint16_t)((cur & ~(7u << 10)) |
+                                ((uint16_t)s5_slp_typa << 10) | (1u << 13));
+        serial_printf("ACPI shutdown: PM1a cur=0x%x write=0x%x\n", cur, pm1a_value);
+        outw(fadt->pm1a_control_block, pm1a_value);
+    }
 
     if (fadt->pm1b_control_block) {
-        uint16_t pm1b_value = (s5_slp_typb << 10) | (1 << 13);
+        uint16_t cur = inw(fadt->pm1b_control_block);
+        pm1b_value = (uint16_t)((cur & ~(7u << 10)) |
+                                ((uint16_t)s5_slp_typb << 10) | (1u << 13));
         outw(fadt->pm1b_control_block, pm1b_value);
     }
 
-    for (volatile int i = 0; i < 100000; i++)
+    for (volatile int i = 0; i < 1000000; i++)
         asm volatile("pause");
 
     if (fadt->header.length >= 244) {
-        if (fadt->x_pm1a_control_block.address) {
+        if (fadt->x_pm1a_control_block.address &&
+            fadt->x_pm1a_control_block.address != fadt->pm1a_control_block) {
             serial_writestring("ACPI shutdown: trying extended PM1a...\n");
             acpi_write_gas(&fadt->x_pm1a_control_block, pm1a_value);
         }
-        if (fadt->x_pm1b_control_block.address) {
-            uint16_t pm1b_value = (s5_slp_typb << 10) | (1 << 13);
+        if (fadt->x_pm1b_control_block.address &&
+            fadt->x_pm1b_control_block.address != fadt->pm1b_control_block) {
             acpi_write_gas(&fadt->x_pm1b_control_block, pm1b_value);
         }
 
-        for (volatile int i = 0; i < 100000; i++)
+        for (volatile int i = 0; i < 1000000; i++)
             asm volatile("pause");
+    }
+
+    if (fadt && fadt->pm1a_control_block) {
+        for (int rep = 0; rep < 3; rep++) {
+            outw(fadt->pm1a_control_block, pm1a_value);
+            if (fadt->pm1b_control_block)
+                outw(fadt->pm1b_control_block, pm1b_value);
+            for (volatile int i = 0; i < 500000; i++) asm volatile("pause");
+        }
     }
 
 fallback:

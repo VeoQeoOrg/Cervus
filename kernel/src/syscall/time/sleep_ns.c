@@ -8,8 +8,6 @@ int64_t sys_sleep_ns(uint64_t ns)
     task_t *me = syscall_cur_task();
     if (!me) return -ESRCH;
 
-    syscall_save_user_regs(me);
-
     uint64_t now = sched_now_ns();
     me->wakeup_time_ns = now + ns;
     sched_note_wakeup(me->wakeup_time_ns);

@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/xhci.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/drivers/usb/usb_msc.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
@@ -103,12 +104,12 @@ static int xhci_msc_bulk(void *dev, bool dir_in, void *virt, uintptr_t buf_phys,
     asm volatile("" ::: "memory");
     m->ctl->doorbells[m->slot_id] = dci;
 
-    uint64_t start = hpet_elapsed_ns();
+    uint64_t start = clocksource_now_ns();
     uint64_t deadline_ns = timeout_ms * 1000000ULL;
     while (*pending != 0) {
         xhci_drain_events(m->ctl);
         if (*pending == 0) break;
-        if (hpet_elapsed_ns() - start > deadline_ns) {
+        if (clocksource_now_ns() - start > deadline_ns) {
             serial_printf("[xhci-msc] timeout on bulk %s dci=%u\n",
                           dir_in ? "IN" : "OUT", dci);
             return -ETIMEDOUT;

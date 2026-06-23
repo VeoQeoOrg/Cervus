@@ -111,8 +111,9 @@
 
 #define SYS_MOUSE_STATE       565
 #define SYS_KEYMAP_CONFIG     566
+#define SYS_KLOG              567
 
-#define SYSCALL_TABLE_SIZE    567
+#define SYSCALL_TABLE_SIZE    568
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

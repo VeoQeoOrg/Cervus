@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/uhci.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/drivers/usb/usb_msc.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
@@ -108,7 +109,7 @@ static int uhci_msc_bulk(void *dev, bool in_dir, void *virt, uintptr_t phys,
     qh->qelp = (uint32_t)tdp[0];
     asm volatile("" ::: "memory");
 
-    uint64_t deadline = hpet_elapsed_ns() + (uint64_t)timeout_ms * 1000000ULL;
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)timeout_ms * 1000000ULL;
     int r = -ETIMEDOUT;
     uhci_td_t *last_td = tds[n_tds - 1];
     while (1) {
@@ -118,7 +119,7 @@ static int uhci_msc_bulk(void *dev, bool in_dir, void *virt, uintptr_t phys,
                        TD_STATUS_CRC | TD_STATUS_BITSTUF)) ? -EIO : 0;
             break;
         }
-        if (hpet_elapsed_ns() > deadline) break;
+        if (clocksource_now_ns() > deadline) break;
         asm volatile("pause");
     }
 

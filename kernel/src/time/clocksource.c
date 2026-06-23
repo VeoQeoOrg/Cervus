@@ -14,18 +14,7 @@ static volatile uint64_t g_mono_last = 0;
 static uint64_t g_wd_last_cur = 0;
 static uint64_t g_wd_last_wd  = 0;
 static bool     g_wd_armed    = false;
-
-static bool tsc_invariant(void) {
-    uint32_t eax, ebx, ecx, edx;
-    asm volatile("cpuid"
-                 : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-                 : "a"(0x80000000));
-    if (eax < 0x80000007) return false;
-    asm volatile("cpuid"
-                 : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
-                 : "a"(0x80000007));
-    return (edx & (1u << 8)) != 0;
-}
+static int      g_wd_strikes  = 0;
 
 static bool cs_tsc_available(void)  { return tsc_elapsed_ns() != 0; }
 static uint64_t cs_tsc_read(void)   { return tsc_elapsed_ns(); }
@@ -65,9 +54,9 @@ void clocksource_select(void) {
     for (clocksource_t *cs = g_cs_list; cs; cs = cs->next) {
         if (cs->unstable || !cs->available()) continue;
         if (!best || cs->rating > best->rating) {
-            second = best;
+            if (best && best->rating >= 100) second = best;
             best = cs;
-        } else if (!second || cs->rating > second->rating) {
+        } else if ((!second || cs->rating > second->rating) && cs->rating >= 100) {
             second = cs;
         }
     }
@@ -75,10 +64,10 @@ void clocksource_select(void) {
     if (!best) return;
 
     if (best != g_cs_current) {
-        if (g_cs_current) {
-            uint64_t old_now = cs_now(g_cs_current);
-            best->offset_ns = (int64_t)old_now - (int64_t)best->read_ns();
-        }
+        uint64_t base = __atomic_load_n(&g_mono_last, __ATOMIC_RELAXED);
+        if (!base && g_cs_current) base = cs_now(g_cs_current);
+        if (base)
+            best->offset_ns = (int64_t)base - (int64_t)best->read_ns();
         g_cs_current = best;
         serial_printf("[time] clocksource: %s (rating %d)%s\n",
                       best->name, best->rating,
@@ -86,6 +75,7 @@ void clocksource_select(void) {
     }
     g_cs_watchdog = second;
     g_wd_armed = false;
+    g_wd_strikes = 0;
 }
 
 clocksource_t *clocksource_current(void)  { return g_cs_current; }
@@ -103,6 +93,19 @@ uint64_t clocksource_now_ns(void) {
 
     uint64_t last = __atomic_load_n(&g_mono_last, __ATOMIC_RELAXED);
     while (now > last) {
+        if (last != 0 && now - last > 3600000000000ULL) {
+            static int poisoned_logged = 0;
+            if (!poisoned_logged) {
+                poisoned_logged = 1;
+                serial_printf("[time] REJECTED insane forward jump: %llu -> %llu ns\n",
+                              (unsigned long long)last, (unsigned long long)now);
+            }
+            if (cs) {
+                cs->unstable = true;
+                clocksource_select();
+            }
+            return last;
+        }
         if (__atomic_compare_exchange_n(&g_mono_last, &last, now, false,
                                         __ATOMIC_RELAXED, __ATOMIC_RELAXED))
             return now;
@@ -131,16 +134,27 @@ void clocksource_watchdog_tick(void) {
     g_wd_last_wd  = wd_now;
 
     uint64_t diff = (cur_d > wd_d) ? (cur_d - wd_d) : (wd_d - cur_d);
-    uint64_t margin = wd_d / 100;
+    bool wd_is_ticks = (wd == &cs_jiffies);
+    uint64_t margin = wd_is_ticks ? wd_d / 20 : wd_d / 100;
     if (margin < 10000000ULL) margin = 10000000ULL;
 
-    if (diff > margin) {
+    bool suspect = (diff > margin);
+    if (suspect && wd_is_ticks && cur_d > wd_d)
+        suspect = false;
+
+    if (suspect) {
+        g_wd_strikes++;
         serial_printf("[time] WATCHDOG: '%s' drifted %llu ns vs '%s' over %llu ns "
-                      "— marking unstable\n",
+                      "(strike %d)\n",
                       cur->name, (unsigned long long)diff, wd->name,
-                      (unsigned long long)wd_d);
-        cur->unstable = true;
-        clocksource_select();
+                      (unsigned long long)wd_d, g_wd_strikes);
+        if (g_wd_strikes >= 2) {
+            serial_printf("[time] WATCHDOG: marking '%s' unstable\n", cur->name);
+            cur->unstable = true;
+            clocksource_select();
+        }
+    } else {
+        g_wd_strikes = 0;
     }
 }
 
@@ -160,9 +174,12 @@ int clocksource_list(char *buf, int max) {
 }
 
 void clocksource_init(void) {
-    if (tsc_invariant()) {
+    if (tsc_is_invariant()) {
         cs_tsc.rating = 300;
         serial_printf("[time] TSC is invariant (rating 300)\n");
+    } else {
+        cs_tsc.rating = 50;
+        serial_printf("[time] TSC is NOT invariant (halts in C-states), rating 50\n");
     }
     clocksource_register(&cs_jiffies);
     clocksource_register(&cs_hpet);

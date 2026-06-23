@@ -407,8 +407,15 @@ bool ps2_init(void) {
 
     if (mouse_ok) {
         ps2_mouse_cmd(0xFF);
-        for (int i = 0; i < 200000; i++) {
-            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) inb(PS2_DATA_PORT);
+        extern uint64_t clocksource_now_ns(void);
+        uint64_t mdl = clocksource_now_ns() + 600000000ULL;
+        bool bat_done = false;
+        while (clocksource_now_ns() < mdl) {
+            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
+                uint8_t b = inb(PS2_DATA_PORT);
+                if (bat_done) break;
+                if (b == 0xAA) bat_done = true;
+            }
             io_wait();
         }
         ps2_flush_output();

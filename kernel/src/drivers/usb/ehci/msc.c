@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/ehci.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/drivers/usb/usb_msc.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
@@ -115,7 +116,7 @@ static int ehci_msc_bulk(void *dev, bool dir_in, void *virt, uintptr_t buf_phys,
     asm volatile("" ::: "memory");
     ehci_async_resume(m->ctl, old_cmd);
 
-    uint64_t deadline = hpet_elapsed_ns() + (uint64_t)timeout_ms * 1000000ULL;
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)timeout_ms * 1000000ULL;
     int r = -ETIMEDOUT;
     for (;;) {
         uint32_t st = t->token & 0xFF;
@@ -130,7 +131,7 @@ static int ehci_msc_bulk(void *dev, bool dir_in, void *virt, uintptr_t buf_phys,
             }
             break;
         }
-        if (hpet_elapsed_ns() > deadline) {
+        if (clocksource_now_ns() > deadline) {
             serial_printf("[ehci-msc] bulk %s TIMEOUT len=%u token=0x%08x qh_tok=0x%08x usbsts=0x%x\n",
                    dir_in ? "IN" : "OUT", len, t->token, qh->overlay_token,
                    op_r32(m->ctl, EHCI_OP_USBSTS));

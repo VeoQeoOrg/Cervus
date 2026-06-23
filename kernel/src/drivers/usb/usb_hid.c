@@ -1,4 +1,5 @@
 #include "../../../include/drivers/usb/usb_hid.h"
+#include "../../../include/time/clocksource.h"
 #include "../../../include/drivers/mouse.h"
 #include "../../../include/drivers/keymap.h"
 #include "../../../include/apic/apic.h"
@@ -108,7 +109,7 @@ void usb_hid_kbd_process_report(usb_hid_kbd_state_t *s, const uint8_t *report) {
         if (now_t && !was_t) keymap_toggle();
     }
     s->cur_modifier = mod;
-    uint64_t now = hpet_elapsed_ns();
+    uint64_t now = clocksource_now_ns();
 
     for (int i = 2; i < USB_HID_REPORT_LEN; i++) {
         uint8_t u = report[i];
@@ -143,7 +144,7 @@ void usb_hid_kbd_process_report(usb_hid_kbd_state_t *s, const uint8_t *report) {
 }
 
 void usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n) {
-    uint64_t now = hpet_elapsed_ns();
+    uint64_t now = clocksource_now_ns();
     for (int i = 0; i < n; i++) {
         usb_hid_kbd_state_t *s = states[i];
         if (!s) continue;

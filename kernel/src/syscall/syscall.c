@@ -122,6 +122,7 @@ extern int64_t sys_fb_acquire(void);
 extern int64_t sys_fb_release(void);
 extern int64_t sys_mouse_state(uint64_t);
 extern int64_t sys_keymap_config(uint64_t, uint64_t);
+extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -129,6 +130,7 @@ typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t
 #define W1(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)b;(void)c;(void)d;(void)e;(void)f;return fn(a);}
 #define W2(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)c;(void)d;(void)e;(void)f;return fn(a,b);}
 #define W3(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)d;(void)e;(void)f;return fn(a,b,c);}
+#define W4(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)e;(void)f;return fn(a,b,c,d);}
 #define W5(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){(void)f;return fn(a,b,c,d,e);}
 #define W6(fn) static int64_t _##fn(uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e,uint64_t f){return fn(a,b,c,d,e,f);}
 
@@ -171,6 +173,7 @@ W2(sys_symlink)     W3(sys_readlink)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W2(sys_keymap_config)
+W4(sys_klog)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -259,6 +262,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FB_RELEASE]        = _sys_fb_release,
     [SYS_MOUSE_STATE]       = _sys_mouse_state,
     [SYS_KEYMAP_CONFIG]     = _sys_keymap_config,
+    [SYS_KLOG]              = _sys_klog,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
