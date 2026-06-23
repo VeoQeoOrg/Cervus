@@ -3,6 +3,7 @@
 sbom.json
 log_*.txt
 *.tar
+build
 demo_iso/
 limine/
 limine-tools/
