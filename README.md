@@ -2,6 +2,14 @@
   <img src="https://github.com/VeoQeo/Cervus/blob/main/wallpapers/cervus_logo.jpg" alt="Cervus OS Logo" width="400px">
 </p>
 
+<p align="center">
+  <a href="https://t.me/veoqeo_off">
+    <img src="https://img.shields.io/badge/Telegram-Channel-blue?style=for-the-badge&logo=telegram" alt="Telegram Channel">
+  </a>
+  <br>
+  <sub><b>Follow Cervus OS news on our Telegram channel:</b> <a href="https://t.me/veoqeo_off">t.me/veoqeo_off</a></sub>
+</p>
+
 
 # Cervus x86_64 Operating System
 
