@@ -1,5 +1,8 @@
 .fz_cache
 .fz_objs
+sbom.json
+log_*.txt
+*.tar
 demo_iso/
 limine/
 limine-tools/
