@@ -1,4 +1,4 @@
-# Contributing to CervusOS
+# ⚙️ Contributing to CervusOS
 
 You can contribute to CervusOS easily — just follow a few strict rules, and everything will be perfect.
 
@@ -7,7 +7,7 @@ We do **not** tolerate undocumented contributions, PRs that appear AI‑generate
 
 Most importantly: to contribute you must **clearly understand** what you are doing and what goal your feature or fix serves.
 
-**The kernel** is maintained by **VeoQeo**.  
+**The kernel** is maintained by [**VeoQeo**](https://github.com/VeoQeo) 
 You can contribute to userspace, libraries, tooling, or any other part of the OS that does not require deep kernel expertise.
 
 ---
@@ -19,6 +19,26 @@ We use a custom builder located at `builder/build.c`.
 * Build it via `.fz.yaml` (install the **forgezero** utility first: [forgezero‑cli/forgezero](https://github.com/forgezero-cli/forgezero)).
 * Run `./builder` and choose the desired option.  
 The workflow is straightforward and fully self‑contained.
+
+## Memory Safety Testing (Alex Mode)
+
+Before submitting a Pull Request, you **must** verify that your changes do not introduce memory errors or leaks.  
+CervusOS provides an automated AddressSanitizer (ASan) test mode for this purpose.
+
+```bash
+./build alex
+# Or using interactive menu
+```
+
+### What it does:
+
+-> Rebuilds the entire project — host‑side builder, kernel, userspace applications, and libraries — with AddressSanitizer enabled.
+
+-> Runs a full compilation and ISO creation pipeline without launching QEMU.
+
+-> At exit, LeakSanitizer prints a summary of all heap memory leaks detected in the build tool itself.
+
+Expected output after a clean run
 
 ---
 
