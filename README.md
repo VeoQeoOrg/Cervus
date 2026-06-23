@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/Telegram-Channel-blue?style=for-the-badge&logo=telegram" alt="Telegram Channel">
   </a>
   <br>
-  <sub>📢 <b>Follow Cervus OS news on our Telegram channel:</b> <a href="https://t.me/veoqeo_off">t.me/veoqeo_off</a></sub>
+  <sub><b>Follow Cervus OS news on our Telegram channel:</b> <a href="https://t.me/veoqeo_off">t.me/veoqeo_off</a></sub>
 </p>
 
 
