@@ -25,6 +25,7 @@ static int g_rows = 25;
 static int g_start_row = 0;
 static int g_prompt_len = 0;
 static const char *g_rl_buf = NULL;
+static int g_eof_streak = 0;
 
 static void term_update_size(void) {
     struct winsize ws;
@@ -272,7 +273,7 @@ static int g_menu_grid_rows = 1;
 static int g_menu_colw = 4;
 
 static void menu_layout(int len, rl_completions_t *c) {
-    int last_input_row = last_row_of(len);
+    int input_rows = last_row_of(len) - g_start_row + 1;
     int maxw = 0;
     for (int i = 0; i < c->count; i++) {
         int w = (int)strlen(c->items[i]) + (c->is_dir[i] ? 1 : 0);
@@ -283,18 +284,30 @@ static void menu_layout(int len, rl_completions_t *c) {
     int cols = g_cols / colw;
     if (cols < 1) cols = 1;
     int rows = (c->count + cols - 1) / cols;
-    int avail = g_rows - last_input_row - 1;
-    if (avail < 1) avail = 1;
-    if (rows > avail) rows = avail;
+    int max_rows = g_rows - input_rows - 1;
+    if (max_rows < 1) max_rows = 1;
+    if (rows > max_rows) rows = max_rows;
     g_menu_cols = cols;
     g_menu_grid_rows = rows;
     g_menu_colw = colw;
 }
 
+static void menu_scroll_for(int needed_rows, int len) {
+    int last_input_row = last_row_of(len);
+    int avail = g_rows - last_input_row - 1;
+    int delta = needed_rows - avail;
+    if (delta <= 0) return;
+    vt_goto(g_rows - 1, 0);
+    for (int i = 0; i < delta; i++) write(1, "\n", 1);
+    g_start_row -= delta;
+    if (g_start_row < 0) g_start_row = 0;
+}
+
 static void menu_draw(int len, int pos, rl_completions_t *c, int sel) {
+    menu_layout(len, c);
+    menu_scroll_for(g_menu_grid_rows, len);
     int last_input_row = last_row_of(len);
     g_menu_base_row = last_input_row;
-    menu_layout(len, c);
     int cols = g_menu_cols, rows = g_menu_grid_rows, colw = g_menu_colw;
 
     for (int r = 0; r < rows; r++) {
@@ -458,8 +471,12 @@ static int readline_edit(char *buf, int maxlen) {
         }
         char c;
         ssize_t rr = read(0, &c, 1);
-        if (rr == 0) return -1;
-        if (rr < 0) { cervus_nanosleep(10000000ULL); continue; }
+        if (rr <= 0) {
+            if (++g_eof_streak >= 100) return -1;
+            cervus_nanosleep(5000000ULL);
+            continue;
+        }
+        g_eof_streak = 0;
 
         if (c == '\x1b') {
             char s[4];
@@ -646,6 +663,9 @@ static int prompt_visible_len(const char *p) {
 }
 
 char *readline(const char *prompt) {
+    fflush(stdout);
+    g_eof_streak = 0;
+
     struct termios orig, raw;
     int have_tio = (tcgetattr(0, &orig) == 0);
     if (have_tio) {

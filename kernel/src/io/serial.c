@@ -23,8 +23,30 @@ log_level_t klog_get_level(void) {
     return g_log_level;
 }
 
+static volatile int g_ts_line_start = 1;
+
 static void serial_log_emit(const char *buf, size_t len) {
     if (!buf || len == 0) return;
+
+    static char joined[1100];
+    if (g_ts_line_start) {
+        extern uint64_t clocksource_now_ns(void);
+        uint64_t ns = clocksource_now_ns();
+        int tn = snprintf(joined, sizeof(joined), "[%4llu.%03llu] ",
+                          (unsigned long long)(ns / 1000000000ULL),
+                          (unsigned long long)((ns / 1000000ULL) % 1000ULL));
+        if (tn > 0) {
+            size_t cp = len;
+            if (cp > sizeof(joined) - (size_t)tn - 1) cp = sizeof(joined) - (size_t)tn - 1;
+            memcpy(joined + tn, buf, cp);
+            g_ts_line_start = (buf[len - 1] == '\n');
+            buf = joined;
+            len = (size_t)tn + cp;
+        }
+    } else {
+        g_ts_line_start = (buf[len - 1] == '\n');
+    }
+
     klog_write(buf, len);
     if (default_serial_port == 0) return;
     uint64_t flags;
@@ -598,6 +620,7 @@ void serial_printf_port(uint16_t port, const char* format, ...) {
 }
 
 void serial_printf(const char* format, ...) {
+    if (LOG_LEVEL_INFO > g_log_level) return;
     char buf[1024];
     va_list args;
     va_start(args, format);

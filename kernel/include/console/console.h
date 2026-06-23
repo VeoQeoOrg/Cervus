@@ -30,6 +30,7 @@ void console_set_offscreen(int on);
 void console_set_grid(vt_cell_t *grid, uint32_t cols, uint32_t rows);
 void console_redraw_grid(void);
 void console_flush_pending(void);
+void console_flush_now(void);
 void vt_tick_flush(void);
 
 #define VT_COUNT          12

@@ -1091,11 +1091,19 @@ static int glob_token(const char *pat, char *out[], int max) {
 
 static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[], int *nfree) {
     int oi = 0;
+    if (!nfree || !out || !freelist || max < 1 || !tok) {
+        if (out && max >= 1) out[0] = NULL;
+        if (nfree) *nfree = 0;
+        return 0;
+    }
     *nfree = 0;
+    if (n > max - 1) n = max - 1;
     for (int i = 0; i < n && oi < max - 1; i++) {
-        if (i > 0 && has_glob_chars(tok[i])) {
+        char *ti = tok[i];
+        if (i > 0 && ti && has_glob_chars(ti)) {
             char *matches[256];
-            int m = glob_token(tok[i], matches, 256);
+            int m = glob_token(ti, matches, 256);
+            if (m > 256) m = 256;
             if (m > 0) {
                 for (int k = 0; k < m && oi < max - 1; k++) {
                     out[oi++] = matches[k];
@@ -1104,7 +1112,7 @@ static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[]
                 continue;
             }
         }
-        out[oi++] = tok[i];
+        out[oi++] = ti;
     }
     out[oi] = NULL;
     return oi;
@@ -1225,6 +1233,16 @@ static int exec_tokens(char **tok, int n) {
     int nn = n;
     if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr) < 0) { rc_set(1); return 1; }
     if (nn == 0) return g_last_rc;
+
+    int need_glob = 0;
+    for (int i = 1; i < nn; i++)
+        if (tok[i] && has_glob_chars(tok[i])) { need_glob = 1; break; }
+
+    if (!need_glob) {
+        int rc = exec_external(nn, tok, rd, nr);
+        rc_set(rc);
+        return rc;
+    }
 
     char *gtok[CSH_MAX_TOKENS * 4];
     char *gfree[CSH_MAX_TOKENS * 4];
@@ -2052,7 +2070,7 @@ static int is_dir_path(const char *dir, const char *name) {
     return st.st_type == 1 ? 1 : 0;
 }
 
-#define TAB_MAX_MATCHES 64
+#define TAB_MAX_MATCHES RL_MAX_COMPLETIONS
 
 static int gather_matches(const char *buf, int pos, char matches[][256],
                           int dirflag[], int max, int *out_ws_start,
@@ -2209,19 +2227,19 @@ static void print_motd(void) {
     int fd = open("/mnt/etc/motd", O_RDONLY, 0);
     if (fd < 0) fd = open("/etc/motd", O_RDONLY, 0);
     if (fd < 0) {
-        putchar(10);
-        fputs("  Cervus OS\n  Type 'help' for commands.\n", stdout);
-        putchar(10);
+        const char *m = "\n  Cervus OS\n  Type 'help' for commands.\n\n";
+        write(1, m, strlen(m));
         return;
     }
     char buf[1024];
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
-    if (n > 0) { buf[n] = '\0'; write(1, buf, n); }
+    if (n > 0) write(1, buf, (size_t)n);
 }
 
 static int interactive_main(void) {
     interactive_init_paths();
+    write(1, "\033[2J\033[H", 7);
     print_motd();
 
     readline_set_completion(csh_complete2);

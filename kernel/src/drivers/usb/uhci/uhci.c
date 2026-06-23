@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/uhci.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/drivers/usb/usb_config.h"
 #include "../../../../include/drivers/usb/usb_enum.h"
 #include "../../../../include/drivers/pci.h"
@@ -146,7 +147,7 @@ static int uhci_port_reset(uhci_controller_t *c, uint8_t port, bool *out_low_spe
 }
 
 static int uhci_wait_td(uhci_td_t *last, uint32_t timeout_ms) {
-    uint64_t deadline = hpet_elapsed_ns() + (uint64_t)timeout_ms * 1000000ULL;
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)timeout_ms * 1000000ULL;
     while (1) {
         uint32_t st = last->status;
         if (!(st & TD_STATUS_ACTIVE)) {
@@ -156,7 +157,7 @@ static int uhci_wait_td(uhci_td_t *last, uint32_t timeout_ms) {
             }
             return 0;
         }
-        if (hpet_elapsed_ns() > deadline) return -ETIMEDOUT;
+        if (clocksource_now_ns() > deadline) return -ETIMEDOUT;
         asm volatile("pause");
     }
 }

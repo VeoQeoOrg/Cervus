@@ -284,14 +284,17 @@ void kernel_main(void) {
     vfs_mount("/proc", procroot);
     vfs_set_mount_info("/proc", "procfs", "procfs");
     serial_writestring("procfs [OK]\n");
+    serial_writestring("[stage] acpi_init\n");
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");
+    serial_writestring("[stage] apic_init\n");
     apic_init();
     serial_writestring("APIC [OK]\n");
+    serial_writestring("[stage] pci_init\n");
     pci_init();
     serial_writestring("PCI [OK]\n");
-    clear_screen();
+    serial_writestring("[stage] smp_init\n");
     smp_init(mp_request.response);
     serial_writestring("SMP [OK]\n");
 
@@ -324,12 +327,18 @@ void kernel_main(void) {
     printf("%u cpu%s configured\n", smp_get_cpu_count(),
            smp_get_cpu_count() == 1 ? "" : "s");
 
+    serial_writestring("[stage] syscall_init\n");
     syscall_init();
+    serial_writestring("[stage] disk_init (ATA/AHCI/NVMe probe)\n");
     disk_init();
 
+    serial_writestring("[stage] xhci_init\n");
     xhci_init();
+    serial_writestring("[stage] ehci_init\n");
     ehci_init();
+    serial_writestring("[stage] uhci_init\n");
     uhci_init();
+    serial_writestring("[stage] usb done\n");
     {
         int xn = xhci_controller_count();
         int en = ehci_controller_count();
@@ -396,14 +405,17 @@ void kernel_main(void) {
         serial_writestring("[initramfs] no TAR module (modules[1] missing)\n");
     }
 
+    serial_writestring("[stage] timer_init\n");
     timer_init();
-    serial_writestring("Initializing PS/2 keyboard/mouse...\n");
+    serial_writestring("[stage] ps2_init\n");
     ps2_init();
 
+    serial_writestring("[stage] sched_init\n");
     sched_init();
     sched_notify_ready();
     timer_sleep_ms(10);
     printf("starting init...\n\n");
+    serial_writestring("[stage] load init (ELF)\n");
     load_elf_module();
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();

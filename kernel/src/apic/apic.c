@@ -5,6 +5,7 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/vmm.h"
 #include "../../include/smp/percpu.h"
+#include "../../include/sched/spinlock.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -75,6 +76,9 @@ bool hpet_init(void) {
     hpet_period = hpet_regs[HPET_PERIOD / 4];
     if (hpet_period == 0) return false;
 
+    if (!hpet_table->counter_size)
+        serial_printf("[APIC] HPET counter is 32-bit, software wrap extension active\n");
+
     uint64_t config = *(volatile uint64_t*)(hpet_base + HPET_CONFIG);
     config |= HPET_ENABLE_CNF;
     if (hpet_table->legacy_replacement) config |= HPET_LEGACY_CNF;
@@ -90,14 +94,24 @@ bool hpet_is_available(void) {
     return hpet_base != 0 && hpet_period != 0;
 }
 
+static spinlock_t g_hpet32_lock = SPINLOCK_INIT;
+static uint64_t g_hpet32_hi   = 0;
+static uint32_t g_hpet32_last = 0;
+
 uint64_t hpet_read_counter(void) {
     if (!hpet_base) return 0;
 
     if (hpet_table->counter_size) {
         return *(volatile uint64_t*)(hpet_base + HPET_MAIN_COUNTER);
-    } else {
-        return *(volatile uint32_t*)(hpet_base + HPET_MAIN_COUNTER);
     }
+
+    uint32_t now = *(volatile uint32_t*)(hpet_base + HPET_MAIN_COUNTER);
+    uint64_t f = spinlock_acquire_irqsave(&g_hpet32_lock);
+    if (now < g_hpet32_last) g_hpet32_hi += (1ULL << 32);
+    g_hpet32_last = now;
+    uint64_t v = g_hpet32_hi | (uint64_t)now;
+    spinlock_release_irqrestore(&g_hpet32_lock, f);
+    return v;
 }
 
 uint64_t hpet_get_frequency(void) {
@@ -151,14 +165,19 @@ static void cpuid(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t
     asm volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf));
 }
 
-bool tsc_deadline_supported(void) {
+bool tsc_is_invariant(void) {
     uint32_t a, b, c, d;
-    cpuid(1, &a, &b, &c, &d);
-    if (!(c & (1u << 24))) return false;
     cpuid(0x80000000, &a, &b, &c, &d);
     if (a < 0x80000007) return false;
     cpuid(0x80000007, &a, &b, &c, &d);
     return (d & (1u << 8)) != 0;
+}
+
+bool tsc_deadline_supported(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, &a, &b, &c, &d);
+    if (!(c & (1u << 24))) return false;
+    return tsc_is_invariant();
 }
 
 bool apic_deadline_active(void) {
@@ -193,7 +212,17 @@ static void apic_deadline_start(uint32_t vector) {
 }
 
 void hpet_sleep_ns(uint64_t nanoseconds) {
-    if (!hpet_base || !hpet_period) return;
+    if (!hpet_base || !hpet_period) {
+        uint64_t t0 = tsc_elapsed_ns();
+        if (t0) {
+            uint64_t t1 = t0 + nanoseconds;
+            while (tsc_elapsed_ns() < t1) asm volatile("pause");
+            return;
+        }
+        for (volatile uint64_t i = 0; i < nanoseconds / 100 + 1; i++)
+            asm volatile("pause");
+        return;
+    }
 
     uint64_t ticks_needed = (nanoseconds * 1000000ULL) / hpet_period;
     if (ticks_needed == 0) ticks_needed = 1;

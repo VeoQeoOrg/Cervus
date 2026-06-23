@@ -227,9 +227,7 @@ void monitor_activate(void) {
 }
 
 void console_boot_logging_off(void) {
-    extern void clear_screen_with_scroll(void);
     g_boot_echo = 0;
-    clear_screen_with_scroll();
 }
 
 static void mon_do_search(uint64_t from) {

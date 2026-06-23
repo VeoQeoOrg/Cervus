@@ -8,13 +8,21 @@ int64_t sys_wait(uint64_t pid_arg, uint64_t status_ptr, uint64_t flags)
 
 retry:;
     task_t *zombie = NULL;
+    bool zombie_still_on_cpu = false;
     {
         uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
         task_t *child = parent->children;
         bool has_children = (child != NULL);
         while (child) {
             bool match = (pid_arg == (uint64_t)-1) || (child->pid == (uint32_t)pid_arg);
-            if (match && child->state == TASK_ZOMBIE) { zombie = child; break; }
+            if (match && child->state == TASK_ZOMBIE) {
+                if (__atomic_load_n(&child->on_cpu._val, __ATOMIC_ACQUIRE)) {
+                    zombie_still_on_cpu = true;
+                } else {
+                    zombie = child;
+                    break;
+                }
+            }
             child = child->sibling;
         }
         spinlock_release_irqrestore(&children_lock, _cf);
@@ -22,8 +30,11 @@ retry:;
     }
 
     if (!zombie) {
+        if (zombie_still_on_cpu) {
+            task_yield();
+            goto retry;
+        }
         if (flags & WNOHANG) return 0;
-        syscall_save_user_regs(parent);
         parent->wait_for_pid = (pid_arg == (uint64_t)-1) ? (uint32_t)-1 : (uint32_t)pid_arg;
         parent->runnable = false;
         parent->state    = TASK_BLOCKED;
@@ -55,7 +66,8 @@ retry:;
         spinlock_release_irqrestore(&children_lock, _cf);
     }
 
-    task_clear_foreground_if(zpid);
+    extern void task_reassign_foreground(uint32_t dead_pid, task_t *parent);
+    task_reassign_foreground(zpid, parent);
     task_destroy(zombie);
     return (int64_t)zpid;
 }

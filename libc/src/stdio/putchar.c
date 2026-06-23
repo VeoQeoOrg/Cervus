@@ -31,8 +31,9 @@ static uint32_t   g_grows = 0;
 
 extern bool               hpet_is_available(void);
 extern unsigned long long hpet_elapsed_ns(void);
+extern unsigned long long clocksource_now_ns(void);
 
-#define CONSOLE_FLUSH_INTERVAL_NS 16000000ULL
+#define CONSOLE_FLUSH_INTERVAL_NS 8000000ULL
 
 void console_set_offscreen(int on) { g_offscreen = on; }
 
@@ -92,7 +93,7 @@ static void do_flush_now(void) {
         fb_flush_lines(global_framebuffer, dirty_y_min, dirty_y_max);
     dirty_y_min = 0xFFFFFFFFu;
     dirty_y_max = 0;
-    if (hpet_is_available()) g_last_flush_ns = hpet_elapsed_ns();
+    g_last_flush_ns = clocksource_now_ns();
 }
 
 static void commit_dirty(void) {
@@ -102,14 +103,22 @@ static void commit_dirty(void) {
         return;
     }
     if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
-    if (!g_need_redraw && hpet_is_available()) {
-        unsigned long long now = hpet_elapsed_ns();
-        if (now - g_last_flush_ns < CONSOLE_FLUSH_INTERVAL_NS) return;
+    if (!g_need_redraw) {
+        unsigned long long now = clocksource_now_ns();
+        if (now && now - g_last_flush_ns < CONSOLE_FLUSH_INTERVAL_NS) return;
     }
     do_flush_now();
 }
 
 void console_flush_pending(void) {
+    if (g_offscreen || !global_framebuffer) return;
+    if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
+    unsigned long long now = clocksource_now_ns();
+    if (!g_need_redraw && now && now - g_last_flush_ns < CONSOLE_FLUSH_INTERVAL_NS) return;
+    do_flush_now();
+}
+
+void console_flush_now(void) {
     if (g_offscreen || !global_framebuffer) return;
     if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;
     do_flush_now();
@@ -122,7 +131,7 @@ void console_force_full_redraw(void) {
     dirty_y_min = 0xFFFFFFFFu;
     dirty_y_max = 0;
     fb_flush(global_framebuffer);
-    if (hpet_is_available()) g_last_flush_ns = hpet_elapsed_ns();
+    g_last_flush_ns = clocksource_now_ns();
 }
 
 void putchar_flush_begin(void) {
@@ -167,8 +176,29 @@ void scroll_screen(int lines) {
             for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
         }
         if (!g_offscreen && global_framebuffer) {
-            console_redraw_grid();
-            mark_dirty(0, global_framebuffer->height);
+            extern uint32_t *g_backbuf;
+            extern uint32_t  g_bb_pitch;
+            uint32_t sh = get_screen_height();
+            uint32_t sw = get_screen_width();
+            uint32_t sp = (uint32_t)lines * 16;
+            uint32_t *tgt = g_backbuf ? g_backbuf : (uint32_t *)global_framebuffer->address;
+            uint32_t pitch = g_backbuf ? g_bb_pitch : (global_framebuffer->pitch / 4);
+            (void)sw;
+            if (sp < sh) {
+                uint32_t rows_mv = sh - sp;
+                memmove(tgt, tgt + (size_t)sp * pitch,
+                        (size_t)rows_mv * pitch * sizeof(uint32_t));
+                uint32_t *cs = tgt + (size_t)rows_mv * pitch;
+                size_t clear_words = (size_t)sp * pitch;
+                if (bg_color == 0) {
+                    memset(cs, 0, clear_words * sizeof(uint32_t));
+                } else {
+                    for (size_t i = 0; i < clear_words; i++) cs[i] = bg_color;
+                }
+            } else {
+                fb_clear(global_framebuffer, bg_color);
+            }
+            mark_dirty(0, sh);
             g_need_redraw = 0;
         }
         return;
@@ -230,19 +260,17 @@ static void draw_cursor_at(uint32_t x, uint32_t y) {
         fb_fill_rect(global_framebuffer, x, y, 8, 16, text_color);
         if (ch && ch != ' ')
             fb_draw_char(global_framebuffer, ch, x, y, bg);
-        fb_flush_lines(global_framebuffer, y, y + 16);
     } else if (cursor_shape == 2) {
         for (uint32_t row = 0; row < 16; row++) {
             fb_draw_pixel(global_framebuffer, x, y + row, text_color);
         }
-        fb_flush_lines(global_framebuffer, y, y + 16);
     } else {
         for (uint32_t col = 0; col < 8; col++) {
             fb_draw_pixel(global_framebuffer, x + col, y + 14, text_color);
             fb_draw_pixel(global_framebuffer, x + col, y + 15, text_color);
         }
-        fb_flush_lines(global_framebuffer, y + 14, y + 16);
     }
+    mark_dirty(y, 16);
 }
 
 static void erase_cursor_at(uint32_t x, uint32_t y) {
@@ -255,7 +283,7 @@ static void erase_cursor_at(uint32_t x, uint32_t y) {
     fb_fill_rect(global_framebuffer, x, y, 8, 16, bg);
     if (ch && ch != ' ')
         fb_draw_char(global_framebuffer, ch, x, y, fg);
-    fb_flush_lines(global_framebuffer, y, y + 16);
+    mark_dirty(y, 16);
 }
 
 void draw_cursor(void)  { draw_cursor_at(cursor_x, cursor_y); }
@@ -416,7 +444,6 @@ int putchar(int c) {
             if (cursor_y + 16 > get_screen_height()) {
                 scroll_screen(1); cursor_y = get_screen_height() - 16;
             }
-            if (!flush_inhibit) commit_dirty();
             break;
         case '\r': cursor_x = 0; break;
         case '\t': cursor_x = (cursor_x + 32) & ~31u; break;

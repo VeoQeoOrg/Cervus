@@ -36,7 +36,7 @@ static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len
 
 #define ELF_PIE_BASE        0x0000000000400000ULL
 #define ELF_USER_STACK_TOP  0x00007FFFFFFFE000ULL
-#define ELF_DEFAULT_STACK   (64 * 1024)
+#define ELF_DEFAULT_STACK   (256 * 1024)
 
 #define PML4_KERNEL_START   256
 #define PML4_ENTRIES        512

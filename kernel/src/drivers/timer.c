@@ -17,15 +17,38 @@ extern void    task_kill(task_t* target);
 extern void    task_kill_foreground_group(task_t* fg);
 extern void    sched_wakeup_sleepers(uint64_t now_ns);
 
+DEFINE_PER_CPU(uint32_t, g_stall_ctr) = 0;
+DEFINE_PER_CPU(uint64_t, g_stall_seen) = 0;
+
+static void tick_stall_check(uint32_t cpu)
+{
+    percpu_t *pc = get_percpu();
+    if (!pc) return;
+    uint32_t *ctr = per_cpu_ptr(g_stall_ctr, pc);
+    if (++(*ctr) < 3000) return;
+    *ctr = 0;
+    uint64_t *seen = per_cpu_ptr(g_stall_seen, pc);
+    uint64_t t = ticks;
+    if (t != 0 && t == *seen) {
+        serial_printf("[time] CPU%u: BSP tick stall detected (ticks=%llu), kicking via IPI\n",
+                      cpu, (unsigned long long)t);
+        smp_info_t *info = smp_get_info();
+        lapic_send_ipi(info->bsp_lapic_id, 0x20);
+    }
+    *seen = t;
+}
+
 DEFINE_IRQ(0x20, timer_handler)
 {
-    ticks++;
     if (apic_deadline_active()) apic_deadline_rearm();
     lapic_eoi();
 
     uint32_t cpu = smp_cpu_index();
     task_t* current = current_task[cpu];
     percpu_t* pc = get_percpu();
+
+    if (cpu == 0) ticks++;
+    else tick_stall_check(cpu);
 
     if (cpu == 0 && g_ctrlc_pending) {
         g_ctrlc_pending = 0;
@@ -51,10 +74,13 @@ DEFINE_IRQ(0x20, timer_handler)
         sched_wakeup_sleepers(sched_now_ns());
     }
 
-    if (cpu == 0) {
+    {
         extern void vt_tick_flush(void);
-        extern void monitor_tick(void);
         vt_tick_flush();
+    }
+
+    if (cpu == 0) {
+        extern void monitor_tick(void);
         monitor_tick();
         if ((ticks & 2047) == 0) clocksource_watchdog_tick();
     }
@@ -158,7 +184,7 @@ static void tsc_recal_task(void *arg) {
 }
 
 void timer_start_recal_task(void) {
-    if (!hpet_is_available() || g_tsc_khz == 0) return;
+    if (!hpet_is_available() || g_tsc_khz == 0 || !tsc_is_invariant()) return;
     task_create("tsc_recal", tsc_recal_task, NULL, 1);
 }
 

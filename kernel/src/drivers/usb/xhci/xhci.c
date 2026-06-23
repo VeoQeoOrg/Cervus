@@ -1,4 +1,5 @@
 #include "../../../../include/drivers/usb/xhci.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/drivers/usb/usb_hid.h"
 #include "../../../../include/drivers/usb/usb_config.h"
 #include "../../../../include/drivers/usb/usb_enum.h"
@@ -301,7 +302,7 @@ static void xhci_cmd_enqueue(xhci_controller_t *c, uint64_t param,
 static int xhci_poll_event(xhci_controller_t *c, uintptr_t wait_trb_phys,
                            xhci_trb_t *out_event, uint64_t timeout_ms)
 {
-    uint64_t start = hpet_elapsed_ns();
+    uint64_t start = clocksource_now_ns();
     uint64_t deadline_ns = timeout_ms * 1000000ULL;
 
     for (;;) {
@@ -332,7 +333,7 @@ static int xhci_poll_event(xhci_controller_t *c, uintptr_t wait_trb_phys,
             continue;
         }
 
-        if (hpet_elapsed_ns() - start > deadline_ns) return -ETIMEDOUT;
+        if (clocksource_now_ns() - start > deadline_ns) return -ETIMEDOUT;
         asm volatile("pause");
     }
 }
@@ -369,13 +370,13 @@ static int xhci_port_reset(xhci_controller_t *c, uint8_t port, uint8_t *out_spee
 
     *out_speed = (uint8_t)((portsc >> PORTSC_SPEED_SHIFT) & PORTSC_SPEED_MASK);
 
-    op_w32(c, XHCI_OP_PORTSC(port), portsc);
+    op_w32(c, XHCI_OP_PORTSC(port), portsc & ~((0xFu << 5) | (1u << 1)));
     return 0;
 }
 
 static uint16_t default_max_packet0(uint8_t speed) {
     switch (speed) {
-        case 1: return 64;
+        case 1: return 8;
         case 2: return 8;
         case 3: return 64;
         case 4: return 512;
@@ -693,6 +694,32 @@ static int xhci_enum_control(void *h, const uint8_t setup[8],
                              wValue, wIndex, wLength, data);
 }
 
+static int xhci_evaluate_ep0_mps(xhci_controller_t *c, uint8_t slot_id, uint16_t mps)
+{
+    uintptr_t inctx_phys;
+    uint8_t *inctx = (uint8_t *)dma_alloc_coherent(4096, &inctx_phys);
+    if (!inctx) return -ENOMEM;
+    memset(inctx, 0, 4096);
+
+    uint32_t *icc = (uint32_t *)inctx;
+    icc[1] = (1u << 1);
+
+    uint32_t *ep0_ctx = (uint32_t *)(inctx + 32 + 32);
+    ep0_ctx[1] = (3u << 1) | (4u << 3) | ((uint32_t)mps << 16);
+
+    xhci_trb_t ev;
+    int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0,
+                          TRB_TYPE(TRB_EVALUATE_CONTEXT) | ((uint32_t)slot_id << 24),
+                          &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS) {
+        serial_printf("[xhci] EVALUATE CONTEXT (mps=%u): completion code %u\n", mps, cc);
+        return -EIO;
+    }
+    return 0;
+}
+
 void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
                       const char *path_label)
 {
@@ -720,6 +747,17 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
     uint8_t  cyc = 1;
     xhci_ctrl_handle_t xh = { c, slot_id, ep0_ring, ep0_phys, &enq, &cyc };
     usb_ctrl_ops_t ops = { &xh, xhci_enum_control };
+
+    if (topo->speed == 1) {
+        uint8_t d8[8] = {0};
+        uint8_t setup8[8] = { 0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 8, 0x00 };
+        if (xhci_enum_control(&xh, setup8, d8, 8, true) >= 0 &&
+            d8[7] && d8[7] != default_max_packet0(1)) {
+            serial_printf("[xhci] %s: FS EP0 mps %u -> evaluate context\n",
+                          path_label, d8[7]);
+            xhci_evaluate_ep0_mps(c, slot_id, d8[7]);
+        }
+    }
 
     uint8_t  desc[18];
     if (usb_get_device_descriptor(&ops, desc) < 0)
