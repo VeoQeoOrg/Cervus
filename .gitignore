@@ -1,3 +1,5 @@
+.fz_cache
+.fz_objs
 demo_iso/
 limine/
 limine-tools/
