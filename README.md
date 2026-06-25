@@ -757,7 +757,6 @@ See the [LICENSE](LICENSE) file for the full text.
 
 - **Telegram Channel:** [@veoqeo_off](https://t.me/veoqeo_off) — Latest news and announcements
 - **GitHub Issues:** [Report bugs or request features](https://github.com/VeoQeo/Cervus/issues)
-- **GitHub Discussions:** [Community Q&A and ideas](https://github.com/VeoQeo/Cervus/discussions)
 
 ### Getting Help
 
