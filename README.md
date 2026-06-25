@@ -1,8 +1,4 @@
 <p align="center">
-  <img src="assets/cervus_vfetch.jpg" alt="Cervus fetch preview" width="600px">
-</p>
-
-<p align="center">
   <img src="https://github.com/VeoQeo/Cervus/blob/main/wallpapers/cervus_logo.jpg" alt="Cervus OS Logo" width="400px">
 </p>
 
@@ -25,6 +21,10 @@
   <a href="#">
     <img src="https://img.shields.io/badge/Stage-Alpha-orange.svg?style=for-the-badge" alt="Stage: Alpha">
   </a>
+</p>
+
+<p align="center">
+  <img src="assets/cervus_vfetch.jpg" alt="Cervus fetch preview" width="600px">
 </p>
 
 ---
