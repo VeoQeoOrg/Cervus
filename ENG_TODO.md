@@ -1,0 +1,23 @@
+- [x] **Bootloader**: Limine Barebones
+- [x] **Graphics**: Basic framebuffer support
+- [x] **Fonts**: PSF font support
+- [x] **I/O Ports**: Basic port I/O operations
+- [x] **Serial Port**: Debug output over COM1
+- [x] **Minimal libc**: Basic C standard library
+- [x] **GDT**: Global Descriptor Table
+- [x] **IDT**: Interrupt Descriptor Table
+- [x] **SIMD**: SSE/AVX instruction set support
+- [x] **PMM**: Physical Memory Manager
+- [x] **VMM**: Virtual Memory Manager
+- [x] **PAGING**
+- [x] **ACPI**: ACPI table parsing
+- [x] **APIC**: Advanced Programmable Interrupt Controller
+- [x] **IOAPIC**: I/O Advanced Programmable Interrupt Controller
+- [x] **LAPIC**: Local APIC
+- [x] **HPET**: High Precision Event Timer
+- [x] **APIC Timer**: APIC-based timer
+- [x] **SMP**: Symmetric Multiprocessing
+- [x] **Multitasking**: Multitasking and scheduler
+- [x] **Syscalls**: System calls
+- [x] **Userspace**: User space
+- [x_x(help me)] **The fun begins**: Further development
