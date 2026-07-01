@@ -1,0 +1,83 @@
+#!/bin/sh
+# Cervus ninja build front-end.
+#
+#   ./nb                    configure + build everything (kernel, initramfs), -j nproc
+#   ./nb <targets...>       build specific ninja targets (e.g. kernel, apps, iso)
+#   ./nb -j4 kernel         extra ninja flags pass straight through
+#   ./nb run [opts]         build ISO + boot in QEMU (see run opts below)
+#   ./nb clean              remove build artifacts (keeps fetched deps/limine/tcc)
+#   ./nb gitclean           deep wipe: also remove deps, limine, tcc, disks, ISOs
+#   ./nb cleaniso           drop demo_iso/ only
+#   ./nb reconfigure        regenerate build.ninja only
+#   ./nb help               this text
+#
+# run opts (combine freely):
+#   --uefi         UEFI/OVMF (default BIOS)   --disk=ide|ahci|nvme|all|none
+#   --live         no disk, live ISO          --fresh   recreate empty disk(s)
+#   --installed    boot existing disk, no ISO (simulate real hardware)
+#
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
+
+JOBS=$(nproc 2>/dev/null || echo 4)
+
+configure() { sh builder/configure.sh; }
+
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
+
+deep_clean() {
+  rm -rf obj bin rootfs iso_root data_iso_root demo_iso limine limine-tools \
+    edk2-ovmf kernel/linker-scripts .ninja build.ninja builder/.legacy-build
+  rm -f initramfs.tar *.tar limine.conf OS-TREE.txt log.txt log_*.txt \
+    cervus_disk.img cervus_ata.img cervus_sata.img cervus_nvme.img \
+    cervus_data.iso Cervus.iso Cervus.hdd temp_*
+  rm -f usr/sysroot/usr/lib/libcervus.a usr/sysroot/usr/lib/crt0.o
+  rm -rf usr/sysroot/usr/bin usr/sysroot/usr/lib/tcc
+  rm -rf usr/tcc/tcc-0.9.27 usr/tcc/tcc.elf usr/tcc/libtcc1.a
+  rm -f usr/tcc/*.o usr/tcc/*.tar.bz2
+  find usr/lib/libcervus -name '*.o' -delete 2>/dev/null || true
+  rm -f usr/lib/libcervus/libcervus.a
+  find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
+}
+
+case "${1:-}" in
+run)
+  shift
+  installed=false
+  for a in "$@"; do [ "$a" = --installed ] && installed=true; done
+  if ! $installed; then
+    configure
+    ninja -j "$JOBS" iso
+  fi
+  exec sh builder/run_qemu.sh "$@"
+  ;;
+clean)
+  rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja
+  rm -f initramfs.tar limine.conf
+  find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
+  echo "cleaned (deps/limine/tcc kept; './nb gitclean' for a full wipe)"
+  ;;
+gitclean)
+  deep_clean
+  echo "deep clean complete (deps/limine/tcc removed too)"
+  ;;
+cleaniso)
+  rm -rf demo_iso
+  echo "removed demo_iso/"
+  ;;
+reconfigure)
+  configure
+  ;;
+help | -h | --help)
+  usage
+  ;;
+"")
+  configure
+  ninja -j "$JOBS"
+  ;;
+*)
+  configure
+  ninja -j "$JOBS" "$@"
+  ;;
+esac
