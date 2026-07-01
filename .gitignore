@@ -1,3 +1,6 @@
+.ninja/ 
+builder/.legacy-build
+build.ninja
 .fz_cache
 .fz_objs
 sbom.json
