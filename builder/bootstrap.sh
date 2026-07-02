@@ -6,9 +6,10 @@
 #   builder/bootstrap.sh limine   download + build the Limine bootloader
 #   builder/bootstrap.sh tcc      build the on-OS tcc compiler into the sysroot
 #
-# The tcc step deliberately reuses the legacy builder (builder/build.c) for its
-# ~400 lines of fragile in-place source patching -- there is no point
-# reimplementing that here.
+# The tcc step downloads/patches/builds tcc via builder/build_tcc.sh
+# (patches applied by builder/tcc_patch.pl). It only *reads* libcervus.a/
+# crt0.o from the sysroot -- Ninja already built them via build.ninja's
+# order-only dependency, so there's nothing to snapshot/restore here.
 
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -74,31 +75,8 @@ do_limine() {
 }
 
 do_tcc() {
-    say "building tcc via host builder"
-    # `_tcc` rebuilds libcervus as a side effect, clobbering the sysroot
-    # libcervus.a / crt0.o that Ninja owns and bumping their mtimes -- which
-    # would make every app relink forever. Snapshot them (content + mtime) and
-    # restore afterward so Ninja sees no change.
-    saved=""
-    for f in usr/sysroot/usr/lib/libcervus.a usr/sysroot/usr/lib/crt0.o; do
-        if [ -f "$f" ]; then cp -p "$f" "$f.fzsave"; saved="$saved $f"; fi
-    done
-    restore() { for f in $saved; do [ -f "$f.fzsave" ] && mv "$f.fzsave" "$f"; done; }
-    trap 'restore' EXIT
-
-    # Prefer the ForgeZero-built ./build (see .fz.yaml); fall back to a private
-    # copy so `./nb` works even when the build wasn't driven through fz.
-    if [ -f ./build ] && [ -x ./build ]; then
-        ./build _tcc
-    else
-        legacy=builder/.legacy-build
-        if [ ! -x "$legacy" ] || [ builder/build.c -nt "$legacy" ]; then
-            cc -O2 -o "$legacy" builder/build.c
-        fi
-        "./$legacy" _tcc
-    fi
-    restore
-    trap - EXIT
+    say "building tcc"
+    sh builder/build_tcc.sh
 }
 
 [ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|tcc}"

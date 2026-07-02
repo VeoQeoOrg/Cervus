@@ -14,21 +14,16 @@ You can contribute to userspace, libraries, tooling, or any other part of the OS
 
 ## Build system
 
-We use a custom builder located at `builder/build.c`.  
+The build is Ninja-driven. `builder/configure.sh` walks the source tree and
+generates `build.ninja`; one-time/network steps (deps, Limine, tcc) live in
+`builder/bootstrap.sh`, gated behind stamp files so they run at most once.
 
-* Build it via `.fz.yaml` (install the **forgezero** utility first: [forgezero‑cli/forgezero](https://github.com/forgezero-cli/forgezero)).
-* Run `./builder` and choose the desired option.  
-The workflow is straightforward and fully self‑contained.
+* `./nb` — configure + build everything
+* `./nb run` — build the ISO and boot it in QEMU
+* `./nb help` — full command list
 
-## Memory Safety Testing (Alex Mode)
-
-Before submitting a Pull Request, you **must** verify that your changes do not introduce memory errors or leaks.  
-CervusOS provides an automated AddressSanitizer (ASan) test mode for this purpose.
-
-```bash
-./build alex
-# Or using interactive menu
-```
+The workflow is straightforward and fully self‑contained; no external build
+orchestrator to install.
 
 ### What it does:
 

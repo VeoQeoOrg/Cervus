@@ -74,7 +74,7 @@ Cervus has its own kernel ABI, custom syscall numbers, and native C library. Whi
 This is not "a kernel that prints hello." Cervus includes a functional shell with command history, an interactive text editor, a working C compiler, a real filesystem on a real disk, and a complete installer that produces a bootable, persistent system.
 
 ### 🚀 **One-Command Build**
-The entire system builds with a single command: `./build run`. The build system is itself a C binary, checked into the repository. No complicated shell scripts, no make dependency hell, no external tools beyond standard gcc, nasm, and qemu.
+The entire system builds with a single command: `./nb run`. The build system is a small POSIX shell configurator (`builder/configure.sh`) that generates a `build.ninja`, so incremental rebuilds and parallelism are handled by Ninja itself. One-time/network steps (fetching deps, Limine, tcc) are gated behind stamp files in `builder/bootstrap.sh`. No Python, no make dependency hell, no external tools beyond gcc, nasm, ninja, and qemu.
 
 ---
 
@@ -328,10 +328,17 @@ Cervus/
 │   └── init/                 # System initialization
 │
 ├── builder/                   # Build system
-│   └── build.c              # Single-binary build tool (no make/shell scripts)
+│   ├── configure.sh          # Generates build.ninja
+│   ├── bootstrap.sh           # One-time steps: deps, limine, tcc (stamp-gated)
+│   ├── build_tcc.sh           # Downloads/patches/builds tcc into the sysroot
+│   ├── tcc_patch.pl           # Applies Cervus's tcc source patches (idempotent)
+│   ├── mk_initramfs.sh
+│   ├── mk_iso.sh
+│   ├── mk_psf.sh
+│   └── run_qemu.sh
 │
 ├── limine.conf              # Boot configuration
-├── build                    # Build wrapper script
+├── nb                        # Ninja build front-end (./nb, ./nb run, ...)
 └── README.md                # This file
 ```
 
@@ -365,50 +372,11 @@ To build Cervus, you need a standard Linux development environment:
 | `gcc` | C compiler | `sudo apt install gcc` (or equivalent) |
 | `nasm` | Assembler | `sudo apt install nasm` |
 | `ar` | Archiver (binutils) | Usually included with build-essential |
+| `ninja` | Build execution | `sudo apt install ninja-build` |
+| `perl` | tcc source patching | Preinstalled on virtually all Linux distros |
 | `qemu-system-x86_64` | x86_64 emulator | `sudo apt install qemu-system-x86` |
 | `xorriso` | ISO manipulation | `sudo apt install xorriso` |
 | `mtools` | FAT utilities | `sudo apt install mtools` |
-| `ForgeZero` | Modern build system (upcoming) | See installation guide below |
-
-### Installing ForgeZero (Modern Build System)
-
-Cervus is transitioning to **ForgeZero** — a modern, cutting-edge build orchestration system that provides superior build performance, better dependency management, and an enhanced developer experience. The project will completely migrate to ForgeZero in upcoming releases.
-
-**ForgeZero GitHub:** [forgezero-cli/ForgeZero](https://github.com/forgezero-cli/forgezero)
-
-ForgeZero is optional for current builds (the legacy C-based build system still works), but we recommend installing it for future compatibility and to experience the next generation of Cervus builds.
-
-#### Installation Method 1: Using Go (Recommended for Developers)
-
-If you have Go installed, install ForgeZero with a single command:
-
-```bash
-# Install ForgeZero
-GOPROXY=direct go install github.com/forgezero-cli/ForgeZero/cmd/fz@main
-
-# Add to PATH (add this to your ~/.bashrc or ~/.zshrc for permanent change)
-export PATH=$PATH:$(go env GOPATH)/bin
-
-# Verify installation
-fz --version
-```
-
-#### Installation Method 2: Pre-built Binary (No Go Required)
-
-If you prefer not to use Go, download a pre-built binary:
-
-1. **Visit** [ForgeZero Releases](https://github.com/forgezero-cli/forgezero/releases)
-2. **Download** the binary for your platform (Linux x86_64, macOS, Windows)
-3. **Make it executable** and move to your PATH:
-
-```bash
-# After downloading the binary
-chmod +x fz
-sudo mv fz /usr/local/bin/
-
-# Verify installation
-fz --version
-```
 
 ### Quick Start
 
@@ -420,7 +388,7 @@ git clone https://github.com/VeoQeo/Cervus.git
 cd Cervus
 
 # 2. Build and run in QEMU (one command)
-./build run
+./nb run
 
 # 3. System boots and presents login prompt
 # Log in with default credentials
@@ -429,9 +397,9 @@ cd Cervus
 #### Create Bootable USB (for real hardware):
 
 ```bash
-# After building, the ISO is in build/cervus.iso
+# After building, the ISO is Cervus.iso in the repo root
 # Write to USB device (replace sdX with your device)
-sudo dd if=build/cervus.iso of=/dev/sdX bs=4M && sync
+sudo dd if=Cervus.iso of=/dev/sdX bs=4M && sync
 ```
 
 #### Boot from Installation Disk:
@@ -451,52 +419,32 @@ sudo dd if=build/cervus.iso of=/dev/sdX bs=4M && sync
 
 ## Building from Source
 
-### Modern Build System: ForgeZero
-
-**Cervus is actively transitioning to ForgeZero**, a next-generation build system that will completely replace the current C-based build system in upcoming releases. ForgeZero offers:
-
-- ⚡ **Superior Performance** — Optimized parallel builds with intelligent caching
-- 📦 **Better Dependency Management** — Explicit dependency graphs and version management
-- 🔧 **Enhanced Developer Experience** — Clear build output, better error messages
-- 🚀 **Future-Ready** — Modern architecture designed for complex projects
-- 📱 **Cross-Platform** — Seamless builds on Linux, macOS, and Windows
-
-**Current Status:**
-- ✅ ForgeZero already integrated and available for use
-- 🚧 Current C-based build system still fully functional
-- 📅 Complete migration planned for next major release
-
-For now, both build systems work interchangeably. Developers can choose either the legacy `./build` command or ForgeZero-based builds.
-
 ### Build Commands
 
-The `./build` script is your primary interface. It invokes the C-based build system:
+`./nb` is the build front-end. It regenerates `build.ninja` via `builder/configure.sh` and then invokes `ninja`:
 
 ```bash
-./build help          # Show all available commands
+./nb                    # configure + build everything (kernel, initramfs), -j nproc
+./nb <targets...>       # build specific ninja targets (e.g. kernel, apps, iso)
+./nb -j4 kernel         # extra ninja flags pass straight through
+./nb run [opts]         # build ISO + boot in QEMU
+./nb clean              # remove build artifacts (keeps fetched deps/limine/tcc)
+./nb gitclean           # deep wipe: also remove deps, limine, tcc, disks, ISOs
+./nb cleaniso           # drop demo_iso/ only
+./nb reconfigure        # regenerate build.ninja only
+./nb help               # show this text
 
-./build               # Full build (kernel + userland)
-./build run           # Build and launch in QEMU
-
-./build iso           # Build bootable ISO only
-./build kernel        # Build kernel only
-./build userland      # Build userland utilities only
-./build clean         # Remove all build artifacts
-./build distclean     # Clean + remove downloads
-
-./build run-gdb       # Run with GDB debugger attached
-./build run-kvm       # Use KVM acceleration (Linux only)
-./build run-usb       # Create USB image instead of ISO
+# run opts (combine freely):
+./nb run --uefi                # UEFI/OVMF (default BIOS)
+./nb run --disk=ide|ahci|nvme|all|none
+./nb run --live                # no disk, live ISO
+./nb run --fresh               # recreate empty disk(s)
+./nb run --installed           # boot existing disk, no ISO (simulate real hardware)
 ```
 
 ### Custom Build Options
 
-Edit `builder/build.c` to customize:
-- Kernel compiler flags
-- Optimization level
-- Debug symbols
-- Include paths
-- Output directories
+Compiler flags (kernel, libcervus, userland apps) live in `builder/configure.sh`, at the top under `KERNEL_BASE`/`LIBCERVUS_CFLAGS`/`APP_CFLAGS`. Edit them there; `./nb` regenerates `build.ninja` automatically on the next run.
 
 ### Build Time
 
@@ -507,27 +455,13 @@ On a typical modern system:
 
 ### Build System Architecture
 
-**Current Build System (C-based):**
+The build is Ninja-driven:
+1. `builder/configure.sh` walks the source tree and writes `build.ninja` (kernel, libcervus, userland apps — all with proper header dependency tracking via gcc depfiles)
+2. One-time/network steps (fetching deps, Limine, building tcc) are delegated to `builder/bootstrap.sh` and gated behind stamp files in `.ninja/stamps/`, so they run at most once
+3. `builder/build_tcc.sh` downloads tcc-0.9.27, applies Cervus's patches via `builder/tcc_patch.pl` (idempotent, literal source patches — no dlopen/backtrace, static linking against libcervus, PLT relocation folding for the freestanding target), and installs `tcc`/`libtcc1.a` into the sysroot
+4. `builder/mk_initramfs.sh` and `builder/mk_iso.sh` package the final kernel + initramfs into a bootable ISO
 
-The current build system (`builder/build.c`) is a single C program that:
-1. Compiles the kernel (C + ASM)
-2. Compiles libcervus (C library)
-3. Compiles userland utilities
-4. Packages everything into an ISO
-5. Optionally launches QEMU
-
-No make, no shell scripts, no external dependencies beyond compiler toolchain.
-
-**Upcoming: ForgeZero Migration**
-
-The project is actively migrating to **ForgeZero** for the following benefits:
-- Better handling of complex build dependencies
-- Improved parallel build performance
-- Cleaner, more maintainable build configuration
-- Better error reporting and debugging
-- Full cross-platform support
-
-Developers can start using ForgeZero commands immediately after installation. More details on ForgeZero-based builds will be available in upcoming releases.
+No Python, no external build orchestrators beyond `ninja` itself.
 
 ---
 
@@ -612,8 +546,8 @@ Developers can start using ForgeZero commands immediately after installation. Mo
 1. Create source in `usr/bin/new_tool/main.c`
 2. Include minimal libcervus headers
 3. Link against libcervus.a
-4. Update builder build system
-5. Run `./build` to include in system
+4. `builder/configure.sh` auto-discovers every `.c` file under `usr/apps`, `usr/bin`, `usr/installer` — no manual registration needed
+5. Run `./nb` to include in system
 
 **Creating System Daemons:**
 
@@ -654,25 +588,20 @@ sudo apt install build-essential
 sudo apt install nasm
 ```
 
-**"fz: command not found" (ForgeZero)**
+**"ninja: command not found"**
 ```bash
-# Install ForgeZero using Go
-GOPROXY=direct go install github.com/forgezero-cli/ForgeZero/cmd/fz@main
-export PATH=$PATH:$(go env GOPATH)/bin
-
-# Or download pre-built binary from:
-# https://github.com/forgezero-cli/forgezero/releases
+sudo apt install ninja-build
 ```
 
 **Build timeout or hangs**
 - Check system resources: `free -h`, `df -h`
-- Clear build cache: `./build clean`
-- Rebuild: `./build`
+- Clear build cache: `./nb clean` (or `./nb gitclean` for a full wipe)
+- Rebuild: `./nb`
 
 ### Runtime Issues
 
 **System hangs on boot**
-- Run with: `./build run-qemu -- -cpu host` for better CPU compatibility
+- Run with: `./nb run -- -cpu host` for better CPU compatibility
 - Check QEMU version: `qemu-system-x86_64 --version`
 
 **Filesystem becomes read-only**
@@ -718,7 +647,7 @@ git remote add upstream https://github.com/VeoQeo/Cervus.git
 git checkout -b feature/my-feature
 
 # Build and test
-./build run
+./nb run
 
 # Push and create PR
 git push origin feature/my-feature
