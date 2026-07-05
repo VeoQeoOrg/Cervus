@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <sys/syscall.h>
 #include <sys/cervus.h>
+#include <sys/ioctl.h>
 #include <errno.h>
 #include <readline.h>
 #include <cervus_util.h>
@@ -2016,8 +2017,13 @@ static void render_ps1(const char *ps1, char *out, int outmax) {
 }
 
 static void build_prompt(char *out, int outmax) {
+    int o = 0;
+    struct cursor_pos cp;
+    if (ioctl(1, TIOCGCURSOR, &cp) == 0 && cp.col != 0) {
+        if (o + 1 < outmax) out[o++] = '\n';
+    }
+    o += snprintf(out + o, outmax - o, "\x1b[0m\x1b[?25h\r\x1b[K");
     const char *ps1 = var_get("PS1");
-    int o = snprintf(out, outmax, "\x1b[0m\x1b[?25h\r\x1b[K");
     if (ps1 && ps1[0]) {
         render_ps1(ps1, out + o, outmax - o);
         int e = (int)strlen(out);
