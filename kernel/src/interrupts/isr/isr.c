@@ -225,6 +225,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                     for (int qi = 0; qi < 6; qi++)
                         serial_printf("[GPF] rsp[+%d] = 0x%016llx\n", qi * 8, sp[qi]);
                 }
+                dump_rip_bytes_safe(regs->rip);
             }
             kernel_panic_regs("General Protection Fault (kernel)", regs);
 

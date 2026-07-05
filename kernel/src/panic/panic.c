@@ -210,8 +210,8 @@ void kernel_panic_regs(const char *msg, struct int_frame_t *regs) {
         for (;;) asm volatile("cli; hlt");
     }
 
-    serial_force_unlock();
     halt_other_cpus();
+    serial_force_unlock();
     serial_panic_dump(msg, regs);
     draw_panic_screen(msg, regs);
 
