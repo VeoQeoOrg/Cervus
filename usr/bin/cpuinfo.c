@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
+#include <stdbool.h>
 
 static void cpuid_leaf(uint32_t leaf, uint32_t *a, uint32_t *b,
                        uint32_t *c, uint32_t *d)
