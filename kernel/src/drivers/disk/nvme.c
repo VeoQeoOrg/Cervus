@@ -198,7 +198,8 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
     uint64_t timeout_ns = (cmd->opcode == NVME_NVM_FLUSH)
                         ? 30000000000ULL
                         : 10000000000ULL;
-    uint64_t start_ns = hpet_elapsed_ns();
+    extern uint64_t clocksource_now_ns(void);
+    uint64_t start_ns = clocksource_now_ns();
 
     for (;;) {
         uint16_t st = e->status;
@@ -224,11 +225,11 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
             }
             return 0;
         }
-        if (hpet_elapsed_ns() - start_ns > timeout_ns) break;
+        if (clocksource_now_ns() - start_ns > timeout_ns) break;
         asm volatile("pause");
     }
 
-    uint64_t elapsed_ms = (hpet_elapsed_ns() - start_ns) / 1000000ULL;
+    uint64_t elapsed_ms = (clocksource_now_ns() - start_ns) / 1000000ULL;
     serial_printf("[nvme] opcode 0x%02x TIMEOUT after %llu ms — marking controller dead\n",
                   cmd->opcode, (unsigned long long)elapsed_ms);
     c->dead = true;

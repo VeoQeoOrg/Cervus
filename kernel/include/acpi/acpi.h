@@ -106,7 +106,11 @@ typedef struct {
     acpi_gas_t x_pm_timer_block;
     acpi_gas_t x_gpe0_block;
     acpi_gas_t x_gpe1_block;
+    acpi_gas_t sleep_control_reg;
+    acpi_gas_t sleep_status_reg;
 } __attribute__((packed)) acpi_fadt_t;
+
+#define FADT_FLAG_HW_REDUCED_ACPI (1u << 20)
 
 typedef struct {
     acpi_sdt_header_t header;

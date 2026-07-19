@@ -148,7 +148,7 @@ uint32_t get_screen_width(void) {
 }
 uint32_t get_screen_height(void) {
     if (!global_framebuffer) return 768;
-    return global_framebuffer->height;
+    return (global_framebuffer->height / 16) * 16;
 }
 
 uint32_t get_cursor_row(void) { return cursor_y / 16; }

@@ -174,22 +174,6 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         case EXCEPTION_DEVICE_NOT_AVAILABLE:
         case EXCEPTION_X87_FPU_ERROR:
             if ((regs->cs & 3) == 3) {
-                if (regs->interrupt == EXCEPTION_INVALID_OPCODE) {
-                    dump_rip_bytes_safe(regs->rip);
-
-                    serial_printf("[ISR-UD] RBP=0x%llx RSP=0x%llx\n",
-                                  regs->rbp, regs->rsp);
-
-                    uint64_t fp = regs->rbp;
-                    for (int d = 0; d < 10 && fp >= 0x10000 && fp < 0x800000000000ULL; d++) {
-                        uint64_t saved_rbp = *(volatile uint64_t*)fp;
-                        uint64_t ret       = *(volatile uint64_t*)(fp + 8);
-                        serial_printf("[ISR-UD]   frame %d: rbp=0x%llx ret=0x%llx\n",
-                                      d, fp, ret);
-                        if (saved_rbp <= fp || saved_rbp >= 0x800000000000ULL) break;
-                        fp = saved_rbp;
-                    }
-                }
                 serial_printf("[ISR] %s in userspace at RIP=0x%llx — killing task\n",
                               exception_names[regs->interrupt], regs->rip);
                 kill_current_task(139);

@@ -29,6 +29,12 @@ static void serial_log_emit(const char *buf, size_t len) {
     if (!buf || len == 0) return;
 
     static char joined[1100];
+
+    uint64_t flags;
+    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    while (__sync_lock_test_and_set(&serial_lock, 1))
+        __asm__ volatile("pause" ::: "memory");
+
     if (g_ts_line_start) {
         extern uint64_t clocksource_now_ns(void);
         uint64_t ns = clocksource_now_ns();
@@ -48,13 +54,11 @@ static void serial_log_emit(const char *buf, size_t len) {
     }
 
     klog_write(buf, len);
-    if (default_serial_port == 0) return;
-    uint64_t flags;
-    asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    while (__sync_lock_test_and_set(&serial_lock, 1))
-        __asm__ volatile("pause" ::: "memory");
-    for (size_t i = 0; i < len; i++)
-        serial_write_port(default_serial_port, buf[i]);
+    if (default_serial_port != 0) {
+        for (size_t i = 0; i < len; i++)
+            serial_write_port(default_serial_port, buf[i]);
+    }
+
     __sync_lock_release(&serial_lock);
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
