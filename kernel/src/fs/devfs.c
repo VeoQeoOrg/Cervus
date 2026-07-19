@@ -21,6 +21,7 @@ extern void putchar_flush_end(void);
 
 extern uint32_t get_screen_width(void);
 extern uint32_t get_screen_height(void);
+extern uint64_t sched_now_ns(void);
 extern uint32_t get_cursor_row(void);
 extern uint32_t get_cursor_col(void);
 
@@ -176,7 +177,7 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out,
                 continue;
             }
             if (half_tick) {
-                me->wakeup_time_ns = hpet_elapsed_ns() + 300000000ULL;
+                me->wakeup_time_ns = sched_now_ns() + 300000000ULL;
                 sched_note_wakeup(me->wakeup_time_ns);
             } else {
                 me->wakeup_time_ns = 0;

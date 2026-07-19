@@ -345,6 +345,15 @@ void acpi_shutdown(void) {
         }
     }
 
+    if (fadt->header.length >= 256 && fadt->sleep_control_reg.address) {
+        uint8_t slp = (uint8_t)(((uint32_t)s5_slp_typa << 2) | (1u << 5));
+        serial_printf("ACPI shutdown: hardware-reduced SLEEP_CONTROL_REG write=0x%x\n", slp);
+        for (int rep = 0; rep < 3; rep++) {
+            acpi_write_gas(&fadt->sleep_control_reg, slp);
+            for (volatile int i = 0; i < 500000; i++) asm volatile("pause");
+        }
+    }
+
 fallback:
     serial_writestring("ACPI shutdown: trying QEMU/Bochs port 0x604...\n");
     outw(0x604, 0x2000);

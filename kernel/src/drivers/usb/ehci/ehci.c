@@ -15,6 +15,7 @@
 #include <stdio.h>
 
 extern void devfs_register(const char *name, vnode_t *node);
+extern uint64_t clocksource_now_ns(void);
 
 #define EHCI_MAX_DEVS 16
 static xhci_pub_dev_t g_ehci_pub_devs[EHCI_MAX_DEVS];
@@ -326,7 +327,7 @@ int ehci_control_xfer(ehci_controller_t *c,
 
     asm volatile("" ::: "memory");
 
-    uint64_t deadline = hpet_elapsed_ns() + 2000000000ULL;
+    uint64_t deadline = clocksource_now_ns() + 2000000000ULL;
     int r = -ETIMEDOUT;
     for (;;) {
         uint32_t st = t3->token & 0xFF;
@@ -341,7 +342,7 @@ int ehci_control_xfer(ehci_controller_t *c,
             }
             break;
         }
-        if (hpet_elapsed_ns() > deadline) break;
+        if (clocksource_now_ns() > deadline) break;
         asm volatile("pause");
     }
 
@@ -349,9 +350,9 @@ int ehci_control_xfer(ehci_controller_t *c,
 
     uint32_t cmd = op_r32(c, EHCI_OP_USBCMD);
     op_w32(c, EHCI_OP_USBCMD, cmd | USBCMD_IAAD);
-    uint64_t dl2 = hpet_elapsed_ns() + 100000000ULL;
+    uint64_t dl2 = clocksource_now_ns() + 100000000ULL;
     while (!(op_r32(c, EHCI_OP_USBSTS) & USBSTS_IAA)) {
-        if (hpet_elapsed_ns() > dl2) break;
+        if (clocksource_now_ns() > dl2) break;
         asm volatile("pause");
     }
     op_w32(c, EHCI_OP_USBSTS, USBSTS_IAA);
@@ -373,9 +374,9 @@ int ehci_async_pause(ehci_controller_t *c, uint32_t *old_cmd) {
     spinlock_acquire(&c->async_lock);
     *old_cmd = op_r32(c, EHCI_OP_USBCMD);
     op_w32(c, EHCI_OP_USBCMD, *old_cmd & ~USBCMD_ASE);
-    uint64_t deadline = hpet_elapsed_ns() + 100000000ULL;
+    uint64_t deadline = clocksource_now_ns() + 100000000ULL;
     while (op_r32(c, EHCI_OP_USBSTS) & USBSTS_ASYNC) {
-        if (hpet_elapsed_ns() > deadline) {
+        if (clocksource_now_ns() > deadline) {
             spinlock_release(&c->async_lock);
             return -ETIMEDOUT;
         }
@@ -386,9 +387,9 @@ int ehci_async_pause(ehci_controller_t *c, uint32_t *old_cmd) {
 
 void ehci_async_resume(ehci_controller_t *c, uint32_t old_cmd) {
     op_w32(c, EHCI_OP_USBCMD, old_cmd | USBCMD_ASE);
-    uint64_t deadline = hpet_elapsed_ns() + 100000000ULL;
+    uint64_t deadline = clocksource_now_ns() + 100000000ULL;
     while (!(op_r32(c, EHCI_OP_USBSTS) & USBSTS_ASYNC)) {
-        if (hpet_elapsed_ns() > deadline) break;
+        if (clocksource_now_ns() > deadline) break;
         asm volatile("pause");
     }
     spinlock_release(&c->async_lock);
