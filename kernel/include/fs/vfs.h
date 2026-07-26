@@ -68,6 +68,7 @@ typedef struct vnode_ops {
     int     (*rename)  (vnode_t *src_dir, const char *src_name,
                         vnode_t *dst_dir, const char *dst_name);
     int     (*stat)    (vnode_t *node, vfs_stat_t *out);
+    int     (*setattr) (vnode_t *node);
     void    (*ref)     (vnode_t *node);
     void    (*unref)   (vnode_t *node);
     int64_t (*ioctl)   (vnode_t *node, uint64_t req, void *arg);
@@ -138,6 +139,9 @@ int     vfs_stat   (const char *path, vfs_stat_t *out);
 int     vfs_fstat  (vfs_file_t *file, vfs_stat_t *out);
 int     vfs_truncate (const char *path, uint64_t new_size);
 int     vfs_ftruncate(vfs_file_t *file, uint64_t new_size);
+int     vfs_chmod    (const char *path, uint32_t mode);
+int     vfs_chown    (const char *path, uint32_t uid, uint32_t gid);
+uint32_t vfs_current_uid(void);
 int     vfs_fsync    (vfs_file_t *file);
 int     vfs_symlink  (const char *target, const char *linkpath);
 int64_t vfs_readlink (const char *path, char *buf, size_t bufsiz);
