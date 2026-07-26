@@ -265,6 +265,7 @@ int initramfs_mount(const void *data, size_t size) {
             if (strcmp(abspath, "/") != 0) {
                 int r = mkdir_p(abspath);
                 if (r == 0) {
+                    if (mode & 0777) vfs_chmod(abspath, mode);
                     LOG_D("[initramfs] dir  %s\n", abspath);
                     dirs_ok++;
                 } else {
