@@ -29,6 +29,12 @@ static vt_cell_t *g_grid  = NULL;
 static uint32_t   g_gcols = 0;
 static uint32_t   g_grows = 0;
 
+#define ALT_MAX_CELLS 20480
+static vt_cell_t  alt_save[ALT_MAX_CELLS];
+static size_t     alt_saved_n = 0;
+static int        alt_active  = 0;
+static uint32_t   alt_cx = 0, alt_cy = 0, alt_fg = 0, alt_bg = 0;
+
 extern bool               hpet_is_available(void);
 extern unsigned long long hpet_elapsed_ns(void);
 extern unsigned long long clocksource_now_ns(void);
@@ -132,6 +138,39 @@ void console_force_full_redraw(void) {
     dirty_y_max = 0;
     fb_flush(global_framebuffer);
     g_last_flush_ns = clocksource_now_ns();
+}
+
+static void console_alt_enter(void) {
+    if (alt_active) return;
+    size_t n = (size_t)g_gcols * g_grows;
+    if (n > ALT_MAX_CELLS) n = ALT_MAX_CELLS;
+    if (g_grid) memcpy(alt_save, g_grid, n * sizeof(vt_cell_t));
+    alt_saved_n = n;
+    alt_cx = cursor_x; alt_cy = cursor_y;
+    alt_fg = text_color; alt_bg = bg_color;
+    alt_active = 1;
+    for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
+    cursor_x = 0; cursor_y = 0;
+    if (!g_offscreen && global_framebuffer) {
+        fb_clear(global_framebuffer, bg_color);
+        mark_dirty(0, get_screen_height());
+        g_need_redraw = 0;
+        commit_dirty();
+    }
+}
+
+static void console_alt_exit(void) {
+    if (!alt_active) return;
+    if (g_grid && alt_saved_n) memcpy(g_grid, alt_save, alt_saved_n * sizeof(vt_cell_t));
+    cursor_x = alt_cx; cursor_y = alt_cy;
+    text_color = alt_fg; bg_color = alt_bg;
+    alt_active = 0;
+    if (!g_offscreen && global_framebuffer) {
+        console_redraw_grid();
+        g_need_redraw = 0;
+        mark_dirty(0, get_screen_height());
+        do_flush_now();
+    }
 }
 
 void putchar_flush_begin(void) {
@@ -514,6 +553,9 @@ int putchar(int c) {
                 } else if (p == 7) {
                     if      (ch == 'l') autowrap = 0;
                     else if (ch == 'h') autowrap = 1;
+                } else if (p == 1049 || p == 1047 || p == 47) {
+                    if      (ch == 'h') console_alt_enter();
+                    else if (ch == 'l') console_alt_exit();
                 }
                 ps_state = PS_NORMAL;
                 break;
