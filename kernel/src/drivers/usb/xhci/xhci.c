@@ -74,6 +74,10 @@ extern void devfs_register(const char *name, vnode_t *node);
 #define TRB_NO_OP_CMD         23
 #define TRB_ENABLE_SLOT       9
 #define TRB_ADDRESS_DEVICE    11
+#define TRB_RESET_DEVICE      17
+#define TRB_RESET_ENDPOINT    14
+#define TRB_SET_TR_DEQUEUE    16
+#define TRB_ADDR_BSR          (1u << 9)
 #define TRB_CONFIGURE_ENDPOINT 12
 #define TRB_EVALUATE_CONTEXT  13
 #define TRB_TRANSFER_EVT      32
@@ -98,6 +102,8 @@ extern void devfs_register(const char *name, vnode_t *node);
 #define TRB_TRT_IN_DATA       3
 
 #define CC_SUCCESS            1
+#define CC_SHORT_PACKET       13
+#define CC_STALL_ERROR        6
 
 #define USB_GET_DESCRIPTOR    6
 #define USB_SET_CONFIGURATION 9
@@ -386,7 +392,8 @@ static uint16_t default_max_packet0(uint8_t speed) {
 }
 
 static int xhci_address_device(xhci_controller_t *c, const xhci_topology_t *topo,
-                               uint8_t slot_id, uintptr_t ep0_ring_phys)
+                               uint8_t slot_id, uintptr_t ep0_ring_phys,
+                               int bsr, uintptr_t *out_inctx_phys)
 {
     uintptr_t devctx_phys;
     void *devctx = dma_alloc_coherent(4096, &devctx_phys);
@@ -418,17 +425,76 @@ static int xhci_address_device(xhci_controller_t *c, const xhci_topology_t *topo
     ep0_ctx[3] = (uint32_t)((uint64_t)ep0_ring_phys >> 32);
     ep0_ctx[4] = 8;
 
+    uint32_t control = TRB_TYPE(TRB_ADDRESS_DEVICE) | ((uint32_t)slot_id << 24);
+    if (bsr) control |= TRB_ADDR_BSR;
+
     xhci_trb_t ev;
-    int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0,
-                          TRB_TYPE(TRB_ADDRESS_DEVICE) | ((uint32_t)slot_id << 24),
-                          &ev);
+    int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0, control, &ev);
     if (r < 0) {
         serial_writestring("[xhci] ADDRESS DEVICE: timeout\n");
         return r;
     }
     uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
     if (cc != CC_SUCCESS) {
-        serial_printf("[xhci] ADDRESS DEVICE: completion code %u\n", cc);
+        serial_printf("[xhci] ADDRESS DEVICE (bsr=%d): completion code %u\n", bsr, cc);
+        return -EIO;
+    }
+    if (out_inctx_phys) *out_inctx_phys = inctx_phys;
+    return 0;
+}
+
+static int xhci_reset_device(xhci_controller_t *c, uint8_t slot_id) {
+    xhci_trb_t ev;
+    int r = xhci_send_cmd(c, 0, 0,
+                          TRB_TYPE(TRB_RESET_DEVICE) | ((uint32_t)slot_id << 24), &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS) {
+        serial_printf("[xhci] RESET_DEVICE: cc=%u\n", cc);
+        return -EIO;
+    }
+    return 0;
+}
+
+int xhci_reset_endpoint(xhci_controller_t *c, uint8_t slot_id, uint8_t dci) {
+    xhci_trb_t ev;
+    uint32_t control = TRB_TYPE(TRB_RESET_ENDPOINT) |
+                       ((uint32_t)slot_id << 24) | ((uint32_t)dci << 16);
+    int r = xhci_send_cmd(c, 0, 0, control, &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS && cc != 19) {
+        serial_printf("[xhci] RESET_ENDPOINT slot=%u dci=%u: cc=%u\n", slot_id, dci, cc);
+        return -EIO;
+    }
+    return 0;
+}
+
+int xhci_set_tr_dequeue(xhci_controller_t *c, uint8_t slot_id, uint8_t dci,
+                        uintptr_t deq_phys, uint8_t dcs) {
+    xhci_trb_t ev;
+    uint64_t param = (deq_phys & ~0xFULL) | (uint64_t)(dcs & 1u);
+    uint32_t control = TRB_TYPE(TRB_SET_TR_DEQUEUE) |
+                       ((uint32_t)slot_id << 24) | ((uint32_t)dci << 16);
+    int r = xhci_send_cmd(c, param, 0, control, &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS) {
+        serial_printf("[xhci] SET_TR_DEQUEUE slot=%u dci=%u: cc=%u\n", slot_id, dci, cc);
+        return -EIO;
+    }
+    return 0;
+}
+
+static int xhci_readdress_device(xhci_controller_t *c, uint8_t slot_id,
+                                 uintptr_t inctx_phys) {
+    xhci_trb_t ev;
+    uint32_t control = TRB_TYPE(TRB_ADDRESS_DEVICE) | ((uint32_t)slot_id << 24);
+    int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0, control, &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS) {
+        serial_printf("[xhci] re-ADDRESS: cc=%u\n", cc);
         return -EIO;
     }
     return 0;
@@ -519,6 +585,11 @@ int xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
         if (buf) dma_free_coherent(buf, 4096);
         serial_printf("[xhci] control xfer (req=0x%02x type=0x%02x): cc=%u\n",
                       bRequest, bmRequestType, cc);
+        if (cc == CC_STALL_ERROR) {
+            uintptr_t deq = ep0_ring_phys + (uintptr_t)(*enq) * sizeof(xhci_trb_t);
+            if (xhci_reset_endpoint(c, slot_id, 1) == 0)
+                xhci_set_tr_dequeue(c, slot_id, 1, deq, *cyc);
+        }
         return -EIO;
     }
 
@@ -526,7 +597,6 @@ int xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
     if (buf) dma_free_coherent(buf, 4096);
     return 0;
 }
-
 
 static const char *usb_class_name(uint8_t c) {
     switch (c) {
@@ -600,7 +670,6 @@ static void xhci_parse_config(const uint8_t *buf, uint16_t total) {
     }
 }
 
-
 #define XHCI_MAX_USB_DEVS 32
 static xhci_pub_dev_t g_usb_devs[XHCI_MAX_USB_DEVS];
 static int g_usb_count = 0;
@@ -612,8 +681,6 @@ int xhci_list_devs(xhci_pub_dev_t *out, int max) {
     return n;
 }
 
-
-
 static void xhci_handle_xfer_event(xhci_controller_t *c, const xhci_trb_t *ev) {
     (void)c;
     uint8_t  slot_id = (uint8_t)((ev->control >> 24) & 0xFFu);
@@ -621,7 +688,8 @@ static void xhci_handle_xfer_event(xhci_controller_t *c, const xhci_trb_t *ev) {
     uint8_t  cc      = (uint8_t)((ev->status  >> 24) & 0xFFu);
     uint32_t resid   = ev->status & 0x00FFFFFFu;
 
-    if (xhci_hid_kbd_handle_xfer_event(slot_id, dci)) return;
+    serial_printf("[XFEREV] slot=%u dci=%u cc=%u resid=%u\n", slot_id, dci, cc, resid);
+    if (xhci_hid_kbd_handle_xfer_event(slot_id, dci, cc)) return;
     if (xhci_msc_handle_xfer_event(slot_id, dci, cc, resid, ev->parameter)) return;
 }
 
@@ -741,17 +809,21 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
     link->parameter = (uint64_t)ep0_phys;
     link->control   = TRB_TYPE(TRB_LINK) | TRB_TC;
 
-    if (xhci_address_device(c, topo, slot_id, ep0_phys) < 0) return;
+    uintptr_t inctx_phys = 0;
+    if (xhci_address_device(c, topo, slot_id, ep0_phys, 1, &inctx_phys) < 0) return;
+    xhci_reset_device(c, slot_id);
+    if (xhci_readdress_device(c, slot_id, inctx_phys) < 0) return;
 
     uint16_t enq = 0;
     uint8_t  cyc = 1;
     xhci_ctrl_handle_t xh = { c, slot_id, ep0_ring, ep0_phys, &enq, &cyc };
     usb_ctrl_ops_t ops = { &xh, xhci_enum_control };
 
-    if (topo->speed == 1) {
+    if (topo->speed == 1 || topo->speed == 2) {
         uint8_t d8[8] = {0};
         uint8_t setup8[8] = { 0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 8, 0x00 };
         if (xhci_enum_control(&xh, setup8, d8, 8, true) >= 0 &&
+            topo->speed == 1 &&
             d8[7] && d8[7] != default_max_packet0(1)) {
             serial_printf("[xhci] %s: FS EP0 mps %u -> evaluate context\n",
                           path_label, d8[7]);
@@ -921,6 +993,48 @@ static void xhci_dump_ports(xhci_controller_t *c) {
     }
 }
 
+static void xhci_bios_handoff(xhci_controller_t *c) {
+    uint32_t xecp = (c->hccparams1 >> 16) & 0xFFFF;
+    if (xecp == 0) return;
+    uint32_t off = xecp << 2;
+
+    for (int guard = 0; guard < 64; guard++) {
+        volatile uint32_t *cap = (volatile uint32_t *)(c->bar0 + off);
+        uint32_t val   = cap[0];
+        uint8_t  id    = val & 0xFF;
+        uint8_t  next  = (val >> 8) & 0xFF;
+
+        if (id == 1) {
+            if (val & (1u << 16)) {
+                cap[0] = val | (1u << 24);
+                int i;
+                for (i = 0; i < 1000; i++) {
+                    val = cap[0];
+                    if (!(val & (1u << 16))) break;
+                    for (volatile int d = 0; d < 50000; d++) ;
+                }
+                if (val & (1u << 16)) {
+                    serial_writestring("[xhci] BIOS won't release ownership; forcing OS-only\n");
+                    cap[0] = (cap[0] & ~(1u << 16)) | (1u << 24);
+                }
+            } else {
+                cap[0] = val | (1u << 24);
+            }
+
+            uint32_t ctl = cap[1];
+            ctl &= ~((1u << 0) | (1u << 4) | (1u << 13) | (1u << 14) | (1u << 15));
+            ctl |=  ((1u << 29) | (1u << 30) | (1u << 31));
+            cap[1] = ctl;
+
+            serial_writestring("[xhci] BIOS handoff complete\n");
+            return;
+        }
+
+        if (next == 0) break;
+        off += (uint32_t)next << 2;
+    }
+}
+
 static int xhci_probe(pci_device_t *pd) {
     if (g_count >= XHCI_MAX_CONTROLLERS) return 0;
     if (pd->class_code != 0x0C || pd->subclass != 0x03 || pd->prog_if != 0x30) return 0;
@@ -981,6 +1095,8 @@ static int xhci_probe(pci_device_t *pd) {
                   c->hccparams1,
                   c->hccparams1 & 1, (c->hccparams1 >> 2) & 1,
                   ((c->hccparams1 >> 16) & 0xFFFF) << 2);
+
+    xhci_bios_handoff(c);
 
     printf("[xhci] probe: slots=%u ports=%u, halting...\n", c->max_slots, c->max_ports);
     (void)xhci_halt(c);
@@ -1139,7 +1255,6 @@ static void xhci_handle_root_port(xhci_controller_t *c, int port_idx) {
     }
 }
 
-
 void xhci_worker(void *arg) {
     (void)arg;
     serial_writestring("[xhci-worker] started\n");
@@ -1164,7 +1279,7 @@ void xhci_worker(void *arg) {
             xhci_hub_tick();
         }
 
-        task_sleep_ms(20);
+        task_sleep_ms(4);
     }
 }
 

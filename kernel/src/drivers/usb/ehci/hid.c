@@ -58,7 +58,7 @@ int ehci_hid_kbd_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
     int r = ehci_control_xfer(c, addr, speed, 64, setup_proto, NULL, 0, false);
     if (r < 0) serial_printf("[ehci-hid] SET_PROTOCOL failed: %d\n", r);
 
-    uint8_t setup_idle[8] = { 0x21, 0x0A, 0x00, 0x00, info->intf, 0x00, 0x00, 0x00 };
+    uint8_t setup_idle[8] = { 0x21, 0x0A, 0x00, 0x08, info->intf, 0x00, 0x00, 0x00 };
     r = ehci_control_xfer(c, addr, speed, 64, setup_idle, NULL, 0, false);
     if (r < 0) serial_printf("[ehci-hid] SET_IDLE failed: %d\n", r);
 
@@ -146,6 +146,13 @@ static void hid_kbd_poll(ehci_hid_kbd_t *k) {
     }
     k->dt_bit = k->qh->overlay_token & QTD_DT;
     hid_kbd_arm(k);
+}
+
+int ehci_hid_kbd_active_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_hid_count; i++)
+        if (g_hid_kbds[i].active && !g_hid_kbds[i].is_mouse) n++;
+    return n;
 }
 
 void ehci_hid_kbd_tick(void) {

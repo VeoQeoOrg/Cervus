@@ -2,6 +2,7 @@
 #include "../../../../include/drivers/usb/usb_hid.h"
 #include "../../../../include/drivers/mouse.h"
 #include "../../../../include/memory/dma.h"
+#include "../../../../include/memory/pmm.h"
 #include "../../../../include/io/serial.h"
 #include "../../../../include/syscall/errno.h"
 #include <string.h>
@@ -9,6 +10,10 @@
 #define XHCI_HID_RING_TRBS  64
 #define XHCI_HID_REPORT_LEN USB_HID_REPORT_LEN
 #define XHCI_MAX_HID        8
+
+#define CC_XFER_SUCCESS       1
+#define CC_XFER_SHORT_PACKET  13
+#define HID_RECOVERY_MAX_FAILS 8
 
 typedef struct {
     xhci_controller_t *ctl;
@@ -27,6 +32,11 @@ typedef struct {
     usb_hid_kbd_state_t state;
     bool       active;
     bool       is_mouse;
+    uint32_t   total_reports;
+    uint32_t   total_errors;
+    volatile bool needs_recovery;
+    uint8_t    last_err_cc;
+    uint8_t    recovery_fails;
 } xhci_hid_kbd_t;
 
 static xhci_hid_kbd_t g_hid_kbds[XHCI_MAX_HID];
@@ -55,6 +65,15 @@ static void hid_post_normal(xhci_hid_kbd_t *k) {
     k->ctl->doorbells[k->slot_id] = k->ep_dci;
 }
 
+static void hid_reset_ring(xhci_hid_kbd_t *k) {
+    memset(k->ring, 0, XHCI_HID_RING_TRBS * sizeof(xhci_trb_t));
+    xhci_trb_t *link = &k->ring[XHCI_HID_RING_TRBS - 1];
+    link->parameter = (uint64_t)k->ring_phys;
+    link->control   = TRB_TYPE(TRB_LINK) | TRB_TC;
+    k->enq = 0;
+    k->cyc = 1;
+}
+
 static int configure_intr_ep(xhci_controller_t *c, uint8_t slot_id,
                              uint8_t port_id, uint8_t speed,
                              uint8_t ep_dci, uint16_t mps, uint8_t bInterval,
@@ -69,15 +88,20 @@ static int configure_intr_ep(xhci_controller_t *c, uint8_t slot_id,
     icc[0] = 0;
     icc[1] = (1u << 0) | (1u << ep_dci);
 
+    (void)port_id;
+    const uint32_t *out_slot =
+        (const uint32_t *)pmm_phys_to_virt((uintptr_t)c->dcbaa[slot_id]);
+
     uint32_t *slot_ctx = (uint32_t *)(inctx + 32);
-    slot_ctx[0] = ((uint32_t)ep_dci << 27) | ((uint32_t)speed << 20);
-    slot_ctx[1] = (uint32_t)port_id << 16;
+    slot_ctx[0] = (out_slot[0] & ~(0x1Fu << 27)) | ((uint32_t)ep_dci << 27);
+    slot_ctx[1] = out_slot[1];
+    slot_ctx[2] = out_slot[2];
 
     uint8_t interval = bInterval;
     if (speed == 1 || speed == 2) {
         uint32_t mframes = (uint32_t)bInterval * 8;
         uint8_t ivl = 0;
-        while ((1u << ivl) < mframes) ivl++;
+        while ((uint32_t)(1u << (ivl + 1)) <= mframes) ivl++;
         if (ivl < 3)  ivl = 3;
         if (ivl > 10) ivl = 10;
         interval = ivl;
@@ -91,7 +115,7 @@ static int configure_intr_ep(xhci_controller_t *c, uint8_t slot_id,
     ep_ctx[1] = (3u << 1) | ((uint32_t)EP_TYPE_INTR_IN << 3) | ((uint32_t)mps << 16);
     ep_ctx[2] = (uint32_t)(tr_phys | 1);
     ep_ctx[3] = (uint32_t)((uint64_t)tr_phys >> 32);
-    ep_ctx[4] = (uint32_t)mps;
+    ep_ctx[4] = (uint32_t)mps | ((uint32_t)mps << 16);
 
     xhci_trb_t ev;
     int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0,
@@ -126,6 +150,21 @@ static int hid_set_idle(xhci_controller_t *c, uint8_t slot_id,
                              0x21, 0x0A, wValue, intf, 0, NULL);
 }
 
+static void hid_read_report_desc(xhci_controller_t *c, uint8_t slot_id,
+                                 xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
+                                 uint16_t *enq, uint8_t *cyc, uint8_t intf)
+{
+    uintptr_t phys;
+    uint8_t *rd = (uint8_t *)dma_alloc_coherent(256, &phys);
+    if (!rd) return;
+    memset(rd, 0, 256);
+
+    int r = xhci_control_xfer(c, slot_id, ep0_ring, ep0_phys, enq, cyc,
+                              0x81, 0x06, 0x2200, intf, 128, rd);
+    serial_printf("[xhci]   HID report descriptor read: intf=%u r=%d\n", intf, r);
+    dma_free_coherent(rd, 256);
+}
+
 int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                           uint8_t port_id, uint8_t speed,
                           xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
@@ -149,8 +188,9 @@ int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                               ep_dci, m->ep_mps, m->ep_interval, ring_phys);
     if (r < 0) return r;
 
-    (void)hid_set_protocol(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 0);
-    (void)hid_set_idle    (c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 0);
+    hid_read_report_desc(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf);
+    hid_set_protocol(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 0);
+    hid_set_idle    (c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 8);
 
     uintptr_t buf_phys;
     uint8_t *buf = (uint8_t *)dma_alloc_coherent(64, &buf_phys);
@@ -183,13 +223,61 @@ int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
     return 0;
 }
 
+int xhci_hid_kbd_active_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_hid_count; i++)
+        if (g_hid_kbds[i].active && !g_hid_kbds[i].is_mouse) n++;
+    return n;
+}
+
+static void hid_recover_endpoint(xhci_hid_kbd_t *k) {
+    xhci_controller_t *c = k->ctl;
+    uint8_t cc_was = k->last_err_cc;
+    k->needs_recovery = false;
+
+    int r1 = xhci_reset_endpoint(c, k->slot_id, k->ep_dci);
+    hid_reset_ring(k);
+    int r2 = xhci_set_tr_dequeue(c, k->slot_id, k->ep_dci, k->ring_phys, 1);
+
+    if (r1 < 0 || r2 < 0) {
+        if (++k->recovery_fails >= HID_RECOVERY_MAX_FAILS) {
+            k->active = false;
+            serial_printf("[xhci] kbd slot=%u dci=%u: recovery failed %u times (last cc=%u) -> giving up\n",
+                          k->slot_id, k->ep_dci, k->recovery_fails, cc_was);
+        }
+        return;
+    }
+    k->recovery_fails = 0;
+    hid_post_normal(k);
+    serial_printf("[xhci] kbd slot=%u dci=%u: endpoint recovered after cc=%u (total errors=%u), re-armed\n",
+                  k->slot_id, k->ep_dci, cc_was, k->total_errors);
+}
+
 void xhci_hid_kbd_tick(void) {
+    for (int i = 0; i < g_hid_count; i++) {
+        xhci_hid_kbd_t *k = &g_hid_kbds[i];
+        if (k->active && k->needs_recovery) hid_recover_endpoint(k);
+    }
+
     usb_hid_kbd_state_t *states[XHCI_MAX_HID];
     int n = 0;
     for (int i = 0; i < g_hid_count; i++) {
         if (g_hid_kbds[i].active) states[n++] = &g_hid_kbds[i].state;
     }
     if (n > 0) usb_hid_kbd_tick_repeats(states, n);
+
+    static uint32_t mon = 0;
+    if (++mon >= 500) {
+        mon = 0;
+        for (int i = 0; i < g_hid_count; i++) {
+            xhci_hid_kbd_t *k = &g_hid_kbds[i];
+            if (!k->active || k->is_mouse) continue;
+            const uint32_t *ep = (const uint32_t *)pmm_phys_to_virt(
+                (uintptr_t)k->ctl->dcbaa[k->slot_id] + (uintptr_t)k->ep_dci * 32);
+            serial_printf("[hidmon] slot=%u ep=%u state=%u reports=%u errors=%u\n",
+                          k->slot_id, k->ep_dci, ep[0] & 0x7u, k->total_reports, k->total_errors);
+        }
+    }
 }
 
 void xhci_hid_kbd_disconnect_slot(uint8_t slot_id) {
@@ -199,10 +287,22 @@ void xhci_hid_kbd_disconnect_slot(uint8_t slot_id) {
     }
 }
 
-bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci) {
+bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci, uint8_t cc) {
     for (int i = 0; i < g_hid_count; i++) {
         xhci_hid_kbd_t *k = &g_hid_kbds[i];
         if (k->active && k->slot_id == slot_id && k->ep_dci == dci) {
+            if (cc != CC_XFER_SUCCESS && cc != CC_XFER_SHORT_PACKET) {
+                k->total_errors++;
+                k->last_err_cc    = cc;
+                k->needs_recovery = true;
+                return true;
+            }
+            k->total_reports++;
+            if (!k->is_mouse && k->total_reports <= 40)
+                serial_printf("[hidrpt] slot=%u #%u: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                              k->slot_id, k->total_reports,
+                              k->buf[0], k->buf[1], k->buf[2], k->buf[3],
+                              k->buf[4], k->buf[5], k->buf[6], k->buf[7]);
             if (k->is_mouse)
                 usb_hid_mouse_process_report(k->buf, XHCI_HID_REPORT_LEN);
             else

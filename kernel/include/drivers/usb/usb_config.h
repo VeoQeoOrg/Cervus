@@ -30,9 +30,13 @@ typedef struct {
     uint8_t  interval;
 } usb_hub_iface_t;
 
+#define USB_MAX_HID_IFACES 4
+
 typedef struct {
     usb_msc_iface_t msc;
     usb_hid_iface_t hid;
+    usb_hid_iface_t hid_list[USB_MAX_HID_IFACES];
+    uint8_t  hid_count;
     usb_hub_iface_t hub;
     uint8_t  cfg_value;
     uint8_t  first_class;

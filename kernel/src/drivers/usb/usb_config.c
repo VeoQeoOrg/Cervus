@@ -10,6 +10,7 @@ void usb_parse_config(const uint8_t *buf, uint16_t total, usb_ifaces_t *out) {
     bool in_msc = false, in_kbd = false, in_mouse = false, in_hub = false;
     uint8_t cur_intf = 0;
     bool first_intf = true;
+    int cur_hid = -1;
 
     uint16_t pos = 9;
     while (pos + 2 <= total) {
@@ -24,6 +25,7 @@ void usb_parse_config(const uint8_t *buf, uint16_t total, usb_ifaces_t *out) {
             uint8_t sub   = buf[pos + 6];
             uint8_t proto = buf[pos + 7];
             cur_intf = inum;
+            cur_hid  = -1;
 
             in_msc   = (cls == 0x08 && sub == 0x06 && proto == 0x50 && alt == 0);
             in_kbd   = (cls == 0x03 && sub == 0x01 && proto == 0x01 && alt == 0);
@@ -34,10 +36,17 @@ void usb_parse_config(const uint8_t *buf, uint16_t total, usb_ifaces_t *out) {
                 out->msc.present = true;
                 out->msc.intf    = inum;
             }
-            if ((in_kbd || in_mouse) && !out->hid.present) {
-                out->hid.present  = true;
-                out->hid.is_mouse = in_mouse;
-                out->hid.intf     = inum;
+            if ((in_kbd || in_mouse) && out->hid_count < USB_MAX_HID_IFACES) {
+                cur_hid = out->hid_count++;
+                usb_hid_iface_t *h = &out->hid_list[cur_hid];
+                h->present  = true;
+                h->is_mouse = in_mouse;
+                h->intf     = inum;
+                if (!out->hid.present) {
+                    out->hid.present  = true;
+                    out->hid.is_mouse = in_mouse;
+                    out->hid.intf     = inum;
+                }
             }
             if (in_hub && !out->hub.present) {
                 out->hub.present = true;
@@ -67,11 +76,17 @@ void usb_parse_config(const uint8_t *buf, uint16_t total, usb_ifaces_t *out) {
                     out->msc.out_mps = mps & 0x7FF;
                 }
             }
-            if ((in_kbd || in_mouse) && out->hid.present && out->hid.intf == cur_intf &&
-                type == 3 && dir_in && out->hid.in_ep == 0) {
-                out->hid.in_ep    = num;
-                out->hid.in_mps   = mps & 0x7FF;
-                out->hid.interval = ivl;
+            if (cur_hid >= 0 && type == 3 && dir_in &&
+                out->hid_list[cur_hid].in_ep == 0) {
+                usb_hid_iface_t *h = &out->hid_list[cur_hid];
+                h->in_ep    = num;
+                h->in_mps   = mps & 0x7FF;
+                h->interval = ivl;
+                if (out->hid.intf == cur_intf && out->hid.in_ep == 0) {
+                    out->hid.in_ep    = num;
+                    out->hid.in_mps   = mps & 0x7FF;
+                    out->hid.interval = ivl;
+                }
             }
             if (in_hub && out->hub.present && out->hub.intf == cur_intf &&
                 type == 3 && dir_in && out->hub.in_ep == 0) {

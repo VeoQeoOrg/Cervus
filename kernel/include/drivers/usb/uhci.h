@@ -146,6 +146,7 @@ int        uhci_control_xfer(uhci_controller_t *c, uint8_t addr, bool low_speed,
 int  uhci_hid_kbd_setup(uhci_controller_t *c, uint8_t addr, bool low_speed,
                         const uhci_hid_info_t *info);
 void uhci_hid_kbd_tick(void);
+int  uhci_hid_kbd_active_count(void);
 void uhci_hid_kbd_deactivate_addr(uint8_t addr);
 
 int  uhci_msc_setup(uhci_controller_t *c, uint8_t addr, bool low_speed,

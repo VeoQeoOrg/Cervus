@@ -49,7 +49,7 @@ int uhci_hid_kbd_setup(uhci_controller_t *c, uint8_t addr, bool low_speed,
     uint8_t setup_proto[8] = { 0x21, 0x0B, 0x00, 0x00, info->intf, 0x00, 0x00, 0x00 };
     (void)uhci_control_xfer(c, addr, low_speed, low_speed ? 8 : 64,
                             setup_proto, NULL, 0, false);
-    uint8_t setup_idle[8]  = { 0x21, 0x0A, 0x00, 0x00, info->intf, 0x00, 0x00, 0x00 };
+    uint8_t setup_idle[8]  = { 0x21, 0x0A, 0x00, 0x08, info->intf, 0x00, 0x00, 0x00 };
     (void)uhci_control_xfer(c, addr, low_speed, low_speed ? 8 : 64,
                             setup_idle, NULL, 0, false);
 
@@ -113,6 +113,13 @@ static void hid_kbd_poll(uhci_hid_kbd_t *k) {
         k->dt ^= 1;
     }
     hid_kbd_arm(k);
+}
+
+int uhci_hid_kbd_active_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_hid_count; i++)
+        if (g_hid_kbds[i].active && !g_hid_kbds[i].is_mouse) n++;
+    return n;
 }
 
 void uhci_hid_kbd_tick(void) {

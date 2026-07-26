@@ -211,8 +211,13 @@ int  xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                            uint16_t *enq, uint8_t *cyc,
                            const usb_kbd_match_t *m);
 void xhci_hid_kbd_tick(void);
+int  xhci_hid_kbd_active_count(void);
 void xhci_hid_kbd_disconnect_slot(uint8_t slot_id);
-bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci);
+bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci, uint8_t cc);
+
+int  xhci_reset_endpoint(xhci_controller_t *c, uint8_t slot_id, uint8_t dci);
+int  xhci_set_tr_dequeue(xhci_controller_t *c, uint8_t slot_id, uint8_t dci,
+                         uintptr_t deq_phys, uint8_t dcs);
 
 int  xhci_msc_register(xhci_controller_t *c, uint8_t slot_id,
                        uint8_t port_id, uint8_t speed,
