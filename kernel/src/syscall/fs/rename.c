@@ -12,6 +12,11 @@ int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
     int rp2 = syscall_resolve_path_from_user(newp, (const char *)new_ptr, sizeof(newp));
     if (rp2 < 0) return rp2;
 
+    int ps = syscall_perm_parent(oldp, 2);
+    if (ps < 0) return ps;
+    int pd = syscall_perm_parent(newp, 2);
+    if (pd < 0) return pd;
+
     vnode_t *src_node = NULL;
     int r = vfs_lookup(oldp, &src_node);
     if (r < 0) return r;

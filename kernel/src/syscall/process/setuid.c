@@ -8,5 +8,6 @@ int64_t sys_setuid(uint64_t u)
     if (t->uid != UID_ROOT && !cap_has(t->capabilities, CAP_SETUID)) return -EPERM;
     if (u > 65535) return -EINVAL;
     t->uid = (uint32_t)u;
+    t->capabilities = cap_initial((uint32_t)u);
     return 0;
 }

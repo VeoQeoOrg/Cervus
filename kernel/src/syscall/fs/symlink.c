@@ -11,6 +11,9 @@ int64_t sys_symlink(uint64_t target_ptr, uint64_t link_ptr)
     int rp = syscall_resolve_path_from_user(klink, (const char *)link_ptr, sizeof(klink));
     if (rp < 0) return rp;
 
+    int pr = syscall_perm_parent(klink, 2);
+    if (pr < 0) return pr;
+
     return vfs_symlink(ktarget, klink);
 }
 

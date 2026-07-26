@@ -19,4 +19,7 @@ int  syscall_strncpy_from_user(char *dst, const char *src, size_t max);
 int  syscall_resolve_path_from_user(char *dst, const char *src, size_t max);
 void syscall_path_normalize(char *path);
 
+int  syscall_perm_file(const char *kpath, int want);
+int  syscall_perm_parent(const char *kpath, int want);
+
 #endif

@@ -6,6 +6,8 @@ int64_t sys_truncate(uint64_t path_ptr, uint64_t length)
     char kpath[VFS_MAX_PATH];
     int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
     if (rp < 0) return rp;
+    int pr = syscall_perm_file(kpath, 2);
+    if (pr < 0) return pr;
     return vfs_truncate(kpath, length);
 }
 
