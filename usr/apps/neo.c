@@ -70,8 +70,7 @@ static neo_t E;
 
 static void die(const char *msg)
 {
-    write(1, "\x1b[2J", 4);
-    write(1, "\x1b[H", 3);
+    write(1, "\x1b[?25h\x1b[?1049l", 14);
     if (msg) {
         write(2, "neo: ", 5);
         write(2, msg, strlen(msg));
@@ -83,7 +82,7 @@ static void die(const char *msg)
 static void disable_raw_mode(void)
 {
     tcsetattr(0, TCSAFLUSH, &E.orig_termios);
-    write(1, "\x1b[?7h\x1b[?25h", 11);
+    write(1, "\x1b[?7h\x1b[?25h\x1b[?1049l", 19);
 }
 
 static void enable_raw_mode(void)
@@ -99,7 +98,7 @@ static void enable_raw_mode(void)
     raw.c_cc[VMIN]  = 1;
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(0, TCSAFLUSH, &raw) < 0) die("tcsetattr");
-    write(1, "\x1b[?7l", 5);
+    write(1, "\x1b[?1049h\x1b[?7l", 13);
 }
 
 static int read_key(void)
