@@ -1,5 +1,7 @@
 #include "../../../../include/drivers/usb/xhci.h"
 #include "../../../../include/apic/apic.h"
+#include "../../../../include/memory/dma.h"
+#include "../../../../include/memory/pmm.h"
 #include "../../../../include/io/serial.h"
 #include "../../../../include/syscall/errno.h"
 #include <string.h>
@@ -141,10 +143,46 @@ static int hub_query_descriptor(xhci_hub_t *h) {
     return 0;
 }
 
+static int hub_configure_slot(xhci_hub_t *h) {
+    xhci_controller_t *c = h->ctl;
+    uintptr_t inctx_phys;
+    uint8_t *inctx = (uint8_t *)dma_alloc_coherent(4096, &inctx_phys);
+    if (!inctx) return -ENOMEM;
+    memset(inctx, 0, 4096);
+
+    uint32_t *icc = (uint32_t *)inctx;
+    icc[0] = 0;
+    icc[1] = (1u << 0);
+
+    const uint32_t *out_slot =
+        (const uint32_t *)pmm_phys_to_virt((uintptr_t)c->dcbaa[h->slot_id]);
+
+    uint32_t *slot_ctx = (uint32_t *)(inctx + 32);
+    slot_ctx[0] = out_slot[0];
+    slot_ctx[1] = (out_slot[1] & 0x00FFFFFFu) | ((uint32_t)h->n_ports << 24);
+    slot_ctx[2] = out_slot[2];
+    slot_ctx[3] = out_slot[3] | (1u << 26);
+
+    xhci_trb_t ev;
+    int r = xhci_send_cmd(c, (uint64_t)inctx_phys, 0,
+                          TRB_TYPE(TRB_CONFIGURE_ENDPOINT) |
+                          ((uint32_t)h->slot_id << 24), &ev);
+    if (r < 0) return r;
+    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
+    if (cc != CC_SUCCESS) {
+        serial_printf("[xhci-hub] mark-hub slot %u: cc=%u\n", h->slot_id, cc);
+        return -EIO;
+    }
+    serial_printf("[xhci-hub] slot %u marked as Hub (%u ports)\n",
+                  h->slot_id, h->n_ports);
+    return 0;
+}
+
 static int hub_init_topology(xhci_hub_t *h) {
     if (h->n_ports == 0) {
         if (hub_query_descriptor(h) < 0) return -EIO;
     }
+    hub_configure_slot(h);
     for (uint8_t p = 1; p <= h->n_ports; p++) {
         hub_set_port_feature(h, p, HUB_FEAT_PORT_POWER);
     }

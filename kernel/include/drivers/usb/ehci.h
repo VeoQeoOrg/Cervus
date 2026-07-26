@@ -177,6 +177,7 @@ int  ehci_control_xfer(ehci_controller_t *c,
 int  ehci_hid_kbd_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                         const ehci_hid_info_t *info);
 void ehci_hid_kbd_tick(void);
+int  ehci_hid_kbd_active_count(void);
 void ehci_hid_kbd_deactivate_addr(uint8_t addr);
 
 int  ehci_msc_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
