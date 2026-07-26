@@ -80,6 +80,7 @@ size_t pmm_get_used_pages(void);
 void   pmm_print_stats(void);
 
 void  slab_init(void);
+void pmm_recover_locks(void);
 void *kmalloc(size_t size);
 void *kzalloc(size_t size);
 void *krealloc(void *ptr, size_t new_size);
