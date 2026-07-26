@@ -12,6 +12,7 @@
 #include "../include/fs/vfs.h"
 #include "../include/panic/panic.h"
 #include "../include/console/console.h"
+#include "../include/puzzle/puzzle.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -195,7 +196,8 @@ void sched_init(void) {
     serial_writestring("Scheduler initialized\n");
 }
 
-task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
+task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
+                       int priority, uint64_t affinity) {
     task_t* t = calloc(1, sizeof(task_t));
     if (!t) return NULL;
     t->pid             = task_alloc_pid();
@@ -209,6 +211,7 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     t->priority        = priority > MAX_PRIORITY ? MAX_PRIORITY : priority;
     t->runnable        = true;
     t->state           = TASK_READY;
+    t->cpu_affinity    = affinity;
     t->cpu_id          = (uint32_t)-1;
     t->time_slice      = TASK_DEFAULT_TIMESLICE;
     t->time_slice_init = TASK_DEFAULT_TIMESLICE;
@@ -223,6 +226,46 @@ task_t* task_create(const char* name, void (*entry)(void*), void* arg, int prior
     pid_register(t);
     enqueue_global(t);
     return t;
+}
+
+task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
+    return task_create_ex(name, entry, arg, priority, 0);
+}
+
+int sched_find_free_cpu(void) {
+    return sched_find_free_cpu_mask(0);
+}
+
+int sched_find_free_cpu_mask(uint64_t exclude) {
+    uint32_t self = smp_cpu_index();
+    uint32_t n    = smp_get_cpu_count();
+    if (n > 64) n = 64;
+    for (uint32_t c = 0; c < n; c++) {
+        if (c == self) continue;
+        if (exclude & (1ULL << c)) continue;
+        if (current_task[c] == &idle_tasks[c]) return (int)c;
+    }
+    return -1;
+}
+
+static void spec_test_worker(void *arg) {
+    uint32_t assigned = (uint32_t)(uintptr_t)arg;
+    uint32_t actual   = smp_cpu_index();
+    serial_printf("[spec-test] worker: pinned cpu=%u, ran on cpu=%u -> %s\n",
+                  assigned, actual, assigned == actual ? "OK" : "MISMATCH");
+    task_exit();
+}
+
+void spec_selftest(void) {
+    uint32_t n = smp_get_cpu_count();
+    serial_printf("[spec-test] cpus=%u self=%u find_free_cpu=%d\n",
+                  n, smp_cpu_index(), sched_find_free_cpu());
+    smp_info_t *si = smp_get_info();
+    for (uint32_t c = 1; c < n && c <= 3; c++) {
+        task_t *t = task_create_ex("spec-worker", spec_test_worker,
+                                   (void *)(uintptr_t)c, 1, (1ULL << c));
+        if (t) ipi_reschedule_cpu(si->cpus[c].lapic_id);
+    }
 }
 
 task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, uint64_t cr3, int priority, vmm_pagemap_t* pagemap, uint32_t uid, uint32_t gid) {
@@ -371,6 +414,11 @@ void task_destroy(task_t* task) {
         task->stack_base = 0;
     }
 
+    if (task->puzzle) {
+        puzzle_destroy(task->puzzle);
+        task->puzzle = NULL;
+    }
+
     if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
         vmm_free_pagemap(task->pagemap);
         task->pagemap = NULL;
@@ -467,7 +515,7 @@ __attribute__((noreturn)) void task_exit(void)
 void task_kill(task_t* target) {
     if (!target) return;
 
-    if (target->pid == 0) return;
+    if (target->pid <= 1) return;
     if (target->is_userspace == TASK_TYPE_KERNEL) return;
 
     if (target->state == TASK_ZOMBIE || target->state == TASK_DEAD) return;
@@ -552,6 +600,7 @@ void task_kill_foreground_group(task_t *fg) {
     task_t *root = fg;
     while (root->parent && root->parent->ppid != 1 && root->parent->pid != 1)
         root = root->parent;
+    if (root->pid <= 1) return;
     task_kill_subtree(root);
 }
 
@@ -565,6 +614,11 @@ static task_t* sched_pick_next(uint32_t cpu) {
         task_t*  t    = *head;
         while (t) {
             if (t->runnable && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) {
+                if (t->cpu_affinity != 0 && !(t->cpu_affinity & (1ULL << cpu))) {
+                    head = &t->next;
+                    t    = *head;
+                    continue;
+                }
                 bool expected = false;
                 if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
                     *head   = t->next;

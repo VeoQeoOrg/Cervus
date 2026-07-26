@@ -137,6 +137,8 @@ typedef struct task {
 
     uint64_t create_time_ns;
 
+    struct puzzle_process *puzzle;
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -167,6 +169,10 @@ void task_sleep_ms(uint64_t ms);
 void sched_note_wakeup(uint64_t deadline_ns);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
+task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg, int priority, uint64_t affinity);
+int     sched_find_free_cpu(void);
+int     sched_find_free_cpu_mask(uint64_t exclude);
+void    spec_selftest(void);
 
 task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, uint64_t cr3, int priority, vmm_pagemap_t* pagemap, uint32_t uid, uint32_t gid);
 
