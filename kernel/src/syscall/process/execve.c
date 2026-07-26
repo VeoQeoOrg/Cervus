@@ -5,6 +5,7 @@
 #include "../../../include/memory/pmm.h"
 #include "../../../include/smp/percpu.h"
 #include "../../../include/io/serial.h"
+#include "../../../include/puzzle/puzzle.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -115,6 +116,18 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
     return new_rsp;
 }
 
+static int exec_allowed(const vfs_stat_t *st, uint32_t uid, uint32_t gid)
+{
+    uint32_t m = st->st_mode & 0777;
+    if (uid == 0) return (m & 0111) != 0;
+    if (m == 0) return 1;
+    int allowed;
+    if (uid == st->st_uid)      allowed = (int)((m >> 6) & 7);
+    else if (gid == st->st_gid) allowed = (int)((m >> 3) & 7);
+    else                        allowed = (int)(m & 7);
+    return (allowed & 1) != 0;
+}
+
 int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
 {
     task_t *t = syscall_cur_task();
@@ -124,6 +137,12 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
     if (rp < 0) return rp;
     if (!kpath[0]) return -ENOENT;
+
+    {
+        vfs_stat_t xst;
+        if (vfs_stat(kpath, &xst) == 0 && !exec_allowed(&xst, t->uid, t->gid))
+            return -EACCES;
+    }
 
     const char *kargv_ptrs[EXECVE_MAX_ARGS + 1];
     char (*kargv_store)[EXECVE_MAX_ARGLEN] = malloc(EXECVE_MAX_ARGS * EXECVE_MAX_ARGLEN);
@@ -169,37 +188,82 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     }
     kenvp_ptrs[envc] = NULL;
 
-    vfs_file_t *vfile = NULL;
-    int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
-    if (vret < 0) { serial_printf("[EXECVE] open failed: %d\n", vret); free(kargv_store); free(kenvp_store); return (int64_t)vret; }
-    vfs_stat_t st;
-    if (vfs_fstat(vfile, &st) < 0 || st.st_size == 0) {
-        serial_printf("[EXECVE] fstat/size failed: path='%s' size=%llu\n",
-                      kpath, (unsigned long long)st.st_size);
-        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -EIO;
-    }
-    size_t fsize = (size_t)st.st_size;
-    uint8_t magic[4] = {0};
-    int64_t mr = vfs_read(vfile, magic, 4);
-    if (mr != 4 || magic[0] != 0x7F || magic[1] != 'E' ||
-        magic[2] != 'L' || magic[3] != 'F') {
-        serial_printf("[EXECVE] not an ELF: path='%s' magic=%02x%02x%02x%02x\n",
-                      kpath, magic[0], magic[1], magic[2], magic[3]);
-        vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOEXEC;
+    char script_path[EXECVE_MAX_PATH];
+    strncpy(script_path, kpath, sizeof(script_path) - 1);
+    script_path[sizeof(script_path) - 1] = '\0';
+    char interp_buf[EXECVE_MAX_PATH], sharg_buf[EXECVE_MAX_PATH];
+    uint8_t *elf_buf = NULL;
+    size_t   fsize   = 0;
+    int      shebang_depth = 0;
+
+    for (;;) {
+        vfs_file_t *vfile = NULL;
+        int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
+        if (vret < 0) { free(kargv_store); free(kenvp_store); return (int64_t)vret; }
+        vfs_stat_t st;
+        if (vfs_fstat(vfile, &st) < 0 || st.st_size == 0) {
+            vfs_close(vfile); free(kargv_store); free(kenvp_store); return -EIO;
+        }
+        fsize = (size_t)st.st_size;
+        elf_buf = (uint8_t *)malloc(fsize);
+        if (!elf_buf) { vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOMEM; }
+        int64_t rd = vfs_read(vfile, elf_buf, fsize);
+        vfs_close(vfile);
+        if (rd != (int64_t)fsize) { free(elf_buf); free(kargv_store); free(kenvp_store); return -EIO; }
+
+        if (fsize >= 2 && elf_buf[0] == '#' && elf_buf[1] == '!') {
+            if (++shebang_depth > 4) { free(elf_buf); free(kargv_store); free(kenvp_store); return -ELOOP; }
+            char line[EXECVE_MAX_PATH];
+            size_t e = 2, li = 0;
+            while (e < fsize && elf_buf[e] != '\n' && li < sizeof(line) - 1) line[li++] = (char)elf_buf[e++];
+            line[li] = '\0';
+            free(elf_buf); elf_buf = NULL;
+
+            char *p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            int i = 0;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\r' && i < EXECVE_MAX_PATH - 1) interp_buf[i++] = *p++;
+            interp_buf[i] = '\0';
+            while (*p == ' ' || *p == '\t') p++;
+            i = 0;
+            while (*p && *p != '\r' && i < EXECVE_MAX_PATH - 1) sharg_buf[i++] = *p++;
+            while (i > 0 && (sharg_buf[i - 1] == ' ' || sharg_buf[i - 1] == '\t')) i--;
+            sharg_buf[i] = '\0';
+            if (!interp_buf[0]) { free(kargv_store); free(kenvp_store); return -ENOEXEC; }
+
+            const char *newv[EXECVE_MAX_ARGS + 4];
+            int ni = 0;
+            newv[ni++] = interp_buf;
+            if (sharg_buf[0]) newv[ni++] = sharg_buf;
+            newv[ni++] = script_path;
+            for (int a = 1; a < argc && ni < EXECVE_MAX_ARGS; a++) newv[ni++] = kargv_ptrs[a];
+            for (int a = 0; a < ni; a++) kargv_ptrs[a] = newv[a];
+            kargv_ptrs[ni] = NULL;
+            argc = ni;
+
+            strncpy(kpath, interp_buf, sizeof(kpath) - 1);
+            kpath[sizeof(kpath) - 1] = '\0';
+            continue;
+        }
+
+        if (fsize < 4 || elf_buf[0] != 0x7F || elf_buf[1] != 'E' ||
+            elf_buf[2] != 'L' || elf_buf[3] != 'F') {
+            free(elf_buf); free(kargv_store); free(kenvp_store); return -ENOEXEC;
+        }
+        break;
     }
 
-    elf_load_result_t elf = elf_load_file(vfile, fsize, 0);
-    vfs_close(vfile);
+    elf_load_result_t elf = elf_load(elf_buf, fsize, 0);
     if (elf.error != ELF_OK) {
         serial_printf("[EXECVE] elf_load: %s\n", elf_strerror(elf.error));
         if (elf.pagemap) vmm_free_pagemap(elf.pagemap);
-        free(kargv_store); free(kenvp_store); return -ENOEXEC;
+        free(elf_buf); free(kargv_store); free(kenvp_store); return -ENOEXEC;
     }
 
     uintptr_t new_rsp = execve_build_stack(elf.pagemap, elf.stack_top, kargv_ptrs, argc, kenvp_ptrs, envc, &elf);
     free(kargv_store);
     free(kenvp_store);
-    if (!new_rsp) { vmm_free_pagemap(elf.pagemap); return -ENOMEM; }
+    if (!new_rsp) { free(elf_buf); vmm_free_pagemap(elf.pagemap); return -ENOMEM; }
 
     if (t->fd_table) fd_table_cloexec(t->fd_table);
 
@@ -225,6 +289,18 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     for (const char *p = kpath; *p; p++) if (*p == '/') bn = p + 1;
     strncpy(t->name, bn, sizeof(t->name) - 1);
     t->name[sizeof(t->name) - 1] = '\0';
+
+    if (t->puzzle) { puzzle_destroy(t->puzzle); t->puzzle = NULL; }
+    {
+        int puzzle_on = 1;
+        for (int i = 0; i < envc; i++)
+            if (strcmp(kenvp_ptrs[i], "PUZZLE=0") == 0) { puzzle_on = 0; break; }
+        if (puzzle_on)
+            puzzle_create(t, &elf, t->brk_start, elf.stack_top, elf.stack_size,
+                          elf_buf, fsize);
+        else
+            free(elf_buf);
+    }
 
     percpu_t *pc = get_percpu();
     if (pc) {

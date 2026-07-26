@@ -99,6 +99,16 @@ typedef enum {
     ELF_ERR_NO_MEM,
 } elf_error_t;
 
+#define ELF_MAX_SEGMENTS 8
+
+typedef struct {
+    uintptr_t vaddr;
+    uint64_t  offset;
+    uint64_t  filesz;
+    uint64_t  memsz;
+    uint32_t  flags;
+} elf_segment_t;
+
 typedef struct {
     uintptr_t       entry;
     vmm_pagemap_t*  pagemap;
@@ -107,6 +117,8 @@ typedef struct {
     size_t          stack_size;
     elf_error_t     error;
     uintptr_t       load_end;
+    elf_segment_t   segments[ELF_MAX_SEGMENTS];
+    int             nsegments;
 } elf_load_result_t;
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);

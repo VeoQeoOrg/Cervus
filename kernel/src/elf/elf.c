@@ -406,6 +406,15 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
             return result;
         }
 
+        if (result.nsegments < ELF_MAX_SEGMENTS) {
+            elf_segment_t* s = &result.segments[result.nsegments++];
+            s->vaddr  = ph->p_vaddr + load_bias;
+            s->offset = ph->p_offset;
+            s->filesz = ph->p_filesz;
+            s->memsz  = ph->p_memsz;
+            s->flags  = ph->p_flags;
+        }
+
         uintptr_t seg_end = ph->p_vaddr + load_bias + ph->p_memsz;
         if (seg_end > max_vaddr) max_vaddr = seg_end;
     }
