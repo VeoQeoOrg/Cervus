@@ -30,6 +30,7 @@ deep_clean() {
   rm -rf obj bin rootfs iso_root data_iso_root demo_iso limine limine-tools \
     edk2-ovmf kernel/linker-scripts .ninja build.ninja builder/.legacy-build
   rm -f initramfs.tar *.tar limine.conf OS-TREE.txt log.txt log_*.txt \
+    cervus-dev.log *.log \
     cervus_disk.img cervus_ata.img cervus_sata.img cervus_nvme.img \
     cervus_data.iso Cervus.iso Cervus.hdd temp_*
   rm -f usr/sysroot/usr/lib/libcervus.a usr/sysroot/usr/lib/crt0.o

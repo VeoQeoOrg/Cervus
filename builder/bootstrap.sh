@@ -18,7 +18,7 @@ cd "$ROOT"
 say() { printf '\033[96m[bootstrap]\033[0m %s\n' "$*"; }
 die() { printf '\033[91m[bootstrap] %s\033[0m\n' "$*" >&2; exit 1; }
 
-LIMINE_VERSION=12.5.0
+LIMINE_VERSION=12.5.2
 LIMINE_TARBALL=limine-binary.tar.gz
 LIMINE_URL="https://github.com/limine-bootloader/limine/releases/download/v${LIMINE_VERSION}/${LIMINE_TARBALL}"
 
@@ -33,13 +33,13 @@ dep_clone() {  # $1=name  $2=url  $3=commit
 do_deps() {
     mkdir -p limine-tools
     dep_clone freestnd-c-hdrs \
-        https://codeberg.org/OSDev/freestnd-c-hdrs-0bsd.git \
+        https://github.com/osdev0/freestanding-c-hdrs.git \
         5df91dd7062ad0c54f5ffd86193bb9f008677631
     dep_clone cc-runtime \
-        https://codeberg.org/OSDev/cc-runtime.git \
+        https://github.com/osdev0/cc-runtime.git \
         dae79833b57a01b9fd3e359ee31def69f5ae899b
     dep_clone limine-protocol \
-        https://codeberg.org/Limine/limine-protocol.git \
+        https://github.com/limine-bootloader/limine-protocol.git \
         c4616df2572d77c60020bdefa617dd9bdcc6566a
 }
 

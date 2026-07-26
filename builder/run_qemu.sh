@@ -17,6 +17,8 @@ cd "$ROOT"
 
 QEMUFLAGS="-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
 ISO="demo_iso/Cervus.latest.iso"
+RUNLOG="cervus-dev.log"
+SERIAL="-chardev stdio,id=cervlog,logfile=$RUNLOG,signal=off -serial chardev:cervlog"
 
 UEFI=false
 DISK=ide
@@ -85,6 +87,8 @@ build_data_iso() {
     rm -rf "$root"
 }
 
+green "Serial log -> $ROOT/$RUNLOG"
+
 # --- installed: boot the disk directly, no ISO -----------------------------
 if $INSTALLED; then
     [ -f cervus_disk.img ] || { red "cervus_disk.img not found. Run './nb run' first."; exit 1; }
@@ -92,10 +96,10 @@ if $INSTALLED; then
     if [ "$DISK" = nvme ]; then
         exec qemu-system-x86_64 -machine q35$BIOS \
             -drive id=nvm0,file=cervus_disk.img,format=raw,if=none,file.locking=off \
-            -device nvme,serial=CRV001,drive=nvm0 -serial stdio $QEMUFLAGS
+            -device nvme,serial=CRV001,drive=nvm0 $SERIAL $QEMUFLAGS
     else
         exec qemu-system-x86_64 -machine pc$BIOS \
-            -drive file=cervus_disk.img,format=raw,if=ide -serial stdio $QEMUFLAGS
+            -drive file=cervus_disk.img,format=raw,if=ide $SERIAL $QEMUFLAGS
     fi
 fi
 
@@ -106,7 +110,7 @@ case "$DISK" in
 none)
     green "Starting QEMU (live, no disk)..."
     exec qemu-system-x86_64 -machine pc$BIOS -cdrom "$ISO" -boot d \
-        -serial stdio $QEMUFLAGS
+        $SERIAL $QEMUFLAGS
     ;;
 all)
     mk_disk cervus_ata.img; mk_disk cervus_sata.img; mk_disk cervus_nvme.img
@@ -125,7 +129,7 @@ all)
         -drive id=nvm0,file=cervus_nvme.img,format=raw,if=none,file.locking=off \
         -device nvme,serial=CRV001,drive=nvm0,bootindex=4 \
         -device qemu-xhci,id=xhci -boot menu=on,splash-time=2000 \
-        -serial stdio $QEMUFLAGS
+        $SERIAL $QEMUFLAGS
     ;;
 ahci)
     mk_disk cervus_disk.img
@@ -133,7 +137,7 @@ ahci)
     exec qemu-system-x86_64 -machine q35$BIOS -cdrom "$ISO" -boot d \
         -drive id=hd0,file=cervus_disk.img,format=raw,if=none,file.locking=off \
         -device ich9-ahci,id=ahci -device ide-hd,bus=ahci.0,drive=hd0 \
-        -serial stdio $QEMUFLAGS
+        $SERIAL $QEMUFLAGS
     ;;
 nvme)
     mk_disk cervus_disk.img
@@ -141,13 +145,13 @@ nvme)
     exec qemu-system-x86_64 -machine q35$BIOS -cdrom "$ISO" -boot d \
         -drive id=nvm0,file=cervus_disk.img,format=raw,if=none,file.locking=off \
         -device nvme,serial=CRV001,drive=nvm0 \
-        -serial stdio $QEMUFLAGS
+        $SERIAL $QEMUFLAGS
     ;;
 ide|*)
     mk_disk cervus_disk.img
     green "Starting QEMU (BIOS, IDE)..."
     exec qemu-system-x86_64 -machine pc$BIOS -cdrom "$ISO" -boot d \
-        -serial stdio $QEMUFLAGS \
+        $SERIAL $QEMUFLAGS \
         -drive file=cervus_disk.img,format=raw,if=ide,index=0,media=disk
     ;;
 esac

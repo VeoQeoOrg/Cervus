@@ -18,7 +18,12 @@ linker-scripts/
 iso_root/
 rootfs/
 cervus_disk.img
+cervus_ata.img
+cervus_sata.img
+cervus_nvme.img
+cervus_data.iso
 log.txt
+*.log
 usr/tcc/tcc-0.9.27/
 usr/tcc/*.tar.bz2
 usr/tcc/tcc.elf
