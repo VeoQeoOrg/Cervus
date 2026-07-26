@@ -1,11 +1,24 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include "../../include/sched/spinlock.h"
+#include "../../include/smp/percpu.h"
 #include <string.h>
 #include <stdio.h>
 
 static pmm_buddy_state_t g_buddy;
 static spinlock_t g_pmm_lock = SPINLOCK_INIT;
+static volatile int g_pmm_owner = -1;
+
+static inline void pmm_lock_acq(void) {
+    spinlock_t *l = &g_pmm_lock;
+    spinlock_acquire(l);
+    __atomic_store_n(&g_pmm_owner, (int)smp_cpu_index(), __ATOMIC_RELAXED);
+}
+static inline void pmm_lock_rel(void) {
+    spinlock_t *l = &g_pmm_lock;
+    __atomic_store_n(&g_pmm_owner, -1, __ATOMIC_RELAXED);
+    spinlock_release(l);
+}
 
 static inline uintptr_t _align_up(uintptr_t v, uintptr_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -92,6 +105,17 @@ static uintptr_t _buddy_alloc_order(int order) {
     if (found < 0) return 0;
 
     pmm_block_t *b = _fl_first(&g_buddy.orders[found]);
+    if (!_block_ptr_valid(&g_buddy.orders[found], b->next) ||
+        !_block_ptr_valid(&g_buddy.orders[found], b->prev)) {
+        serial_printf("[PMM] CORRUPT free block %p phys=0x%llx order=%d next=%p prev=%p "
+                      "-- dropping order to avoid crash\n",
+                      (void *)b, (unsigned long long)_block_phys(b), found,
+                      (void *)b->next, (void *)b->prev);
+        g_buddy.orders[found].head.next = &g_buddy.orders[found].head;
+        g_buddy.orders[found].head.prev = &g_buddy.orders[found].head;
+        g_buddy.orders[found].count = 0;
+        return 0;
+    }
     _fl_del(&g_buddy.orders[found], b);
     uintptr_t phys = _block_phys(b);
 
@@ -200,10 +224,10 @@ void *pmm_alloc(size_t pages) {
     if (order < 0) return NULL;
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_pmm_lock);
+    pmm_lock_acq();
     uintptr_t phys = _buddy_alloc_order(order);
     size_t free_after = g_buddy.free_pages;
-    spinlock_release(&g_pmm_lock);
+    pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
     if (phys) {
         if (phys < PMM_FREE_MIN_PHYS) {
@@ -249,17 +273,17 @@ void *pmm_alloc_aligned(size_t pages, size_t alignment) {
 
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_pmm_lock);
+    pmm_lock_acq();
     uintptr_t phys = _buddy_alloc_order(order);
-    if (!phys) { spinlock_release(&g_pmm_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
+    if (!phys) { pmm_lock_rel(); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
 
     if (phys & (alignment - 1)) {
         _buddy_free_order(phys, order);
-        spinlock_release(&g_pmm_lock);
+        pmm_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         return NULL;
     }
-    spinlock_release(&g_pmm_lock);
+    pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 
     return (void *)(phys + g_buddy.hhdm_offset);
@@ -273,7 +297,7 @@ void *pmm_alloc_below(size_t pages, uintptr_t max_phys) {
 
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_pmm_lock);
+    pmm_lock_acq();
 
     uintptr_t phys = 0;
     for (int o = order; o <= PMM_MAX_ORDER && !phys; o++) {
@@ -296,7 +320,7 @@ void *pmm_alloc_below(size_t pages, uintptr_t max_phys) {
         }
     }
 
-    spinlock_release(&g_pmm_lock);
+    pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 
     if (!phys) return NULL;
@@ -321,13 +345,13 @@ void pmm_free(void *addr, size_t pages) {
 
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_pmm_lock);
+    pmm_lock_acq();
 
     pmm_block_t *existing = _fl_find(&g_buddy.orders[order], phys);
     if (existing) {
         serial_printf("[PMM_DOUBLE_FREE] addr=%p phys=0x%llx pages=%zu order=%d ALREADY FREE!\n",
                       addr, (unsigned long long)phys, pages, order);
-        spinlock_release(&g_pmm_lock);
+        pmm_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         return;
     }
@@ -336,7 +360,7 @@ void pmm_free(void *addr, size_t pages) {
     _buddy_free_order(phys, order);
     __atomic_fetch_add(&g_pmm_free_count, (size_t)1 << order, __ATOMIC_RELAXED);
 
-    spinlock_release(&g_pmm_lock);
+    pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
@@ -346,9 +370,9 @@ void pmm_free_single(void *addr) {
     if (phys < g_buddy.mem_start || phys >= g_buddy.mem_end) return;
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_pmm_lock);
+    pmm_lock_acq();
     _buddy_free_nocoalesce(phys);
-    spinlock_release(&g_pmm_lock);
+    pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 
@@ -506,17 +530,45 @@ void slab_init(void) {
 }
 
 static spinlock_t g_slab_lock = SPINLOCK_INIT;
+static volatile int g_slab_owner = -1;
+
+static inline void slab_lock_acq(void) {
+    spinlock_t *l = &g_slab_lock;
+    spinlock_acquire(l);
+    __atomic_store_n(&g_slab_owner, (int)smp_cpu_index(), __ATOMIC_RELAXED);
+}
+static inline void slab_lock_rel(void) {
+    spinlock_t *l = &g_slab_lock;
+    __atomic_store_n(&g_slab_owner, -1, __ATOMIC_RELAXED);
+    spinlock_release(l);
+}
+
+void pmm_recover_locks(void) {
+    int cpu = (int)smp_cpu_index();
+    spinlock_t *pl = &g_pmm_lock;
+    spinlock_t *sl = &g_slab_lock;
+    if (__atomic_load_n(&g_pmm_owner, __ATOMIC_RELAXED) == cpu) {
+        __atomic_store_n(&g_pmm_owner, -1, __ATOMIC_RELAXED);
+        spinlock_release(pl);
+        serial_printf("[OOPS] force-released g_pmm_lock held by dying task on cpu %d\n", cpu);
+    }
+    if (__atomic_load_n(&g_slab_owner, __ATOMIC_RELAXED) == cpu) {
+        __atomic_store_n(&g_slab_owner, -1, __ATOMIC_RELAXED);
+        spinlock_release(sl);
+        serial_printf("[OOPS] force-released g_slab_lock held by dying task on cpu %d\n", cpu);
+    }
+}
 
 void *kmalloc(size_t size) {
     if (!size) return NULL;
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_slab_lock);
+    slab_lock_acq();
 
     void *result;
     if (size > SLAB_MAX_SIZE) {
         size_t pages = (size + sizeof(large_hdr_t) + PAGE_SIZE - 1) / PAGE_SIZE;
-        spinlock_release(&g_slab_lock);
+        slab_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         large_hdr_t *hdr = (large_hdr_t *)SLAB_PAGE_ALLOC(pages);
         if (!hdr) return NULL;
@@ -526,15 +578,15 @@ void *kmalloc(size_t size) {
     }
 
     slab_cache_t *cache = _cache_for(size);
-    if (!cache) { spinlock_release(&g_slab_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
+    if (!cache) { slab_lock_rel(); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return NULL; }
 
     if (!cache->partial) {
-        spinlock_release(&g_slab_lock);
+        slab_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         slab_t *s = _slab_new(cache);
         if (!s) return NULL;
         asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-        spinlock_acquire(&g_slab_lock);
+        slab_lock_acq();
         _slab_list_push(&cache->partial, s);
     }
     slab_t *s = cache->partial;
@@ -549,7 +601,7 @@ void *kmalloc(size_t size) {
         _slab_list_push(&cache->full, s);
     }
     result = obj;
-    spinlock_release(&g_slab_lock);
+    slab_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
     return result;
 }
@@ -573,7 +625,7 @@ void kfree(void *ptr) {
 
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    spinlock_acquire(&g_slab_lock);
+    slab_lock_acq();
 
     slab_t *s = (slab_t *)((uintptr_t)ptr & ~((uintptr_t)PAGE_SIZE - 1));
 
@@ -584,7 +636,7 @@ void kfree(void *ptr) {
             break;
         }
     }
-    if (!cache) { spinlock_release(&g_slab_lock); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return; }
+    if (!cache) { slab_lock_rel(); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return; }
 
     bool was_full = (s->used == s->total);
     *(void **)ptr = s->freelist;
@@ -599,12 +651,12 @@ void kfree(void *ptr) {
     if (s->used == 0) {
         _slab_list_remove(&cache->partial, s);
         size_t pages = _slab_pages(s->obj_size);
-        spinlock_release(&g_slab_lock);
+        slab_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         SLAB_PAGE_FREE(s, pages > 0 ? pages : 1);
         return;
     }
-    spinlock_release(&g_slab_lock);
+    slab_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }
 

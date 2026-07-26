@@ -7,6 +7,7 @@
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
 #include "../../../include/panic/panic.h"
+#include "../../../include/puzzle/puzzle.h"
 #include <stdio.h>
 
 extern const int_desc_t __start_isr_handlers[];
@@ -154,8 +155,55 @@ static __attribute__((noreturn)) void kill_current_task(int exit_code) {
     task_exit();
 }
 
+static volatile int                g_oops_burst   = 0;
+static volatile unsigned long long g_oops_last_ns = 0;
+#define OOPS_BURST_LIMIT 8
+#define OOPS_WINDOW_NS   2000000000ULL
+
+static __attribute__((noreturn)) void kernel_fault_recover_or_panic(struct int_frame_t *regs,
+                                                                    const char *name) {
+    extern unsigned long long clocksource_now_ns(void);
+    percpu_t *pc = get_percpu();
+    task_t   *me = pc ? (task_t *)pc->current_task : NULL;
+    if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
+
+    int recoverable = (me && me->is_userspace && me->pid > 1);
+
+    unsigned long long now = clocksource_now_ns();
+    if (now && g_oops_last_ns && now - g_oops_last_ns > OOPS_WINDOW_NS)
+        g_oops_burst = 0;
+    g_oops_last_ns = now;
+    int burst = __atomic_add_fetch(&g_oops_burst, 1, __ATOMIC_SEQ_CST);
+
+    if (recoverable && burst <= OOPS_BURST_LIMIT) {
+        serial_printf("[OOPS] %s in kernel serving task '%s' pid=%u RIP=0x%llx -- "
+                      "killing task, OS survives (burst %d/%d)\n",
+                      name, me->name, me->pid, regs->rip, burst, OOPS_BURST_LIMIT);
+        pmm_recover_locks();
+        kill_current_task(139);
+    }
+    if (recoverable)
+        serial_printf("[OOPS] %s -- fault storm (burst %d) -> unrecoverable\n", name, burst);
+    else
+        serial_printf("[OOPS] %s -- no user task in context -> unrecoverable\n", name);
+    kernel_panic_regs(name, regs);
+}
+
 void handle_intercpu_interrupt(struct int_frame_t *regs)
 {
+    if (regs->interrupt == EXCEPTION_PAGE_FAULT) {
+        uint64_t cr2v = 0;
+        asm volatile("mov %%cr2, %0" : "=r"(cr2v));
+        percpu_t *pc = get_percpu();
+        task_t   *cur = pc ? (task_t *)pc->current_task : NULL;
+        if (!cur) { uint32_t cpu = smp_cpu_index(); cur = current_task[cpu]; }
+        if (cur && cur->puzzle && puzzle_cow_fault(cur, cr2v, regs->error))
+            return;
+        if (cur && cur->puzzle && (regs->cs & 3) == 3 &&
+            puzzle_regenerate_fault(cur, cr2v, regs->error))
+            return;
+    }
+
     if (regs->interrupt == 2) {
         if (__atomic_load_n(&g_panic_owner, __ATOMIC_ACQUIRE) != 0) {
             for (;;) asm volatile("cli; hlt");
@@ -211,7 +259,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                 }
                 dump_rip_bytes_safe(regs->rip);
             }
-            kernel_panic_regs("General Protection Fault (kernel)", regs);
+            kernel_fault_recover_or_panic(regs, "General Protection Fault (kernel)");
 
         case EXCEPTION_PAGE_FAULT: {
             uint64_t cr2val = 0;
@@ -230,7 +278,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                 dump_user_qword_via_task(regs->rsp + 24,   "[rsp+24] ");
                 kill_current_task(139);
             }
-            kernel_panic_regs("Page Fault (kernel)", regs);
+            kernel_fault_recover_or_panic(regs, "Page Fault (kernel)");
         }
 
         case EXCEPTION_MACHINE_CHECK:
