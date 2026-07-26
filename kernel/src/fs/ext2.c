@@ -421,6 +421,20 @@ static int ext2_stat(vnode_t *node, vfs_stat_t *out) {
     return 0;
 }
 
+static int ext2_setattr(vnode_t *node) {
+    ext2_vdata_t *vd = node->fs_data;
+    ext2_t *fs = vd->fs;
+    ext2_inode_t di;
+    int r = inode_read(fs, vd->ino, &di);
+    if (r < 0) return r;
+    di.i_mode = (uint16_t)((di.i_mode & 0xF000) | (node->mode & 0x0FFF));
+    di.i_uid  = (uint16_t)node->uid;
+    di.i_gid  = (uint16_t)node->gid;
+    inode_write(fs, vd->ino, &di);
+    fs->dirty = true;
+    return 0;
+}
+
 static void ext2_vnode_ref(vnode_t *node)  { (void)node; }
 static void ext2_vnode_unref(vnode_t *node) {
     if (node->fs_data) kfree(node->fs_data);
@@ -432,6 +446,7 @@ static const vnode_ops_t ext2_file_ops = {
     .write    = ext2_file_write,
     .truncate = ext2_file_truncate,
     .stat     = ext2_stat,
+    .setattr  = ext2_setattr,
     .ref      = ext2_vnode_ref,
     .unref    = ext2_vnode_unref,
 };
@@ -587,6 +602,8 @@ static int ext2_dir_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
     ext2_inode_t ndi;
     memset(&ndi, 0, sizeof(ndi));
     ndi.i_mode = EXT2_S_IFDIR | (uint16_t)(mode ? mode : 0755);
+    ndi.i_uid  = (uint16_t)vfs_current_uid();
+    ndi.i_gid  = (uint16_t)vfs_current_uid();
     ndi.i_links_count = 2;
     int32_t blk = alloc_block(fs);
     if (blk < 0) { free_inode(fs, (uint32_t)ino); return (int)blk; }
@@ -628,6 +645,8 @@ static int ext2_dir_create(vnode_t *dir, const char *name, uint32_t mode, vnode_
     ext2_inode_t ndi;
     memset(&ndi, 0, sizeof(ndi));
     ndi.i_mode = EXT2_S_IFREG | (uint16_t)(mode ? mode : 0644);
+    ndi.i_uid  = (uint16_t)vfs_current_uid();
+    ndi.i_gid  = (uint16_t)vfs_current_uid();
     ndi.i_links_count = 1;
     inode_write(fs, (uint32_t)ino, &ndi);
     int r = ext2_dir_add_entry(fs, vd->ino, (uint32_t)ino, EXT2_FT_REG_FILE, name);
@@ -749,6 +768,7 @@ static const vnode_ops_t ext2_dir_ops = {
     .unlink  = ext2_dir_unlink,
     .rename  = ext2_dir_rename,
     .stat    = ext2_stat,
+    .setattr = ext2_setattr,
     .ref     = ext2_vnode_ref,
     .unref   = ext2_vnode_unref,
 };

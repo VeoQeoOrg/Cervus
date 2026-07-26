@@ -1,8 +1,15 @@
 #include "../../include/fs/vfs.h"
 #include "../../include/sched/sched.h"
+#include "../../include/smp/percpu.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+
+uint32_t vfs_current_uid(void) {
+    percpu_t *pc = get_percpu();
+    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    return t ? t->uid : 0;
+}
 
 static vfs_mount_t  g_mounts[VFS_MAX_MOUNTS];
 static vfs_file_t   g_open_files[VFS_MAX_OPEN_FILES];
@@ -432,6 +439,31 @@ int vfs_truncate(const char *path, uint64_t new_size) {
     if (ret == 0) node->size = new_size;
     vnode_unref(node);
     return ret;
+}
+
+int vfs_chmod(const char *path, uint32_t mode) {
+    if (!path) return -EINVAL;
+    vnode_t *node = NULL;
+    int ret = vfs_lookup(path, &node);
+    if (ret < 0) return ret;
+    node->mode = (node->mode & ~0777u) | (mode & 0777u);
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
+    vnode_unref(node);
+    vfs_sync_all();
+    return 0;
+}
+
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
+    if (!path) return -EINVAL;
+    vnode_t *node = NULL;
+    int ret = vfs_lookup(path, &node);
+    if (ret < 0) return ret;
+    if (uid != 0xFFFFFFFFu) node->uid = uid;
+    if (gid != 0xFFFFFFFFu) node->gid = gid;
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
+    vnode_unref(node);
+    vfs_sync_all();
+    return 0;
 }
 
 int vfs_fsync(vfs_file_t *file) {
