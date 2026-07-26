@@ -1,6 +1,7 @@
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/smp/percpu.h"
 #include "../../include/memory/vmm.h"
+#include "../../include/fs/vfs.h"
 #include <string.h>
 
 task_t *syscall_cur_task(void)
@@ -139,4 +140,42 @@ int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
     }
     syscall_path_normalize(dst);
     return 0;
+}
+
+static int perm_check(uint32_t mode, uint32_t fuid, uint32_t fgid,
+                      uint32_t uid, uint32_t gid, int want)
+{
+    if (uid == 0) return 1;
+    uint32_t m = mode & 0777;
+    if (m == 0) return 1;
+    int allowed;
+    if (uid == fuid)      allowed = (int)((m >> 6) & 7);
+    else if (gid == fgid) allowed = (int)((m >> 3) & 7);
+    else                  allowed = (int)(m & 7);
+    return (allowed & want) == want;
+}
+
+int syscall_perm_file(const char *kpath, int want)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || t->uid == 0) return 0;
+    vfs_stat_t st;
+    if (vfs_stat(kpath, &st) != 0) return -ENOENT;
+    return perm_check(st.st_mode, st.st_uid, st.st_gid, t->uid, t->gid, want) ? 0 : -EACCES;
+}
+
+int syscall_perm_parent(const char *kpath, int want)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || t->uid == 0) return 0;
+    char parent[VFS_MAX_PATH];
+    strncpy(parent, kpath, sizeof(parent));
+    parent[sizeof(parent) - 1] = 0;
+    char *slash = strrchr(parent, '/');
+    if (slash == parent) parent[1] = 0;
+    else if (slash)      *slash = 0;
+    else                 { parent[0] = '/'; parent[1] = 0; }
+    vfs_stat_t st;
+    if (vfs_stat(parent, &st) != 0) return -EACCES;
+    return perm_check(st.st_mode, st.st_uid, st.st_gid, t->uid, t->gid, want) ? 0 : -EACCES;
 }

@@ -9,6 +9,7 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/io/serial.h"
 #include "../../include/panic/panic.h"
+#include "../../include/puzzle/puzzle.h"
 #include <stdint.h>
 
 #define MSR_EFER   0xC0000080
@@ -114,6 +115,8 @@ extern int64_t sys_setpgid   (uint64_t, uint64_t);
 extern int64_t sys_getsid    (uint64_t);
 extern int64_t sys_setsid    (void);
 extern int64_t sys_symlink   (uint64_t, uint64_t);
+extern int64_t sys_chmod     (uint64_t, uint64_t);
+extern int64_t sys_chown     (uint64_t, uint64_t, uint64_t);
 extern int64_t sys_readlink  (uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fb_info   (uint64_t);
 extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -123,6 +126,11 @@ extern int64_t sys_fb_release(void);
 extern int64_t sys_mouse_state(uint64_t);
 extern int64_t sys_keymap_config(uint64_t, uint64_t);
 extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_puzzle(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_spec(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_auth(uint64_t, uint64_t);
+extern int64_t sys_sudo(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_passwd_set(uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -170,10 +178,16 @@ W3(sys_getdents)
 W1(sys_getpgid)     W2(sys_setpgid)
 W1(sys_getsid)      W0(sys_setsid)
 W2(sys_symlink)     W3(sys_readlink)
+W2(sys_chmod)       W3(sys_chown)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W2(sys_keymap_config)
 W4(sys_klog)
+W3(sys_puzzle)
+W3(sys_spec)
+W2(sys_auth)
+W3(sys_sudo)
+W2(sys_passwd_set)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -254,6 +268,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETSID]            = _sys_getsid,
     [SYS_SETSID]            = _sys_setsid,
     [SYS_SYMLINK]           = _sys_symlink,
+    [SYS_CHMOD]             = _sys_chmod,
+    [SYS_CHOWN]             = _sys_chown,
     [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,
@@ -263,6 +279,11 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_MOUSE_STATE]       = _sys_mouse_state,
     [SYS_KEYMAP_CONFIG]     = _sys_keymap_config,
     [SYS_KLOG]              = _sys_klog,
+    [SYS_PUZZLE]            = _sys_puzzle,
+    [SYS_SPEC]              = _sys_spec,
+    [SYS_AUTH]              = _sys_auth,
+    [SYS_SUDO]              = _sys_sudo,
+    [SYS_PASSWD_SET]        = _sys_passwd_set,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
@@ -300,6 +321,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     task_t *t = syscall_cur_task();
     if (t) {
         syscall_save_user_regs(t);
+        puzzle_on_syscall(t);
     }
     if (nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
         serial_printf("[SYSCALL] unknown nr=%llu\n", nr);

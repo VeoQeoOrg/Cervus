@@ -8,6 +8,8 @@ int64_t sys_mkdir(uint64_t path_ptr, uint64_t mode, uint64_t a3,
     char path[VFS_MAX_PATH];
     int rp = syscall_resolve_path_from_user(path, (const char *)path_ptr, sizeof(path));
     if (rp < 0) return rp;
+    int pp = syscall_perm_parent(path, 2);
+    if (pp < 0) return pp;
     int r = vfs_mkdir(path, (uint32_t)mode);
     if (r == 0) vfs_sync_all();
     return r;

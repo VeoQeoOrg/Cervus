@@ -66,6 +66,8 @@
 #define SYS_FDATASYNC       112
 #define SYS_SYMLINK         113
 #define SYS_READLINK        114
+#define SYS_CHMOD           115
+#define SYS_CHOWN           116
 
 #define SYS_DBG_PRINT       512
 #define SYS_TASK_KILL       515
@@ -104,6 +106,11 @@
 #define SYS_MOUSE_STATE     565
 #define SYS_KEYMAP_CONFIG   566
 #define SYS_KLOG            567
+#define SYS_PUZZLE          568
+#define SYS_SPEC            569
+#define SYS_AUTH            570
+#define SYS_SUDO            571
+#define SYS_PASSWD_SET      572
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

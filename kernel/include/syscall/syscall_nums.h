@@ -64,6 +64,8 @@
 #define SYS_FDATASYNC   112
 #define SYS_SYMLINK     113
 #define SYS_READLINK    114
+#define SYS_CHMOD       115
+#define SYS_CHOWN       116
 
 #define SYS_CERVUS_BASE       512
 
@@ -112,8 +114,13 @@
 #define SYS_MOUSE_STATE       565
 #define SYS_KEYMAP_CONFIG     566
 #define SYS_KLOG              567
+#define SYS_PUZZLE            568
+#define SYS_SPEC              569
+#define SYS_AUTH              570
+#define SYS_SUDO              571
+#define SYS_PASSWD_SET        572
 
-#define SYSCALL_TABLE_SIZE    568
+#define SYSCALL_TABLE_SIZE    573
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
