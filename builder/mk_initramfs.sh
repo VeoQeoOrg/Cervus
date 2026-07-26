@@ -15,9 +15,16 @@ green() { printf '\033[92m[initramfs]\033[0m %s\n' "$*"; }
 red()   { printf '\033[91m[initramfs] %s\033[0m\n' "$*" >&2; }
 
 rm -rf "$RFS"
-mkdir -p "$RFS"/bin "$RFS"/dev "$RFS"/etc "$RFS"/home "$RFS"/tmp "$RFS"/proc "$RFS"/apps
+mkdir -p "$RFS"/bin "$RFS"/dev "$RFS"/etc "$RFS"/etc/skel "$RFS"/home "$RFS"/tmp "$RFS"/proc "$RFS"/apps "$RFS"/root
 
-printf 'root:x:0:0:root:/root:/bin/sh\n' > "$RFS/etc/passwd"
+printf 'root:x:0:0:root:/root:/bin/csh\n' > "$RFS/etc/passwd"
+chmod 0644 "$RFS/etc/passwd"
+: > "$RFS/etc/sudoers"
+chmod 0600 "$RFS/etc/sudoers"
+: > "$RFS/etc/shadow"
+chmod 0600 "$RFS/etc/shadow"
+chmod 1777 "$RFS/tmp"
+chmod 0700 "$RFS/root"
 printf 'cervus'                          > "$RFS/etc/hostname"
 printf '/bin/csh\n'                      > "$RFS/etc/shell"
 
@@ -77,25 +84,20 @@ else
     red "$SYSROOT/usr not found - skipping sysroot"
 fi
 
-cat > "$RFS/home/readme.txt" <<EOF
-Cervus OS v0.0.2
-================
-
-This is Cervus - an x86_64 OS written in C.
-Bootloader: Limine | Filesystem: ext2
-
-Source: https://github.com/VeoQeo/Cervus
-EOF
-
-cat > "$RFS/home/welcome.txt" <<EOF
-Welcome to Cervus Shell!
+# /etc/skel - copied into each new user's home by the installer / useradd
+cat > "$RFS/etc/skel/welcome.txt" <<EOF
+Welcome to Cervus!
 
 Tips:
   - Use arrow keys to move cursor within a command
   - Use Up/Down to browse command history (saved in ~/.history)
   - Press Tab to autocomplete commands and paths
   - Binaries are in /bin and /apps
+
+Cervus OS v0.0.2 - an x86_64 OS written in C.
+Source: https://github.com/VeoQeo/Cervus
 EOF
+chmod 0644 "$RFS/etc/skel/welcome.txt"
 
 # boot files
 mkdir -p "$RFS/boot"

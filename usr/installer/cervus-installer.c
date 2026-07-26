@@ -1141,7 +1141,230 @@ static int write_limine_conf(const char *path) {
     return 0;
 }
 
-static int do_install(const disk_entry_t *d, const layout_t *L) {
+#define MAX_ACCT_USERS 8
+typedef struct { char name[64]; char pw[128]; int is_admin; } acct_user_t;
+typedef struct {
+    char rootpw[128];
+    acct_user_t users[MAX_ACCT_USERS];
+    int  n_users;
+} account_cfg_t;
+
+static void field_draw(int row, int col, const char *buf, int len, int mask, int cursor) {
+    go_xy(row, col);
+    fputs("\x1b[K", stdout);
+    for (int i = 0; i < len; i++) fputc(mask ? '*' : buf[i], stdout);
+    if (cursor) fputs("\x1b[7m \x1b[0m", stdout);
+    fflush(stdout);
+}
+
+static int read_field_at(int row, int col, char *buf, int cap, int mask) {
+    int len = (int)strlen(buf);
+    int blink = 1;
+    for (;;) {
+        field_draw(row, col, buf, len, mask, blink);
+
+        unsigned char c;
+        int got = 0;
+        for (int i = 0; i < 100; i++) {
+            if (read_byte_nb(&c)) { got = 1; break; }
+            syscall1(SYS_SLEEP_NS, 5000000ULL);
+        }
+        if (!got) { blink ^= 1; continue; }
+
+        if (c == 0x1B) {
+            unsigned char s1;
+            int has = 0;
+            for (int i = 0; i < 12 && !has; i++) {
+                if (read_byte_nb(&s1)) { has = 1; break; }
+                syscall1(SYS_SLEEP_NS, 1000000ULL);
+            }
+            if (!has) { field_draw(row, col, buf, len, mask, 0); return 0; }
+            if (s1 == '[' || s1 == 'O') {
+                unsigned char s2;
+                for (int i = 0; i < 12; i++) { if (read_byte_nb(&s2)) break; syscall1(SYS_SLEEP_NS, 1000000ULL); }
+            }
+            blink = 1;
+            continue;
+        }
+        if (c == '\n' || c == '\r') { field_draw(row, col, buf, len, mask, 0); return 1; }
+        if (c == 8 || c == 127) { if (len > 0) buf[--len] = '\0'; blink = 1; continue; }
+        if (c >= 32 && c < 127 && len < cap - 1) { buf[len++] = (char)c; buf[len] = '\0'; blink = 1; }
+    }
+}
+
+static void acc_msg(int row, int col, const char *m) {
+    go_xy(row, col);
+    fputs("\x1b[K", stdout);
+    if (m) fputs(m, stdout);
+    fflush(stdout);
+}
+
+static int valid_username(const char *u) {
+    size_t n = strlen(u);
+    if (n == 0 || n > 31) return 0;
+    if (!((u[0] >= 'a' && u[0] <= 'z') || (u[0] >= 'A' && u[0] <= 'Z'))) return 0;
+    for (const char *p = u; *p; p++)
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-')) return 0;
+    return strcmp(u, "root") != 0;
+}
+
+static int acc_password2(int r, const char *l1, const char *l2, char *out, int cap) {
+    int col = 4;
+    char p2[128];
+    for (;;) {
+        out[0] = 0;
+        go_xy(r, col);     fputs("\x1b[K", stdout); fputs(l1, stdout);
+        if (!read_field_at(r, col + 23, out, cap, 1)) return 0;
+        if ((int)strlen(out) < 4) { acc_msg(r + 6, col, C_RED "  too short (min 4 chars)" C_RESET); continue; }
+        p2[0] = 0;
+        go_xy(r + 1, col); fputs("\x1b[K", stdout); fputs(l2, stdout);
+        if (!read_field_at(r + 1, col + 23, p2, sizeof(p2), 1)) return 0;
+        if (strcmp(out, p2) != 0) { acc_msg(r + 6, col, C_RED "  passwords do not match" C_RESET); continue; }
+        acc_msg(r + 6, col, "");
+        return 1;
+    }
+}
+
+static int acc_yesno(int r, const char *label, int def) {
+    int col = 4, blink = 1;
+    for (;;) {
+        go_xy(r, col); fputs("\x1b[K", stdout); fputs(label, stdout);
+        if (blink) fputs("\x1b[7m \x1b[0m", stdout);
+        fflush(stdout);
+        unsigned char c; int got = 0;
+        for (int i = 0; i < 100; i++) { if (read_byte_nb(&c)) { got = 1; break; } syscall1(SYS_SLEEP_NS, 5000000ULL); }
+        if (!got) { blink ^= 1; continue; }
+        if (c == 0x1B) {
+            unsigned char s1; int has = 0;
+            for (int i = 0; i < 12 && !has; i++) { if (read_byte_nb(&s1)) { has = 1; break; } syscall1(SYS_SLEEP_NS, 1000000ULL); }
+            if (!has) return -1;
+            if (s1 == '[' || s1 == 'O') { unsigned char s2; for (int i = 0; i < 12; i++) { if (read_byte_nb(&s2)) break; syscall1(SYS_SLEEP_NS, 1000000ULL); } }
+            continue;
+        }
+        int res = -2;
+        if (c == 'y' || c == 'Y') res = 1;
+        else if (c == 'n' || c == 'N') res = 0;
+        else if (c == '\n' || c == '\r') res = def;
+        if (res == -2) continue;
+        go_xy(r, col); fputs("\x1b[K", stdout); fputs(label, stdout);
+        fputs(res ? "yes" : "no", stdout); fflush(stdout);
+        return res;
+    }
+}
+
+static int name_taken(const account_cfg_t *a, const char *nm) {
+    for (int i = 0; i < a->n_users; i++)
+        if (strcmp(a->users[i].name, nm) == 0) return 1;
+    return 0;
+}
+
+static int account_setup_screen(account_cfg_t *a) {
+    memset(a, 0, sizeof(*a));
+
+    hide_cursor(); clear_screen();
+    go_xy(2, 4); fputs(C_GREEN "== Account setup ==" C_RESET, stdout);
+    go_xy(3, 4); fputs("Set the root (administrator) password. ESC cancels the install.", stdout);
+    if (!acc_password2(5, "Root password:         ", "Confirm root password: ", a->rootpw, sizeof(a->rootpw)))
+        return 0;
+
+    while (a->n_users < MAX_ACCT_USERS) {
+        acct_user_t *u = &a->users[a->n_users];
+        memset(u, 0, sizeof(*u));
+
+        hide_cursor(); clear_screen();
+        go_xy(2, 4); printf(C_GREEN "== Create user %d ==" C_RESET, a->n_users + 1);
+        go_xy(3, 4); fputs("ESC cancels the install.", stdout);
+
+        for (;;) {
+            u->name[0] = 0;
+            go_xy(5, 4); fputs("\x1b[K", stdout); fputs("Username:", stdout);
+            if (!read_field_at(5, 27, u->name, sizeof(u->name), 0)) return 0;
+            if (!valid_username(u->name)) { acc_msg(13, 4, C_RED "  invalid name (letters/digits, not 'root')" C_RESET); continue; }
+            if (name_taken(a, u->name)) { acc_msg(13, 4, C_RED "  that name is already used" C_RESET); continue; }
+            acc_msg(13, 4, "");
+            break;
+        }
+
+        if (!acc_password2(6, "Password:              ", "Confirm password:      ", u->pw, sizeof(u->pw)))
+            return 0;
+
+        int ad = acc_yesno(9, "Grant this user admin (sudo)? [Y/n]: ", 1);
+        if (ad < 0) return 0;
+        u->is_admin = ad;
+
+        a->n_users++;
+        if (a->n_users >= MAX_ACCT_USERS) break;
+
+        int more = acc_yesno(11, "Create another user? [y/N]: ", 0);
+        if (more < 0) return 0;
+        if (!more) break;
+    }
+    return 1;
+}
+
+static void apply_accounts(const account_cfg_t *a) {
+
+    syscall2(SYS_PASSWD_SET, 0, (uint64_t)(uintptr_t)a->rootpw);
+    for (int i = 0; i < a->n_users; i++)
+        syscall2(SYS_PASSWD_SET, (uint64_t)(1000 + i), (uint64_t)(uintptr_t)a->users[i].pw);
+
+    int sfd = open("/etc/shadow", O_RDONLY, 0);
+    if (sfd >= 0) {
+        static char sh[4096];
+        int n = (int)read(sfd, sh, sizeof(sh) - 1);
+        close(sfd);
+        if (n < 0) n = 0;
+        unlink("/mnt/root/etc/shadow");
+        int dfd = open("/mnt/root/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (dfd >= 0) { if (n > 0) write(dfd, sh, (size_t)n); close(dfd); }
+    }
+
+    static char pw[2048];
+    int pn = snprintf(pw, sizeof(pw), "root:x:0:0:root:/root:/bin/csh\n");
+    for (int i = 0; i < a->n_users; i++) {
+        const char *nm = a->users[i].name;
+        int uid = 1000 + i;
+        pn += snprintf(pw + pn, sizeof(pw) - pn,
+            "%s:x:%d:%d:%s:/home/%s:/bin/csh\n", nm, uid, uid, nm, nm);
+    }
+    unlink("/mnt/root/etc/passwd");
+    int fd = open("/mnt/root/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) { write(fd, pw, (size_t)pn); close(fd); }
+
+    static char su[512];
+    int sn = 0;
+    for (int i = 0; i < a->n_users; i++)
+        if (a->users[i].is_admin) sn += snprintf(su + sn, sizeof(su) - sn, "%d\n", 1000 + i);
+    unlink("/mnt/root/etc/sudoers");
+    fd = open("/mnt/root/etc/sudoers", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) { if (sn > 0) write(fd, su, (size_t)sn); close(fd); }
+
+    ensure_dir("/mnt/root/home");
+    for (int i = 0; i < a->n_users; i++) {
+        int uid = 1000 + i;
+        char home[160];
+        snprintf(home, sizeof(home), "/mnt/root/home/%s", a->users[i].name);
+        ensure_dir(home);
+        syscall3(SYS_CHOWN, (uint64_t)(uintptr_t)home, (uint64_t)uid, (uint64_t)uid);
+
+        static dent_t skel[MAX_ENTRIES];
+        int ns = read_dir_entries("/etc/skel", skel, MAX_ENTRIES);
+        for (int j = 0; j < ns; j++) {
+            if (skel[j].d_type != 0) continue;
+            char sp[256], dp[320];
+            path_join("/etc/skel", skel[j].d_name, sp, sizeof(sp));
+            path_join(home, skel[j].d_name, dp, sizeof(dp));
+            copy_one_file(sp, dp);
+            syscall3(SYS_CHOWN, (uint64_t)(uintptr_t)dp, (uint64_t)uid, (uint64_t)uid);
+        }
+    }
+
+    rmdir("/mnt/root/tmp");
+    mkdir("/mnt/root/tmp", 01777);
+}
+
+static int do_install(const disk_entry_t *d, const layout_t *L, const account_cfg_t *acc) {
     uint64_t total_sectors = d->sectors;
     if (total_sectors > 0xFFFFFFFEULL) total_sectors = 0xFFFFFFFEULL;
 
@@ -1162,7 +1385,7 @@ static int do_install(const disk_entry_t *d, const layout_t *L) {
     uint32_t root_size  = avail;
     uint32_t swap_start = root_start + root_size;
 
-    install_screen_init(8);
+    install_screen_init(9);
 
     step_begin("Writing partition table");
     cervus_mbr_part_t specs[4];
@@ -1256,6 +1479,7 @@ static int do_install(const disk_entry_t *d, const layout_t *L) {
         "/mnt/root/usr", NULL
     };
     for (int i = 0; rdirs[i]; i++) ensure_dir(rdirs[i]);
+    mkdir("/mnt/root/root", 0700);
 
     int total_files = count_tree("/bin") + count_tree("/apps");
     struct stat ust0;
@@ -1275,6 +1499,8 @@ static int do_install(const disk_entry_t *d, const layout_t *L) {
         int nn = read_dir_entries("/etc", etc_entries, MAX_ENTRIES);
         for (int i = 0; i < nn; i++) {
             const char *nm = etc_entries[i].d_name;
+            if (strcmp(nm, "shadow") == 0 || strcmp(nm, "passwd") == 0 ||
+                strcmp(nm, "sudoers") == 0) continue;
             size_t nl = strlen(nm);
             int is_txt = (nl >= 4 && strcmp(nm + nl - 4, ".txt") == 0);
             char sp[256], dp[256];
@@ -1292,6 +1518,10 @@ static int do_install(const disk_entry_t *d, const layout_t *L) {
     struct stat hst;
     if (stat("/home", &hst) == 0) copy_tree("/home", "/mnt/root/home");
     step_ok("root populated");
+
+    step_begin("Configuring accounts");
+    apply_accounts(acc);
+    step_ok("accounts configured");
 
     step_begin("Writing limine.conf");
     write_limine_conf("/mnt/esp/boot/limine/limine.conf");
@@ -1451,7 +1681,10 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         int conf = confirm_screen(&disks[picked], &L);
         if (conf != 1) continue;
 
-        do_install(&disks[picked], &L);
+        account_cfg_t acc;
+        if (account_setup_screen(&acc) != 1) continue;
+
+        do_install(&disks[picked], &L, &acc);
         return EXIT_CANCEL;
     }
 }

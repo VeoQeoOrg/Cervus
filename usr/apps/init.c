@@ -18,8 +18,15 @@
 
 static int vt_pid[NVT];
 static char g_shell[256] = "/bin/csh";
+static int g_login = 0;
 
 extern char **environ;
+
+static void boot_stage(const char *s) {
+    char line[256];
+    int n = snprintf(line, sizeof(line), ">> init: %s", s);
+    if (n > 0) syscall4(SYS_KLOG, 3, 0, (uint64_t)(uintptr_t)line, (uint64_t)n);
+}
 
 static int sys_disk_mount(const char *dev, const char *path) {
     return (int)syscall2(SYS_DISK_MOUNT, dev, path);
@@ -115,24 +122,30 @@ static void boot_setup(void) {
         snprintf(part2_name, sizeof(part2_name), "%s%s2", disk_pfx, sep);
     }
 
+    if (rooted_on_disk) boot_stage("rooted on disk");
+    else if (has_disk)  boot_stage("disk detected, launching installer prompt");
+    else                boot_stage("no disk -> live mode");
+
     int disk_mounted = 0;
     if (!rooted_on_disk && has_disk) {
         int code = launch_installer_boot();
+        boot_stage("installer prompt returned");
         if (code == 10) {
             if (sys_disk_mount(part2_name, "/mnt") == 0) disk_mounted = 1;
         }
     }
 
     if (rooted_on_disk) {
-        setenv("HOME", "/home", 1);
+        setenv("HOME", "/root", 1);
         setenv("PATH", "/bin:/apps:/usr/bin", 1);
         setenv("MODE", "installed", 1);
+        g_login = 1;
     } else if (disk_mounted) {
-        setenv("HOME", "/mnt/home", 1);
+        setenv("HOME", "/mnt/root", 1);
         setenv("PATH", "/mnt/bin:/mnt/apps:/mnt/usr/bin", 1);
         setenv("MODE", "installed", 1);
     } else {
-        setenv("HOME", "/", 1);
+        setenv("HOME", "/root", 1);
         setenv("PATH", "/bin:/apps:/usr/bin", 1);
         setenv("MODE", "live", 1);
     }
@@ -156,6 +169,10 @@ static void spawn_shell(int vt) {
         open("/dev/tty", O_RDONLY, 0);
         open("/dev/tty", O_WRONLY, 0);
         open("/dev/tty", O_WRONLY, 0);
+        if (g_login) {
+            char *largv[] = { "/bin/login", NULL };
+            execve("/bin/login", largv, environ);
+        }
         char *argv[] = { g_shell, NULL };
         execve(g_shell, argv, environ);
         _exit(127);
@@ -166,10 +183,13 @@ static void spawn_shell(int vt) {
 int main(void) {
     for (int i = 0; i < NVT; i++) vt_pid[i] = 0;
 
+    boot_stage("start");
     boot_setup();
     term_cooked();
 
+    boot_stage("spawning shell on vt0");
     spawn_shell(0);
+    boot_stage("shell spawned, entering supervisor loop");
 
     for (;;) {
         int status;
