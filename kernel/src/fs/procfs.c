@@ -11,6 +11,7 @@
 #include "../../include/apic/apic.h"
 #include "../../include/drivers/timer.h"
 #include "../../include/sched/sched.h"
+#include "../../include/puzzle/puzzle.h"
 #include "../../include/io/serial.h"
 
 #define PROC_BUF_MAX 4096
@@ -268,6 +269,14 @@ static int gen_pid_fd(uint32_t pid, char *buf, size_t max) {
     return (int)off;
 }
 
+static int gen_pid_puzzle(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    if (!t->puzzle)
+        return snprintf(buf, max, "no puzzle (not an execve'd program)\n");
+    return puzzle_format(t->puzzle, buf, max);
+}
+
 typedef int (*proc_pid_gen_fn)(uint32_t pid, char *buf, size_t max);
 
 typedef struct { const char *name; proc_pid_gen_fn gen; } proc_pid_file_t;
@@ -277,6 +286,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "cmdline", gen_pid_cmdline },
     { "stat",    gen_pid_stat    },
     { "fd",      gen_pid_fd      },
+    { "puzzle",  gen_pid_puzzle  },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))
 

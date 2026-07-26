@@ -21,6 +21,7 @@
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
 #include "../include/smp/percpu.h"
+#include "../include/puzzle/puzzle.h"
 #include "../include/sched/sched.h"
 #include "../include/elf/elf.h"
 #include "../include/syscall/syscall.h"
@@ -96,6 +97,31 @@ static void hcf(void) {
     for (;;) {
         asm ("hlt");
     }
+}
+
+__attribute__((unused))
+static void ps2_diag_task(void *arg) {
+    (void)arg;
+    extern void apic_dump_irq(uint8_t);
+    extern void apic_dump_diag(void);
+    uint32_t last = 0xFFFFFFFFu;
+    bool dumped = false;
+    for (int iter = 0; iter < 12; iter++) {
+        task_sleep_ms(2500);
+        if (!dumped) {
+            apic_dump_diag();
+            printf("[ps2diag] keyboard IOAPIC entry:\n");
+            apic_dump_irq(1);
+            dumped = true;
+        }
+        uint32_t n = ps2_kb_irq_count();
+        if (n != last) {
+            printf("[ps2diag] keyboard IRQ fired %u times (press keys to test)\n", n);
+            serial_printf("[ps2diag] keyboard IRQ count=%u\n", n);
+            last = n;
+        }
+    }
+    task_exit();
 }
 
 static void load_elf_module(void) {
@@ -408,15 +434,25 @@ void kernel_main(void) {
     serial_writestring("[stage] timer_init\n");
     timer_init();
     serial_writestring("[stage] ps2_init\n");
-    ps2_init();
+    bool ps2_kb = ps2_init();
 
     serial_writestring("[stage] sched_init\n");
     sched_init();
     sched_notify_ready();
     timer_sleep_ms(10);
+
+    int xk = xhci_hid_kbd_active_count();
+    int ek = ehci_hid_kbd_active_count();
+    int uk = uhci_hid_kbd_active_count();
+    printf("input: PS/2 kbd=%s, USB kbd=%d (xhci=%d ehci=%d uhci=%d)\n",
+           ps2_kb ? "yes" : "no", xk + ek + uk, xk, ek, uk);
+    serial_printf("[input] PS/2 kbd=%s USB kbd=%d (xhci=%d ehci=%d uhci=%d)\n",
+                  ps2_kb ? "yes" : "no", xk + ek + uk, xk, ek, uk);
     printf("starting init...\n\n");
     serial_writestring("[stage] load init (ELF)\n");
     load_elf_module();
+    puzzle_guardian_start();
+
     serial_writestring("Manually triggering first reschedule...\n");
     sched_reschedule();
 

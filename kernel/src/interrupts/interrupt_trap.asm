@@ -59,6 +59,9 @@ common_stub:
     jmp .kernel_exit
 
 .kernel_resched:
+    mov rax, [rsp + 15*8]
+    cmp rax, 32
+    jb .kernel_check_cs
     call get_percpu
     test rax, rax
     jz .kernel_check_cs
