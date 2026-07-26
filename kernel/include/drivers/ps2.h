@@ -80,6 +80,7 @@ typedef struct {
 } kb_buf_t;
 
 bool                  ps2_init(void);
+uint32_t              ps2_kb_irq_count(void);
 const kb_state_t*     ps2_kb_get_state(void);
 const mouse_state_t*  ps2_mouse_get_state(void);
 bool  kb_buf_empty(void);

@@ -67,6 +67,29 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index, uint64_t flags) {
     return (vmm_pte_t*)pmm_phys_to_virt(parent[index] & PTE_PHYS_MASK);
 }
 
+vmm_pte_t* vmm_pte_lookup(vmm_pagemap_t* map, uintptr_t virt) {
+    if (!map || !map->pml4) return NULL;
+    size_t pml4_i = (virt >> 39) & MASK;
+    size_t pdpt_i = (virt >> 30) & MASK;
+    size_t pd_i   = (virt >> 21) & MASK;
+    size_t pt_i   = (virt >> 12) & MASK;
+
+    vmm_pte_t e4 = map->pml4[pml4_i];
+    if (!(e4 & VMM_PRESENT)) return NULL;
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(e4 & PTE_PHYS_MASK);
+    vmm_pte_t e3 = pdpt[pdpt_i];
+    if (!(e3 & VMM_PRESENT) || (e3 & VMM_PSE)) return NULL;
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(e3 & PTE_PHYS_MASK);
+    vmm_pte_t e2 = pd[pd_i];
+    if (!(e2 & VMM_PRESENT) || (e2 & VMM_PSE)) return NULL;
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(e2 & PTE_PHYS_MASK);
+    return &pt[pt_i];
+}
+
+void vmm_flush_local(uintptr_t virt) {
+    invlpg((void*)virt);
+}
+
 bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
     if (!map || !map->pml4) {
         serial_printf("[VMM_BUG] vmm_map_page: map=%p pml4=%p virt=0x%llx\n",

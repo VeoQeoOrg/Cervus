@@ -190,9 +190,13 @@ extern struct limine_framebuffer *global_framebuffer;
 extern void     get_cursor_position(uint32_t *x, uint32_t *y);
 extern uint32_t get_screen_width(void);
 
+volatile uint32_t g_kb_irq_total = 0;
+uint32_t ps2_kb_irq_count(void) { return g_kb_irq_total; }
+
 DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 {
     (void)frame;
+    g_kb_irq_total++;
     static bool e0_prefix = false;
     uint8_t sc       = inb(PS2_DATA_PORT);
     bool    released = (sc & PS2_KEY_RELEASE_BIT) != 0;
@@ -453,6 +457,10 @@ bool ps2_init(void) {
         apic_setup_irq(MOUSE_IRQ_LINE, MOUSE_IRQ_VECTOR, false, 0);
         serial_printf("[PS2] Mouse     IRQ%d -> vector 0x%02x\n", MOUSE_IRQ_LINE, MOUSE_IRQ_VECTOR);
     }
+
+    printf("[PS2] IOAPIC keyboard/mouse IRQ routing:\n");
+    if (kb_ok)    apic_dump_irq(KB_IRQ_LINE);
+    if (mouse_ok) apic_dump_irq(MOUSE_IRQ_LINE);
 
     kb_state  = (kb_state_t){0};
     kb_buf    = (kb_buf_t){0};

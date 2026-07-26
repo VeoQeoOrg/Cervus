@@ -8,6 +8,7 @@
 #include "../../include/sched/spinlock.h"
 #include <string.h>
 #include <stddef.h>
+#include <stdio.h>
 
 uintptr_t lapic_base = 0;
 uintptr_t ioapic_base = 0;
@@ -26,6 +27,8 @@ typedef struct {
 #define MAX_IRQ_OVERRIDES 16
 static irq_override_t g_irq_overrides[MAX_IRQ_OVERRIDES];
 static int g_irq_override_count = 0;
+static int g_ioapic_count = 0;
+static uint32_t g_ioapic_gsi_base = 0;
 
 uint64_t g_hpet_boot_counter = 0;
 uint64_t g_tsc_khz = 0;
@@ -269,8 +272,14 @@ static void parse_madt(void) {
 
             case MADT_ENTRY_IOAPIC: {
                 madt_ioapic_entry_t* ioapic_entry = (madt_ioapic_entry_t*)entries;
+                g_ioapic_count++;
+                serial_printf("[APIC] IOAPIC #%d id=%u addr=0x%x gsi_base=%u\n",
+                              g_ioapic_count, ioapic_entry->ioapic_id,
+                              ioapic_entry->ioapic_address,
+                              ioapic_entry->global_system_interrupt_base);
                 if (!map_mmio_region(ioapic_entry->ioapic_address, 0x1000)) break;
                 ioapic_base = phys_to_virt(ioapic_entry->ioapic_address);
+                g_ioapic_gsi_base = ioapic_entry->global_system_interrupt_base;
                 break;
             }
 
@@ -316,6 +325,11 @@ void apic_init(void) {
     hpet_init();
     lapic_enable();
 
+    outb(0x22, 0x70);
+    outb(0x23, 0x01);
+    serial_printf("[APIC] IMCR: PIC mode -> Symmetric I/O (APIC) mode (pcat=%u)\n",
+                  (unsigned)(madt->flags & 1));
+
     if (ioapic_base) {
         uint32_t max_redirects = ioapic_get_max_redirects(ioapic_base);
         for (uint32_t i = 0; i < max_redirects; i++) {
@@ -344,6 +358,66 @@ void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags) {
     if (mask) redir_flags |= IOAPIC_INT_MASKED;
 
     ioapic_redirect_irq((uint8_t)gsi, vector, redir_flags);
+}
+
+void apic_dump_diag(void) {
+    printf("[apicdiag] madt flags=0x%x pcat=%u  lapic raw_id=0x%x get_id=%u\n",
+           madt ? madt->flags : 0, madt ? (unsigned)(madt->flags & 1) : 0,
+           lapic_read(LAPIC_ID), lapic_get_id());
+    serial_printf("[apicdiag] madt flags=0x%x pcat=%u lapic raw_id=0x%x get_id=%u\n",
+                  madt ? madt->flags : 0, madt ? (unsigned)(madt->flags & 1) : 0,
+                  lapic_read(LAPIC_ID), lapic_get_id());
+    if (ioapic_base) {
+        uint32_t id  = ioapic_read(ioapic_base, IOAPIC_ID);
+        uint32_t ver = ioapic_read(ioapic_base, IOAPIC_VERSION);
+        printf("[apicdiag] ioapic count=%d id=%u ver=0x%x maxredir=%u gsi_base=%u\n",
+               g_ioapic_count, (id >> 24) & 0xF, ver & 0xFF,
+               ((ver >> 16) & 0xFF) + 1, g_ioapic_gsi_base);
+        serial_printf("[apicdiag] ioapic count=%d id=%u ver=0x%x maxredir=%u gsi_base=%u\n",
+                      g_ioapic_count, (id >> 24) & 0xF, ver & 0xFF,
+                      ((ver >> 16) & 0xFF) + 1, g_ioapic_gsi_base);
+    } else {
+        printf("[apicdiag] NO IOAPIC BASE!\n");
+        serial_printf("[apicdiag] NO IOAPIC BASE!\n");
+    }
+    for (int i = 0; i < g_irq_override_count; i++) {
+        irq_override_t *o = &g_irq_overrides[i];
+        printf("[apicdiag] ISO src=%u -> gsi=%u flags=0x%x\n",
+               o->source_irq, o->gsi, o->flags);
+        serial_printf("[apicdiag] ISO src=%u -> gsi=%u flags=0x%x\n",
+                      o->source_irq, o->gsi, o->flags);
+    }
+}
+
+void apic_dump_irq(uint8_t irq) {
+    if (!ioapic_base) {
+        printf("  IRQ%u: NO IOAPIC\n", irq);
+        serial_printf("[APIC] dump IRQ%u: no IOAPIC\n", irq);
+        return;
+    }
+    uint32_t gsi = irq;
+    const irq_override_t *ov = find_irq_override(irq);
+    if (ov) gsi = ov->gsi;
+
+    uint32_t reg  = IOAPIC_REDIR_START + gsi * 2;
+    uint32_t low  = ioapic_read(ioapic_base, reg);
+    uint32_t high = ioapic_read(ioapic_base, reg + 1);
+
+    uint8_t vec = (uint8_t)(low & 0xFF);
+    uint8_t pol = (uint8_t)((low >> 13) & 1);
+    uint8_t trg = (uint8_t)((low >> 15) & 1);
+    uint8_t msk = (uint8_t)((low >> 16) & 1);
+    uint8_t dst = (uint8_t)((high >> 24) & 0xFF);
+
+    uint32_t bsp = lapic_get_id();
+    printf("  IRQ%u->GSI%u vec=0x%02x %s %s mask=%u dest=%u bsp_apic=%u %s iso=%s\n",
+           irq, gsi, vec, pol ? "ACT-LOW" : "act-high",
+           trg ? "LEVEL" : "edge", msk, dst, bsp,
+           (dst == bsp) ? "OK" : "MISMATCH!", ov ? "YES" : "no");
+    serial_printf("[APIC] IRQ%u->GSI%u vec=0x%02x pol=%s trig=%s mask=%u dest=%u bsp=%u%s iso=%s "
+                  "(low=0x%08x high=0x%08x)\n",
+                  irq, gsi, vec, pol ? "LOW" : "high", trg ? "level" : "edge",
+                  msk, dst, bsp, (dst == bsp) ? "" : " MISMATCH", ov ? "yes" : "no", low, high);
 }
 
 static uint32_t apic_calibrate_pit_once(uint64_t *out_tsc_khz) {

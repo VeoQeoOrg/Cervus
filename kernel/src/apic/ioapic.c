@@ -52,12 +52,13 @@ void ioapic_redirect_irq(uint8_t irq, uint8_t vector, uint32_t flags) {
     }
 
     uint32_t low = vector | flags;
-    uint32_t high = 0;
+    uint32_t high = (uint32_t)lapic_get_id() << 24;
 
     uint32_t redir_reg = IOAPIC_REDIR_START + irq * 2;
 
-    ioapic_write(ioapic_base, redir_reg, low);
+    ioapic_write(ioapic_base, redir_reg, low | IOAPIC_INT_MASKED);
     ioapic_write(ioapic_base, redir_reg + 1, high);
+    ioapic_write(ioapic_base, redir_reg, low);
 
     serial_printf("IOAPIC: IRQ %u redirected to vector 0x%x\n", irq, vector);
 }

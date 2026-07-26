@@ -89,6 +89,8 @@ void ioapic_mask_irq(uint8_t irq);
 void ioapic_unmask_irq(uint8_t irq);
 
 void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags);
+void apic_dump_irq(uint8_t irq);
+void apic_dump_diag(void);
 void apic_timer_calibrate(void);
 extern uint64_t g_tsc_khz;
 void tsc_calibrate_bsp(void);
