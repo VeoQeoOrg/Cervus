@@ -76,7 +76,7 @@ static int tty_set_nonblock(int on)
 
 static void restore_term(void)
 {
-    fputs("\x1b[?25h\x1b[0m\x1b[2J\x1b[H", stdout);
+    fputs("\x1b[?25h\x1b[0m", stdout);
     fflush(stdout);
     if (g_stdin_nonblock) {
         tty_set_nonblock(0);
@@ -86,7 +86,7 @@ static void restore_term(void)
         tcsetattr(0, TCSAFLUSH, &g_orig_tio);
         g_in_raw = 0;
     }
-    fputs("\x1b[?25h", stdout);
+    fputs("\x1b[?25h\x1b[?1049l", stdout);
     fflush(stdout);
 }
 
@@ -104,7 +104,7 @@ static void enter_raw(void)
 
     if (tty_set_nonblock(1) == 0) g_stdin_nonblock = 1;
 
-    fputs("\x1b[?25l\x1b[2J\x1b[H", stdout);
+    fputs("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H", stdout);
     fflush(stdout);
 }
 
