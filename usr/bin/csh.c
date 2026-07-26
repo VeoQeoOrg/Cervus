@@ -231,6 +231,20 @@ static int starts_with_word(const char *s, const char *w) {
     return c == '\0' || isspace((unsigned char)c);
 }
 
+static char *tilde_expand_dup(const char *word) {
+    if (!word || word[0] != '~') return NULL;
+    if (word[1] != '\0' && word[1] != '/') return NULL;
+    const char *home = var_get("HOME");
+    if (!home || !home[0]) home = "/";
+    const char *rest = word + 1;
+    size_t hl = strlen(home), rl = strlen(rest);
+    char *out = (char *)malloc(hl + rl + 1);
+    if (!out) return NULL;
+    memcpy(out, home, hl);
+    memcpy(out + hl, rest, rl + 1);
+    return out;
+}
+
 static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r, int *nr) {
     *nr = 0;
     int new_argc = 0;
@@ -265,7 +279,9 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r,
         }
         if (*nr < max_r) {
             redirs[*nr].type = rt;
-            snprintf(redirs[*nr].path, CSH_PATH_MAX, "%s", target);
+            char *tx = tilde_expand_dup(target);
+            snprintf(redirs[*nr].path, CSH_PATH_MAX, "%s", tx ? tx : target);
+            free(tx);
             (*nr)++;
         }
     }
@@ -467,9 +483,19 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
             close(fd);
         }
         execve(binpath, (char *const *)real_argv, (char *const *)real_envp);
-        fputs(C_RED "csh: exec failed: " C_RESET, stdout);
-        fputs(binpath, stdout); putchar('\n');
-        exit(127);
+        int ee = errno;
+        if (ee == EACCES) {
+            fputs(C_RED "csh: permission denied: " C_RESET, stdout);
+            fputs(binpath, stdout);
+            fputs("  (try: chmod +x ", stdout); fputs(binpath, stdout); fputs(")\n", stdout);
+        } else if (ee == ENOEXEC) {
+            fputs(C_RED "csh: not executable (bad format / missing #!): " C_RESET, stdout);
+            fputs(binpath, stdout); putchar('\n');
+        } else {
+            fputs(C_RED "csh: cannot execute: " C_RESET, stdout);
+            fputs(binpath, stdout); putchar('\n');
+        }
+        exit(126);
     }
     if (g_bg_cmd) {
         int jid = job_add(child, g_bg_cmd);
@@ -995,7 +1021,6 @@ static void cmd_help(void) {
     putchar(10);
 }
 
-
 static int glob_match(const char *pat, const char *str) {
     while (*pat) {
         if (*pat == '*') {
@@ -1101,6 +1126,11 @@ static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[]
     if (n > max - 1) n = max - 1;
     for (int i = 0; i < n && oi < max - 1; i++) {
         char *ti = tok[i];
+        char *tx = tilde_expand_dup(ti);
+        if (tx) {
+            if (*nfree < max) freelist[(*nfree)++] = tx;
+            ti = tx;
+        }
         if (i > 0 && ti && has_glob_chars(ti)) {
             char *matches[256];
             int m = glob_token(ti, matches, 256);
@@ -1207,6 +1237,21 @@ static int exec_tokens(char **tok, int n) {
     if (strcmp(tok[0], "cd") == 0) {
         const char *path = (n > 1) ? tok[1] : var_get("HOME");
         if (!path || !path[0]) path = "/";
+
+        char dotbuf[128];
+        {
+            int alldots = 1, nd = 0;
+            for (const char *q = path; *q; q++) { if (*q != '.') { alldots = 0; break; } nd++; }
+            if (alldots && nd >= 3) {
+                int bo = 0;
+                for (int k = 0; k < nd - 1 && bo + 3 < (int)sizeof(dotbuf); k++) { dotbuf[bo++]='.'; dotbuf[bo++]='.'; dotbuf[bo++]='/'; }
+                if (bo > 0) bo--;
+                dotbuf[bo] = '\0';
+                path = dotbuf;
+            }
+        }
+        char *tx = tilde_expand_dup(path);
+        if (tx) path = tx;
         int rc;
         if (chdir(path) < 0) {
             fputs(C_RED "cd: " C_RESET, stdout);
@@ -1219,6 +1264,7 @@ static int exec_tokens(char **tok, int n) {
             if (!getcwd(g_cwd, sizeof(g_cwd))) { g_cwd[0] = '/'; g_cwd[1] = '\0'; }
             rc = 0;
         }
+        free(tx);
         rc_set(rc);
         return rc;
     }
@@ -1236,8 +1282,8 @@ static int exec_tokens(char **tok, int n) {
     if (nn == 0) return g_last_rc;
 
     int need_glob = 0;
-    for (int i = 1; i < nn; i++)
-        if (tok[i] && has_glob_chars(tok[i])) { need_glob = 1; break; }
+    for (int i = 0; i < nn; i++)
+        if (tok[i] && (tok[i][0] == '~' || (i > 0 && has_glob_chars(tok[i])))) { need_glob = 1; break; }
 
     if (!need_glob) {
         int rc = exec_external(nn, tok, rd, nr);
@@ -1966,10 +2012,45 @@ static const char *prompt_hostname(void) {
 }
 
 static const char *prompt_user(void) {
-    const char *u = var_get("USER");
-    if (!u || !u[0]) u = var_get("LOGNAME");
-    if (!u || !u[0]) u = "root";
-    return u;
+    static char ub[64];
+    static int cached = -1;
+    uint32_t uid = (uint32_t)getuid();
+    if (cached == (int)uid && ub[0]) return ub;
+    cached = (int)uid;
+    ub[0] = 0;
+
+    int fd = open("/etc/passwd", O_RDONLY, 0);
+    if (fd >= 0) {
+        char buf[4096];
+        int n = (int)read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = 0;
+            const char *p = buf;
+            while (*p) {
+                const char *line = p;
+                while (*p && *p != '\n') p++;
+                const char *c1 = line; while (c1 < p && *c1 != ':') c1++;
+                if (c1 < p) {
+                    const char *c2 = c1 + 1; while (c2 < p && *c2 != ':') c2++;
+                    if (c2 < p && (uint32_t)strtoul(c2 + 1, NULL, 10) == uid) {
+                        int nl = (int)(c1 - line);
+                        if (nl > 63) nl = 63;
+                        memcpy(ub, line, nl); ub[nl] = 0;
+                        break;
+                    }
+                }
+                if (*p == '\n') p++;
+            }
+        }
+    }
+    if (!ub[0]) {
+        const char *u = var_get("USER");
+        if (!u || !u[0]) u = getenv("USER");
+        if (u && u[0]) { strncpy(ub, u, 63); ub[63] = 0; }
+        else strcpy(ub, uid == 0 ? "root" : "user");
+    }
+    return ub;
 }
 
 static void render_ps1(const char *ps1, char *out, int outmax) {
@@ -2031,9 +2112,11 @@ static void build_prompt(char *out, int outmax) {
             snprintf(out + e, outmax - e, "%s", g_color_seq);
     } else {
         const char *dp = display_path();
+        const char *usr = prompt_user();
+        const char *tail = (strcmp(usr, "root") == 0) ? "# " : "$ ";
         snprintf(out + o, outmax - o,
-                 C_GREEN "cervus" C_RESET ":" C_BLUE "%s" C_RESET "$ %s",
-                 dp, g_color_seq[0] ? g_color_seq : "");
+                 C_GREEN "%s" C_RESET ":" C_BLUE "%s" C_RESET "%s%s",
+                 usr, dp, tail, g_color_seq[0] ? g_color_seq : "");
     }
 }
 
@@ -2146,7 +2229,6 @@ static int gather_matches(const char *buf, int pos, char matches[][256],
     *out_plen = plen;
     return nmatch;
 }
-
 
 static void csh_complete2(const char *buf, int pos, rl_completions_t *out) {
     out->count = 0;
