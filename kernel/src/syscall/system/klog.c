@@ -1,5 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/console/klog.h"
+#include "../../../include/io/serial.h"
 
 int64_t sys_klog(uint64_t op, uint64_t arg, uint64_t ubuf, uint64_t ulen)
 {
@@ -15,6 +16,17 @@ int64_t sys_klog(uint64_t op, uint64_t arg, uint64_t ubuf, uint64_t ulen)
             if (syscall_copy_to_user((void *)ubuf, kbuf, (size_t)n + 1) < 0)
                 return -EFAULT;
             return n;
+        }
+        case 3: {
+            if (!ubuf || ulen == 0) return -EINVAL;
+            char kbuf[KLOG_LINE_MAX];
+            size_t want = ulen < sizeof(kbuf) - 1 ? ulen : sizeof(kbuf) - 1;
+            if (syscall_copy_from_user(kbuf, (const void *)ubuf, want) < 0)
+                return -EFAULT;
+            kbuf[want] = '\0';
+            serial_writestring(kbuf);
+            serial_writestring("\n");
+            return (int64_t)want;
         }
         default: return -EINVAL;
     }
