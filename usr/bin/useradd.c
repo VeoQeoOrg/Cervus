@@ -102,15 +102,26 @@ int main(int argc, char **argv) {
     printf("user '%s' created (uid=%u, home=%s%s)\n", name, uid, home, sudoer ? ", sudo" : "");
 
     char p1[256], p2[256];
-    if (pw_getpass("New password: ", p1, sizeof(p1)) < 0) return 1;
-    if (pw_getpass("Retype new password: ", p2, sizeof(p2)) < 0) return 1;
-    if (strcmp(p1, p2) != 0) { fprintf(stderr, "useradd: passwords do not match; user has no password\n"); return 1; }
-    if (strlen(p1) < 4) { fprintf(stderr, "useradd: password too short; user has no password\n"); return 1; }
-
-    long r = syscall2(SYS_PASSWD_SET, (uint64_t)uid, (uint64_t)(uintptr_t)p1);
+    int set = 0;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (pw_getpass("New password: ", p1, sizeof(p1)) < 0) break;
+        if (pw_getpass("Retype new password: ", p2, sizeof(p2)) < 0) break;
+        if (strcmp(p1, p2) != 0) { fprintf(stderr, "Sorry, passwords do not match.\n"); continue; }
+        if (strlen(p1) < 4) { fprintf(stderr, "Password too short (min 4 characters).\n"); continue; }
+        if (syscall2(SYS_PASSWD_SET, (uint64_t)uid, (uint64_t)(uintptr_t)p1) != 0) {
+            fprintf(stderr, "useradd: failed to set password\n");
+            break;
+        }
+        set = 1;
+        break;
+    }
     memset(p1, 0, sizeof(p1)); memset(p2, 0, sizeof(p2));
-    if (r != 0) { fprintf(stderr, "useradd: failed to set password\n"); return 1; }
 
-    printf("password set for '%s'\n", name);
+    if (set) {
+        printf("password set for '%s'\n", name);
+        return 0;
+    }
+    fprintf(stderr, "useradd: '%s' created but has no password (locked). "
+                    "Set one later with: passwd %s\n", name, name);
     return 0;
 }
