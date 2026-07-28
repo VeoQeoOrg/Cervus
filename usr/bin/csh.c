@@ -164,8 +164,12 @@ static void rc_set(int rc) {
 static void expand_vars(const char *src, char *dst, size_t dsz) {
     size_t di = 0;
     const char *p = src;
+    int in_sq = 0, in_dq = 0;
     while (*p && di + 1 < dsz) {
-        if (*p != '$') { dst[di++] = *p++; continue; }
+        char qc = *p;
+        if (qc == '\'' && !in_dq) { in_sq = !in_sq; dst[di++] = *p++; continue; }
+        if (qc == '"'  && !in_sq) { in_dq = !in_dq; dst[di++] = *p++; continue; }
+        if (*p != '$' || in_sq) { dst[di++] = *p++; continue; }
         p++;
         int braced = (*p == '{');
         if (braced) p++;
