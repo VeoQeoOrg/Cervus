@@ -129,7 +129,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
 | **Resilience** | Process regeneration and kernel fault recovery |
-| **Userland** | `csh` shell, ~60 utilities, `neo` editor, `cfm` file manager, `tcc` compiler |
+| **Userland** | `csh` shell, ~70 utilities, `neo` editor (C syntax highlighting), `cfm` file manager, `tcc` compiler |
 | **Terminals** | 12 virtual terminals, per-terminal login, a live debug monitor |
 
 ---
@@ -274,7 +274,10 @@ has an HPET.
 A custom **GDT**, **IDT**, and **TSS** are installed early. The IDT wires up the full
 set of CPU exception vectors (page fault, general protection fault, and so on) and
 the hardware IRQ vectors. Interrupt routing is programmed through the LAPIC and
-IOAPIC, and end-of-interrupt is signaled to the LAPIC.
+IOAPIC, and end-of-interrupt is signaled to the LAPIC. Machines with **multiple
+IOAPICs** (common on AMD platforms) are handled by resolving each global system
+interrupt to the chip that actually owns it, so keyboard and other legacy IRQs are
+delivered correctly rather than programmed into the wrong controller.
 
 A fault taken in **user** context terminates the offending process. A fault taken in
 **kernel** context while serving a user task is handled by the recovery path
@@ -414,8 +417,10 @@ each controller provides its own transfer transport. On top sit class drivers:
 - **Mass Storage** — SCSI transparent command set over Bulk-Only Transport, so USB
   flash drives appear as block devices and can be mounted.
 
-Halted endpoints are recovered (Reset Endpoint + Set TR Dequeue) so flaky low-speed
-devices keep working.
+Halted endpoints are recovered (Reset Endpoint + Set TR Dequeue). Cheap low-speed
+keyboards that stay silent until prodded are woken with a `SET_REPORT` during
+enumeration, and an interrupt endpoint that never delivers its first report is
+re-kicked — so flaky HID devices keep working across a range of real hardware.
 
 ### Storage
 
@@ -496,9 +501,10 @@ the target machine.
 
 ### Privilege model
 
-- A privilege change happens **only** through kernel syscalls that verify a password:
-  `login` and `su` authenticate *to* a user (dropping to that UID), and `sudo`
-  elevates a listed sudoer to root.
+- A privilege **escalation** happens **only** through kernel syscalls that verify a
+  password: a non-root user must supply the target's password to `login`/`su`, and a
+  listed sudoer must supply their own to `sudo`. Dropping *down* — root becoming
+  another user — needs no password, since it only ever reduces privilege.
 - A non-root process has **no `CAP_SETUID`**, so it cannot raise its own UID.
 - `/etc/shadow` and `/etc/sudoers` are unreadable and unwritable by non-root, and
   they cannot be replaced through `rename`, `truncate`, or `unlink` — every
@@ -757,9 +763,10 @@ programs live in `/apps`.
 |----------|----------|
 | **Files** | `cat` `cp` `mv` `rm` `ln` `touch` `stat` `chmod` `chown` `truncate` |
 | **Directories** | `ls` `mkdir` `rmdir` `pwd` `cd` `find` `tree` |
-| **Text** | `grep` `sed` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `diff` `tee` `hexdump` |
-| **Process** | `ps` `top` `kill` `killall` `sleep` `time` `xargs` |
-| **Users** | `whoami` `id` `su` `sudo` `login` `passwd` `useradd` `chsh` |
+| **Text** | `grep` `sed` `awk` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `diff` `tee` `hexdump` |
+| **Scripting** | `expr` `test` (`[`) `seq` `xargs` |
+| **Process** | `ps` `top` `kill` `killall` `sleep` `time` |
+| **Users** | `whoami` `id` `su` `sudo` `login` `passwd` `useradd` `userdel` `usermod` `groups` `chsh` |
 | **System** | `uname` `env` `echo` `printf` `which` `clear` `dmesg` `watch` `reboot` `shutdown` |
 | **Hardware** | `lspci` `lsusb` `lsblk` `cpuinfo` `meminfo` `diskinfo` `df` `du` |
 | **Filesystem** | `mount` `umount` `sync` `mkfs` `fdisk` `mkpart` `eject` `wipefs` `tar` |
@@ -785,6 +792,10 @@ Brief descriptions of the most commonly used commands:
 - `find` — walk a directory tree looking for files.
 - `grep` — search for a pattern in files.
 - `sed` — stream editor for simple substitutions.
+- `awk` — field-oriented text processing (`$1`, `NR`, `NF`, patterns, `BEGIN`/`END`,
+  `-F`, `printf`, `length`/`substr`/`index`); handles the common one-liners.
+- `expr` — evaluate an integer expression; `test` (also `[`) — evaluate a condition
+  for scripts (`-f`, `-d`, `-eq`, `-gt`, `=`, …).
 - `head` / `tail` — first / last lines of a file.
 - `wc` — count lines, words, and bytes.
 - `sort` / `uniq` — order lines / drop adjacent duplicates.
@@ -792,12 +803,16 @@ Brief descriptions of the most commonly used commands:
 - `diff` — compare two files.
 - `hexdump` — dump a file as hex and ASCII.
 - `tee` — copy standard input to a file and to standard output.
-- `ps` / `top` — list processes / live process monitor.
+- `ps` — list processes; `top` — interactive process monitor (arrows select a
+  process, `k` kills it, `P`/`M`/`N`/`T` sort by CPU/memory/PID/time, `p` pauses).
 - `kill` / `killall` — signal a process by PID / by name.
-- `whoami` / `id` — the current user / its IDs.
-- `su` — start a shell as another user; `sudo` — run one command as root.
+- `whoami` / `id` — the current user / its IDs; `groups` — a user's groups.
+- `su` — start a shell as another user (root switches without a password; other users
+  authenticate); `sudo` — run one command as root.
 - `login` — authenticate and start a session (used on each terminal).
-- `passwd` — set a password; `useradd` — create a user (root); `chsh` — change shell.
+- `passwd` — set a password; `chsh` — change shell.
+- `useradd` / `userdel` — create / remove a user (root); `usermod` — modify one
+  (`-aG sudo` grant, `-rG sudo` revoke, `-s` change shell).
 - `uname` — system name; `env` — environment; `which` — locate a command.
 - `dmesg` — print the kernel log; `watch` — re-run a command periodically.
 - `lspci` / `lsusb` / `lsblk` — list PCI devices / USB devices / block devices.
@@ -806,7 +821,8 @@ Brief descriptions of the most commonly used commands:
 - `mount` / `umount` — attach / detach a filesystem; `sync` — flush caches.
 - `mkfs` — create a filesystem; `fdisk` / `mkpart` — partition a disk.
 - `tar` — create and extract archives.
-- `reboot` / `shutdown` — power control.
+- `reboot` / `shutdown` — power control (prompt for the root password when run by a
+  non-root user, instead of just failing).
 - `seq` / `factor` — number sequences / integer factorization.
 - `basename` / `dirname` / `realpath` — path manipulation.
 - `fetch` — a compact system-information summary.
@@ -821,7 +837,7 @@ For built-in shell commands (`cd`, `alias`, `export`, `jobs`, control flow, …)
 `neo` is a small, modeless, nano-style text editor for editing files on the machine.
 
 <p align="center">
-  <img src="assets/screenshots/neo.png" alt="Editing a file in the neo editor" width="760px">
+  <img src="assets/screenshots/neo.png" alt="C syntax highlighting in the neo editor" width="760px">
 </p>
 
 It shows line numbers and a status line with the filename, modified state, and cursor
@@ -829,6 +845,11 @@ position. Control-key shortcuts are listed along the bottom: `^S` save, `^Q` qui
 `^X` cut, `^C` copy, `^V` paste, `^D` duplicate line, `^F` find, `^G` go to line,
 `^N` toggle line numbers. Arrow keys move the cursor; there are no modes to switch
 between.
+
+Editing C (`.c`/`.h`) files turns on **syntax highlighting** — keywords, types,
+strings, character and numeric literals, `//` and `/* */` comments, and preprocessor
+directives are each colored (as in the screenshot above). Pressing Enter keeps the
+current line's indentation (**auto-indent**), so nested code lines up while you type.
 
 ---
 
@@ -933,10 +954,15 @@ files so they run only once.
 ./nb kernel          # build only the kernel
 ./nb iso             # build the bootable ISO
 ./nb apps            # build the userland programs
+./nb flash /dev/sdX  # write a fresh ISO to a USB stick for hardware testing
 ./nb reconfigure     # regenerate build.ninja
 ./nb clean           # remove build artifacts (keeps fetched deps)
 ./nb gitclean        # deep wipe (also removes deps, disks, ISOs)
 ```
+
+`./nb flash` builds a fresh image and writes it to a USB stick with `dd`. It only
+lists and accepts **removable** devices, refuses fixed disks, and asks for
+confirmation before erasing anything; run it with no device to see the candidates.
 
 `./nb` is a thin front-end over Ninja; any extra arguments are passed straight
 through, so `./nb -j4 kernel` works as expected. The build configurator lives in
@@ -1047,8 +1073,9 @@ Planned and in-progress directions, roughly in order of interest:
   someone who boots their own environment (see the limitations below).
 - **Stronger password hashing** — moving the key-derivation function toward a
   memory-hard, brute-force-resistant scheme (bcrypt/scrypt/argon2 class).
-- **Wider hardware coverage** — more input, storage, and controller support, and
-  ironing out machine-specific interrupt-routing issues.
+- **Wider hardware coverage** — more input, storage, and controller support across
+  more real machines. Multi-IOAPIC interrupt routing and several flaky-USB-keyboard
+  quirks (which previously broke input on some AMD boards) are now handled.
 
 ### Current limitations
 
