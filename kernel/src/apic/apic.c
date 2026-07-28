@@ -27,8 +27,29 @@ typedef struct {
 #define MAX_IRQ_OVERRIDES 16
 static irq_override_t g_irq_overrides[MAX_IRQ_OVERRIDES];
 static int g_irq_override_count = 0;
-static int g_ioapic_count = 0;
-static uint32_t g_ioapic_gsi_base = 0;
+
+typedef struct {
+    uintptr_t base;
+    uint32_t  gsi_base;
+    uint32_t  pins;
+    uint8_t   id;
+} ioapic_dev_t;
+
+#define MAX_IOAPICS 8
+static ioapic_dev_t g_ioapics[MAX_IOAPICS];
+static int g_ioapic_num = 0;
+
+bool ioapic_resolve_gsi(uint32_t gsi, uintptr_t *base_out, uint32_t *pin_out) {
+    for (int i = 0; i < g_ioapic_num; i++) {
+        ioapic_dev_t *io = &g_ioapics[i];
+        if (gsi >= io->gsi_base && gsi < io->gsi_base + io->pins) {
+            if (base_out) *base_out = io->base;
+            if (pin_out)  *pin_out  = gsi - io->gsi_base;
+            return true;
+        }
+    }
+    return false;
+}
 
 uint64_t g_hpet_boot_counter = 0;
 uint64_t g_tsc_khz = 0;
@@ -272,14 +293,19 @@ static void parse_madt(void) {
 
             case MADT_ENTRY_IOAPIC: {
                 madt_ioapic_entry_t* ioapic_entry = (madt_ioapic_entry_t*)entries;
-                g_ioapic_count++;
-                serial_printf("[APIC] IOAPIC #%d id=%u addr=0x%x gsi_base=%u\n",
-                              g_ioapic_count, ioapic_entry->ioapic_id,
-                              ioapic_entry->ioapic_address,
-                              ioapic_entry->global_system_interrupt_base);
                 if (!map_mmio_region(ioapic_entry->ioapic_address, 0x1000)) break;
-                ioapic_base = phys_to_virt(ioapic_entry->ioapic_address);
-                g_ioapic_gsi_base = ioapic_entry->global_system_interrupt_base;
+                if (g_ioapic_num < MAX_IOAPICS) {
+                    ioapic_dev_t *io = &g_ioapics[g_ioapic_num++];
+                    io->base     = phys_to_virt(ioapic_entry->ioapic_address);
+                    io->gsi_base = ioapic_entry->global_system_interrupt_base;
+                    io->pins     = ioapic_get_max_redirects(io->base);
+                    io->id       = ioapic_entry->ioapic_id;
+                    serial_printf("[APIC] IOAPIC #%d id=%u addr=0x%x gsi_base=%u pins=%u\n",
+                                  g_ioapic_num, io->id, ioapic_entry->ioapic_address,
+                                  io->gsi_base, io->pins);
+                    if (io->gsi_base == 0 || !ioapic_base)
+                        ioapic_base = io->base;
+                }
                 break;
             }
 
@@ -330,10 +356,11 @@ void apic_init(void) {
     serial_printf("[APIC] IMCR: PIC mode -> Symmetric I/O (APIC) mode (pcat=%u)\n",
                   (unsigned)(madt->flags & 1));
 
-    if (ioapic_base) {
-        uint32_t max_redirects = ioapic_get_max_redirects(ioapic_base);
-        for (uint32_t i = 0; i < max_redirects; i++) {
-            ioapic_mask_irq(i);
+    for (int i = 0; i < g_ioapic_num; i++) {
+        ioapic_dev_t *io = &g_ioapics[i];
+        for (uint32_t p = 0; p < io->pins; p++) {
+            uint32_t reg = IOAPIC_REDIR_START + p * 2;
+            ioapic_write(io->base, reg, ioapic_read(io->base, reg) | IOAPIC_INT_MASKED);
         }
     }
 }
@@ -357,7 +384,7 @@ void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags) {
 
     if (mask) redir_flags |= IOAPIC_INT_MASKED;
 
-    ioapic_redirect_irq((uint8_t)gsi, vector, redir_flags);
+    ioapic_redirect_irq(gsi, vector, redir_flags);
 }
 
 void apic_dump_diag(void) {
@@ -367,15 +394,20 @@ void apic_dump_diag(void) {
     serial_printf("[apicdiag] madt flags=0x%x pcat=%u lapic raw_id=0x%x get_id=%u\n",
                   madt ? madt->flags : 0, madt ? (unsigned)(madt->flags & 1) : 0,
                   lapic_read(LAPIC_ID), lapic_get_id());
-    if (ioapic_base) {
-        uint32_t id  = ioapic_read(ioapic_base, IOAPIC_ID);
-        uint32_t ver = ioapic_read(ioapic_base, IOAPIC_VERSION);
-        printf("[apicdiag] ioapic count=%d id=%u ver=0x%x maxredir=%u gsi_base=%u\n",
-               g_ioapic_count, (id >> 24) & 0xF, ver & 0xFF,
-               ((ver >> 16) & 0xFF) + 1, g_ioapic_gsi_base);
-        serial_printf("[apicdiag] ioapic count=%d id=%u ver=0x%x maxredir=%u gsi_base=%u\n",
-                      g_ioapic_count, (id >> 24) & 0xF, ver & 0xFF,
-                      ((ver >> 16) & 0xFF) + 1, g_ioapic_gsi_base);
+    if (g_ioapic_num > 0) {
+        printf("[apicdiag] ioapic count=%d\n", g_ioapic_num);
+        serial_printf("[apicdiag] ioapic count=%d\n", g_ioapic_num);
+        for (int i = 0; i < g_ioapic_num; i++) {
+            ioapic_dev_t *io = &g_ioapics[i];
+            uint32_t id  = ioapic_read(io->base, IOAPIC_ID);
+            uint32_t ver = ioapic_read(io->base, IOAPIC_VERSION);
+            printf("[apicdiag]  ioapic[%d] id=%u ver=0x%x gsi=%u..%u pins=%u\n",
+                   i, (id >> 24) & 0xF, ver & 0xFF,
+                   io->gsi_base, io->gsi_base + io->pins - 1, io->pins);
+            serial_printf("[apicdiag]  ioapic[%d] id=%u ver=0x%x gsi=%u..%u pins=%u\n",
+                   i, (id >> 24) & 0xF, ver & 0xFF,
+                   io->gsi_base, io->gsi_base + io->pins - 1, io->pins);
+        }
     } else {
         printf("[apicdiag] NO IOAPIC BASE!\n");
         serial_printf("[apicdiag] NO IOAPIC BASE!\n");
@@ -390,18 +422,21 @@ void apic_dump_diag(void) {
 }
 
 void apic_dump_irq(uint8_t irq) {
-    if (!ioapic_base) {
-        printf("  IRQ%u: NO IOAPIC\n", irq);
-        serial_printf("[APIC] dump IRQ%u: no IOAPIC\n", irq);
-        return;
-    }
     uint32_t gsi = irq;
     const irq_override_t *ov = find_irq_override(irq);
     if (ov) gsi = ov->gsi;
 
-    uint32_t reg  = IOAPIC_REDIR_START + gsi * 2;
-    uint32_t low  = ioapic_read(ioapic_base, reg);
-    uint32_t high = ioapic_read(ioapic_base, reg + 1);
+    uintptr_t base;
+    uint32_t pin;
+    if (!ioapic_resolve_gsi(gsi, &base, &pin)) {
+        printf("  IRQ%u->GSI%u: NO IOAPIC\n", irq, gsi);
+        serial_printf("[APIC] dump IRQ%u->GSI%u: no IOAPIC\n", irq, gsi);
+        return;
+    }
+
+    uint32_t reg  = IOAPIC_REDIR_START + pin * 2;
+    uint32_t low  = ioapic_read(base, reg);
+    uint32_t high = ioapic_read(base, reg + 1);
 
     uint8_t vec = (uint8_t)(low & 0xFF);
     uint8_t pol = (uint8_t)((low >> 13) & 1);
