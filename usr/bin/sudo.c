@@ -24,8 +24,13 @@ int main(int argc, char **argv) {
     long r = syscall3(SYS_SUDO, (uint64_t)(uintptr_t)pw, 0, 0);
     memset(pw, 0, sizeof(pw));
     if (r != 0) {
-        if (r == -1 || r == -13) printf("sudo: authentication failure\n");
-        else printf("sudo: not permitted (you are not a sudoer)\n");
+        if (r == -13)
+            printf("sudo: authentication failure (wrong password)\n");
+        else if (r == -1)
+            printf("sudo: user is not in the sudoers file "
+                   "(create with 'useradd -G sudo <name>')\n");
+        else
+            printf("sudo: not permitted\n");
         return 1;
     }
 

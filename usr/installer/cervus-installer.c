@@ -1263,7 +1263,7 @@ static int account_setup_screen(account_cfg_t *a) {
     memset(a, 0, sizeof(*a));
 
     hide_cursor(); clear_screen();
-    go_xy(2, 4); fputs(C_GREEN "== Account setup ==" C_RESET, stdout);
+    go_xy(2, 4); fputs(C_GREEN " Account setup " C_RESET, stdout);
     go_xy(3, 4); fputs("Set the root (administrator) password. ESC cancels the install.", stdout);
     if (!acc_password2(5, "Root password:         ", "Confirm root password: ", a->rootpw, sizeof(a->rootpw)))
         return 0;
@@ -1273,7 +1273,7 @@ static int account_setup_screen(account_cfg_t *a) {
         memset(u, 0, sizeof(*u));
 
         hide_cursor(); clear_screen();
-        go_xy(2, 4); printf(C_GREEN "== Create user %d ==" C_RESET, a->n_users + 1);
+        go_xy(2, 4); printf(C_GREEN " Create user %d " C_RESET, a->n_users + 1);
         go_xy(3, 4); fputs("ESC cancels the install.", stdout);
 
         for (;;) {
