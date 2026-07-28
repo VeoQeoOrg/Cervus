@@ -35,12 +35,19 @@
 typedef struct { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; } neo_winsize_t;
 
 typedef struct {
-    int    size;
-    int    cap;
-    char  *chars;
-    int    rsize;
-    char  *render;
+    int            size;
+    int            cap;
+    char          *chars;
+    int            rsize;
+    char          *render;
+    unsigned char *hl;
+    int            hl_open_comment;
 } neo_row_t;
+
+enum {
+    HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1,
+    HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_PREPROC
+};
 
 typedef struct {
     int        cx, cy;
@@ -63,6 +70,7 @@ typedef struct {
     char      *clipboard;
     int        clipboard_len;
     int        clipboard_was_line;
+    int        syntax;
     struct termios orig_termios;
 } neo_t;
 
@@ -187,6 +195,115 @@ static int row_rx_to_cx(neo_row_t *row, int rx)
     return cx;
 }
 
+static const char *C_KEYWORDS[] = {
+    "switch", "if", "while", "for", "break", "continue", "return", "else",
+    "struct", "union", "typedef", "static", "enum", "case", "default", "do",
+    "goto", "sizeof", "const", "extern", "volatile", "inline", "register",
+    "#include", "#define", "#ifdef", "#ifndef", "#endif", "#if", "#else",
+    "#elif", "#pragma", "#undef",
+    "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
+    "void|", "short|", "auto|", "bool|", "size_t|", "ssize_t|", "uintptr_t|",
+    "uint8_t|", "uint16_t|", "uint32_t|", "uint64_t|",
+    "int8_t|", "int16_t|", "int32_t|", "int64_t|", NULL
+};
+
+static int hl_is_space(int c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+static int hl_is_digit(int c) { return c >= '0' && c <= '9'; }
+static int hl_is_sep(int c) {
+    return c == '\0' || hl_is_space(c) ||
+           strchr(",.()+-/*=~%<>[]{};:&|!?^", c) != NULL;
+}
+static int hl_color(int hl) {
+    switch (hl) {
+        case HL_COMMENT:
+        case HL_MLCOMMENT: return 90;
+        case HL_KEYWORD1:  return 33;
+        case HL_KEYWORD2:  return 32;
+        case HL_STRING:    return 35;
+        case HL_NUMBER:    return 31;
+        case HL_PREPROC:   return 36;
+        default:           return 37;
+    }
+}
+
+static void editor_update_syntax(int at)
+{
+    neo_row_t *row = &E.row[at];
+    free(row->hl);
+    row->hl = malloc(row->rsize ? row->rsize : 1);
+    if (!row->hl) return;
+    memset(row->hl, HL_NORMAL, row->rsize ? row->rsize : 1);
+
+    int recur = 0;
+    if (E.syntax) {
+        char *s = row->render;
+        int i = 0, prev_sep = 1, in_string = 0;
+        int in_comment = (at > 0 && E.row[at - 1].hl_open_comment);
+
+        while (i < row->rsize) {
+            char c = s[i];
+            unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+            if (!in_string && !in_comment && c == '/' && i + 1 < row->rsize && s[i + 1] == '/') {
+                memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+                break;
+            }
+            if (!in_string) {
+                if (in_comment) {
+                    row->hl[i] = HL_MLCOMMENT;
+                    if (c == '*' && i + 1 < row->rsize && s[i + 1] == '/') {
+                        row->hl[i + 1] = HL_MLCOMMENT;
+                        i += 2; in_comment = 0; prev_sep = 1; continue;
+                    }
+                    i++; continue;
+                } else if (c == '/' && i + 1 < row->rsize && s[i + 1] == '*') {
+                    row->hl[i] = HL_MLCOMMENT; row->hl[i + 1] = HL_MLCOMMENT;
+                    i += 2; in_comment = 1; continue;
+                }
+            }
+            if (in_string) {
+                row->hl[i] = HL_STRING;
+                if (c == '\\' && i + 1 < row->rsize) { row->hl[i + 1] = HL_STRING; i += 2; continue; }
+                if (c == in_string) in_string = 0;
+                i++; prev_sep = 1; continue;
+            } else if (c == '"' || c == '\'') {
+                in_string = c; row->hl[i] = HL_STRING; i++; continue;
+            }
+            if ((hl_is_digit((unsigned char)c) && (prev_sep || prev_hl == HL_NUMBER)) ||
+                (c == '.' && prev_hl == HL_NUMBER)) {
+                row->hl[i] = HL_NUMBER; i++; prev_sep = 0; continue;
+            }
+            if (prev_sep) {
+                int j;
+                for (j = 0; C_KEYWORDS[j]; j++) {
+                    int klen = (int)strlen(C_KEYWORDS[j]);
+                    int kw2 = C_KEYWORDS[j][klen - 1] == '|';
+                    if (kw2) klen--;
+                    int pp = C_KEYWORDS[j][0] == '#';
+                    if (i + klen <= row->rsize &&
+                        strncmp(&s[i], C_KEYWORDS[j], klen) == 0 &&
+                        hl_is_sep(i + klen < row->rsize ? s[i + klen] : '\0')) {
+                        memset(&row->hl[i], pp ? HL_PREPROC : (kw2 ? HL_KEYWORD2 : HL_KEYWORD1), klen);
+                        i += klen; break;
+                    }
+                }
+                if (C_KEYWORDS[j] != NULL) { prev_sep = 0; continue; }
+            }
+            prev_sep = hl_is_sep((unsigned char)c);
+            i++;
+        }
+        recur = (row->hl_open_comment != in_comment);
+        row->hl_open_comment = in_comment;
+    } else {
+        recur = (row->hl_open_comment != 0);
+        row->hl_open_comment = 0;
+    }
+
+    if (recur && at + 1 < E.numrows) editor_update_syntax(at + 1);
+}
+
 static void row_update(neo_row_t *row)
 {
     int tabs = 0;
@@ -204,6 +321,8 @@ static void row_update(neo_row_t *row)
     }
     row->render[idx] = '\0';
     row->rsize = idx;
+
+    editor_update_syntax((int)(row - E.row));
 }
 
 static void rows_reserve(int want)
@@ -219,6 +338,7 @@ static void rows_reserve(int want)
     for (int i = E.numrows; i < nc; i++) {
         nr[i].size = 0; nr[i].cap = 0; nr[i].chars = NULL;
         nr[i].rsize = 0; nr[i].render = NULL;
+        nr[i].hl = NULL; nr[i].hl_open_comment = 0;
     }
     E.row = nr;
     E.rowscap = nc;
@@ -239,6 +359,8 @@ static void row_insert_at(int at, const char *s, int len)
     r->chars[len] = '\0';
     r->render = NULL;
     r->rsize  = 0;
+    r->hl = NULL;
+    r->hl_open_comment = 0;
     row_update(r);
     E.numrows++;
     E.dirty = 1;
@@ -248,8 +370,9 @@ static void row_free(neo_row_t *r)
 {
     free(r->chars);
     free(r->render);
-    r->chars = NULL; r->render = NULL;
-    r->size = 0; r->cap = 0; r->rsize = 0;
+    free(r->hl);
+    r->chars = NULL; r->render = NULL; r->hl = NULL;
+    r->size = 0; r->cap = 0; r->rsize = 0; r->hl_open_comment = 0;
 }
 
 static void row_delete_at(int at)
@@ -316,16 +439,34 @@ static void editor_insert_newline(void)
 {
     if (E.cx == 0) {
         row_insert_at(E.cy, "", 0);
-    } else {
-        neo_row_t *r = &E.row[E.cy];
-        row_insert_at(E.cy + 1, &r->chars[E.cx], r->size - E.cx);
-        r = &E.row[E.cy];
-        r->size = E.cx;
-        r->chars[r->size] = '\0';
-        row_update(r);
+        E.cy++;
+        E.cx = 0;
+        return;
     }
+
+    neo_row_t *r = &E.row[E.cy];
+    int indent = 0;
+    while (indent < E.cx && indent < r->size &&
+           (r->chars[indent] == ' ' || r->chars[indent] == '\t'))
+        indent++;
+
+    int tail_len = r->size - E.cx;
+    int new_len = indent + tail_len;
+    char *nl = malloc(new_len > 0 ? new_len : 1);
+    if (nl) {
+        if (indent > 0)   memcpy(nl, r->chars, indent);
+        if (tail_len > 0) memcpy(nl + indent, &r->chars[E.cx], tail_len);
+    }
+    row_insert_at(E.cy + 1, nl ? nl : "", nl ? new_len : 0);
+    free(nl);
+
+    r = &E.row[E.cy];
+    r->size = E.cx;
+    r->chars[r->size] = '\0';
+    row_update(r);
+
     E.cy++;
-    E.cx = 0;
+    E.cx = indent;
 }
 
 static void editor_delete_char(void)
@@ -441,6 +582,14 @@ static void editor_open(const char *filename)
     size_t fl = strlen(filename);
     E.filename = malloc(fl + 1);
     memcpy(E.filename, filename, fl + 1);
+
+    E.syntax = 0;
+    const char *dot = NULL;
+    for (const char *p = filename; *p; p++) if (*p == '.') dot = p;
+    if (dot && (!strcmp(dot, ".c")   || !strcmp(dot, ".h")  ||
+                !strcmp(dot, ".cpp") || !strcmp(dot, ".cc") ||
+                !strcmp(dot, ".hpp") || !strcmp(dot, ".cxx")))
+        E.syntax = 1;
 
     char full[512];
     snprintf(full, sizeof(full), "%s", filename);
@@ -633,7 +782,27 @@ static void draw_rows(abuf_t *ab)
                 len++;
             }
             while (byte_off + len < rsz && utf8_cont((unsigned char)rnd[byte_off + len])) len++;
-            ab_append(ab, rnd + byte_off, len);
+
+            unsigned char *hl = E.row[filerow].hl;
+            int cur_color = -1;
+            int k = 0;
+            while (k < len) {
+                int hlc = hl ? hl[byte_off + k] : HL_NORMAL;
+                int color = hl_color(hlc);
+                if (color != cur_color) {
+                    char cb[16];
+                    int cl = snprintf(cb, sizeof(cb), "\x1b[%dm", color);
+                    ab_append(ab, cb, cl);
+                    cur_color = color;
+                }
+                ab_append(ab, &rnd[byte_off + k], 1);
+                k++;
+                while (k < len && utf8_cont((unsigned char)rnd[byte_off + k])) {
+                    ab_append(ab, &rnd[byte_off + k], 1);
+                    k++;
+                }
+            }
+            if (cur_color != -1) ab_append(ab, "\x1b[39m", 5);
         }
         ab_append(ab, "\x1b[K", 3);
     }
