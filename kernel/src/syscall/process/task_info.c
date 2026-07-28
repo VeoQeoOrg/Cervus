@@ -8,8 +8,6 @@ int64_t sys_task_info(uint64_t pid_arg, uint64_t buf_ptr)
     if (!buf_ptr) return -EINVAL;
     task_t *target = (pid_arg == 0) ? syscall_cur_task() : task_find_by_pid((uint32_t)pid_arg);
     if (!target) return -ESRCH;
-    task_t *me = syscall_cur_task();
-    if (me && me != target && !cap_has(me->capabilities, CAP_TASK_INFO)) return -EPERM;
 
     cervus_task_info_t info;
     memset(&info, 0, sizeof(info));
