@@ -5,6 +5,7 @@
 #   ./nb <targets...>       build specific ninja targets (e.g. kernel, apps, iso)
 #   ./nb -j4 kernel         extra ninja flags pass straight through
 #   ./nb run [opts]         build ISO + boot in QEMU (see run opts below)
+#   ./nb flash [/dev/sdX]   write the fresh ISO to a USB stick (removable-only, confirms)
 #   ./nb clean              remove build artifacts (keeps fetched deps/limine/tcc)
 #   ./nb gitclean           deep wipe: also remove deps, limine, tcc, disks, ISOs
 #   ./nb cleaniso           drop demo_iso/ only
@@ -42,6 +43,61 @@ deep_clean() {
   find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
 }
 
+flash_iso() {
+  dev="${1:-}"
+
+  configure
+  ninja -j "$JOBS" iso
+  iso="demo_iso/Cervus.latest.iso"
+  [ -e "$iso" ] || { echo "flash: no ISO at $iso" >&2; exit 1; }
+  iso=$(readlink -f "$iso")
+
+  if [ -z "$dev" ]; then
+    echo "Removable / USB block devices:"
+    echo
+    lsblk -d -o NAME,SIZE,TRAN,RM,MODEL 2>/dev/null | awk 'NR==1 || $4==1 || $3=="usb"'
+    echo
+    echo "Then run:  ./nb flash /dev/sdX     (writes to the WHOLE device, not a partition)"
+    exit 1
+  fi
+
+  case "$dev" in /dev/*) ;; *) echo "flash: '$dev' is not a /dev path" >&2; exit 1 ;; esac
+  [ -b "$dev" ] || { echo "flash: '$dev' is not a block device" >&2; exit 1; }
+
+  name=$(basename "$dev")
+  rmv=$(cat "/sys/block/$name/removable" 2>/dev/null || echo 0)
+  tran=$(lsblk -dno TRAN "$dev" 2>/dev/null || echo "")
+  size=$(lsblk -dno SIZE "$dev" 2>/dev/null || echo "?")
+  model=$(lsblk -dno MODEL "$dev" 2>/dev/null || echo "?")
+
+  if [ "$rmv" != "1" ] && [ "$tran" != "usb" ]; then
+    echo "flash: '$dev' is not removable (removable=$rmv, tran=$tran)." >&2
+    echo "       Refusing to write to a fixed disk. Check the device name." >&2
+    exit 1
+  fi
+
+  SUDO=""
+  [ "$(id -u)" = 0 ] || SUDO="sudo"
+
+  echo
+  echo "  Target : $dev  ($size, ${tran:-?}, $model)"
+  echo "  Image  : $iso"
+  echo
+  printf "ALL DATA on %s will be ERASED. Type 'yes' to write: " "$dev"
+  read ans
+  [ "$ans" = "yes" ] || { echo "aborted."; exit 1; }
+
+  for part in $(lsblk -lno NAME "$dev" 2>/dev/null | tail -n +2); do
+    $SUDO umount "/dev/$part" 2>/dev/null || true
+  done
+
+  echo "writing..."
+  $SUDO dd if="$iso" of="$dev" bs=4M oflag=sync status=progress ||
+    $SUDO dd if="$iso" of="$dev" bs=4M
+  $SUDO sync
+  echo "done -- '$dev' is now bootable Cervus."
+}
+
 case "${1:-}" in
 run)
   shift
@@ -52,6 +108,10 @@ run)
     ninja -j "$JOBS" iso
   fi
   exec sh builder/run_qemu.sh "$@"
+  ;;
+flash)
+  shift
+  flash_iso "${1:-}"
   ;;
 clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja
