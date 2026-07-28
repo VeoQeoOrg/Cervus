@@ -207,7 +207,7 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     uint64_t freq        = hpet_is_available() ? hpet_get_frequency() : 0;
     uint64_t half_tick   = (want_cursor && freq) ? freq / 2 : 0;
     uint64_t next_blink  = half_tick ? (hpet_read_counter() + half_tick) : 0;
-    int      cursor_on   = want_cursor ? 1 : 0;
+    int      cursor_on   = 0;
     int      canonical   = (t->termios.c_lflag & T_ICANON) != 0;
     int      isig        = (t->termios.c_lflag & T_ISIG) != 0;
     int      echo        = canonical && (t->termios.c_lflag & T_ECHO) != 0;
@@ -216,7 +216,10 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
         && (!canonical || t->line_read >= t->line_len))
         return -EAGAIN;
 
-    if (want_cursor) vt_cursor(vt, 1);
+    if (want_cursor && !(canonical && t->line_read < t->line_len)) {
+        vt_cursor(vt, 1);
+        cursor_on = 1;
+    }
 
     if (!canonical) {
         char c;
