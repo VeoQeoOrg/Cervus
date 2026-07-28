@@ -165,6 +165,21 @@ static void hid_read_report_desc(xhci_controller_t *c, uint8_t slot_id,
     dma_free_coherent(rd, 256);
 }
 
+static void hid_set_report_led(xhci_controller_t *c, uint8_t slot_id,
+                               xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
+                               uint16_t *enq, uint8_t *cyc, uint8_t intf)
+{
+    uintptr_t phys;
+    uint8_t *led = (uint8_t *)dma_alloc_coherent(8, &phys);
+    if (!led) return;
+    memset(led, 0, 8);
+
+    int r = xhci_control_xfer(c, slot_id, ep0_ring, ep0_phys, enq, cyc,
+                              0x21, 0x09, 0x0200, intf, 1, led);
+    serial_printf("[xhci]   HID SET_REPORT(LED=0): intf=%u r=%d\n", intf, r);
+    dma_free_coherent(led, 8);
+}
+
 int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                           uint8_t port_id, uint8_t speed,
                           xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
@@ -191,6 +206,8 @@ int xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
     hid_read_report_desc(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf);
     hid_set_protocol(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 0);
     hid_set_idle    (c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf, 8);
+    if (!m->is_mouse)
+        hid_set_report_led(c, slot_id, ep0_ring, ep0_phys, enq, cyc, m->intf);
 
     uintptr_t buf_phys;
     uint8_t *buf = (uint8_t *)dma_alloc_coherent(64, &buf_phys);
@@ -266,6 +283,19 @@ void xhci_hid_kbd_tick(void) {
     }
     if (n > 0) usb_hid_kbd_tick_repeats(states, n);
 
+    static uint32_t kick = 0;
+    if (++kick >= 100) {
+        kick = 0;
+        for (int i = 0; i < g_hid_count; i++) {
+            xhci_hid_kbd_t *k = &g_hid_kbds[i];
+            if (!k->active || k->needs_recovery) continue;
+            if (k->total_reports == 0) {
+                asm volatile("" ::: "memory");
+                k->ctl->doorbells[k->slot_id] = k->ep_dci;
+            }
+        }
+    }
+
     static uint32_t mon = 0;
     if (++mon >= 500) {
         mon = 0;
@@ -274,8 +304,10 @@ void xhci_hid_kbd_tick(void) {
             if (!k->active || k->is_mouse) continue;
             const uint32_t *ep = (const uint32_t *)pmm_phys_to_virt(
                 (uintptr_t)k->ctl->dcbaa[k->slot_id] + (uintptr_t)k->ep_dci * 32);
-            serial_printf("[hidmon] slot=%u ep=%u state=%u reports=%u errors=%u\n",
-                          k->slot_id, k->ep_dci, ep[0] & 0x7u, k->total_reports, k->total_errors);
+            serial_printf("[hidmon] slot=%u ep=%u state=%u reports=%u errors=%u "
+                          "trdeq=0x%x enq=%u\n",
+                          k->slot_id, k->ep_dci, ep[0] & 0x7u, k->total_reports,
+                          k->total_errors, ep[2], k->enq);
         }
     }
 }
