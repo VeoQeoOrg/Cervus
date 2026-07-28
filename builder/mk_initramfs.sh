@@ -58,6 +58,7 @@ for elf in usr/bin/*.elf; do
     [ -e "$elf" ] || continue
     cp "$elf" "$RFS/bin/$(basename "$elf" .elf)"
 done
+[ -e "$RFS/bin/test" ] && cp "$RFS/bin/test" "$RFS/bin/["
 green "copied /bin programs"
 
 # /apps programs (excluding init)
