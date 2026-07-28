@@ -456,8 +456,14 @@ static void draw_and_advance(uint32_t cp) {
     if (!global_framebuffer) return;
     uint32_t sh = get_screen_height();
     uint32_t sw = get_screen_width();
-    grid_put(cursor_x / 8, cursor_y / 16, cp, text_color, bg_color);
-    if (!g_offscreen) {
+    uint32_t gcol = cursor_x / 8, grow = cursor_y / 16;
+    int unchanged = 0;
+    if (g_grid && gcol < g_gcols && grow < g_grows) {
+        vt_cell_t *cc = &g_grid[(size_t)grow * g_gcols + gcol];
+        unchanged = (cc->ch == cp && cc->fg == text_color && cc->bg == bg_color);
+    }
+    grid_put(gcol, grow, cp, text_color, bg_color);
+    if (!g_offscreen && !unchanged) {
         fb_fill_rect(global_framebuffer, cursor_x, cursor_y, 8, 16, bg_color);
         fb_draw_char(global_framebuffer, cp, cursor_x, cursor_y, text_color);
         flush_region(cursor_y, 16);
