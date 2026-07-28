@@ -268,9 +268,9 @@ static void view_file(const char *path) {
                g_cols - 7, g_cols - 7, path);
         for (int i = 0; i < view; i++) {
             tui_move(2 + i, 1);
+            printf("\x1b[K");
             int idx = off + i;
-            if (idx < li) printf("%-.*s\x1b[K", g_cols, lines[idx]);
-            else          printf("\x1b[K");
+            if (idx < li) printf("%-.*s", g_cols, lines[idx]);
         }
         tui_move(g_rows, 1);
         printf("\x1b[46m\x1b[30m \x18\x19 scroll  PgUp/PgDn  line %d/%d  q back \x1b[0m\x1b[K",
