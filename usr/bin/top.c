@@ -11,10 +11,14 @@
 
 static const char USAGE[] =
     "Usage: top\nInteractive process viewer (top-style).\n"
-    "Keys: q quit  P sort %CPU  M sort %MEM  N sort PID  T sort TIME  p pause\n";
+    "Keys: up/down select  k kill  q quit  P sort %CPU  M sort %MEM  N sort PID  "
+    "T sort TIME  p pause\n";
 
 #define TIOCGWINSZ     0x5413
 #define TIOCSNONBLOCK  0x5481
+
+#define TK_UP   1000
+#define TK_DOWN 1001
 
 typedef struct { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; } winsize_t;
 
@@ -33,6 +37,8 @@ static int g_in_raw = 0, g_nonblock = 0;
 static int g_cols = 80, g_rows_term = 24;
 static int g_running = 1, g_paused = 0, g_sort = 0;
 static int g_refresh_ms = 100, g_ncpus = 1;
+static int g_selected = 0, g_scroll = 0;
+static uint32_t g_sel_pid = 0;
 
 static prow_t g_rows[MAX_TASKS];
 static int g_nrows = 0;
@@ -93,15 +99,29 @@ static int read_key(int *out) {
     unsigned char c;
     if (!read_byte(&c)) return 0;
     if (c == 0x1B) {
-        unsigned char s1, s2;
-        for (int i = 0; i < 50 && !read_byte(&s1); i++) cervus_nanosleep(1000000ULL);
-        if (s1 != '[' && s1 != 'O') { *out = 0x1B; return 1; }
-        for (int i = 0; i < 50 && !read_byte(&s2); i++) cervus_nanosleep(1000000ULL);
+        unsigned char s1 = 0, s2 = 0;
+        int got1 = 0, got2 = 0;
+        for (int i = 0; i < 50 && !(got1 = read_byte(&s1)); i++) cervus_nanosleep(1000000ULL);
+        if (!got1 || (s1 != '[' && s1 != 'O')) { *out = 0x1B; return 1; }
+        for (int i = 0; i < 50 && !(got2 = read_byte(&s2)); i++) cervus_nanosleep(1000000ULL);
+        if (got2 && s2 == 'A') { *out = TK_UP;   return 1; }
+        if (got2 && s2 == 'B') { *out = TK_DOWN; return 1; }
         *out = 0x1B;
         return 1;
     }
     *out = c;
     return 1;
+}
+
+static void resync_selection(void) {
+    if (g_nrows <= 0) { g_selected = 0; g_sel_pid = 0; return; }
+    if (g_sel_pid != 0) {
+        for (int i = 0; i < g_nrows; i++)
+            if (g_rows[i].pid == g_sel_pid) { g_selected = i; return; }
+    }
+    if (g_selected >= g_nrows) g_selected = g_nrows - 1;
+    if (g_selected < 0) g_selected = 0;
+    g_sel_pid = g_rows[g_selected].pid;
 }
 
 static uint64_t ns_now(void) { return cervus_uptime_ns(); }
@@ -339,12 +359,17 @@ static void draw(uint64_t up_ns) {
     fputs("\x1b[0m\x1b[K\r\n", stdout);
 
     int header_rows = 8;
-    int visible = g_rows_term - header_rows - 1;
+    int visible = g_rows_term - header_rows - 2;
     if (visible < 1) visible = 1;
 
+    if (g_selected < g_scroll) g_scroll = g_selected;
+    if (g_selected >= g_scroll + visible) g_scroll = g_selected - visible + 1;
+    if (g_scroll < 0) g_scroll = 0;
+
     for (int i = 0; i < visible; i++) {
-        if (i >= g_nrows) { fputs("\x1b[K\r\n", stdout); continue; }
-        prow_t *r = &g_rows[i];
+        int ri = g_scroll + i;
+        if (ri >= g_nrows) { fputs("\x1b[K\r\n", stdout); continue; }
+        prow_t *r = &g_rows[ri];
         unsigned cpu = row_cpu_x100(r);
         unsigned mem = row_mem_x100(r);
         char tbuf[16], vbuf[12], rbuf[12], cbuf[8], mbuf[8], ubuf[12], nbuf[24], ebuf[16];
@@ -358,22 +383,22 @@ static void draw(uint64_t up_ns) {
         snprintf(ubuf, sizeof(ubuf), "%-8.8s", (r->uid == 0) ? "root" : "user");
         snprintf(nbuf, sizeof(nbuf), "%-.20s", r->name);
         const char *sl = state_letter(r->state);
-        const char *hot = (cpu >= 5000) ? "\x1b[1m" : "";
-        const char *hot_end = (cpu >= 5000) ? "\x1b[0m" : "";
+        const char *pre = (ri == g_selected) ? "\x1b[7m" : (cpu >= 5000 ? "\x1b[1m" : "");
 
-        printf("%s%5u %s %2d  0 %8s %7s %s %5s %5s %10s %9s %s%s\x1b[K\r\n",
-               hot,
+        printf("%s%5u %s %2d  0 %8s %7s %s %5s %5s %10s %9s %s\x1b[K\x1b[0m\r\n",
+               pre,
                (unsigned)r->pid, ubuf,
                (int)r->priority,
                vbuf, rbuf, sl,
-               cbuf, mbuf, tbuf, ebuf, nbuf,
-               hot_end);
+               cbuf, mbuf, tbuf, ebuf, nbuf);
     }
 
     fputs("\x1b[J", stdout);
-    if (g_paused) {
-        fputs("\x1b[7m [PAUSED] \x1b[0m", stdout);
-    }
+    if (g_nrows > 0 && g_selected >= 0 && g_selected < g_nrows)
+        printf("\x1b[7m sel PID %u (%.12s) \x1b[0m  \x18\x19 select  k kill  "
+               "P/M/N/T sort  p pause  q quit%s\x1b[K",
+               (unsigned)g_rows[g_selected].pid, g_rows[g_selected].name,
+               g_paused ? "  \x1b[7m[PAUSED]\x1b[0m" : "");
     fputs("\x1b[?2026l", stdout);
     fflush(stdout);
 }
@@ -390,12 +415,13 @@ int main(int argc, char **argv) {
     sample(g_prev_uptime_ns);
     for (int i = 0; i < g_nrows; i++) g_rows[i].cpu_ns_delta = 0;
     sort_rows();
+    resync_selection();
     draw(ns_now());
 
     uint64_t next = ns_now() + (uint64_t)g_refresh_ms * 1000000ULL;
 
     while (g_running) {
-        int key, redraw = 0, resort = 0;
+        int key, redraw = 0, resort = 0, do_sample = 0;
         while (read_key(&key)) {
             redraw = 1;
             if (key == 'q' || key == 'Q' || key == 3) { g_running = 0; break; }
@@ -403,16 +429,31 @@ int main(int argc, char **argv) {
             else if (key == 'M') { g_sort = 1; resort = 1; }
             else if (key == 'N') { g_sort = 2; resort = 1; }
             else if (key == 'T') { g_sort = 3; resort = 1; }
-            else if (key == ' ') { }
             else if (key == 'p') { g_paused = !g_paused; }
+            else if (key == TK_UP) {
+                if (g_selected > 0) g_selected--;
+                if (g_selected < g_nrows) g_sel_pid = g_rows[g_selected].pid;
+            }
+            else if (key == TK_DOWN) {
+                if (g_selected < g_nrows - 1) g_selected++;
+                if (g_selected < g_nrows) g_sel_pid = g_rows[g_selected].pid;
+            }
+            else if (key == 'k' || key == 'K') {
+                if (g_nrows > 0 && g_selected >= 0 && g_selected < g_nrows) {
+                    cervus_task_kill((pid_t)g_rows[g_selected].pid);
+                    do_sample = 1;
+                }
+            }
         }
-        if (resort) sort_rows();
-        if (redraw) { update_size(); draw(ns_now()); }
+        if (do_sample) sample(ns_now());
+        if (resort || do_sample) { sort_rows(); resync_selection(); }
+        if (redraw || do_sample) { update_size(); draw(ns_now()); }
 
         uint64_t now = ns_now();
         if (!g_paused && now >= next) {
             sample(now);
             sort_rows();
+            resync_selection();
             update_size();
             draw(now);
             next = now + (uint64_t)g_refresh_ms * 1000000ULL;
