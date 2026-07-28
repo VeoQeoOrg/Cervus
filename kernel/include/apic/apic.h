@@ -84,9 +84,10 @@ void lapic_send_nmi_to_all_but_self(void);
 void ioapic_write(uintptr_t base, uint32_t reg, uint32_t value);
 uint32_t ioapic_read(uintptr_t base, uint32_t reg);
 uint32_t ioapic_get_max_redirects(uintptr_t base);
-void ioapic_redirect_irq(uint8_t irq, uint8_t vector, uint32_t flags);
-void ioapic_mask_irq(uint8_t irq);
-void ioapic_unmask_irq(uint8_t irq);
+void ioapic_redirect_irq(uint32_t gsi, uint8_t vector, uint32_t flags);
+void ioapic_mask_irq(uint32_t gsi);
+void ioapic_unmask_irq(uint32_t gsi);
+bool ioapic_resolve_gsi(uint32_t gsi, uintptr_t *base_out, uint32_t *pin_out);
 
 void apic_setup_irq(uint8_t irq, uint8_t vector, bool mask, uint32_t flags);
 void apic_dump_irq(uint8_t irq);

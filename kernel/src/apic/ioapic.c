@@ -42,39 +42,42 @@ uint32_t ioapic_get_max_redirects(uintptr_t base) {
     return ((version >> 16) & 0xFF) + 1;
 }
 
-void ioapic_redirect_irq(uint8_t irq, uint8_t vector, uint32_t flags) {
-    if (!ioapic_base) return;
-
-    uint32_t max_redirects = ioapic_get_max_redirects(ioapic_base);
-    if (irq >= max_redirects) {
-        serial_printf("IOAPIC: IRQ %u out of range (max %u)\n", irq, max_redirects);
+void ioapic_redirect_irq(uint32_t gsi, uint8_t vector, uint32_t flags) {
+    uintptr_t base;
+    uint32_t pin;
+    if (!ioapic_resolve_gsi(gsi, &base, &pin)) {
+        serial_printf("IOAPIC: no IOAPIC owns GSI %u\n", gsi);
         return;
     }
 
     uint32_t low = vector | flags;
     uint32_t high = (uint32_t)lapic_get_id() << 24;
 
-    uint32_t redir_reg = IOAPIC_REDIR_START + irq * 2;
+    uint32_t redir_reg = IOAPIC_REDIR_START + pin * 2;
 
-    ioapic_write(ioapic_base, redir_reg, low | IOAPIC_INT_MASKED);
-    ioapic_write(ioapic_base, redir_reg + 1, high);
-    ioapic_write(ioapic_base, redir_reg, low);
+    ioapic_write(base, redir_reg, low | IOAPIC_INT_MASKED);
+    ioapic_write(base, redir_reg + 1, high);
+    ioapic_write(base, redir_reg, low);
 
-    serial_printf("IOAPIC: IRQ %u redirected to vector 0x%x\n", irq, vector);
+    serial_printf("IOAPIC: GSI %u (pin %u) redirected to vector 0x%x\n", gsi, pin, vector);
 }
 
-void ioapic_mask_irq(uint8_t irq) {
-    if (!ioapic_base) return;
+void ioapic_mask_irq(uint32_t gsi) {
+    uintptr_t base;
+    uint32_t pin;
+    if (!ioapic_resolve_gsi(gsi, &base, &pin)) return;
 
-    uint32_t redir_reg = IOAPIC_REDIR_START + irq * 2;
-    uint32_t current = ioapic_read(ioapic_base, redir_reg);
-    ioapic_write(ioapic_base, redir_reg, current | IOAPIC_INT_MASKED);
+    uint32_t redir_reg = IOAPIC_REDIR_START + pin * 2;
+    uint32_t current = ioapic_read(base, redir_reg);
+    ioapic_write(base, redir_reg, current | IOAPIC_INT_MASKED);
 }
 
-void ioapic_unmask_irq(uint8_t irq) {
-    if (!ioapic_base) return;
+void ioapic_unmask_irq(uint32_t gsi) {
+    uintptr_t base;
+    uint32_t pin;
+    if (!ioapic_resolve_gsi(gsi, &base, &pin)) return;
 
-    uint32_t redir_reg = IOAPIC_REDIR_START + irq * 2;
-    uint32_t current = ioapic_read(ioapic_base, redir_reg);
-    ioapic_write(ioapic_base, redir_reg, current & ~IOAPIC_INT_MASKED);
+    uint32_t redir_reg = IOAPIC_REDIR_START + pin * 2;
+    uint32_t current = ioapic_read(base, redir_reg);
+    ioapic_write(base, redir_reg, current & ~IOAPIC_INT_MASKED);
 }
