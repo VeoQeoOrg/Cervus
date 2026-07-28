@@ -7,6 +7,7 @@
 #include "../../../include/fs/ext2.h"
 #include "../../../include/fs/fat32.h"
 #include "../../../include/fs/iso9660.h"
+#include "../../../include/fs/udf.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/memory/pmm.h"
@@ -375,6 +376,8 @@ static int detect_fs_type(blkdev_t *dev) {
         }
     }
 
+    if (udf_detect(dev)) return 4;
+
     uint8_t bpb_head[90] = {0};
     if (blkdev_read(dev, 0, bpb_head, sizeof(bpb_head)) == 0) {
         uint8_t mbr_tail[2] = {0};
@@ -412,6 +415,10 @@ int disk_mount(const char *devname, const char *path) {
         root = iso9660_mount(dev);
         fsname = "iso9660";
         serial_printf("[disk] mounting iso9660 %s -> %s\n", raw, path);
+    } else if (t == 4) {
+        root = udf_mount(dev);
+        fsname = "udf";
+        serial_printf("[disk] mounting udf %s -> %s\n", raw, path);
     } else {
         serial_printf("[disk] %s: no recognizable FS\n", raw);
         return -EINVAL;
