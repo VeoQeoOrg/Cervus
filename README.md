@@ -122,7 +122,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Scheduling** | Preemptive, per-priority ready queues, per-CPU state, SSE/FPU save/restore |
 | **Time** | TSC/LAPIC clocksource cascade with watchdog and drift recalibration |
 | **Syscalls** | POSIX-style process, file, memory, and time calls plus Cervus extensions |
-| **Filesystems** | VFS with ext2, FAT32, ISO9660, ramfs, initramfs, devfs, procfs |
+| **Filesystems** | VFS with ext2, FAT32, ISO9660, UDF, ramfs, initramfs, devfs, procfs |
 | **Storage** | AHCI/SATA, legacy ATA, NVMe; MBR and GPT partitions; block layer |
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
 | **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8 |
@@ -463,6 +463,7 @@ in beneath it:
 | **ext2** | read / write | On-disk root of an installed system; in-kernel formatter |
 | **FAT32** | read / write | EFI system partition; in-kernel formatter; long names |
 | **ISO9660** | read-only | CD/DVD media |
+| **UDF** | read / write | DVD and rewritable optical / disk media; extent files and directories |
 | **ramfs** | read / write | In-memory files: the live root and `/tmp` |
 | **initramfs** | read-only source | Archive unpacked into ramfs at boot on the live image |
 | **devfs** | special | Device nodes: `/dev/tty`, `/dev/null`, `/dev/zero`, disks, … |
@@ -998,7 +999,7 @@ kernel/
     console/      framebuffer console, virtual terminals, debug monitor
     drivers/      PS/2, USB (xhci/ehci/uhci), disk (ahci/ata/nvme), PCI, timer
     elf/          ELF64 loader
-    fs/           VFS + ext2, fat32, iso9660, ramfs, initramfs, devfs, procfs
+    fs/           VFS + ext2, fat32, iso9660, udf, ramfs, initramfs, devfs, procfs
     graphics/     framebuffer
     interrupts/   GDT/IDT, ISR/IRQ handlers
     memory/       buddy PMM, slab, paging, VMM, DMA
