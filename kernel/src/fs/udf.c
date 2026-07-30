@@ -14,6 +14,7 @@
 #define TAG_PD   5
 #define TAG_LVD  6
 #define TAG_TD   8
+#define TAG_LVID 9
 #define TAG_FSD  256
 #define TAG_FID  257
 #define TAG_SBD  264
@@ -31,6 +32,10 @@ typedef struct {
     uint16_t  desc_ver;
     uint16_t  tag_serial;
     uint32_t  root_block;
+    uint32_t  lvid_lba;
+    uint32_t  lvid_nparts;
+    uint32_t  free_blocks;
+    uint64_t  next_uniqid;
 } udf_fs_t;
 
 typedef struct {
@@ -114,8 +119,10 @@ static int udf_alloc_block(udf_fs_t *fs) {
             buf[bidx] &= (uint8_t)~mask;
             uint32_t sec = bidx / fs->block_size;
             if (udf_write_sector(fs->dev, fs->bitmap_lba + sec,
-                                 buf + (size_t)sec * fs->block_size) == 0)
+                                 buf + (size_t)sec * fs->block_size) == 0) {
                 result = (int)bit;
+                if (fs->free_blocks) fs->free_blocks--;
+            }
             break;
         }
     }
@@ -130,10 +137,33 @@ static void udf_free_block(udf_fs_t *fs, uint32_t block) {
     uint8_t *buf = kmalloc(fs->block_size);
     if (!buf) return;
     if (udf_read_sector(fs->dev, fs->bitmap_lba + sec, buf) == 0) {
-        buf[bidx - sec * fs->block_size] |= (uint8_t)(1u << (block & 7));
-        udf_write_sector(fs->dev, fs->bitmap_lba + sec, buf);
+        uint32_t o = bidx - sec * fs->block_size;
+        uint8_t m = (uint8_t)(1u << (block & 7));
+        if (!(buf[o] & m)) {
+            buf[o] |= m;
+            udf_write_sector(fs->dev, fs->bitmap_lba + sec, buf);
+            fs->free_blocks++;
+        }
     }
     kfree(buf);
+}
+
+static void udf_flush_lvid(udf_fs_t *fs) {
+    if (!fs->lvid_lba) return;
+    uint8_t *b = kmalloc(fs->block_size);
+    if (!b) return;
+    if (udf_read_sector(fs->dev, fs->lvid_lba, b) < 0 || rd16(b) != TAG_LVID) { kfree(b); return; }
+    uint16_t crc_len = rd16(b + 10);
+    wr32(b + 28, 1);
+    wr64(b + 40, fs->next_uniqid);
+    wr32(b + 80, fs->free_blocks);
+    wr16(b + 8, udf_crc(b + 16, crc_len));
+    b[4] = 0;
+    uint8_t sum = 0;
+    for (int i = 0; i < 16; i++) if (i != 4) sum += b[i];
+    b[4] = sum;
+    udf_write_sector(fs->dev, fs->lvid_lba, b);
+    kfree(b);
 }
 
 static void udf_free_fe_extents(udf_fs_t *fs, const uint8_t *fe) {
@@ -517,12 +547,181 @@ static int64_t udf_resize_write(vnode_t *n, const void *buf, size_t len, uint64_
     kfree(data); kfree(fe);
     if (r < 0) return r;
     nd->size = new_size; n->size = new_size;
+    udf_flush_lvid(fs);
     return is_trunc ? 0 : (int64_t)len;
+}
+
+static int udf_load_blocks(udf_fs_t *fs, const uint8_t *fe, uint32_t **out_list) {
+    int efe = (rd16(fe) == TAG_EFE);
+    uint32_t l_ea = efe ? rd32(fe + 208) : rd32(fe + 168);
+    uint32_t l_ad = efe ? rd32(fe + 212) : rd32(fe + 172);
+    uint32_t ad_area = (efe ? 216u : 176u) + l_ea;
+    uint32_t bs = fs->block_size;
+    uint32_t total = 0;
+    for (uint32_t p = 0; p + 8 <= l_ad; p += 8) {
+        uint32_t raw = rd32(fe + ad_area + p);
+        uint32_t et = raw >> 30, elen = raw & 0x3FFFFFFF;
+        if (et >= 2 || elen == 0) continue;
+        total += (elen + bs - 1) / bs;
+    }
+    uint32_t *list = kmalloc((total ? total : 1) * sizeof(uint32_t));
+    if (!list) return -1;
+    uint32_t n = 0;
+    for (uint32_t p = 0; p + 8 <= l_ad; p += 8) {
+        uint32_t raw = rd32(fe + ad_area + p);
+        uint32_t et = raw >> 30, elen = raw & 0x3FFFFFFF;
+        uint32_t blk = rd32(fe + ad_area + p + 4);
+        if (et >= 2 || elen == 0) continue;
+        uint32_t nb = (elen + bs - 1) / bs;
+        for (uint32_t k = 0; k < nb; k++) list[n++] = blk + k;
+    }
+    *out_list = list;
+    return (int)n;
 }
 
 static int64_t udf_file_write(vnode_t *n, const void *buf, size_t len, uint64_t offset) {
     if (!n || !buf) return -EINVAL;
-    return udf_resize_write(n, buf, len, offset, 0);
+    if (len == 0) return 0;
+    udf_node_t *nd = n->fs_data;
+    if (!nd || nd->is_dir) return -EISDIR;
+    udf_fs_t *fs = nd->fs;
+    uint32_t bs = fs->block_size;
+
+    uint8_t *fe = kmalloc(bs);
+    if (!fe) return -ENOMEM;
+    if (udf_read_sector(fs->dev, nd->fe_lba, fe) < 0) { kfree(fe); return -EIO; }
+    int efe = (rd16(fe) == TAG_EFE);
+    uint32_t l_ea = efe ? rd32(fe + 208) : rd32(fe + 168);
+    uint32_t ad_area = (efe ? 216u : 176u) + l_ea;
+    uint32_t inline_cap = bs - ad_area;
+    int ad_type = fe[34] & 7;
+    uint64_t cur_size = rd64(fe + 56);
+    uint64_t new_size = (offset + len > cur_size) ? (offset + len) : cur_size;
+    if (new_size > 8u * 1024 * 1024) { kfree(fe); return -EFBIG; }
+
+    if (new_size <= inline_cap) {
+        uint8_t *data = kmalloc((size_t)new_size);
+        if (!data) { kfree(fe); return -ENOMEM; }
+        memset(data, 0, (size_t)new_size);
+        uint64_t keep = (cur_size < new_size) ? cur_size : new_size;
+        if (keep) udf_read_range(fs, nd->fe_lba, data, keep, 0);
+        memcpy(data + offset, buf, len);
+        udf_free_fe_extents(fs, fe);
+        int r = udf_write_fe_data(fs, fe, nd->fe_lba, data, new_size, 0);
+        kfree(data); kfree(fe);
+        if (r < 0) return r;
+        nd->size = new_size; n->size = new_size;
+        return (int64_t)len;
+    }
+
+    if (ad_type == 1) { kfree(fe); return udf_resize_write(n, buf, len, offset, 0); }
+
+    uint32_t content_blocks = (uint32_t)((cur_size + bs - 1) / bs);
+    uint32_t disk_blocks = (ad_type == 3) ? 0 : content_blocks;
+    uint32_t needed = (uint32_t)((new_size + bs - 1) / bs);
+    uint32_t max_ads = inline_cap / 8;
+
+    uint32_t *nb_list = kmalloc(needed * sizeof(uint32_t));
+    if (!nb_list) { kfree(fe); return -ENOMEM; }
+
+    uint8_t *inln = NULL;
+    if (ad_type == 3) {
+        if (cur_size) {
+            inln = kmalloc((size_t)cur_size);
+            if (!inln) { kfree(nb_list); kfree(fe); return -ENOMEM; }
+            memcpy(inln, fe + ad_area, (size_t)cur_size);
+        }
+    } else {
+        uint32_t *cur = NULL;
+        int nc = udf_load_blocks(fs, fe, &cur);
+        if (nc < 0) { kfree(nb_list); kfree(fe); return -ENOMEM; }
+        for (uint32_t i = 0; i < disk_blocks && i < (uint32_t)nc; i++) nb_list[i] = cur[i];
+        if (cur) kfree(cur);
+    }
+
+    int allocated = 0;
+    for (uint32_t i = disk_blocks; i < needed; i++) {
+        int b = udf_alloc_block(fs);
+        if (b < 0) {
+            for (uint32_t k = disk_blocks; k < i; k++) udf_free_block(fs, nb_list[k]);
+            if (inln) kfree(inln);
+            kfree(nb_list); kfree(fe);
+            return -ENOSPC;
+        }
+        nb_list[i] = (uint32_t)b;
+        allocated = 1;
+    }
+
+    uint8_t *sec = kmalloc(bs);
+    if (inln) {
+        uint32_t done = 0;
+        while (done < cur_size) {
+            uint32_t bi = done / bs;
+            memset(sec, 0, bs);
+            uint32_t cpy = (uint32_t)((cur_size - done > bs) ? bs : (cur_size - done));
+            memcpy(sec, inln + done, cpy);
+            udf_write_sector(fs->dev, fs->part_start + nb_list[bi], sec);
+            done += cpy;
+        }
+        kfree(inln);
+    }
+
+    for (uint32_t bi = content_blocks; bi < needed; bi++) {
+        uint64_t bstart = (uint64_t)bi * bs;
+        if (bstart + bs <= offset || bstart >= offset + len) {
+            memset(sec, 0, bs);
+            udf_write_sector(fs->dev, fs->part_start + nb_list[bi], sec);
+        }
+    }
+
+    const uint8_t *src = buf;
+    uint64_t pos = offset, end = offset + len;
+    while (pos < end) {
+        uint32_t bi = (uint32_t)(pos / bs);
+        uint32_t boff = (uint32_t)(pos % bs);
+        uint32_t cpy = bs - boff;
+        if (cpy > end - pos) cpy = (uint32_t)(end - pos);
+        if (boff != 0 || cpy != bs) {
+            if (bi < content_blocks) udf_read_sector(fs->dev, fs->part_start + nb_list[bi], sec);
+            else memset(sec, 0, bs);
+            memcpy(sec + boff, src, cpy);
+        } else {
+            memcpy(sec, src, bs);
+        }
+        udf_write_sector(fs->dev, fs->part_start + nb_list[bi], sec);
+        src += cpy; pos += cpy;
+    }
+    kfree(sec);
+
+    uint8_t *ad = fe + ad_area;
+    memset(fe + ad_area, 0, bs - ad_area);
+    uint32_t l_ad = 0, i = 0;
+    int overflow = 0;
+    while (i < needed) {
+        if (l_ad / 8 >= max_ads) { overflow = 1; break; }
+        uint32_t start = nb_list[i], run = 1;
+        while (i + run < needed && nb_list[i + run] == start + run) run++;
+        uint64_t eb = (i + run >= needed) ? (new_size - (uint64_t)i * bs) : (uint64_t)run * bs;
+        wr32(ad + l_ad, (uint32_t)eb);
+        wr32(ad + l_ad + 4, start);
+        l_ad += 8;
+        i += run;
+    }
+    kfree(nb_list);
+    if (overflow) { kfree(fe); return -EFBIG; }
+
+    fe[34] = (uint8_t)(fe[34] & ~7);
+    wr64(fe + 56, new_size);
+    if (efe) { wr64(fe + 64, new_size); wr64(fe + 72, needed); wr32(fe + 212, l_ad); }
+    else     { wr64(fe + 64, needed); wr32(fe + 172, l_ad); }
+    udf_finalize_tag(fs, fe, efe ? TAG_EFE : TAG_FE,
+                     (uint16_t)(ad_area + l_ad - 16), nd->fe_lba - fs->part_start);
+    int r = udf_write_sector(fs->dev, nd->fe_lba, fe);
+    kfree(fe);
+    if (r < 0) return -EIO;
+    nd->size = new_size; n->size = new_size;
+    if (allocated) udf_flush_lvid(fs);
+    return (int64_t)len;
 }
 
 static int udf_truncate(vnode_t *n, uint64_t new_size) {
@@ -601,7 +800,9 @@ static int udf_create(vnode_t *dir, const char *name, uint32_t mode, vnode_t **o
     if (efe) { wr64(fe + 64, 0); wr64(fe + 72, 0); wr32(fe + 212, 0); }
     else     { wr64(fe + 64, 0); wr32(fe + 172, 0); }
     memset(fe + ad_area, 0, bs - ad_area);
-    wr64(fe + (efe ? 200 : 160), (uint64_t)fe_block + 16);
+    uint64_t uid = (uint64_t)fe_block + 16;
+    wr64(fe + (efe ? 200 : 160), uid);
+    if (fs->next_uniqid <= uid) fs->next_uniqid = uid + 1;
     udf_finalize_tag(fs, fe, efe ? TAG_EFE : TAG_FE,
                      (uint16_t)(ad_area - 16), (uint32_t)fe_block);
     int wr = udf_write_sector(fs->dev, fe_lba, fe);
@@ -614,6 +815,7 @@ static int udf_create(vnode_t *dir, const char *name, uint32_t mode, vnode_t **o
     vnode_t *vn = udf_alloc_vnode(fs, fe_lba, 0, false);
     if (!vn) return -ENOMEM;
     *out = vn;
+    udf_flush_lvid(fs);
     return 0;
 }
 
@@ -659,14 +861,18 @@ static int udf_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
     wr64(fe + 56, dir_data);
     if (efe) { wr64(fe + 64, dir_data); wr64(fe + 72, 0); wr32(fe + 212, (uint32_t)dir_data); }
     else     { wr64(fe + 64, 0);        wr32(fe + 172, (uint32_t)dir_data); }
-    wr64(fe + (efe ? 200 : 160), (uint64_t)dblk + 16);
+    uint64_t uid = (uint64_t)dblk + 16;
+    wr64(fe + (efe ? 200 : 160), uid);
+    if (fs->next_uniqid <= uid) fs->next_uniqid = uid + 1;
     udf_finalize_tag(fs, fe, efe ? TAG_EFE : TAG_FE,
                      (uint16_t)(ad_area + dir_data - 16), (uint32_t)dblk);
     int wr = udf_write_sector(fs->dev, dlba, fe);
     kfree(fe);
     if (wr < 0) return -EIO;
 
-    return udf_dir_add_fid(fs, dnd->fe_lba, name, (uint32_t)dblk, 1);
+    int r = udf_dir_add_fid(fs, dnd->fe_lba, name, (uint32_t)dblk, 1);
+    if (r == 0) udf_flush_lvid(fs);
+    return r;
 }
 
 static int udf_dir_remove_fid(udf_fs_t *fs, uint32_t dir_fe_lba, const char *name,
@@ -733,6 +939,7 @@ static int udf_unlink(vnode_t *dir, const char *name) {
     int r = udf_dir_remove_fid(fs, dnd->fe_lba, name, &child, NULL);
     if (r < 0) return r;
     udf_free_child(fs, child);
+    udf_flush_lvid(fs);
     return 0;
 }
 
@@ -753,7 +960,9 @@ static int udf_rename(vnode_t *src_dir, const char *src_name,
     int is_dir = 0;
     int r = udf_dir_remove_fid(fs, snd->fe_lba, src_name, &child, &is_dir);
     if (r < 0) return r;
-    return udf_dir_add_fid(fs, dnd->fe_lba, dst_name, child, is_dir);
+    r = udf_dir_add_fid(fs, dnd->fe_lba, dst_name, child, is_dir);
+    if (r == 0) udf_flush_lvid(fs);
+    return r;
 }
 
 static const vnode_ops_t udf_file_ops = {
@@ -807,6 +1016,7 @@ vnode_t *udf_mount(blkdev_t *dev) {
     uint32_t part_start = 0, part_len = 0, block_size = UDF_SECTOR;
     uint32_t fsd_len = 0, fsd_block = 0;
     uint32_t bitmap_block = 0, bitmap_len = 0;
+    uint32_t integ_loc = 0;
 
     uint32_t nsec = mvds_len / UDF_SECTOR;
     if (nsec > 64) nsec = 64;
@@ -823,6 +1033,7 @@ vnode_t *udf_mount(blkdev_t *dev) {
             block_size = rd32(sec + 212);
             fsd_len    = rd32(sec + 248);
             fsd_block  = rd32(sec + 248 + 4);
+            integ_loc  = rd32(sec + 436);
         } else if (tag == TAG_TD) {
             break;
         }
@@ -865,6 +1076,15 @@ vnode_t *udf_mount(blkdev_t *dev) {
         } else {
             fs->bitmap_lba = 0;
         }
+    }
+
+    fs->next_uniqid = 16;
+    if (integ_loc && udf_read_sector(dev, integ_loc, sec) == 0 && rd16(sec) == TAG_LVID) {
+        fs->lvid_lba    = integ_loc;
+        fs->lvid_nparts = rd32(sec + 72);
+        fs->free_blocks = rd32(sec + 80);
+        uint64_t uid    = rd64(sec + 40);
+        if (uid > fs->next_uniqid) fs->next_uniqid = uid;
     }
 
     if (udf_read_sector(dev, root_fe, sec) < 0) { free(fs); kfree(sec); return NULL; }
