@@ -1369,25 +1369,37 @@ static int run_command_line(const char *line) {
 }
 
 static char **collect_foreach_items(char **tok, int n, int *out_n) {
-    int open_i = -1, close_i = -1;
-    for (int i = 0; i < n; i++) {
-        if (open_i < 0 && strcmp(tok[i], "(") == 0) open_i = i;
-        else if (open_i >= 0 && strcmp(tok[i], ")") == 0) { close_i = i; break; }
+    *out_n = 0;
+    char **items = (char **)malloc(sizeof(char *) * (size_t)(n + 2));
+    if (!items) return NULL;
+    int count = 0, started = 0;
+    for (int k = 2; k < n; k++) {
+        char buf[CSH_LINE_MAX];
+        strncpy(buf, tok[k], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *s = buf;
+        if (!started) {
+            char *op = strchr(s, '(');
+            if (!op) continue;
+            started = 1;
+            s = op + 1;
+        }
+        int done = 0;
+        char *cp = strchr(s, ')');
+        if (cp) { *cp = '\0'; done = 1; }
+        if (*s) {
+            size_t L = strlen(s);
+            char *d = (char *)malloc(L + 1);
+            if (!d) { for (int j = 0; j < count; j++) free(items[j]); free(items); return NULL; }
+            memcpy(d, s, L + 1);
+            items[count++] = d;
+        }
+        if (done) break;
     }
-    if (open_i < 0 || close_i < 0 || close_i <= open_i + 1) {
-        *out_n = 0;
+    if (!started || count == 0) {
+        for (int j = 0; j < count; j++) free(items[j]);
+        free(items);
         return NULL;
-    }
-    int count = close_i - open_i - 1;
-    char **items = (char **)malloc(sizeof(char *) * (size_t)count);
-    if (!items) { *out_n = 0; return NULL; }
-    for (int i = 0; i < count; i++) {
-        const char *src = tok[open_i + 1 + i];
-        size_t L = strlen(src) + 1;
-        char *d = (char *)malloc(L);
-        if (!d) { for (int j = 0; j < i; j++) free(items[j]); free(items); *out_n = 0; return NULL; }
-        memcpy(d, src, L);
-        items[i] = d;
     }
     *out_n = count;
     return items;
@@ -1458,6 +1470,7 @@ static char *g_while_tok[CSH_MAX_TOKENS];
 static int run_script(void) {
     if (parse_block_structure() < 0) return 2;
 
+    g_sp = 0;
     int line_idx = 0;
     while (line_idx < g_nlines) {
         char *raw = g_line_raw;
@@ -1526,7 +1539,7 @@ static int run_script(void) {
                 }
                 line_idx++; continue;
             }
-            if (n < 5) { fputs(C_RED "csh: bad foreach\n" C_RESET, stdout); rc_set(1); line_idx++; continue; }
+            if (n < 3) { fputs(C_RED "csh: bad foreach\n" C_RESET, stdout); rc_set(1); line_idx++; continue; }
             int nitems = 0;
             char **items = collect_foreach_items(tok, n, &nitems);
             if (!items || nitems == 0) {
@@ -2329,6 +2342,73 @@ static void print_motd(void) {
     if (n > 0) write(1, buf, (size_t)n);
 }
 
+static int line_opens_block(const char *s) {
+    return starts_with_word(s, "if") || starts_with_word(s, "foreach") ||
+           starts_with_word(s, "while");
+}
+
+static int line_closes_block(const char *s) {
+    return starts_with_word(s, "end") || starts_with_word(s, "endif");
+}
+
+static int run_interactive_block(const char *first) {
+    size_t cap = 4096, used = 0;
+    char *buf = (char *)malloc(cap);
+    if (!buf) return -1;
+
+    int depth = 1;
+    const char *line = first;
+    char tmp[CSH_LINE_MAX];
+
+    for (;;) {
+        size_t ll = strlen(line);
+        if (used + ll + 2 > cap) {
+            size_t ncap = cap * 2;
+            while (used + ll + 2 > ncap) ncap *= 2;
+            char *nb = (char *)realloc(buf, ncap);
+            if (!nb) { free(buf); return -1; }
+            buf = nb; cap = ncap;
+        }
+        memcpy(buf + used, line, ll);
+        used += ll;
+        buf[used++] = '\n';
+
+        if (depth == 0) break;
+
+        char *rl = readline("? ");
+        if (!rl) { free(buf); fputs("\n", stdout); return g_last_rc; }
+        strncpy(tmp, rl, CSH_LINE_MAX - 1);
+        tmp[CSH_LINE_MAX - 1] = '\0';
+        free(rl);
+        int tl = (int)strlen(tmp);
+        while (tl > 0 && isspace((unsigned char)tmp[tl - 1])) tmp[--tl] = '\0';
+
+        char probe[CSH_LINE_MAX];
+        strncpy(probe, tmp, sizeof(probe) - 1);
+        probe[sizeof(probe) - 1] = '\0';
+        trim(probe);
+        if (line_closes_block(probe)) { if (depth > 0) depth--; }
+        else if (line_opens_block(probe)) depth++;
+
+        line = tmp;
+    }
+
+    buf[used] = '\0';
+
+    char *p = buf;
+    char *end = buf + used;
+    g_nlines = 0;
+    while (p < end && g_nlines < CSH_MAX_LINES) {
+        g_lines[g_nlines++] = p;
+        while (p < end && *p != '\n') p++;
+        if (p < end) { *p = '\0'; p++; }
+    }
+
+    int rc = run_script();
+    free(buf);
+    return rc;
+}
+
 static int interactive_main(void) {
     interactive_init_paths();
     write(1, "\033[2J\033[H", 7);
@@ -2359,7 +2439,14 @@ static int interactive_main(void) {
         while (len > 0 && isspace((unsigned char)line[len - 1])) line[--len] = '\0';
         if (len > 0) {
             readline_add_history(line);
-            run_command_line(line);
+            char probe[CSH_LINE_MAX];
+            strncpy(probe, line, sizeof(probe) - 1);
+            probe[sizeof(probe) - 1] = '\0';
+            trim(probe);
+            if (line_opens_block(probe))
+                run_interactive_block(probe);
+            else
+                run_command_line(line);
         }
     }
     return g_last_rc;
