@@ -163,16 +163,19 @@ static void disk_media_worker(void *arg) {
             if (key == 2 && asc == 0x04)
                 spin_ticks = 4;
 
-            uint64_t now = 0;
+            uint64_t now = prev;
             if (tur == 0) {
-                int cr = ahci_atapi_read_capacity(adev);
-                now = adev->sectors;
-                if (cr != 0 && changed)
-                    serial_printf("[disk-media] %s: ready but READ CAPACITY failed (%d)\n",
-                                  bd->name, cr);
+                if (changed || prev == 0) {
+                    int cr = ahci_atapi_read_capacity(adev);
+                    now = adev->sectors;
+                    if (cr != 0 && changed)
+                        serial_printf("[disk-media] %s: ready but READ CAPACITY failed (%d)\n",
+                                      bd->name, cr);
+                }
             } else {
                 adev->sectors = 0;
                 adev->size_bytes = 0;
+                now = 0;
             }
 
             if (now != prev) {
