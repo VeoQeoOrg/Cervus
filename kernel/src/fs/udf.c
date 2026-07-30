@@ -400,8 +400,24 @@ static int64_t udf_file_read(vnode_t *n, void *buf, size_t len, uint64_t offset)
     return udf_read_range(nd->fs, nd->fe_lba, buf, len, offset);
 }
 
-static int udf_store_data(udf_fs_t *fs, uint8_t *fe, uint32_t fe_lba,
-                          const uint8_t *data, uint64_t size) {
+static void udf_refinalize_fids(udf_fs_t *fs, uint8_t *data, uint32_t size,
+                                const uint32_t *blocks, uint32_t bs, uint32_t inline_block) {
+    uint32_t off = 0;
+    while (off + 38 <= size) {
+        uint8_t *f = data + off;
+        if (rd16(f) != TAG_FID) break;
+        uint8_t  l_fi = f[19];
+        uint16_t l_iu = rd16(f + 36);
+        uint32_t fid_len = (uint32_t)((38 + l_iu + l_fi + 3) & ~3);
+        if (off + fid_len > size) break;
+        uint32_t tag_loc = blocks ? blocks[off / bs] : inline_block;
+        udf_finalize_tag(fs, f, TAG_FID, (uint16_t)(fid_len - 16), tag_loc);
+        off += fid_len;
+    }
+}
+
+static int udf_write_fe_data(udf_fs_t *fs, uint8_t *fe, uint32_t fe_lba,
+                             uint8_t *data, uint64_t size, int is_dir) {
     uint32_t bs = fs->block_size;
     int efe = (rd16(fe) == TAG_EFE);
     uint32_t l_ea = efe ? rd32(fe + 208) : rd32(fe + 168);
@@ -414,6 +430,7 @@ static int udf_store_data(udf_fs_t *fs, uint8_t *fe, uint32_t fe_lba,
     if (size <= inline_cap) {
         fe[34] = (uint8_t)((fe[34] & ~7) | 3);
         if (size) memcpy(fe + ad_area, data, (size_t)size);
+        if (is_dir) udf_refinalize_fids(fs, fe + ad_area, (uint32_t)size, NULL, bs, tag_loc);
         wr64(fe + 56, size);
         if (efe) { wr64(fe + 64, size); wr64(fe + 72, 0); wr32(fe + 212, (uint32_t)size); }
         else     { wr64(fe + 64, 0);    wr32(fe + 172, (uint32_t)size); }
@@ -433,15 +450,6 @@ static int udf_store_data(udf_fs_t *fs, uint8_t *fe, uint32_t fe_lba,
         kfree(blocks);
         return -ENOSPC;
     }
-    uint8_t *sec = kmalloc(bs);
-    for (uint32_t bi = 0; bi < nblocks; bi++) {
-        memset(sec, 0, bs);
-        uint64_t off = (uint64_t)bi * bs;
-        uint32_t cpy = (uint32_t)((size - off > bs) ? bs : (size - off));
-        memcpy(sec, data + off, cpy);
-        udf_write_sector(fs->dev, fs->part_start + blocks[bi], sec);
-    }
-    kfree(sec);
 
     uint8_t *ad = fe + ad_area;
     uint32_t l_ad = 0, i = 0;
@@ -456,8 +464,24 @@ static int udf_store_data(udf_fs_t *fs, uint8_t *fe, uint32_t fe_lba,
         l_ad += 8;
         i += run;
     }
+    if (overflow) {
+        for (uint32_t k = 0; k < nblocks; k++) udf_free_block(fs, blocks[k]);
+        kfree(blocks);
+        return -EFBIG;
+    }
+
+    if (is_dir) udf_refinalize_fids(fs, data, (uint32_t)size, blocks, bs, tag_loc);
+
+    uint8_t *sec = kmalloc(bs);
+    for (uint32_t bi = 0; bi < nblocks; bi++) {
+        memset(sec, 0, bs);
+        uint64_t off = (uint64_t)bi * bs;
+        uint32_t cpy = (uint32_t)((size - off > bs) ? bs : (size - off));
+        memcpy(sec, data + off, cpy);
+        udf_write_sector(fs->dev, fs->part_start + blocks[bi], sec);
+    }
+    kfree(sec);
     kfree(blocks);
-    if (overflow) return -EFBIG;
 
     fe[34] = (uint8_t)(fe[34] & ~7);
     wr64(fe + 56, size);
@@ -489,7 +513,7 @@ static int64_t udf_resize_write(vnode_t *n, const void *buf, size_t len, uint64_
     if (!is_trunc && len > 0) memcpy(data + offset, buf, len);
 
     udf_free_fe_extents(fs, fe);
-    int r = udf_store_data(fs, fe, nd->fe_lba, data, new_size);
+    int r = udf_write_fe_data(fs, fe, nd->fe_lba, data, new_size, 0);
     kfree(data); kfree(fe);
     if (r < 0) return r;
     nd->size = new_size; n->size = new_size;
@@ -512,20 +536,22 @@ static int udf_dir_add_fid(udf_fs_t *fs, uint32_t dir_fe_lba, const char *name,
     uint8_t *fe = kmalloc(bs);
     if (!fe) return -ENOMEM;
     if (udf_read_sector(fs->dev, dir_fe_lba, fe) < 0) { kfree(fe); return -EIO; }
-    int efe = (rd16(fe) == TAG_EFE);
-    uint32_t l_ea = efe ? rd32(fe + 208) : rd32(fe + 168);
-    uint32_t ad_area = (efe ? 216u : 176u) + l_ea;
-    if ((fe[34] & 7) != 3) { kfree(fe); return -EINVAL; }
-    uint32_t l_ad = efe ? rd32(fe + 212) : rd32(fe + 172);
     uint64_t dir_size = rd64(fe + 56);
     uint32_t dir_block = dir_fe_lba - fs->part_start;
 
     size_t nlen = strlen(name);
     uint8_t  l_fi = (uint8_t)(nlen + 1);
     uint32_t fid_len = (uint32_t)((38 + l_fi + 3) & ~3);
-    if (ad_area + l_ad + fid_len > bs) { kfree(fe); return -ENOSPC; }
+    uint64_t new_size = dir_size + fid_len;
+    if (new_size > 4u * 1024 * 1024) { kfree(fe); return -ENOSPC; }
 
-    uint8_t *fid = fe + ad_area + l_ad;
+    uint8_t *buf = kmalloc((size_t)new_size);
+    if (!buf) { kfree(fe); return -ENOMEM; }
+    if (dir_size && udf_read_range(fs, dir_fe_lba, buf, dir_size, 0) < 0) {
+        kfree(buf); kfree(fe); return -EIO;
+    }
+
+    uint8_t *fid = buf + dir_size;
     memset(fid, 0, fid_len);
     wr16(fid + 16, 1);
     fid[18] = (uint8_t)(child_is_dir ? 0x02 : 0x00);
@@ -538,14 +564,9 @@ static int udf_dir_add_fid(udf_fs_t *fs, uint32_t dir_fe_lba, const char *name,
     memcpy(fid + 39, name, nlen);
     udf_finalize_tag(fs, fid, TAG_FID, (uint16_t)(fid_len - 16), dir_block);
 
-    uint32_t new_l_ad = l_ad + fid_len;
-    uint64_t new_size = dir_size + fid_len;
-    if (efe) { wr32(fe + 212, new_l_ad); wr64(fe + 64, new_size); }
-    else     { wr32(fe + 172, new_l_ad); }
-    wr64(fe + 56, new_size);
-    udf_finalize_tag(fs, fe, efe ? TAG_EFE : TAG_FE,
-                     (uint16_t)(ad_area + new_l_ad - 16), dir_block);
-    int r = udf_write_sector(fs->dev, dir_fe_lba, fe);
+    udf_free_fe_extents(fs, fe);
+    int r = udf_write_fe_data(fs, fe, dir_fe_lba, buf, new_size, 1);
+    kfree(buf);
     kfree(fe);
     return r;
 }
@@ -654,42 +675,42 @@ static int udf_dir_remove_fid(udf_fs_t *fs, uint32_t dir_fe_lba, const char *nam
     uint8_t *fe = kmalloc(bs);
     if (!fe) return -ENOMEM;
     if (udf_read_sector(fs->dev, dir_fe_lba, fe) < 0) { kfree(fe); return -EIO; }
-    int efe = (rd16(fe) == TAG_EFE);
-    if ((fe[34] & 7) != 3) { kfree(fe); return -EINVAL; }
-    uint32_t l_ea = efe ? rd32(fe + 208) : rd32(fe + 168);
-    uint32_t ad_area = (efe ? 216u : 176u) + l_ea;
-    uint32_t l_ad = efe ? rd32(fe + 212) : rd32(fe + 172);
-    uint32_t dir_block = dir_fe_lba - fs->part_start;
+    uint64_t dir_size = rd64(fe + 56);
+    if (dir_size == 0 || dir_size > 4u * 1024 * 1024) { kfree(fe); return -ENOENT; }
+
+    uint8_t *buf = kmalloc((size_t)dir_size);
+    if (!buf) { kfree(fe); return -ENOMEM; }
+    if (udf_read_range(fs, dir_fe_lba, buf, dir_size, 0) < 0) { kfree(buf); kfree(fe); return -EIO; }
 
     uint32_t off = 0;
     int found = 0;
-    while (off + 38 <= l_ad) {
-        uint8_t *f = fe + ad_area + off;
+    while (off + 38 <= dir_size) {
+        uint8_t *f = buf + off;
         if (rd16(f) != TAG_FID) break;
         uint8_t chars = f[18];
         uint8_t l_fi = f[19];
         uint16_t l_iu = rd16(f + 36);
         uint32_t fid_len = (uint32_t)((38 + l_iu + l_fi + 3) & ~3);
+        if (off + fid_len > dir_size) break;
         if (!(chars & 0x0C) && l_fi > 0) {
             char nm[256];
-            udf_fid_name(fe + ad_area, off + 38 + l_iu, l_fi, nm, sizeof(nm));
+            udf_fid_name(buf, off + 38 + l_iu, l_fi, nm, sizeof(nm));
             if (strcmp(nm, name) == 0) {
                 if (out_child) *out_child = rd32(f + 24);
                 if (out_is_dir) *out_is_dir = (chars & 0x02) != 0;
-                f[18] |= 0x04;
-                wr32(f + 20, 0);
-                udf_finalize_tag(fs, f, TAG_FID, (uint16_t)(fid_len - 16), dir_block);
+                memmove(f, f + fid_len, (size_t)(dir_size - off - fid_len));
+                dir_size -= fid_len;
                 found = 1;
                 break;
             }
         }
         off += fid_len;
     }
-    if (!found) { kfree(fe); return -ENOENT; }
+    if (!found) { kfree(buf); kfree(fe); return -ENOENT; }
 
-    udf_finalize_tag(fs, fe, efe ? TAG_EFE : TAG_FE,
-                     (uint16_t)(ad_area + l_ad - 16), dir_block);
-    int r = udf_write_sector(fs->dev, dir_fe_lba, fe);
+    udf_free_fe_extents(fs, fe);
+    int r = udf_write_fe_data(fs, fe, dir_fe_lba, buf, dir_size, 1);
+    kfree(buf);
     kfree(fe);
     return r < 0 ? r : 0;
 }
