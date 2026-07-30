@@ -4,13 +4,15 @@
 #include <errno.h>
 #include <libcervus.h>
 
+extern char **environ;
+
 int execvp(const char *file, char *const argv[])
 {
     if (!file || !*file) { __cervus_errno = ENOENT; return -1; }
 
     int has_slash = 0;
     for (const char *p = file; *p; p++) if (*p == '/') { has_slash = 1; break; }
-    if (has_slash) return execve(file, argv, NULL);
+    if (has_slash) return execve(file, argv, environ);
 
     const char *path = getenv("PATH");
     if (!path || !*path) path = "/bin:/apps";
@@ -27,7 +29,7 @@ int execvp(const char *file, char *const argv[])
             buf[dlen] = '/';
             memcpy(buf + dlen + 1, file, flen);
             buf[dlen + 1 + flen] = '\0';
-            execve(buf, argv, NULL);
+            execve(buf, argv, environ);
         }
         p = colon;
         if (*p == ':') p++;

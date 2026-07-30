@@ -1,8 +1,9 @@
 #include <unistd.h>
 #include <stddef.h>
 
+extern char **environ;
+
 int execv(const char *path, char *const argv[])
 {
-    char *empty[] = { NULL };
-    return execve(path, argv, empty);
+    return execve(path, argv, environ);
 }
