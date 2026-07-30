@@ -77,6 +77,9 @@
 #define ATAPI_OP_READ_10          0x28
 #define ATAPI_OP_START_STOP_UNIT  0x1B
 #define ATAPI_OP_PREVENT_ALLOW    0x1E
+#define ATAPI_OP_GET_CONFIG       0x46
+#define ATAPI_OP_READ_DISC_INFO   0x51
+#define ATAPI_OP_READ_TRACK_INFO  0x52
 
 #define FIS_TYPE_REG_H2D 0x27
 
@@ -376,6 +379,82 @@ static int ahci_atapi_packet(ahci_device_t *d, const uint8_t cdb[16],
     return ahci_issue_cmd(hba, d, slot, timeout_loops);
 }
 
+static uint32_t ahci_atapi_track_end(ahci_device_t *d, uint32_t track,
+                                     uint8_t *buf, uintptr_t buf_phys) {
+    uint8_t cdb[16] = {0};
+    cdb[0] = ATAPI_OP_READ_TRACK_INFO;
+    cdb[1] = 0x01;
+    cdb[2] = (uint8_t)((track >> 24) & 0xFF);
+    cdb[3] = (uint8_t)((track >> 16) & 0xFF);
+    cdb[4] = (uint8_t)((track >>  8) & 0xFF);
+    cdb[5] = (uint8_t)( track        & 0xFF);
+    cdb[8] = 36;
+    memset(buf, 0, 36);
+    spinlock_acquire(&g_ahci_lock);
+    int r = ahci_atapi_packet(d, cdb, buf_phys, 36, 1000000);
+    spinlock_release(&g_ahci_lock);
+    if (r != 0) {
+        serial_printf("[ahci] atapi: READ TRACK INFO trk %u failed (%d)\n", track, r);
+        return 0;
+    }
+    uint32_t tstart = ((uint32_t)buf[8]  << 24) | ((uint32_t)buf[9]  << 16)
+                    | ((uint32_t)buf[10] << 8)  |  (uint32_t)buf[11];
+    uint32_t tsize  = ((uint32_t)buf[24] << 24) | ((uint32_t)buf[25] << 16)
+                    | ((uint32_t)buf[26] << 8)  |  (uint32_t)buf[27];
+    uint32_t lra    = ((uint32_t)buf[28] << 24) | ((uint32_t)buf[29] << 16)
+                    | ((uint32_t)buf[30] << 8)  |  (uint32_t)buf[31];
+    uint8_t  valid  = buf[7];
+    serial_printf("[ahci] atapi: trk %u start=%u size=%u lra=%u valid=0x%02x\n",
+                  track, tstart, tsize, lra, valid);
+    uint32_t end = 0;
+    if ((valid & 0x02) && lra != 0 && lra != 0xFFFFFFFFu) end = lra + 1;
+    else if (tsize != 0 && tsize != 0xFFFFFFFFu)          end = tstart + tsize;
+    if (end > 0x0FFFFFFFu) end = 0;
+    return end;
+}
+
+static uint32_t ahci_atapi_capacity_from_disc(ahci_device_t *d, uint8_t *buf, uintptr_t buf_phys) {
+    {
+        uint8_t cdb[16] = {0};
+        cdb[0] = ATAPI_OP_GET_CONFIG;
+        cdb[8] = 32;
+        memset(buf, 0, 32);
+        spinlock_acquire(&g_ahci_lock);
+        int r = ahci_atapi_packet(d, cdb, buf_phys, 32, 1000000);
+        spinlock_release(&g_ahci_lock);
+        if (r == 0)
+            serial_printf("[ahci] atapi: current profile 0x%04x\n",
+                          ((uint16_t)buf[6] << 8) | buf[7]);
+    }
+
+    uint32_t last_track = 1;
+    {
+        uint8_t cdb[16] = {0};
+        cdb[0] = ATAPI_OP_READ_DISC_INFO;
+        cdb[8] = 32;
+        memset(buf, 0, 32);
+        spinlock_acquire(&g_ahci_lock);
+        int r = ahci_atapi_packet(d, cdb, buf_phys, 32, 1000000);
+        spinlock_release(&g_ahci_lock);
+        if (r == 0) {
+            last_track = ((uint32_t)buf[11] << 8) | buf[6];
+            if (last_track == 0 || last_track > 99) last_track = 1;
+            serial_printf("[ahci] atapi: disc info status=%u first_trk=%u last_trk=%u\n",
+                          buf[2] & 0x03, buf[3], last_track);
+        } else {
+            serial_printf("[ahci] atapi: READ DISC INFO failed (%d)\n", r);
+        }
+    }
+
+    uint32_t cap = 0, tries = 0;
+    for (uint32_t t = last_track; t >= 1 && tries < 4; t--, tries++) {
+        uint32_t end = ahci_atapi_track_end(d, t, buf, buf_phys);
+        if (end > cap) cap = end;
+        if (cap) break;
+    }
+    return cap;
+}
+
 int ahci_atapi_read_capacity(ahci_device_t *d) {
     uint8_t cdb[16] = {0};
     cdb[0] = ATAPI_OP_READ_CAPACITY;
@@ -449,6 +528,16 @@ int ahci_atapi_read_capacity(ahci_device_t *d) {
                 }
             }
             for (int dly = 0; dly < 3000000; dly++) io_pause();
+        }
+    }
+
+    uint32_t disc_cap = ahci_atapi_capacity_from_disc(d, buf, buf_phys);
+    if (disc_cap != 0) {
+        if (block_size == 0) block_size = ATAPI_SECTOR_SIZE;
+        if (max_lba == 0 || max_lba == 0xFFFFFFFFu || disc_cap > max_lba + 1) {
+            serial_printf("[ahci] atapi: using disc-info capacity %u sectors (read-capacity max_lba=%u)\n",
+                          disc_cap, max_lba);
+            max_lba = disc_cap - 1;
         }
     }
 
