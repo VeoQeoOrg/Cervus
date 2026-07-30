@@ -1013,7 +1013,7 @@ static void cmd_help(void) {
     fputs("  " C_BOLD "cursor" C_RESET " [block|underline|bar]  cursor shape (saved)\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "             quit shell\n", stdout);
     fputs("  " C_GRAY "-----------------------------------" C_RESET "\n", stdout);
-    fputs("  " C_BOLD "Scripts:" C_RESET "  if/else/endif  foreach/end  while/end  break  continue\n", stdout);
+    fputs("  " C_BOLD "Blocks:" C_RESET "  if/else/endif  foreach/end  while/end  break  continue  (multi-line or one-line)\n", stdout);
     fputs("  " C_BOLD "Math:" C_RESET "  @ x = expr   (+ - * / %  & | ^ ~ << >>  ( ) hex)   @ x ++/--\n", stdout);
     fputs("  " C_BOLD "Compare:" C_RESET "  == != < > <= >=   " C_BOLD "Random:" C_RESET " $RANDOM (0..32767)\n", stdout);
     fputs("  " C_BOLD "Glob:" C_RESET "  * ? [...]   " C_BOLD "Background:" C_RESET " cmd &\n", stdout);
@@ -2351,6 +2351,108 @@ static int line_closes_block(const char *s) {
     return starts_with_word(s, "end") || starts_with_word(s, "endif");
 }
 
+static int run_collected(char *buf) {
+    char *p = buf;
+    g_nlines = 0;
+    while (*p && g_nlines < CSH_MAX_LINES) {
+        g_lines[g_nlines++] = p;
+        while (*p && *p != '\n') p++;
+        if (*p == '\n') { *p = '\0'; p++; }
+    }
+    return run_script();
+}
+
+static int oneline_append_seg(char *out, size_t cap, size_t *used, const char *s, size_t len) {
+    while (len > 0 && (*s == ' ' || *s == '\t')) { s++; len--; }
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t')) len--;
+    if (len == 0) return 1;
+    if (*used + len + 2 > cap) return 0;
+    memcpy(out + *used, s, len);
+    *used += len;
+    out[(*used)++] = '\n';
+    return 1;
+}
+
+static int expand_oneline_block(const char *line, char *out, size_t cap) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    const char *closer;
+    int is_if = 0;
+    if (starts_with_word(p, "foreach") || starts_with_word(p, "while")) closer = "end";
+    else if (starts_with_word(p, "if")) { closer = "endif"; is_if = 1; }
+    else return 0;
+
+    const char *lp = strchr(p, '(');
+    if (!lp) return 0;
+    int depth = 0;
+    const char *rp = NULL;
+    for (const char *q = lp; *q; q++) {
+        if (*q == '(') depth++;
+        else if (*q == ')') { if (--depth == 0) { rp = q; break; } }
+    }
+    if (!rp) return 0;
+
+    const char *rest = rp + 1;
+    while (*rest == ' ' || *rest == '\t') rest++;
+    size_t rlen = strlen(rest);
+    while (rlen > 0 && (rest[rlen - 1] == ' ' || rest[rlen - 1] == '\t')) rlen--;
+    size_t clen = strlen(closer);
+    if (rlen < clen) return 0;
+    const char *cpos = rest + rlen - clen;
+    if (strncmp(cpos, closer, clen) != 0) return 0;
+    if (cpos != rest && cpos[-1] != ' ' && cpos[-1] != '\t') return 0;
+
+    const char *bstart = rest;
+    size_t blen = (size_t)(cpos - rest);
+    while (blen > 0 && (bstart[blen - 1] == ' ' || bstart[blen - 1] == '\t')) blen--;
+    if (is_if && strncmp(bstart, "then", 4) == 0 && (bstart[4] == ' ' || bstart[4] == '\t')) {
+        bstart += 4; blen -= 4;
+        while (blen > 0 && (*bstart == ' ' || *bstart == '\t')) { bstart++; blen--; }
+    }
+    if (blen == 0) return 0;
+
+    size_t used = 0;
+    size_t hlen = (size_t)(rp - p) + 1;
+    if (hlen + 8 >= cap) return 0;
+    memcpy(out, p, hlen);
+    used = hlen;
+    if (is_if) { memcpy(out + used, " then", 5); used += 5; }
+    out[used++] = '\n';
+
+    const char *bend = bstart + blen;
+    const char *seg = bstart;
+    int sq = 0, dq = 0;
+    for (const char *q = bstart; q <= bend; q++) {
+        int at_end = (q == bend);
+        char c = at_end ? '\0' : *q;
+        if (!at_end) {
+            if (sq) { if (c == '\'') sq = 0; continue; }
+            if (dq) { if (c == '"') dq = 0; continue; }
+            if (c == '\'') { sq = 1; continue; }
+            if (c == '"') { dq = 1; continue; }
+            if ((q == bstart || q[-1] == ' ' || q[-1] == '\t') &&
+                strncmp(q, "else", 4) == 0 &&
+                (q[4] == ' ' || q[4] == '\t' || q[4] == '\0')) {
+                if (!oneline_append_seg(out, cap, &used, seg, (size_t)(q - seg))) return 0;
+                if (used + 5 >= cap) return 0;
+                memcpy(out + used, "else", 4); used += 4; out[used++] = '\n';
+                q += 3;
+                seg = q + 1;
+                continue;
+            }
+        }
+        if (at_end || c == ';') {
+            if (!oneline_append_seg(out, cap, &used, seg, (size_t)(q - seg))) return 0;
+            seg = q + 1;
+        }
+    }
+
+    if (used + clen + 2 >= cap) return 0;
+    memcpy(out + used, closer, clen); used += clen; out[used++] = '\n';
+    out[used] = '\0';
+    return 1;
+}
+
 static int run_interactive_block(const char *first) {
     size_t cap = 4096, used = 0;
     char *buf = (char *)malloc(cap);
@@ -2394,17 +2496,7 @@ static int run_interactive_block(const char *first) {
     }
 
     buf[used] = '\0';
-
-    char *p = buf;
-    char *end = buf + used;
-    g_nlines = 0;
-    while (p < end && g_nlines < CSH_MAX_LINES) {
-        g_lines[g_nlines++] = p;
-        while (p < end && *p != '\n') p++;
-        if (p < end) { *p = '\0'; p++; }
-    }
-
-    int rc = run_script();
+    int rc = run_collected(buf);
     free(buf);
     return rc;
 }
@@ -2443,10 +2535,15 @@ static int interactive_main(void) {
             strncpy(probe, line, sizeof(probe) - 1);
             probe[sizeof(probe) - 1] = '\0';
             trim(probe);
-            if (line_opens_block(probe))
-                run_interactive_block(probe);
-            else
+            if (line_opens_block(probe)) {
+                char oneliner[CSH_LINE_MAX * 2];
+                if (expand_oneline_block(probe, oneliner, sizeof(oneliner)))
+                    run_collected(oneliner);
+                else
+                    run_interactive_block(probe);
+            } else {
                 run_command_line(line);
+            }
         }
     }
     return g_last_rc;
