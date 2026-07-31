@@ -44,6 +44,7 @@ typedef struct sock {
 static sock_t   *g_socks;
 static spinlock_t g_socks_lock;
 static uint16_t   g_ephemeral = 49152;
+static uint64_t   g_sock_ino = 0x20000;
 
 static const vnode_ops_t sock_vnode_ops;
 
@@ -237,10 +238,9 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
 
     vnode_t *vn = calloc(1, sizeof(*vn));
     if (!vn) { free(s); return NULL; }
-    static uint64_t sock_ino = 0x20000;
     vn->type = VFS_NODE_CHARDEV;
     vn->mode = 0600;
-    vn->ino  = sock_ino++;
+    vn->ino  = g_sock_ino++;
     vn->ops  = &sock_vnode_ops;
     vn->fs_data = s;
     vn->refcount = 1;
@@ -250,4 +250,45 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
     g_socks = s;
     spinlock_release(&g_socks_lock);
     return vn;
+}
+
+int64_t sock_op_listen(vnode_t *vn) {
+    sock_t *s = vn->fs_data;
+    if (s->type != SOCK_STREAM || !s->bound) return -EINVAL;
+    if (s->tcb) return 0;
+    s->tcb = tcp_listen(s->local_port);
+    if (!s->tcb) return -ENOMEM;
+    return 0;
+}
+
+vnode_t *sock_op_accept(vnode_t *vn, int nonblock, uint32_t *rip, uint16_t *rport) {
+    sock_t *ls = vn->fs_data;
+    if (ls->type != SOCK_STREAM || !ls->tcb) return NULL;
+
+    tcp_tcb_t *child = tcp_accept(ls->tcb, nonblock, rip, rport);
+    if (!child) return NULL;
+
+    sock_t *s = calloc(1, sizeof(*s));
+    if (!s) { tcp_close(child); return NULL; }
+    s->type = SOCK_STREAM;
+    s->proto = IPPROTO_TCP;
+    s->tcb = child;
+    s->connected = 1;
+    s->peer_ip = *rip;
+    s->peer_port = *rport;
+
+    vnode_t *cvn = calloc(1, sizeof(*cvn));
+    if (!cvn) { tcp_close(child); free(s); return NULL; }
+    cvn->type = VFS_NODE_CHARDEV;
+    cvn->mode = 0600;
+    cvn->ino  = g_sock_ino++;
+    cvn->ops  = &sock_vnode_ops;
+    cvn->fs_data = s;
+    cvn->refcount = 1;
+
+    spinlock_acquire(&g_socks_lock);
+    s->next = g_socks;
+    g_socks = s;
+    spinlock_release(&g_socks_lock);
+    return cvn;
 }

@@ -15,6 +15,14 @@ int connect(int fd, const struct sockaddr *addr, socklen_t addrlen) {
     return (int)__cervus_sys_ret(syscall3(SYS_CONNECT, fd, addr, addrlen));
 }
 
+int listen(int fd, int backlog) {
+    return (int)__cervus_sys_ret(syscall2(SYS_LISTEN, fd, backlog));
+}
+
+int accept(int fd, struct sockaddr *addr, socklen_t *addrlen) {
+    return (int)__cervus_sys_ret(syscall3(SYS_ACCEPT, fd, addr, addrlen));
+}
+
 ssize_t sendto(int fd, const void *buf, size_t len, int flags,
                const struct sockaddr *dest, socklen_t addrlen) {
     (void)flags;

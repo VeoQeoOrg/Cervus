@@ -126,8 +126,10 @@
 #define SYS_SENDTO            576
 #define SYS_RECVFROM          577
 #define SYS_NET_IFCFG         578
+#define SYS_LISTEN            579
+#define SYS_ACCEPT            580
 
-#define SYSCALL_TABLE_SIZE    579
+#define SYSCALL_TABLE_SIZE    581
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

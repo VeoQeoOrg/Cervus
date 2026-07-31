@@ -117,6 +117,50 @@ int64_t sys_recvfrom(uint64_t fd, uint64_t ubuf, uint64_t len, uint64_t uaddr, u
     return r;
 }
 
+int64_t sys_listen(uint64_t fd, uint64_t backlog) {
+    (void)backlog;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
+    if (!vn) return -EBADF;
+    int64_t r = sock_op_listen(vn);
+    fd_put(f);
+    return r;
+}
+
+int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *lf; vnode_t *lvn = sock_vnode_from_fd(t, (int)fd, &lf);
+    if (!lvn) return -EBADF;
+    int nonblock = (lf->flags & O_NONBLOCK) ? 1 : 0;
+
+    uint32_t rip = 0; uint16_t rport = 0;
+    vnode_t *cvn = sock_op_accept(lvn, nonblock, &rip, &rport);
+    fd_put(lf);
+    if (!cvn) return nonblock ? -EAGAIN : -EINVAL;
+
+    vfs_file_t *cf = vfs_file_alloc();
+    if (!cf) { cvn->ops->unref(cvn); return -ENOMEM; }
+    cf->vnode = cvn; cf->flags = O_RDWR; cf->offset = 0; cf->refcount = 1;
+    int cfd = fd_alloc(t->fd_table, cf, 0);
+    if (cfd < 0) { vfs_file_free(cf); return -EMFILE; }
+
+    if (uaddr && syscall_uptr_validate((void *)uaddr, 16)) {
+        uint8_t sa[16];
+        memset(sa, 0, sizeof(sa));
+        sa[0] = AF_INET;
+        wr16be(sa + 2, rport);
+        wr32be(sa + 4, rip);
+        memcpy((void *)uaddr, sa, 16);
+        if (uaddrlen && syscall_uptr_validate((void *)uaddrlen, sizeof(int))) {
+            int sl = 16;
+            memcpy((void *)uaddrlen, &sl, sizeof(int));
+        }
+    }
+    return cfd;
+}
+
 int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf) {
     if (!syscall_uptr_validate((void *)ubuf, sizeof(net_ifcfg_t))) return -EFAULT;
     net_ifcfg_t cfg;
