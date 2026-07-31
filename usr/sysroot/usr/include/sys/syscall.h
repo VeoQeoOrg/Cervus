@@ -111,6 +111,12 @@
 #define SYS_AUTH            570
 #define SYS_SUDO            571
 #define SYS_PASSWD_SET      572
+#define SYS_SOCKET          573
+#define SYS_BIND            574
+#define SYS_CONNECT         575
+#define SYS_SENDTO          576
+#define SYS_RECVFROM        577
+#define SYS_NET_IFCFG       578
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

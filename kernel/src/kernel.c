@@ -40,6 +40,8 @@
 #include "../include/drivers/usb/xhci.h"
 #include "../include/drivers/usb/ehci.h"
 #include "../include/drivers/usb/uhci.h"
+#include "../include/net/netdev.h"
+#include "../include/net/e1000.h"
 #include "../include/console/console.h"
 #include "../include/fs/ext2.h"
 #include "../include/fs/fat32.h"
@@ -176,6 +178,8 @@ static void load_elf_module(void) {
     ehci_start_worker();
     uhci_start_worker();
     disk_start_media_worker();
+    e1000_start_worker();
+    net_start_worker();
     timer_start_recal_task();
 
     console_boot_logging_off();
@@ -374,6 +378,9 @@ void kernel_main(void) {
         if (un) printf("usb: uhci, %d controller%s\n", un, un == 1 ? "" : "s");
         if (!xn && !en && !un) printf("usb: no controllers detected\n");
     }
+
+    serial_writestring("[stage] net_init\n");
+    net_init();
 
     bool has_initramfs_module = (module_request.response &&
                                   module_request.response->module_count >= 2);
