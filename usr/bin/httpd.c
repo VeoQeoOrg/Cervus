@@ -58,7 +58,12 @@ int main(int argc, char **argv) {
                           "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
                           "Content-Length: %d\r\nConnection: close\r\n\r\n", blen);
         send(c, hdr, (size_t)hn, 0);
-        if (blen > 0) send(c, body, (size_t)blen, 0);
+        int off = 0;
+        while (off < blen) {
+            long w = send(c, body + off, (size_t)(blen - off), 0);
+            if (w <= 0) break;
+            off += (int)w;
+        }
         close(c);
 
         struct in_addr ia;

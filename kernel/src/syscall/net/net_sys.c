@@ -5,7 +5,7 @@
 #include "../../../include/net/netdev.h"
 #include <string.h>
 
-#define SOCK_IO_MAX 1536
+#define SOCK_IO_MAX 8192
 
 static vnode_t *sock_vnode_from_fd(task_t *t, int fd, vfs_file_t **out_file) {
     vfs_file_t *f = fd_get(t->fd_table, fd);
