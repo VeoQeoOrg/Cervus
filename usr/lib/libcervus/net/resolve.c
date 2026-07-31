@@ -54,12 +54,43 @@ static in_addr_t dns_parse(const uint8_t *p, int len) {
     return 0xffffffffu;
 }
 
+static uint32_t resolv_conf_dns(void) {
+    int fd = open("/etc/resolv.conf", O_RDONLY);
+    if (fd < 0) return 0;
+    char buf[256];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    char *p = buf;
+    while (p) {
+        if (strncmp(p, "nameserver", 10) == 0) {
+            p += 10;
+            while (*p == ' ' || *p == '\t') p++;
+            char ip[64];
+            int i = 0;
+            while (*p && *p != '\n' && *p != ' ' && *p != '\t' && i < 63) ip[i++] = *p++;
+            ip[i] = 0;
+            in_addr_t a = inet_addr(ip);
+            if (a != 0xffffffffu) return ntohl(a);
+            return 0;
+        }
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    return 0;
+}
+
 in_addr_t inet_resolve(const char *name) {
     in_addr_t direct = inet_addr(name);
     if (direct != 0xffffffffu) return direct;
 
+    uint32_t dns = resolv_conf_dns();
     net_ifcfg_t cfg;
-    if (netif_get(0, &cfg) != 0 || !cfg.dns) return 0xffffffffu;
+    if (!dns) {
+        if (netif_get(0, &cfg) != 0 || !cfg.dns) return 0xffffffffu;
+        dns = cfg.dns;
+    }
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return 0xffffffffu;
@@ -79,7 +110,7 @@ in_addr_t inet_resolve(const char *name) {
     memset(&dst, 0, sizeof(dst));
     dst.sin_family = AF_INET;
     dst.sin_port = htons(53);
-    dst.sin_addr.s_addr = htonl(cfg.dns);
+    dst.sin_addr.s_addr = htonl(dns);
     sendto(fd, q, (size_t)off, 0, (struct sockaddr *)&dst, sizeof(dst));
 
     long fl = fcntl(fd, F_GETFL, 0);
