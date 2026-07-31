@@ -8,6 +8,7 @@
 #   --live            no disk, boot ISO live      (same as --disk=none)
 #   --fresh           recreate empty disk image(s) before boot
 #   --installed       boot existing disk only, no ISO (simulate real HW)
+#   --net             attach an e1000 NIC with user-mode networking (internet via host NAT)
 #
 # The ISO is expected to already exist at demo_iso/Cervus.latest.iso
 # (nb builds it before calling this, except for --installed).
@@ -24,6 +25,7 @@ UEFI=false
 DISK=ide
 FRESH=false
 INSTALLED=false
+NET=""
 
 for a in "$@"; do
     case "$a" in
@@ -31,11 +33,14 @@ for a in "$@"; do
         --live)      DISK=none ;;
         --fresh|--reset-disk) FRESH=true ;;
         --installed) INSTALLED=true ;;
+        --net)       NET=" -netdev user,id=net0 -device e1000,netdev=net0" ;;
         --disk=ide|--disk=ahci|--disk=nvme|--disk=all|--disk=none)
             DISK=${a#--disk=} ;;
         *) echo "run: unknown option '$a'" >&2; exit 1 ;;
     esac
 done
+
+QEMUFLAGS="$QEMUFLAGS$NET"
 
 green() { printf '\033[92m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[93m%s\033[0m\n' "$*"; }
