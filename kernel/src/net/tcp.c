@@ -20,7 +20,7 @@ enum { TCP_CLOSED, TCP_LISTEN, TCP_SYN_SENT, TCP_SYN_RCVD, TCP_ESTABLISHED,
        TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT };
 
 #define TCP_MSS     1400
-#define TCP_SNDBUF  4096
+#define TCP_SNDBUF  16384
 #define TCP_RCVBUF  65536
 
 struct tcp_tcb {
@@ -33,8 +33,8 @@ struct tcp_tcb {
     uint16_t  snd_wnd;
 
     uint8_t   sndbuf[TCP_SNDBUF];
-    uint32_t  snd_len;
-    int       pend_syn, pend_fin;
+    uint32_t  snd_buflen;
+    int       pend_syn, pend_fin, fin_sent;
 
     uint8_t  *rcvbuf;
     uint32_t  rcv_head, rcv_tail, rcv_count;
@@ -153,6 +153,49 @@ int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     return -EINVAL;
 }
 
+static void tcp_try_send(tcp_tcb_t *t) {
+    for (;;) {
+        uint64_t f = spinlock_acquire_irqsave(&t->lock);
+        int st = t->state;
+        if (st != TCP_ESTABLISHED && st != TCP_CLOSE_WAIT &&
+            st != TCP_FIN_WAIT1 && st != TCP_LAST_ACK) {
+            spinlock_release_irqrestore(&t->lock, f);
+            return;
+        }
+        uint32_t inflight = t->snd_nxt - t->snd_una;
+        uint32_t unsent = (t->snd_buflen > inflight) ? (t->snd_buflen - inflight) : 0;
+        uint32_t wnd = t->snd_wnd ? t->snd_wnd : 1;
+        uint32_t canwnd = (inflight < wnd) ? (wnd - inflight) : 0;
+        uint32_t n = unsent;
+        if (n > canwnd) n = canwnd;
+        if (n > TCP_MSS) n = TCP_MSS;
+
+        if (n > 0) {
+            uint8_t seg[TCP_MSS];
+            memcpy(seg, t->sndbuf + inflight, n);
+            uint32_t seq = t->snd_nxt;
+            t->snd_nxt += n;
+            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + 1000;
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_output(t, seq, TH_ACK | TH_PSH, seg, n);
+            continue;
+        }
+
+        if (t->pend_fin && !t->fin_sent && t->snd_buflen == 0 && t->snd_una == t->snd_nxt) {
+            t->fin_sent = 1;
+            uint32_t seq = t->snd_nxt;
+            t->snd_nxt += 1;
+            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + 1000;
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_output(t, seq, TH_ACK | TH_FIN, NULL, 0);
+            return;
+        }
+
+        spinlock_release_irqrestore(&t->lock, f);
+        return;
+    }
+}
+
 int64_t tcp_send(tcp_tcb_t *t, const void *buf, size_t len) {
     if (!t) return -EINVAL;
     task_t *me = syscall_cur_task();
@@ -166,7 +209,8 @@ int64_t tcp_send(tcp_tcb_t *t, const void *buf, size_t len) {
             spinlock_release_irqrestore(&t->lock, f);
             return done ? (int64_t)done : -EINVAL;
         }
-        if (t->snd_len > 0) {
+        uint32_t space = TCP_SNDBUF - t->snd_buflen;
+        if (space == 0) {
             if (me && me->pending_kill) { spinlock_release_irqrestore(&t->lock, f); return done ? (int64_t)done : -EINTR; }
             if (me) { t->waiter = me; me->runnable = false; me->state = TASK_BLOCKED; }
             spinlock_release_irqrestore(&t->lock, f);
@@ -174,17 +218,12 @@ int64_t tcp_send(tcp_tcb_t *t, const void *buf, size_t len) {
             continue;
         }
         uint32_t n = (uint32_t)(len - done);
-        if (n > TCP_MSS) n = TCP_MSS;
-        if (n > TCP_SNDBUF) n = TCP_SNDBUF;
-        memcpy(t->sndbuf, p + done, n);
-        t->snd_len = n;
-        t->snd_nxt = t->snd_una + n;
-        t->rexmit_ms = now_ms() + 1000;
-        t->retries = 0;
-        uint32_t seq = t->snd_una;
-        spinlock_release_irqrestore(&t->lock, f);
-        tcp_output(t, seq, TH_ACK | TH_PSH, t->sndbuf, n);
+        if (n > space) n = space;
+        memcpy(t->sndbuf + t->snd_buflen, p + done, n);
+        t->snd_buflen += n;
         done += n;
+        spinlock_release_irqrestore(&t->lock, f);
+        tcp_try_send(t);
     }
     return (int64_t)done;
 }
@@ -229,20 +268,15 @@ void tcp_close(tcp_tcb_t *t) {
     if (t->state == TCP_ESTABLISHED) {
         t->state = TCP_FIN_WAIT1;
         t->pend_fin = 1;
-        uint32_t seq = t->snd_nxt;
-        t->snd_nxt++;
-        t->rexmit_ms = now_ms() + 1000;
         spinlock_release_irqrestore(&t->lock, f);
-        tcp_output(t, seq, TH_ACK | TH_FIN, NULL, 0);
+        tcp_try_send(t);
         return;
     }
     if (t->state == TCP_CLOSE_WAIT) {
         t->state = TCP_LAST_ACK;
         t->pend_fin = 1;
-        uint32_t seq = t->snd_nxt;
-        t->snd_nxt++;
         spinlock_release_irqrestore(&t->lock, f);
-        tcp_output(t, seq, TH_ACK | TH_FIN, NULL, 0);
+        tcp_try_send(t);
         return;
     }
     spinlock_release_irqrestore(&t->lock, f);
@@ -392,12 +426,17 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
 
     if (flags & TH_ACK) {
         if ((int32_t)(ack - t->snd_una) > 0 && (int32_t)(ack - t->snd_nxt) <= 0) {
-            uint32_t acked = ack - t->snd_una;
-            t->snd_una = ack;
-            if (t->snd_len) {
-                if (acked >= t->snd_len) t->snd_len = 0;
-                else { memmove(t->sndbuf, t->sndbuf + acked, t->snd_len - acked); t->snd_len -= acked; }
+            uint32_t adv = ack - t->snd_una;
+            uint32_t data_acked = adv;
+            if (t->fin_sent && ack == t->snd_nxt && adv > 0) data_acked = adv - 1;
+            if (data_acked > t->snd_buflen) data_acked = t->snd_buflen;
+            if (data_acked) {
+                memmove(t->sndbuf, t->sndbuf + data_acked, t->snd_buflen - data_acked);
+                t->snd_buflen -= data_acked;
             }
+            t->snd_una = ack;
+            t->retries = 0;
+            t->rexmit_ms = (t->snd_una == t->snd_nxt) ? 0 : (now_ms() + 1000);
             tcb_wake(t);
         }
         if (t->state == TCP_FIN_WAIT1 && t->snd_una == t->snd_nxt) t->state = TCP_FIN_WAIT2;
@@ -436,6 +475,7 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
     }
 
     spinlock_release_irqrestore(&t->lock, f);
+    tcp_try_send(t);
 }
 
 void tcp_tick(void) {
@@ -449,28 +489,32 @@ void tcp_tick(void) {
         int reap = 0;
         if (t->reset || t->state == TCP_CLOSED) {
             if (t->app_closed) reap = 1;
+            spinlock_release_irqrestore(&t->lock, f);
         } else if (t->state == TCP_TIME_WAIT) {
             if (nowt - t->close_ms > 2000) reap = 1;
+            spinlock_release_irqrestore(&t->lock, f);
         } else if (t->rexmit_ms && nowt >= t->rexmit_ms) {
-            if (++t->retries > 6) {
+            if (++t->retries > 8) {
                 t->reset = 1; tcb_wake(t);
+                spinlock_release_irqrestore(&t->lock, f);
             } else {
                 t->rexmit_ms = nowt + 1000;
-                uint32_t seq = t->snd_una;
                 int do_syn = t->pend_syn;
                 int syn_ack = (t->state == TCP_SYN_RCVD);
-                int do_fin = t->pend_fin && (t->snd_len == 0);
-                uint32_t sl = t->snd_len;
-                spinlock_release_irqrestore(&t->lock, f);
-                if (do_syn) tcp_output(t, seq, syn_ack ? (TH_SYN | TH_ACK) : TH_SYN, NULL, 0);
-                else if (sl) tcp_output(t, seq, TH_ACK | TH_PSH, t->sndbuf, sl);
-                else if (do_fin) tcp_output(t, t->snd_nxt - 1, TH_ACK | TH_FIN, NULL, 0);
-                f = spinlock_acquire_irqsave(&t->lock);
+                uint32_t seq = t->snd_una;
+                if (do_syn) {
+                    spinlock_release_irqrestore(&t->lock, f);
+                    tcp_output(t, seq, syn_ack ? (TH_SYN | TH_ACK) : TH_SYN, NULL, 0);
+                } else {
+                    t->snd_nxt = t->snd_una;
+                    t->fin_sent = 0;
+                    spinlock_release_irqrestore(&t->lock, f);
+                    tcp_try_send(t);
+                }
             }
+        } else {
+            spinlock_release_irqrestore(&t->lock, f);
         }
-        if (t->state == TCP_ESTABLISHED && t->snd_len == 0 && !t->pend_syn) t->rexmit_ms = 0;
-
-        spinlock_release_irqrestore(&t->lock, f);
 
         if (reap && !t->waiter) {
             *pp = t->next;
