@@ -189,6 +189,8 @@ static void expand_vars(const char *src, char *dst, size_t dsz) {
     dst[di] = '\0';
 }
 
+static int g_tok_quoted[CSH_MAX_TOKENS];
+
 static int tokenize(char *line, char *argv[], int max_tokens) {
     int n = 0;
     char *p = line;
@@ -197,8 +199,9 @@ static int tokenize(char *line, char *argv[], int max_tokens) {
         if (!*p) break;
         if (n >= max_tokens - 1) return -1;
         char *out = p;
+        int idx = n;
         argv[n++] = out;
-        int in_dq = 0, in_sq = 0;
+        int in_dq = 0, in_sq = 0, tq = 0;
         while (*p) {
             if (in_dq) {
                 if (*p == '"') { in_dq = 0; p++; }
@@ -207,13 +210,14 @@ static int tokenize(char *line, char *argv[], int max_tokens) {
                 if (*p == '\'') { in_sq = 0; p++; }
                 else            { *out++ = *p++; }
             } else {
-                if (*p == '"')  { in_dq = 1; p++; }
-                else if (*p == '\'') { in_sq = 1; p++; }
+                if (*p == '"')  { in_dq = 1; tq = 1; p++; }
+                else if (*p == '\'') { in_sq = 1; tq = 1; p++; }
                 else if (isspace((unsigned char)*p)) { p++; break; }
                 else { *out++ = *p++; }
             }
         }
         *out = '\0';
+        if (idx < CSH_MAX_TOKENS) g_tok_quoted[idx] = tq;
         if (in_dq || in_sq) return -1;
     }
     argv[n] = NULL;
@@ -249,13 +253,19 @@ static char *tilde_expand_dup(const char *word) {
     return out;
 }
 
-static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r, int *nr) {
+static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r, int *nr,
+                           const int *quoted) {
     *nr = 0;
     int new_argc = 0;
     for (int i = 0; i < *argc; i++) {
         const char *a = argv[i];
         redir_type_t rt = CSH_REDIR_NONE;
         const char *target = NULL;
+
+        if (quoted && quoted[i]) {
+            argv[new_argc++] = argv[i];
+            continue;
+        }
 
         if (strcmp(a, ">>") == 0) {
             rt = CSH_REDIR_APPEND;
@@ -372,7 +382,7 @@ static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
             if (sub_n == 0) exit(0);
 
             redir_t rd[CSH_REDIRS_MAX]; int nr = 0;
-            if (parse_redirects(sub_argv, &sub_n, rd, CSH_REDIRS_MAX, &nr) < 0) exit(1);
+            if (parse_redirects(sub_argv, &sub_n, rd, CSH_REDIRS_MAX, &nr, g_tok_quoted + starts[i]) < 0) exit(1);
             if (sub_n == 0) exit(0);
 
             char *gtok[CSH_MAX_TOKENS * 4];
@@ -1282,7 +1292,7 @@ static int exec_tokens(char **tok, int n) {
 
     redir_t rd[CSH_REDIRS_MAX]; int nr = 0;
     int nn = n;
-    if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr) < 0) { rc_set(1); return 1; }
+    if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr, g_tok_quoted) < 0) { rc_set(1); return 1; }
     if (nn == 0) return g_last_rc;
 
     int need_glob = 0;
