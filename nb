@@ -16,6 +16,7 @@
 #   --uefi         UEFI/OVMF (default BIOS)   --disk=ide|ahci|nvme|all|none
 #   --live         no disk, live ISO          --fresh   recreate empty disk(s)
 #   --installed    boot existing disk, no ISO (simulate real hardware)
+#   --net          attach e1000 NIC + user networking (internet via host NAT)
 #
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
