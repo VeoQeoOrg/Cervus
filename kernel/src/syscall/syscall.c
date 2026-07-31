@@ -131,6 +131,12 @@ extern int64_t sys_spec(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_auth(uint64_t, uint64_t);
 extern int64_t sys_sudo(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_passwd_set(uint64_t, uint64_t);
+extern int64_t sys_socket(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_bind(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_connect(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_sendto(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_recvfrom(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_net_ifcfg(uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -188,6 +194,8 @@ W3(sys_spec)
 W2(sys_auth)
 W3(sys_sudo)
 W2(sys_passwd_set)
+W3(sys_socket)      W3(sys_bind)       W3(sys_connect)
+W5(sys_sendto)      W5(sys_recvfrom)   W2(sys_net_ifcfg)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -284,6 +292,12 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_AUTH]              = _sys_auth,
     [SYS_SUDO]              = _sys_sudo,
     [SYS_PASSWD_SET]        = _sys_passwd_set,
+    [SYS_SOCKET]            = _sys_socket,
+    [SYS_BIND]              = _sys_bind,
+    [SYS_CONNECT]           = _sys_connect,
+    [SYS_SENDTO]            = _sys_sendto,
+    [SYS_RECVFROM]          = _sys_recvfrom,
+    [SYS_NET_IFCFG]         = _sys_net_ifcfg,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

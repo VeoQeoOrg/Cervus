@@ -120,7 +120,14 @@
 #define SYS_SUDO              571
 #define SYS_PASSWD_SET        572
 
-#define SYSCALL_TABLE_SIZE    573
+#define SYS_SOCKET            573
+#define SYS_BIND              574
+#define SYS_CONNECT           575
+#define SYS_SENDTO            576
+#define SYS_RECVFROM          577
+#define SYS_NET_IFCFG         578
+
+#define SYSCALL_TABLE_SIZE    579
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
