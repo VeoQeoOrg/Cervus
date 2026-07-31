@@ -55,10 +55,13 @@ typedef struct {
     int  is_env;
 } var_t;
 
-typedef enum { CSH_REDIR_NONE, CSH_REDIR_OUT, CSH_REDIR_APPEND, CSH_REDIR_IN } redir_type_t;
+typedef enum { CSH_REDIR_NONE, CSH_REDIR_OUT, CSH_REDIR_APPEND, CSH_REDIR_IN,
+               CSH_REDIR_DUP } redir_type_t;
 
 typedef struct {
     redir_type_t type;
+    int  src_fd;
+    int  dup_fd;
     char path[CSH_PATH_MAX];
 } redir_t;
 
@@ -259,29 +262,40 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r,
     int new_argc = 0;
     for (int i = 0; i < *argc; i++) {
         const char *a = argv[i];
-        redir_type_t rt = CSH_REDIR_NONE;
-        const char *target = NULL;
 
         if (quoted && quoted[i]) {
             argv[new_argc++] = argv[i];
             continue;
         }
 
-        if (strcmp(a, ">>") == 0) {
-            rt = CSH_REDIR_APPEND;
-            if (i + 1 < *argc) target = argv[++i];
-        } else if (strcmp(a, ">") == 0) {
-            rt = CSH_REDIR_OUT;
-            if (i + 1 < *argc) target = argv[++i];
-        } else if (strcmp(a, "<") == 0) {
-            rt = CSH_REDIR_IN;
-            if (i + 1 < *argc) target = argv[++i];
-        } else if (a[0] == '>' && a[1] == '>' && a[2]) {
-            rt = CSH_REDIR_APPEND; target = a + 2;
-        } else if (a[0] == '>' && a[1] && a[1] != '>') {
-            rt = CSH_REDIR_OUT; target = a + 1;
-        } else if (a[0] == '<' && a[1]) {
-            rt = CSH_REDIR_IN; target = a + 1;
+        redir_type_t rt = CSH_REDIR_NONE;
+        int src_fd = -1;
+        const char *target = NULL;
+        int both = 0;
+
+        const char *op = a;
+        if (a[0] >= '0' && a[0] <= '9' && (a[1] == '>' || a[1] == '<')) { src_fd = a[0] - '0'; op = a + 1; }
+
+        if (op[0] == '>' && op[1] == '&' && op[2] >= '0' && op[2] <= '9') {
+            if (*nr < max_r) {
+                redirs[*nr].type = CSH_REDIR_DUP;
+                redirs[*nr].src_fd = (src_fd < 0) ? 1 : src_fd;
+                redirs[*nr].dup_fd = op[2] - '0';
+                (*nr)++;
+            }
+            continue;
+        } else if (a[0] == '&' && a[1] == '>') {
+            rt = CSH_REDIR_OUT; src_fd = 1; both = 1;
+            target = a[2] ? a + 2 : ((i + 1 < *argc) ? argv[++i] : NULL);
+        } else if (op[0] == '>' && op[1] == '>') {
+            rt = CSH_REDIR_APPEND; if (src_fd < 0) src_fd = 1;
+            target = op[2] ? op + 2 : ((i + 1 < *argc) ? argv[++i] : NULL);
+        } else if (op[0] == '>') {
+            rt = CSH_REDIR_OUT; if (src_fd < 0) src_fd = 1;
+            target = op[1] ? op + 1 : ((i + 1 < *argc) ? argv[++i] : NULL);
+        } else if (op[0] == '<') {
+            rt = CSH_REDIR_IN; if (src_fd < 0) src_fd = 0;
+            target = op[1] ? op + 1 : ((i + 1 < *argc) ? argv[++i] : NULL);
         } else {
             argv[new_argc++] = argv[i];
             continue;
@@ -293,9 +307,17 @@ static int parse_redirects(char *argv[], int *argc, redir_t redirs[], int max_r,
         }
         if (*nr < max_r) {
             redirs[*nr].type = rt;
+            redirs[*nr].src_fd = src_fd;
+            redirs[*nr].dup_fd = -1;
             char *tx = tilde_expand_dup(target);
             snprintf(redirs[*nr].path, CSH_PATH_MAX, "%s", tx ? tx : target);
             free(tx);
+            (*nr)++;
+        }
+        if (both && *nr < max_r) {
+            redirs[*nr].type = CSH_REDIR_DUP;
+            redirs[*nr].src_fd = 2;
+            redirs[*nr].dup_fd = 1;
             (*nr)++;
         }
     }
@@ -480,13 +502,17 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     if (child < 0) { fputs(C_RED "csh: fork failed\n" C_RESET, stdout); return 1; }
     if (child == 0) {
         for (int i = 0; i < nr; i++) {
-            int fd = -1, tfd = -1;
+            if (redirs[i].type == CSH_REDIR_DUP) {
+                dup2(redirs[i].dup_fd, redirs[i].src_fd);
+                continue;
+            }
+            int fd = -1, tfd = redirs[i].src_fd;
             if (redirs[i].type == CSH_REDIR_OUT) {
-                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_TRUNC, 0644); tfd = 1;
+                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             } else if (redirs[i].type == CSH_REDIR_APPEND) {
-                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_APPEND, 0644); tfd = 1;
+                fd = open(redirs[i].path, O_WRONLY | O_CREAT | O_APPEND, 0644);
             } else if (redirs[i].type == CSH_REDIR_IN) {
-                fd = open(redirs[i].path, O_RDONLY, 0); tfd = 0;
+                fd = open(redirs[i].path, O_RDONLY, 0);
             }
             if (fd < 0) {
                 fputs(C_RED "csh: cannot open redirect: " C_RESET, stdout);
@@ -2511,6 +2537,52 @@ static int run_interactive_block(const char *first) {
     return rc;
 }
 
+static int heredoc_preprocess(char *line, size_t cap, char *tmp_out) {
+    tmp_out[0] = 0;
+    char *hd = strstr(line, "<<");
+    if (!hd || hd[2] == '<') return 0;
+
+    int sq = 0, dq = 0;
+    for (char *q = line; q < hd; q++) {
+        if (*q == '\'' && !dq) sq ^= 1;
+        else if (*q == '"' && !sq) dq ^= 1;
+    }
+    if (sq || dq) return 0;
+
+    char *d = hd + 2;
+    while (*d == ' ' || *d == '\t') d++;
+    char delim[64];
+    int di = 0;
+    while (*d && *d != ' ' && *d != '\t' && di < 63) delim[di++] = *d++;
+    delim[di] = 0;
+    if (!di) return 0;
+
+    static int seq = 0;
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "/tmp/.hd%d", seq++);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return 0;
+
+    for (;;) {
+        char *bl = readline("heredoc> ");
+        if (!bl) break;
+        if (strcmp(bl, delim) == 0) { free(bl); break; }
+        write(fd, bl, strlen(bl));
+        write(fd, "\n", 1);
+        free(bl);
+    }
+    close(fd);
+
+    char rebuilt[CSH_LINE_MAX];
+    int pre = (int)(hd - line);
+    snprintf(rebuilt, sizeof(rebuilt), "%.*s< %s %s", pre, line, tmp, d);
+    strncpy(line, rebuilt, cap - 1);
+    line[cap - 1] = 0;
+    strncpy(tmp_out, tmp, 63);
+    tmp_out[63] = 0;
+    return 1;
+}
+
 static int interactive_main(void) {
     interactive_init_paths();
     write(1, "\033[2J\033[H", 7);
@@ -2541,6 +2613,8 @@ static int interactive_main(void) {
         while (len > 0 && isspace((unsigned char)line[len - 1])) line[--len] = '\0';
         if (len > 0) {
             readline_add_history(line);
+            char hdtmp[64];
+            heredoc_preprocess(line, sizeof(line), hdtmp);
             char probe[CSH_LINE_MAX];
             strncpy(probe, line, sizeof(probe) - 1);
             probe[sizeof(probe) - 1] = '\0';
@@ -2554,6 +2628,7 @@ static int interactive_main(void) {
             } else {
                 run_command_line(line);
             }
+            if (hdtmp[0]) unlink(hdtmp);
         }
     }
     return g_last_rc;
