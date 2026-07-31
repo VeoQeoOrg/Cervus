@@ -15,6 +15,8 @@ int      sock_is_vnode(const vnode_t *vn);
 
 int64_t  sock_op_bind(vnode_t *vn, uint32_t ip, uint16_t port);
 int64_t  sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port);
+int64_t  sock_op_listen(vnode_t *vn);
+vnode_t *sock_op_accept(vnode_t *vn, int nonblock, uint32_t *rip, uint16_t *rport);
 int64_t  sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, uint16_t port);
 int64_t  sock_op_recvfrom(vnode_t *vn, void *buf, size_t len, int nonblock,
                           uint32_t *src_ip, uint16_t *src_port);

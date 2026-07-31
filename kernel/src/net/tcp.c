@@ -16,8 +16,8 @@
 #define TH_PSH 0x08
 #define TH_ACK 0x10
 
-enum { TCP_CLOSED, TCP_SYN_SENT, TCP_ESTABLISHED, TCP_FIN_WAIT1,
-       TCP_FIN_WAIT2, TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT };
+enum { TCP_CLOSED, TCP_LISTEN, TCP_SYN_SENT, TCP_SYN_RCVD, TCP_ESTABLISHED,
+       TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT };
 
 #define TCP_MSS     1400
 #define TCP_SNDBUF  4096
@@ -43,6 +43,11 @@ struct tcp_tcb {
     uint64_t  rexmit_ms;
     int       retries;
     uint64_t  close_ms;
+
+    int       is_listener;
+    struct tcp_tcb *listener;
+    struct tcp_tcb *accept_q;
+    struct tcp_tcb *accept_next;
 
     spinlock_t lock;
     task_t    *waiter;
@@ -216,6 +221,11 @@ void tcp_close(tcp_tcb_t *t) {
     uint64_t f = spinlock_acquire_irqsave(&t->lock);
     t->app_closed = 1;
     t->close_ms = now_ms();
+    if (t->is_listener) {
+        t->state = TCP_CLOSED;
+        spinlock_release_irqrestore(&t->lock, f);
+        return;
+    }
     if (t->state == TCP_ESTABLISHED) {
         t->state = TCP_FIN_WAIT1;
         t->pend_fin = 1;
@@ -238,6 +248,74 @@ void tcp_close(tcp_tcb_t *t) {
     spinlock_release_irqrestore(&t->lock, f);
 }
 
+static tcp_tcb_t *find_listener(uint16_t port) {
+    for (tcp_tcb_t *t = g_tcbs; t; t = t->next)
+        if (t->is_listener && t->local_port == port) return t;
+    return NULL;
+}
+
+tcp_tcb_t *tcp_listen(uint16_t port) {
+    tcp_tcb_t *t = calloc(1, sizeof(*t));
+    if (!t) return NULL;
+    netdev_t *dev = tdev();
+    t->local_ip = dev ? dev->ip : 0;
+    t->local_port = port;
+    t->state = TCP_LISTEN;
+    t->is_listener = 1;
+    spinlock_acquire(&g_tcbs_lock);
+    t->next = g_tcbs;
+    g_tcbs = t;
+    spinlock_release(&g_tcbs_lock);
+    return t;
+}
+
+tcp_tcb_t *tcp_accept(tcp_tcb_t *lst, int nonblock, uint32_t *rip, uint16_t *rport) {
+    task_t *me = syscall_cur_task();
+    for (;;) {
+        spinlock_acquire(&g_tcbs_lock);
+        if (lst->accept_q) {
+            tcp_tcb_t *c = lst->accept_q;
+            lst->accept_q = c->accept_next;
+            c->accept_next = NULL;
+            spinlock_release(&g_tcbs_lock);
+            if (rip)   *rip = c->remote_ip;
+            if (rport) *rport = c->remote_port;
+            return c;
+        }
+        if (nonblock) { spinlock_release(&g_tcbs_lock); return NULL; }
+        if (me && me->pending_kill) { spinlock_release(&g_tcbs_lock); return NULL; }
+        if (me) { lst->waiter = me; me->runnable = false; me->state = TASK_BLOCKED; }
+        spinlock_release(&g_tcbs_lock);
+        if (me) sched_reschedule(); else task_yield();
+    }
+}
+
+static void tcp_accept_syn(tcp_tcb_t *lst, uint32_t src, uint16_t sport, uint32_t seq) {
+    netdev_t *dev = tdev();
+    if (!dev) return;
+    tcp_tcb_t *c = calloc(1, sizeof(*c));
+    if (!c) return;
+    c->rcvbuf = malloc(TCP_RCVBUF);
+    if (!c->rcvbuf) { free(c); return; }
+    c->local_ip = dev->ip;
+    c->local_port = lst->local_port;
+    c->remote_ip = src;
+    c->remote_port = sport;
+    c->rcv_nxt = seq + 1;
+    c->iss = (uint32_t)(now_ms() * 2654435761u) ^ 0x5a5a;
+    c->snd_una = c->iss;
+    c->snd_nxt = c->iss + 1;
+    c->state = TCP_SYN_RCVD;
+    c->pend_syn = 1;
+    c->listener = lst;
+    c->rexmit_ms = now_ms() + 1000;
+    spinlock_acquire(&g_tcbs_lock);
+    c->next = g_tcbs;
+    g_tcbs = c;
+    spinlock_release(&g_tcbs_lock);
+    tcp_output(c, c->iss, TH_SYN | TH_ACK, NULL, 0);
+}
+
 void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, size_t len) {
     (void)dev; (void)dst_ip;
     if (len < 20) return;
@@ -254,8 +332,13 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
 
     spinlock_acquire(&g_tcbs_lock);
     tcp_tcb_t *t = tcb_find(src_ip, sport, dport);
+    tcp_tcb_t *lst = t ? NULL : find_listener(dport);
     spinlock_release(&g_tcbs_lock);
-    if (!t) return;
+    if (!t) {
+        if (lst && (flags & TH_SYN) && !(flags & TH_ACK))
+            tcp_accept_syn(lst, src_ip, sport, seq);
+        return;
+    }
 
     uint64_t f = spinlock_acquire_irqsave(&t->lock);
 
@@ -279,6 +362,29 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
             tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
             f = spinlock_acquire_irqsave(&t->lock);
             tcb_wake(t);
+        }
+        spinlock_release_irqrestore(&t->lock, f);
+        return;
+    }
+
+    if (t->state == TCP_SYN_RCVD) {
+        if ((flags & TH_ACK) && ack == t->iss + 1) {
+            t->snd_una = ack;
+            t->pend_syn = 0;
+            t->rexmit_ms = 0;
+            t->state = TCP_ESTABLISHED;
+            tcp_tcb_t *listener = t->listener;
+            spinlock_release_irqrestore(&t->lock, f);
+            if (listener) {
+                spinlock_acquire(&g_tcbs_lock);
+                t->accept_next = listener->accept_q;
+                listener->accept_q = t;
+                task_t *w = listener->waiter;
+                listener->waiter = NULL;
+                spinlock_release(&g_tcbs_lock);
+                if (w) task_unblock(w);
+            }
+            return;
         }
         spinlock_release_irqrestore(&t->lock, f);
         return;
@@ -352,10 +458,11 @@ void tcp_tick(void) {
                 t->rexmit_ms = nowt + 1000;
                 uint32_t seq = t->snd_una;
                 int do_syn = t->pend_syn;
+                int syn_ack = (t->state == TCP_SYN_RCVD);
                 int do_fin = t->pend_fin && (t->snd_len == 0);
                 uint32_t sl = t->snd_len;
                 spinlock_release_irqrestore(&t->lock, f);
-                if (do_syn) tcp_output(t, seq, TH_SYN, NULL, 0);
+                if (do_syn) tcp_output(t, seq, syn_ack ? (TH_SYN | TH_ACK) : TH_SYN, NULL, 0);
                 else if (sl) tcp_output(t, seq, TH_ACK | TH_PSH, t->sndbuf, sl);
                 else if (do_fin) tcp_output(t, t->snd_nxt - 1, TH_ACK | TH_FIN, NULL, 0);
                 f = spinlock_acquire_irqsave(&t->lock);
