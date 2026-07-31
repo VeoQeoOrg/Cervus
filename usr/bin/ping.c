@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/cervus.h>
 
 static uint16_t icmp_csum(const uint8_t *d, int len) {
     uint32_t sum = 0;
@@ -51,23 +52,28 @@ int main(int argc, char **argv) {
         uint16_t c = icmp_csum(msg, sizeof(msg));
         msg[2] = (uint8_t)(c >> 8); msg[3] = (uint8_t)c;
 
+        uint64_t t0 = cervus_uptime_ns();
         sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&to, sizeof(to));
         sent++;
 
         int got = 0;
-        for (int t = 0; t < 100; t++) {
+        for (int t = 0; t < 200; t++) {
             uint8_t r[1500];
             struct sockaddr_in from;
             socklen_t fl2 = sizeof(from);
             long n = recvfrom(fd, r, sizeof(r), 0, (struct sockaddr *)&from, &fl2);
             if (n >= 8 && r[0] == 0) {
                 int rseq = (r[6] << 8) | r[7];
+                uint64_t rtt = cervus_uptime_ns() - t0;
+                unsigned ms = (unsigned)(rtt / 1000000ull);
+                unsigned us = (unsigned)((rtt / 1000ull) % 1000ull);
                 struct in_addr fa; fa.s_addr = from.sin_addr.s_addr;
-                printf("%ld bytes from %s: icmp_seq=%d\n", n, inet_ntoa(fa), rseq);
+                printf("%ld bytes from %s: icmp_seq=%d time=%u.%03u ms\n",
+                       n, inet_ntoa(fa), rseq, ms, us);
                 got = 1; recvd++;
                 break;
             }
-            usleep(10000);
+            usleep(5000);
         }
         if (!got) printf("request timeout for icmp_seq=%d\n", seq);
         if (seq < count) sleep(1);
