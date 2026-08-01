@@ -439,6 +439,10 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
         if (ssh_send(s, p, pi)) return -1;
     }
 
+    struct termios oldt, raw;
+    int have_tty = interactive && tcgetattr(0, &oldt) == 0;
+    if (have_tty) { raw = oldt; cfmakeraw(&raw); tcsetattr(0, 0, &raw); }
+
     long fl = fcntl(s->fd, F_GETFL, 0);
     fcntl(s->fd, F_SETFL, fl | O_NONBLOCK);
     if (interactive) { int v = 1; ioctl(0, TIOCSNONBLOCK, &v); }
@@ -503,6 +507,7 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
     }
 
     if (interactive) { int v = 0; ioctl(0, TIOCSNONBLOCK, &v); }
+    if (have_tty) tcsetattr(0, 0, &oldt);
     return exit_status;
 }
 
