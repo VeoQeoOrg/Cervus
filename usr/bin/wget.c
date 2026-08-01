@@ -2,88 +2,53 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <tls.h>
+#include <fcntl.h>
+#include <http.h>
+
+static void basename_of(const char *url, char *out, int cap) {
+    const char *p = url, *q;
+    for (q = p; *q; q++) {}
+    while (q > p && *(q-1) == '/') q--;
+    const char *slash = p;
+    for (const char *s = p; s < q; s++) if (*s == '/') slash = s + 1;
+    int n = (int)(q - slash);
+    if (n <= 0 || n >= cap) { strncpy(out, "index.html", cap - 1); out[cap-1] = 0; return; }
+    memcpy(out, slash, n); out[n] = 0;
+    for (int i = 0; i < n; i++) if (out[i] == '?') { out[i] = 0; break; }
+    if (!out[0]) strncpy(out, "index.html", cap - 1);
+}
 
 int main(int argc, char **argv) {
     int insecure = 0, ai = 1;
-    for (; ai < argc && argv[ai][0] == '-'; ai++) {
-        if (strcmp(argv[ai], "-k") == 0) insecure = 1;
-        else { printf("usage: wget [-k] <url>\n"); return 1; }
+    const char *ofile = 0;
+    for (; ai < argc && argv[ai][0] == '-' && argv[ai][1]; ai++) {
+        if (!strcmp(argv[ai], "-k")) insecure = 1;
+        else if (!strcmp(argv[ai], "-O") && ai + 1 < argc) ofile = argv[++ai];
+        else { printf("usage: wget [-k] [-O file] <url>\n"); return 1; }
     }
-    if (ai >= argc) { printf("usage: wget [-k] <url>\n"); return 1; }
+    if (ai >= argc) { printf("usage: wget [-k] [-O file] <url>\n"); return 1; }
+    const char *url = argv[ai];
 
-    char url[512];
-    strncpy(url, argv[ai], sizeof(url) - 1);
-    url[sizeof(url) - 1] = '\0';
-
-    char *p = url;
-    int https = 0;
-    if (strncmp(p, "https://", 8) == 0) { https = 1; p += 8; }
-    else if (strncmp(p, "http://", 7) == 0) p += 7;
-
-    char host[256], path[256];
-    int port = https ? 443 : 80, i = 0;
-    while (*p && *p != '/' && *p != ':' && i < 255) host[i++] = *p++;
-    host[i] = '\0';
-    if (*p == ':') { p++; port = atoi(p); while (*p && *p != '/') p++; }
-    if (*p == '/') { strncpy(path, p, sizeof(path) - 1); path[sizeof(path) - 1] = '\0'; }
-    else strcpy(path, "/");
-
-    if (!host[0]) { printf("wget: bad url\n"); return 1; }
-
-    in_addr_t ip = inet_resolve(host);
-    if (ip == 0xffffffffu) { printf("wget: cannot resolve %s\n", host); return 1; }
-    struct in_addr ia; ia.s_addr = ip;
-    printf("Connecting to %s (%s) port %d %s...\n", host, inet_ntoa(ia), port, https ? "(TLS) " : "");
-
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { printf("wget: socket failed\n"); return 1; }
-
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)port);
-    sa.sin_addr.s_addr = ip;
-    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
-        printf("wget: connect failed\n");
-        close(fd);
-        return 1;
+    char name[256];
+    int to_stdout = 0;
+    if (ofile) {
+        if (!strcmp(ofile, "-")) to_stdout = 1;
+        else { strncpy(name, ofile, sizeof name - 1); name[sizeof name - 1] = 0; }
+    } else {
+        basename_of(url, name, sizeof name);
     }
 
-    tls_conn *tc = 0;
-    if (https) {
-        tc = tls_client_new(fd, host);
-        if (tc && insecure) tls_set_insecure(tc);
-        if (!tc || tls_handshake(tc) != 0) {
-            printf("wget: TLS handshake failed: %s\n", tc ? tls_error(tc) : "oom");
-            if (tc) tls_free(tc);
-            close(fd);
-            return 1;
-        }
-        printf("TLS: %s\n", insecure ? "connected (certificate NOT verified)" : "certificate verified");
+    int out = 1;
+    if (!to_stdout) {
+        out = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (out < 0) { printf("wget: cannot create %s\n", name); return 1; }
     }
 
-    char req[600];
-    int rl = snprintf(req, sizeof(req),
-                      "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Cervus-wget\r\nConnection: close\r\n\r\n",
-                      path, host);
-    if (https) tls_write(tc, req, (size_t)rl);
-    else send(fd, req, (size_t)rl, 0);
+    int status = http_fetch(url, out, insecure, 0, 1);
+    if (!to_stdout) close(out);
 
-    char buf[4096];
-    long n, total = 0;
-    for (;;) {
-        if (https) n = tls_read(tc, buf, sizeof(buf));
-        else n = recv(fd, buf, sizeof(buf), 0);
-        if (n <= 0) break;
-        write(1, buf, (size_t)n);
-        total += n;
-    }
-    printf("\n[wget: %ld bytes received]\n", total);
-    if (tc) tls_free(tc);
-    close(fd);
+    if (status < 0) { if (!to_stdout) printf("wget: download failed\n"); return 1; }
+    if (status >= 400) { printf("wget: server returned HTTP %d\n", status); return 1; }
+    if (!to_stdout) printf("wget: saved to '%s'\n", name);
     return 0;
 }
