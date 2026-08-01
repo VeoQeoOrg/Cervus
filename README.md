@@ -44,6 +44,7 @@
   - [PCI / PCIe](#pci--pcie)
   - [Graphics and the framebuffer console](#graphics-and-the-framebuffer-console)
 - [Filesystems](#filesystems)
+- [Networking](#networking)
 - [Users, Permissions, and Authentication](#users-permissions-and-authentication)
 - [Virtual Terminals](#virtual-terminals)
 - [The Debug Monitor](#the-debug-monitor)
@@ -125,6 +126,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Filesystems** | VFS with ext2, FAT32, ISO9660, UDF, ramfs, initramfs, devfs, procfs |
 | **Storage** | AHCI/SATA, legacy ATA, NVMe; MBR and GPT partitions; block layer |
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
+| **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3 and SSH from scratch |
 | **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8 |
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
@@ -475,6 +477,38 @@ in beneath it:
 
 Ownership and permissions persist on ext2, so an installed multi-user system keeps
 each user's files owned by that user.
+
+---
+
+## Networking
+
+The network stack is written from scratch, entirely in-tree, from the NIC drivers
+up to TLS and SSH. Nothing is ported.
+
+- **Drivers:** Intel e1000 (`-device e1000`) and Realtek RTL8139, both over a
+  common `netdev` abstraction.
+- **Protocols:** Ethernet, ARP, IPv4, ICMP, UDP and TCP (client and server, with a
+  sliding send window), plus a DHCP client and a DNS resolver.
+- **Sockets:** BSD sockets (`socket`/`bind`/`connect`/`listen`/`accept`/`sendto`/
+  `recvfrom`) exposed as file descriptors. Interfaces are configured by DHCP or
+  statically with `ifconfig eth0 <ip>`.
+- **TLS 1.3:** a from-scratch client with X25519 key exchange, ChaCha20-Poly1305
+  and AES-128-GCM, and the full HKDF key schedule. Server certificates are
+  validated — X.509 chain to a trusted root (RSA and ECDSA P-256/P-384), hostname
+  and validity — against the CA bundle in `/etc/ssl/certs/ca-certificates.crt`.
+- **SSH:** a client *and* a server (`sshd`), speaking `curve25519-sha256` key
+  exchange, `ssh-ed25519` host keys, and `chacha20-poly1305@openssh.com`. Both
+  password and Ed25519 public-key authentication work, and the server runs the
+  login shell on a pseudo-terminal, so remote sessions are fully interactive.
+  Both ends interoperate with OpenSSH.
+- **Crypto:** the underlying library (SHA-2, HMAC/HKDF, ChaCha20-Poly1305,
+  AES-GCM, X25519, Ed25519, RSA and ECDSA verification, a CSPRNG) is validated
+  against the published RFC and NIST test vectors.
+- **Utilities:** `ping`, `nslookup`, `ifconfig`, `setdns`, `nc`, `wget` (with
+  file downloads), `curl`, `httpd`, `ssh`, `sshd`, `ssh-keygen`.
+
+Run a VM with networking via `./nb run --net` (host NAT), or link two VMs with a
+QEMU `socket` netdev for VM-to-VM SSH.
 
 ---
 
