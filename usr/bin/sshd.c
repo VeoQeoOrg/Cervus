@@ -190,6 +190,48 @@ static void derive_key(ssh_t *s, char letter, const uint8_t *kmp, size_t kl, con
     memcpy(out,k1,32); memcpy(out+32,k2,32);
 }
 
+static int b64v(int c){
+    if (c>='A'&&c<='Z') return c-'A';
+    if (c>='a'&&c<='z') return c-'a'+26;
+    if (c>='0'&&c<='9') return c-'0'+52;
+    if (c=='+') return 62;
+    if (c=='/') return 63;
+    return -1;
+}
+
+static int pubkey_authorized(const char *home, const uint8_t *blob, size_t bloblen) {
+    char path[256];
+    snprintf(path, sizeof path, "%s/.ssh/authorized_keys", home);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    static char buf[8192];
+    int n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        char *sp = strchr(line, ' ');
+        if (sp) {
+            char *b = sp + 1;
+            char *sp2 = strchr(b, ' ');
+            if (sp2) *sp2 = 0;
+            uint8_t dec[128]; int acc = 0, nb = 0, o = 0;
+            for (char *p = b; *p; p++) {
+                int v = b64v((unsigned char)*p);
+                if (v < 0) continue;
+                acc = (acc << 6) | v; nb += 6;
+                if (nb >= 8) { nb -= 8; if (o < 128) dec[o++] = (uint8_t)((acc >> nb) & 0xff); }
+            }
+            if ((size_t)o == bloblen && memcmp(dec, blob, bloblen) == 0) return 1;
+        }
+        line = nl ? nl + 1 : 0;
+    }
+    return 0;
+}
+
 static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *gid_out,
                         char *home_out, char *shell_out) {
     for (;;) {
@@ -222,6 +264,30 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
                 }
             }
             memset(pass,0,sizeof pass);
+        } else if (!strcmp(method,"publickey")) {
+            uint8_t has_sig=s->pkt[i]; i+=1;
+            uint32_t algl=rd_u32(s->pkt+i); i+=4+algl;
+            uint32_t pkl=rd_u32(s->pkt+i); i+=4;
+            const uint8_t *pkblob=s->pkt+i;
+            size_t sig_off=i+pkl;
+            i+=pkl;
+            if (has_sig && pkl>=51) {
+                uint32_t uid=0,gid=0; char home[128]="/",shell[128]="/bin/csh";
+                if (pw_lookup_name(user,&uid,&gid,home,sizeof home,shell,sizeof shell)==0
+                    && pubkey_authorized(home,pkblob,pkl)) {
+                    const uint8_t *pub=pkblob+19;
+                    const uint8_t *sblob=s->pkt+i+4;
+                    const uint8_t *sig=sblob+19;
+                    uint8_t signed_data[900]; size_t di=0;
+                    wr_u32(signed_data,32); memcpy(signed_data+4,s->session_id,32); di=36;
+                    if (sig_off<sizeof signed_data-di) { memcpy(signed_data+di,s->pkt,sig_off); di+=sig_off;
+                        if (ed25519_verify(sig,signed_data,di,pub)==0) {
+                            ok=1; strcpy(user_out,user); *uid_out=uid; *gid_out=gid;
+                            strcpy(home_out,home[0]?home:"/"); strcpy(shell_out,shell[0]?shell:"/bin/csh");
+                        }
+                    }
+                }
+            }
         }
         if (ok) { uint8_t p=MSG_USERAUTH_SUCCESS; ssh_send(s,&p,1); return 0; }
         uint8_t p[64]; size_t pi=0;

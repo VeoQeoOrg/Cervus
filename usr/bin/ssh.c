@@ -201,6 +201,53 @@ static int version_exchange(ssh_t *s, char *server_ver, size_t vcap) {
 
 static void hash_str(sha256_ctx *c, const uint8_t *d, uint32_t n){ uint8_t l[4]; wr_u32(l,n); sha256_update(c,l,4); sha256_update(c,d,n); }
 
+static int try_pubkey_auth(ssh_t *s, const char *user) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) home = "/root";
+    char path[256];
+    snprintf(path, sizeof path, "%s/.ssh/id_ed25519", home);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    uint8_t sk[64];
+    int r = read(fd, sk, 64);
+    close(fd);
+    if (r != 64) return 0;
+    const uint8_t *pub = sk + 32;
+
+    uint8_t blob[64]; size_t bl = 0;
+    pcstr(blob, &bl, "ssh-ed25519");
+    pstr(blob, &bl, pub, 32);
+
+    uint8_t req[512]; size_t ri = 0;
+    p8(req, &ri, MSG_USERAUTH_REQUEST);
+    pcstr(req, &ri, user);
+    pcstr(req, &ri, "ssh-connection");
+    pcstr(req, &ri, "publickey");
+    p8(req, &ri, 1);
+    pcstr(req, &ri, "ssh-ed25519");
+    pstr(req, &ri, blob, bl);
+
+    uint8_t signed_data[600]; size_t si = 0;
+    pstr(signed_data, &si, s->session_id, 32);
+    memcpy(signed_data + si, req, ri); si += ri;
+
+    uint8_t sig[64];
+    ed25519_sign(sig, signed_data, si, sk);
+    uint8_t sigblob[128]; size_t sbl = 0;
+    pcstr(sigblob, &sbl, "ssh-ed25519");
+    pstr(sigblob, &sbl, sig, 64);
+    pstr(req, &ri, sigblob, sbl);
+
+    if (ssh_send(s, req, ri)) return 0;
+    for (;;) {
+        int t = wait_msg(s, -1);
+        if (t < 0) return 0;
+        if (t == MSG_USERAUTH_BANNER) continue;
+        if (t == MSG_USERAUTH_SUCCESS) return 1;
+        return 0;
+    }
+}
+
 int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, const char *command);
 
 int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, const char *command) {
@@ -324,7 +371,7 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
     }
     if (wait_msg(s, MSG_SERVICE_ACCEPT) < 0) return -1;
 
-    {
+    if (!try_pubkey_auth(s, user)) {
         uint8_t p[512]; size_t pi = 0;
         p8(p, &pi, MSG_USERAUTH_REQUEST);
         pcstr(p, &pi, user);
@@ -333,14 +380,14 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
         p8(p, &pi, 0);
         pcstr(p, &pi, pass);
         if (ssh_send(s, p, pi)) return -1;
-    }
-    for (;;) {
-        int t = wait_msg(s, -1);
-        if (t < 0) return -1;
-        if (t == MSG_USERAUTH_BANNER) continue;
-        if (t == MSG_USERAUTH_SUCCESS) break;
-        if (t == MSG_USERAUTH_FAILURE) return fail(s, "authentication failed");
-        return fail(s, "unexpected auth reply");
+        for (;;) {
+            int t = wait_msg(s, -1);
+            if (t < 0) return -1;
+            if (t == MSG_USERAUTH_BANNER) continue;
+            if (t == MSG_USERAUTH_SUCCESS) break;
+            if (t == MSG_USERAUTH_FAILURE) return fail(s, "authentication failed");
+            return fail(s, "unexpected auth reply");
+        }
     }
 
     uint32_t lwin = 2000000;
@@ -490,16 +537,25 @@ int main(int argc, char **argv) {
     sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)port); sa.sin_addr.s_addr = ip;
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { printf("ssh: connect failed\n"); close(fd); return 1; }
 
-    char pass[128];
-    printf("%s@%s's password: ", user, host);
-    fflush(stdout);
-    struct termios ot, nt; int tty = tcgetattr(0, &ot) == 0;
-    if (tty) { nt = ot; nt.c_lflag &= ~ECHO; tcsetattr(0, 0, &nt); }
-    int pl = 0; char ch;
-    while (read(0, &ch, 1) == 1 && ch != '\n' && ch != '\r') { if (pl < 126) pass[pl++] = ch; }
-    pass[pl] = 0;
-    if (tty) tcsetattr(0, 0, &ot);
-    printf("\n");
+    char pass[128]; pass[0] = 0;
+    int have_key = 0;
+    {
+        const char *home = getenv("HOME"); if (!home || !home[0]) home = "/root";
+        char kp[256]; snprintf(kp, sizeof kp, "%s/.ssh/id_ed25519", home);
+        int kf = open(kp, O_RDONLY);
+        if (kf >= 0) { have_key = 1; close(kf); }
+    }
+    if (!have_key) {
+        printf("%s@%s's password: ", user, host);
+        fflush(stdout);
+        struct termios ot, nt; int tty = tcgetattr(0, &ot) == 0;
+        if (tty) { nt = ot; nt.c_lflag &= ~ECHO; tcsetattr(0, 0, &nt); }
+        int pl = 0; char ch;
+        while (read(0, &ch, 1) == 1 && ch != '\n' && ch != '\r') { if (pl < 126) pass[pl++] = ch; }
+        pass[pl] = 0;
+        if (tty) tcsetattr(0, 0, &ot);
+        printf("\n");
+    }
 
     ssh_t *s = calloc(1, sizeof(ssh_t));
     if (!s) { printf("ssh: out of memory\n"); close(fd); return 1; }
