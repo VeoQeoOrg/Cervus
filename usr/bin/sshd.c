@@ -259,7 +259,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
     fl=fcntl(outr,F_GETFL,0); fcntl(outr,F_SETFL,fl|O_NONBLOCK);
 
     uint32_t local_window=2000000;
-    int exit_status=0, done=0, interactive=(cmd==0);
+    int exit_status=0, done=0;
     while (!done) {
         int progress=0;
         int r=ssh_recv(s,0);
@@ -269,12 +269,6 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             if (t==MSG_CHANNEL_DATA) {
                 uint32_t dl=rd_u32(s->pkt+5);
                 if (inw>=0) write(inw,s->pkt+9,dl);
-                if (interactive) {
-                    uint8_t p[4096+16]; size_t pi=0;
-                    size_t n=dl>4096?4096:dl;
-                    p8(p,&pi,MSG_CHANNEL_DATA); p32(p,&pi,client_chan); pstr(p,&pi,s->pkt+9,n);
-                    ssh_send(s,p,pi);
-                }
                 local_window-=dl;
                 if (local_window<1000000) {
                     uint8_t p[16]; size_t pi=0;
@@ -296,13 +290,13 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             progress=1;
             size_t off=0;
             while (off<(size_t)n) {
-                while (cli_window==0) { if (ssh_recv(s,1)==1 && s->pkt[0]==MSG_CHANNEL_WINDOW_ADJUST) cli_window+=rd_u32(s->pkt+5); }
-                size_t chunk=(size_t)n-off; if (chunk>16384) chunk=16384; if (chunk>cli_window) chunk=cli_window;
+                size_t chunk=(size_t)n-off; if (chunk>16384) chunk=16384;
                 uint8_t p[16384+16]; size_t pi=0;
                 p8(p,&pi,MSG_CHANNEL_DATA); p32(p,&pi,client_chan); pstr(p,&pi,buf+off,chunk);
-                ssh_send(s,p,pi); cli_window-=chunk; off+=chunk;
+                ssh_send(s,p,pi); off+=chunk;
             }
         }
+        (void)cli_window;
 
         int st;
         pid_t w=waitpid(pid,&st,WNOHANG);
