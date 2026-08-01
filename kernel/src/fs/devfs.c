@@ -71,6 +71,7 @@ typedef struct {
     size_t   line_len, line_read;
     int      line_eof;
     int      nonblock;
+    task_t  *nonblock_owner;
     task_t  *reader;
 } vt_tty_t;
 
@@ -87,6 +88,7 @@ static void vtty_reset(vt_tty_t *t) {
     t->line_read = 0;
     t->line_eof = 0;
     t->nonblock = 0;
+    t->nonblock_owner = NULL;
 }
 
 void tty_vt_init(void) {
@@ -135,6 +137,16 @@ bool tty_has_isig_global(void) {
 
 void tty_reset_nonblock(void) {
     g_vtty[cur_vt()].nonblock = 0;
+    g_vtty[cur_vt()].nonblock_owner = NULL;
+}
+
+void tty_clear_nonblock_owner(task_t *who) {
+    for (int i = 0; i < VT_COUNT; i++) {
+        if (g_vtty[i].nonblock_owner == who) {
+            g_vtty[i].nonblock = 0;
+            g_vtty[i].nonblock_owner = NULL;
+        }
+    }
 }
 
 static void tty_echo_char(int vt, char c) {
@@ -212,7 +224,8 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     int      isig        = (t->termios.c_lflag & T_ISIG) != 0;
     int      echo        = canonical && (t->termios.c_lflag & T_ECHO) != 0;
 
-    if (t->nonblock && ring_empty(t)
+    int nb = t->nonblock && (devfs_cur_task() == t->nonblock_owner);
+    if (nb && ring_empty(t)
         && (!canonical || t->line_read >= t->line_len))
         return -EAGAIN;
 
@@ -339,7 +352,8 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
 
     if (req == TIOCSNONBLOCK) {
         if (!arg) return -EFAULT;
-        t->nonblock = *((int *)arg) ? 1 : 0;
+        if (*((int *)arg)) { t->nonblock = 1; t->nonblock_owner = devfs_cur_task(); }
+        else { t->nonblock = 0; t->nonblock_owner = NULL; }
         return 0;
     }
 
