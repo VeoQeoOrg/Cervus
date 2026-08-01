@@ -120,6 +120,17 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     return 0;
 }
 
+int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns) {
+    netdev_t *d = g_netdevs;
+    for (int i = 0; d && i < index; i++) d = d->next;
+    if (!d) return -1;
+    d->ip = ip;
+    if (netmask) d->netmask = netmask;
+    if (gateway) d->gateway = gateway;
+    if (dns) d->dns = dns;
+    return 0;
+}
+
 void net_start_worker(void) {
     task_create("net", net_worker, NULL, 1);
 }

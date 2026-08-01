@@ -128,8 +128,9 @@
 #define SYS_NET_IFCFG         578
 #define SYS_LISTEN            579
 #define SYS_ACCEPT            580
+#define SYS_NET_IFSET         581
 
-#define SYSCALL_TABLE_SIZE    581
+#define SYSCALL_TABLE_SIZE    582
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

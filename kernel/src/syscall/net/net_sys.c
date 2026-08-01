@@ -168,3 +168,7 @@ int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf) {
     memcpy((void *)ubuf, &cfg, sizeof(cfg));
     return 0;
 }
+
+int64_t sys_net_ifset(uint64_t index, uint64_t ip, uint64_t netmask, uint64_t gateway, uint64_t dns) {
+    return net_ifcfg_set((int)index, (uint32_t)ip, (uint32_t)netmask, (uint32_t)gateway, (uint32_t)dns);
+}
