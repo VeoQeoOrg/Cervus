@@ -85,6 +85,13 @@ else
     red "$SYSROOT/usr not found - skipping sysroot"
 fi
 
+# trusted CA bundle -> /etc/ssl/certs (for TLS certificate validation)
+if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
+    mkdir -p "$RFS/etc/ssl/certs"
+    cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"
+    green "CA bundle installed into /etc/ssl/certs"
+fi
+
 # /etc/skel - copied into each new user's home by the installer / useradd
 cat > "$RFS/etc/skel/welcome.txt" <<EOF
 Welcome to Cervus!

@@ -8,10 +8,15 @@
 #include <tls.h>
 
 int main(int argc, char **argv) {
-    if (argc < 2) { printf("usage: wget <url>\n"); return 1; }
+    int insecure = 0, ai = 1;
+    for (; ai < argc && argv[ai][0] == '-'; ai++) {
+        if (strcmp(argv[ai], "-k") == 0) insecure = 1;
+        else { printf("usage: wget [-k] <url>\n"); return 1; }
+    }
+    if (ai >= argc) { printf("usage: wget [-k] <url>\n"); return 1; }
 
     char url[512];
-    strncpy(url, argv[1], sizeof(url) - 1);
+    strncpy(url, argv[ai], sizeof(url) - 1);
     url[sizeof(url) - 1] = '\0';
 
     char *p = url;
@@ -51,12 +56,14 @@ int main(int argc, char **argv) {
     tls_conn *tc = 0;
     if (https) {
         tc = tls_client_new(fd, host);
+        if (tc && insecure) tls_set_insecure(tc);
         if (!tc || tls_handshake(tc) != 0) {
             printf("wget: TLS handshake failed: %s\n", tc ? tls_error(tc) : "oom");
             if (tc) tls_free(tc);
             close(fd);
             return 1;
         }
+        printf("TLS: %s\n", insecure ? "connected (certificate NOT verified)" : "certificate verified");
     }
 
     char req[600];

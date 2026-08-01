@@ -1,11 +1,17 @@
 #include <tls.h>
 #include <crypto.h>
+#include <x509.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
 #include <sys/socket.h>
 
 #define MAXREC 16640
 #define HSBUF  32768
+#define CA_PATH "/etc/ssl/certs/ca-certificates.crt"
 
 struct tls_conn {
     int fd;
@@ -30,7 +36,14 @@ struct tls_conn {
     const uint8_t *hs_last_msg;
     size_t  hs_last_total;
 
-    char err[128];
+    int verify;
+    x509_cert chain[12];
+    int nchain;
+    uint16_t cv_scheme;
+    const uint8_t *cv_sig; size_t cv_sig_len;
+    uint8_t th_cert[32];
+
+    char err[160];
 };
 
 static int fail(tls_conn *c, const char *m) {
@@ -270,14 +283,87 @@ static int hs_next(tls_conn *c, uint8_t *type, const uint8_t **body, size_t *ble
     return 0;
 }
 
+static void parse_certificate(tls_conn *c, const uint8_t *body, size_t blen) {
+    c->nchain = 0;
+    if (blen < 4) return;
+    const uint8_t *p = body, *e = body + blen;
+    uint8_t ctxlen = *p++;
+    p += ctxlen;
+    if (p + 3 > e) return;
+    uint32_t listlen = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2]; p += 3;
+    const uint8_t *le = p + listlen;
+    if (le > e) le = e;
+    while (p + 3 <= le && c->nchain < 12) {
+        uint32_t clen = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2]; p += 3;
+        if (p + clen > le) break;
+        if (x509_parse(p, clen, &c->chain[c->nchain]) == 0) c->nchain++;
+        p += clen;
+        if (p + 2 > le) break;
+        uint32_t extlen = ((uint32_t)p[0] << 8) | p[1]; p += 2; p += extlen;
+    }
+}
+
+static x509_store *load_ca_store(void) {
+    int fd = open(CA_PATH, O_RDONLY);
+    if (fd < 0) return 0;
+    size_t cap = 512 * 1024, len = 0;
+    uint8_t *buf = (uint8_t *)malloc(cap);
+    if (!buf) { close(fd); return 0; }
+    for (;;) {
+        if (len == cap) break;
+        long r = read(fd, buf + len, cap - len);
+        if (r <= 0) break;
+        len += (size_t)r;
+    }
+    close(fd);
+    x509_store *st = (x509_store *)malloc(sizeof(x509_store));
+    if (!st) { free(buf); return 0; }
+    x509_store_load_pem(st, buf, len);
+    return st;
+}
+
+static int verify_peer(tls_conn *c) {
+    if (c->nchain < 1) return fail(c, "server sent no certificate");
+    uint8_t sd[130];
+    memset(sd, 0x20, 64);
+    const char *ctx = "TLS 1.3, server CertificateVerify";
+    size_t cl = strlen(ctx);
+    memcpy(sd + 64, ctx, cl);
+    sd[64 + cl] = 0;
+    memcpy(sd + 64 + cl + 1, c->th_cert, 32);
+    size_t sdlen = 64 + cl + 1 + 32;
+    int sa;
+    switch (c->cv_scheme) {
+        case 0x0403: sa = SIG_ECDSA_SHA256; break;
+        case 0x0503: sa = SIG_ECDSA_SHA384; break;
+        case 0x0807: sa = SIG_ED25519; break;
+        case 0x0804: sa = SIG_RSA_PSS_SHA256; break;
+        case 0x0401: sa = SIG_RSA_SHA256; break;
+        default: return fail(c, "unsupported CertificateVerify scheme");
+    }
+    if (x509_verify_sig(&c->chain[0], sa, sd, sdlen, c->cv_sig, c->cv_sig_len) != 0)
+        return fail(c, "CertificateVerify signature invalid");
+    x509_store *st = load_ca_store();
+    if (!st) return fail(c, "cannot open CA store " CA_PATH);
+    char e2[128];
+    int r = x509_verify_chain(c->chain, c->nchain, st, c->host, (int64_t)time(0), e2, sizeof e2);
+    free(st->pem);
+    free(st);
+    if (r != 0) { snprintf(c->err, sizeof c->err, "certificate: %s", e2); return -1; }
+    return 0;
+}
+
 tls_conn *tls_client_new(int fd, const char *hostname) {
     tls_conn *c = (tls_conn *)malloc(sizeof(tls_conn));
     if (!c) return 0;
     memset(c, 0, sizeof(*c));
     c->fd = fd;
     c->host = hostname;
+    c->verify = 1;
     return c;
 }
+
+void tls_set_insecure(tls_conn *c) { c->verify = 0; }
 
 int tls_handshake(tls_conn *c) {
     crypto_random(c->cli_priv, 32);
@@ -324,9 +410,20 @@ int tls_handshake(tls_conn *c) {
             c->hs_pos += c->hs_last_total;
             break;
         }
+        if (htype == 11) parse_certificate(c, body, blen);
+        if (htype == 15) {
+            { sha256_ctx t = c->th; sha256_final(&t, c->th_cert); }
+            if (blen >= 4) {
+                c->cv_scheme = ((uint16_t)body[0] << 8) | body[1];
+                size_t sl = ((size_t)body[2] << 8) | body[3];
+                c->cv_sig = body + 4; c->cv_sig_len = sl;
+            }
+        }
         sha256_update(&c->th, c->hs_last_msg, c->hs_last_total);
         c->hs_pos += c->hs_last_total;
     }
+
+    if (c->verify && verify_peer(c)) return -1;
 
     uint8_t th_sf[32]; { sha256_ctx t = c->th; sha256_final(&t, th_sf); }
     uint8_t derived2[32], master[32];
