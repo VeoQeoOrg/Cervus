@@ -466,6 +466,7 @@ void task_wakeup_waiters(uint32_t pid) {
 }
 
 extern void tty_reset_nonblock(void);
+extern void tty_clear_nonblock_owner(task_t *who);
 
 __attribute__((noreturn)) void task_exit(void)
 {
@@ -478,8 +479,7 @@ __attribute__((noreturn)) void task_exit(void)
 
     LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
-    if (me->ctty >= 0 && me->ctty < VT_COUNT && g_foreground_pid[me->ctty] == me->pid)
-        tty_reset_nonblock();
+    tty_clear_nonblock_owner(me);
 
     task_t* init = task_find_by_pid(1);
     if (init && init != me) {
