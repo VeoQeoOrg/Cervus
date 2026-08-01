@@ -24,6 +24,7 @@ struct tls_conn {
 
     uint8_t wkey[32], wiv[12]; uint64_t wseq; int wkeys_set;
     uint8_t rkey[32], riv[12]; uint64_t rseq; int rkeys_set;
+    int cipher;
     int established;
 
     uint8_t rec[MAXREC];
@@ -93,12 +94,12 @@ static void derive_secret(const uint8_t secret[32], const char *label,
 }
 
 static void set_write_keys(tls_conn *c, const uint8_t secret[32]) {
-    expand_label(secret, "key", 0, 0, c->wkey, 32);
+    expand_label(secret, "key", 0, 0, c->wkey, c->cipher == 1 ? 16 : 32);
     expand_label(secret, "iv",  0, 0, c->wiv, 12);
     c->wseq = 0; c->wkeys_set = 1;
 }
 static void set_read_keys(tls_conn *c, const uint8_t secret[32]) {
-    expand_label(secret, "key", 0, 0, c->rkey, 32);
+    expand_label(secret, "key", 0, 0, c->rkey, c->cipher == 1 ? 16 : 32);
     expand_label(secret, "iv",  0, 0, c->riv, 12);
     c->rseq = 0; c->rkeys_set = 1;
 }
@@ -106,6 +107,19 @@ static void set_read_keys(tls_conn *c, const uint8_t secret[32]) {
 static void make_nonce(const uint8_t iv[12], uint64_t seq, uint8_t nonce[12]) {
     memcpy(nonce, iv, 12);
     for (int i = 0; i < 8; i++) nonce[11-i] ^= (uint8_t)(seq >> (8*i));
+}
+
+static void aead_seal(tls_conn *c, const uint8_t *key, const uint8_t nonce[12],
+                      const uint8_t *aad, size_t aadlen, const uint8_t *pt, size_t ptlen,
+                      uint8_t *ct, uint8_t tag[16]) {
+    if (c->cipher == 1) aes_gcm_encrypt(key, 16, nonce, aad, aadlen, pt, ptlen, ct, tag);
+    else chacha20_poly1305_encrypt(key, nonce, aad, aadlen, pt, ptlen, ct, tag);
+}
+static int aead_open(tls_conn *c, const uint8_t *key, const uint8_t nonce[12],
+                     const uint8_t *aad, size_t aadlen, const uint8_t *ct, size_t ctlen,
+                     const uint8_t tag[16], uint8_t *pt) {
+    if (c->cipher == 1) return aes_gcm_decrypt(key, 16, nonce, aad, aadlen, ct, ctlen, tag, pt);
+    return chacha20_poly1305_decrypt(key, nonce, aad, aadlen, ct, ctlen, tag, pt);
 }
 
 static int send_plain(tls_conn *c, uint8_t type, uint16_t ver, const uint8_t *data, size_t len) {
@@ -123,7 +137,7 @@ static int record_send(tls_conn *c, uint8_t inner_type, const uint8_t *data, siz
     memcpy(c->sbuf, data, len);
     c->sbuf[len] = inner_type;
     uint8_t tag[16];
-    chacha20_poly1305_encrypt(c->wkey, nonce, hdr, 5, c->sbuf, inner_len, c->sbuf, tag);
+    aead_seal(c, c->wkey, nonce, hdr, 5, c->sbuf, inner_len, c->sbuf, tag);
     c->wseq++;
     if (io_write_full(c->fd, hdr, 5)) return fail(c, "write");
     if (io_write_full(c->fd, c->sbuf, inner_len)) return fail(c, "write");
@@ -147,7 +161,7 @@ static int record_recv(tls_conn *c, uint8_t *ctype, uint8_t *out, size_t *outlen
         if (rl < 17) return fail(c, "short record");
         uint8_t nonce[12]; make_nonce(c->riv, c->rseq, nonce);
         size_t ctlen = rl - 16;
-        if (chacha20_poly1305_decrypt(c->rkey, nonce, hdr, 5, c->rec, ctlen, c->rec + ctlen, out))
+        if (aead_open(c, c->rkey, nonce, hdr, 5, c->rec, ctlen, c->rec + ctlen, out))
             return fail(c, "AEAD decrypt failed");
         c->rseq++;
         size_t n = ctlen;
@@ -170,8 +184,9 @@ static size_t build_client_hello(tls_conn *c, uint8_t *b) {
     b[i++] = 0x03; b[i++] = 0x03;
     crypto_random(b + i, 32); i += 32;
     b[i++] = 32; crypto_random(b + i, 32); i += 32;
-    b[i++] = 0x00; b[i++] = 0x02;
+    b[i++] = 0x00; b[i++] = 0x04;
     b[i++] = 0x13; b[i++] = 0x03;
+    b[i++] = 0x13; b[i++] = 0x01;
     b[i++] = 0x01; b[i++] = 0x00;
     size_t ext_len_at = i; i += 2;
     size_t ext_start = i;
@@ -235,7 +250,9 @@ static int parse_server_hello(tls_conn *c, const uint8_t *buf, size_t len) {
     p += sidlen;
     if (p + 3 > end) return fail(c, "malformed ServerHello");
     uint16_t suite = ((uint16_t)p[0] << 8) | p[1]; p += 2;
-    if (suite != 0x1303) return fail(c, "server did not pick chacha20-poly1305");
+    if (suite == 0x1303) c->cipher = 0;
+    else if (suite == 0x1301) c->cipher = 1;
+    else return fail(c, "server picked unsupported cipher suite");
     p += 1;
     if (p + 2 > end) return fail(c, "malformed ServerHello");
     uint16_t extlen = ((uint16_t)p[0] << 8) | p[1]; p += 2;

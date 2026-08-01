@@ -49,6 +49,13 @@ int  chacha20_poly1305_decrypt(const uint8_t key[32], const uint8_t nonce[12],
                                const uint8_t *ct, size_t ctlen, const uint8_t tag[16],
                                uint8_t *pt);
 
+void aes_gcm_encrypt(const uint8_t *key, int keybytes, const uint8_t nonce[12],
+                     const uint8_t *aad, size_t aadlen,
+                     const uint8_t *pt, size_t ptlen, uint8_t *ct, uint8_t tag[16]);
+int  aes_gcm_decrypt(const uint8_t *key, int keybytes, const uint8_t nonce[12],
+                     const uint8_t *aad, size_t aadlen,
+                     const uint8_t *ct, size_t ctlen, const uint8_t tag[16], uint8_t *pt);
+
 void x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
 void x25519_base(uint8_t out[32], const uint8_t scalar[32]);
 
