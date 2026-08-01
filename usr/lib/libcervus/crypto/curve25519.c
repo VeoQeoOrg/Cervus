@@ -217,6 +217,43 @@ static int unpackneg(gf r[4], const u8 p[32]){
     return 0;
 }
 
+void ed25519_keypair(uint8_t pub[32], uint8_t priv[64], const uint8_t seed[32]){
+    u8 d[64];
+    gf p[4];
+    sha512(seed, 32, d);
+    d[0] &= 248; d[31] &= 127; d[31] |= 64;
+    scalarbase(p, d);
+    pack(pub, p);
+    memcpy(priv, seed, 32);
+    memcpy(priv + 32, pub, 32);
+}
+
+void ed25519_sign(uint8_t sig[64], const uint8_t *msg, size_t msglen, const uint8_t priv[64]){
+    u8 d[64], r[64], h[64];
+    i64 x[64];
+    gf p[4];
+    sha512(priv, 32, d);
+    d[0] &= 248; d[31] &= 127; d[31] |= 64;
+    sha512_ctx sc;
+    sha512_init(&sc);
+    sha512_update(&sc, d + 32, 32);
+    sha512_update(&sc, msg, msglen);
+    sha512_final(&sc, r);
+    reduce(r);
+    scalarbase(p, r);
+    pack(sig, p);
+    sha512_init(&sc);
+    sha512_update(&sc, sig, 32);
+    sha512_update(&sc, priv + 32, 32);
+    sha512_update(&sc, msg, msglen);
+    sha512_final(&sc, h);
+    reduce(h);
+    for(int i=0;i<64;i++) x[i]=0;
+    for(int i=0;i<32;i++) x[i]=(i64)(u8)r[i];
+    for(int i=0;i<32;i++) for(int j=0;j<32;j++) x[i+j]+=(i64)(u8)h[i]*(i64)(u8)d[j];
+    modL(sig+32, x);
+}
+
 int ed25519_verify(const uint8_t sig[64], const uint8_t *msg, size_t msglen, const uint8_t pub[32]){
     u8 t[32], h[64];
     gf p[4], q[4];
