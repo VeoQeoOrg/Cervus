@@ -137,6 +137,7 @@ extern int64_t sys_connect(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_sendto(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_recvfrom(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_net_ifcfg(uint64_t, uint64_t);
+extern int64_t sys_net_ifset(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_listen(uint64_t, uint64_t);
 extern int64_t sys_accept(uint64_t, uint64_t, uint64_t);
 
@@ -198,7 +199,7 @@ W3(sys_sudo)
 W2(sys_passwd_set)
 W3(sys_socket)      W3(sys_bind)       W3(sys_connect)
 W5(sys_sendto)      W5(sys_recvfrom)   W2(sys_net_ifcfg)
-W2(sys_listen)      W3(sys_accept)
+W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -301,6 +302,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SENDTO]            = _sys_sendto,
     [SYS_RECVFROM]          = _sys_recvfrom,
     [SYS_NET_IFCFG]         = _sys_net_ifcfg,
+    [SYS_NET_IFSET]         = _sys_net_ifset,
     [SYS_LISTEN]            = _sys_listen,
     [SYS_ACCEPT]            = _sys_accept,
 };

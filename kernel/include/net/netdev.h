@@ -51,5 +51,6 @@ typedef struct {
 } net_ifcfg_t;
 
 int net_ifcfg_get(int index, net_ifcfg_t *out);
+int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns);
 
 #endif

@@ -119,6 +119,7 @@
 #define SYS_NET_IFCFG       578
 #define SYS_LISTEN          579
 #define SYS_ACCEPT          580
+#define SYS_NET_IFSET       581
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
