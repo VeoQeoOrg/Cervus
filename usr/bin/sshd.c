@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
+#include <pty.h>
 #include <crypto.h>
 #include <pwutil.h>
 
@@ -22,6 +23,7 @@ static long syscall2(long n, unsigned long a, unsigned long b){(void)n;(void)a;(
 void crypto_random(void *b, size_t n){ FILE*f=fopen("/dev/urandom","rb"); if(f){size_t r=fread(b,1,n,f);(void)r;fclose(f);} }
 #endif
 
+#define TIOCSNONBLOCK 0x5481
 #define RXSZ 40000
 #define MAXPKT 20000
 #define SBUF 17000
@@ -300,29 +302,56 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
 
 static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
                      uint32_t uid, uint32_t gid, const char *home, const char *shell, const char *cmd) {
-    int inpipe[2], outpipe[2];
-    if (pipe(inpipe) || pipe(outpipe)) return -1;
-    pid_t pid = fork();
-    if (pid == 0) {
-        dup2(inpipe[0],0); dup2(outpipe[1],1); dup2(outpipe[1],2);
-        close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
-        close(s->fd);
-        setsid();
-        if (gid) setgid(gid);
-        if (uid) setuid(uid);
-        if (home[0]) chdir(home);
-        setenv("HOME", home[0]?home:"/", 1);
-        setenv("SHELL", shell, 1);
-        setenv("TERM", "xterm", 1);
-        if (cmd) { char *av[]={(char*)shell,"-c",(char*)cmd,NULL}; execve(shell,av,environ); }
-        else { char *av[]={(char*)shell,NULL}; execve(shell,av,environ); }
-        _exit(127);
+    int inw, outr, pty_mode = 0;
+    pid_t pid;
+
+    if (!cmd) {
+        int master, slave;
+        if (openpty(&master, &slave)) return -1;
+        pty_mode = 1;
+        pid = fork();
+        if (pid == 0) {
+            close(master);
+            setsid();
+            dup2(slave,0); dup2(slave,1); dup2(slave,2);
+            if (slave > 2) close(slave);
+            close(s->fd);
+            if (gid) setgid(gid);
+            if (uid) setuid(uid);
+            if (home[0]) chdir(home);
+            setenv("HOME", home[0]?home:"/", 1);
+            setenv("SHELL", shell, 1);
+            setenv("TERM", "xterm", 1);
+            char *av[]={(char*)shell,NULL}; execve(shell,av,environ);
+            _exit(127);
+        }
+        close(slave);
+        inw = outr = master;
+        int one = 1; ioctl(master, TIOCSNONBLOCK, &one);
+    } else {
+        int inpipe[2], outpipe[2];
+        if (pipe(inpipe) || pipe(outpipe)) return -1;
+        pid = fork();
+        if (pid == 0) {
+            dup2(inpipe[0],0); dup2(outpipe[1],1); dup2(outpipe[1],2);
+            close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
+            close(s->fd);
+            setsid();
+            if (gid) setgid(gid);
+            if (uid) setuid(uid);
+            if (home[0]) chdir(home);
+            setenv("HOME", home[0]?home:"/", 1);
+            setenv("SHELL", shell, 1);
+            setenv("TERM", "xterm", 1);
+            char *av[]={(char*)shell,"-c",(char*)cmd,NULL}; execve(shell,av,environ);
+            _exit(127);
+        }
+        close(inpipe[0]); close(outpipe[1]);
+        inw=inpipe[1]; outr=outpipe[0];
+        long ofl=fcntl(outr,F_GETFL,0); fcntl(outr,F_SETFL,ofl|O_NONBLOCK);
     }
-    close(inpipe[0]); close(outpipe[1]);
-    int inw=inpipe[1], outr=outpipe[0];
 
     long fl=fcntl(s->fd,F_GETFL,0); fcntl(s->fd,F_SETFL,fl|O_NONBLOCK);
-    fl=fcntl(outr,F_GETFL,0); fcntl(outr,F_SETFL,fl|O_NONBLOCK);
 
     uint32_t local_window=2000000;
     int exit_status=0, done=0;
@@ -344,7 +373,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             } else if (t==MSG_CHANNEL_WINDOW_ADJUST) {
                 cli_window+=rd_u32(s->pkt+5);
             } else if (t==MSG_CHANNEL_EOF) {
-                if (inw>=0){ close(inw); inw=-1; }
+                if (!pty_mode && inw>=0){ close(inw); inw=-1; }
             } else if (t==MSG_CHANNEL_CLOSE) {
                 done=1;
             }
@@ -379,8 +408,8 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
         }
         if (!progress) usleep(2000);
     }
-    if (inw>=0) close(inw);
-    close(outr);
+    if (pty_mode) { close(outr); }
+    else { if (inw>=0) close(inw); close(outr); }
     return exit_status;
 }
 
