@@ -60,6 +60,8 @@ void x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
 void x25519_base(uint8_t out[32], const uint8_t scalar[32]);
 
 int  ed25519_verify(const uint8_t sig[64], const uint8_t *msg, size_t msglen, const uint8_t pub[32]);
+void ed25519_keypair(uint8_t pub[32], uint8_t priv[64], const uint8_t seed[32]);
+void ed25519_sign(uint8_t sig[64], const uint8_t *msg, size_t msglen, const uint8_t priv[64]);
 
 int  rsa_pkcs1v15_verify(const uint8_t *n, size_t nlen, const uint8_t *e, size_t elen,
                          const uint8_t *sig, size_t siglen, const uint8_t *hash, size_t hlen, int hash_id);
