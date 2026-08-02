@@ -417,7 +417,9 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
         pcstr(p, &pi, "pty-req");
         p8(p, &pi, 1);
         pcstr(p, &pi, "xterm");
-        p32(p, &pi, 80); p32(p, &pi, 24); p32(p, &pi, 0); p32(p, &pi, 0);
+        uint32_t cols = 80, rows = 24;
+        { struct winsize ws; if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col) { cols = ws.ws_col; rows = ws.ws_row; } }
+        p32(p, &pi, cols); p32(p, &pi, rows); p32(p, &pi, 0); p32(p, &pi, 0);
         uint8_t modes[1] = {0};
         pstr(p, &pi, modes, 1);
         if (ssh_send(s, p, pi)) return -1;
