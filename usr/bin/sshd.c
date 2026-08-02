@@ -21,6 +21,7 @@ static long syscall2(long n, unsigned long a, unsigned long b){(void)n;(void)a;(
 #define SYS_AUTH 570
 #endif
 void crypto_random(void *b, size_t n){ FILE*f=fopen("/dev/urandom","rb"); if(f){size_t r=fread(b,1,n,f);(void)r;fclose(f);} }
+#define openpty(m,s) openpty((m),(s),0,0,0)
 #endif
 
 #define TIOCSNONBLOCK 0x5481
@@ -330,6 +331,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
         close(slave);
         inw = outr = master;
         int one = 1; ioctl(master, TIOCSNONBLOCK, &one);
+        long mfl = fcntl(master, F_GETFL, 0); fcntl(master, F_SETFL, mfl | O_NONBLOCK);
     } else {
         int inpipe[2], outpipe[2];
         if (pipe(inpipe) || pipe(outpipe)) return -1;
