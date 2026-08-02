@@ -301,13 +301,15 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
 }
 
 static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
-                     uint32_t uid, uint32_t gid, const char *home, const char *shell, const char *cmd) {
+                     uint32_t uid, uint32_t gid, const char *home, const char *shell, const char *cmd,
+                     uint16_t cols, uint16_t rows) {
     int inw, outr, pty_mode = 0;
     pid_t pid;
 
     if (!cmd) {
         int master, slave;
         if (openpty(&master, &slave)) return -1;
+        { struct winsize ws; ws.ws_col=cols?cols:80; ws.ws_row=rows?rows:24; ws.ws_xpixel=0; ws.ws_ypixel=0; ioctl(master, TIOCSWINSZ, &ws); }
         pty_mode = 1;
         pid = fork();
         if (pid == 0) {
@@ -504,6 +506,7 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
       ssh_send(s,p,pi); }
 
     char cmdbuf[1024]; const char *cmd=0;
+    uint16_t pcols=80, prows=24;
     for (;;) {
         if (wait_msg(s,-1)<0) { free(s); close(fd); return -1; }
         uint8_t t=s->pkt[0];
@@ -519,13 +522,18 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
             } else if (!strcmp(req,"shell")) {
                 if (want_reply) { uint8_t p[8]; size_t pi=0; p8(p,&pi,MSG_CHANNEL_SUCCESS); p32(p,&pi,client_chan); ssh_send(s,p,pi); }
                 break;
+            } else if (!strcmp(req,"pty-req")) {
+                uint32_t tl=rd_u32(s->pkt+i); i+=4+tl;
+                pcols=(uint16_t)rd_u32(s->pkt+i); i+=4;
+                prows=(uint16_t)rd_u32(s->pkt+i); i+=4;
+                if (want_reply) { uint8_t p[8]; size_t pi=0; p8(p,&pi,MSG_CHANNEL_SUCCESS); p32(p,&pi,client_chan); ssh_send(s,p,pi); }
             } else {
                 if (want_reply) { uint8_t p[8]; size_t pi=0; p8(p,&pi,MSG_CHANNEL_SUCCESS); p32(p,&pi,client_chan); ssh_send(s,p,pi); }
             }
         } else if (t==MSG_CHANNEL_CLOSE) { free(s); close(fd); return 0; }
     }
 
-    run_shell(s, client_chan, cli_window, uid, gid, home, shell, cmd);
+    run_shell(s, client_chan, cli_window, uid, gid, home, shell, cmd, pcols, prows);
     free(s); close(fd);
     return 0;
 }
