@@ -26,6 +26,9 @@ static int g_start_row = 0;
 static int g_prompt_len = 0;
 static const char *g_rl_buf = NULL;
 static int g_eof_streak = 0;
+static int g_no_cursor = 0;
+static const char *g_prompt_str = NULL;
+static int g_cur_len = 0;
 
 static void term_update_size(void) {
     struct winsize ws;
@@ -60,6 +63,15 @@ static int vis_cols(int byte_pos) {
     return cols;
 }
 
+static void full_refresh(int pos) {
+    write(1, "\r", 1);
+    if (g_prompt_str && g_prompt_str[0]) write(1, g_prompt_str, strlen(g_prompt_str));
+    if (g_rl_buf && g_cur_len > 0) write(1, g_rl_buf, g_cur_len);
+    write(1, "\x1b[K", 3);
+    int back = vis_cols(g_cur_len) - vis_cols(pos);
+    if (back > 0) { char b[16]; int n = snprintf(b, sizeof b, "\x1b[%dD", back); write(1, b, n); }
+}
+
 static int utf8_next(const char *buf, int len, int p) {
     if (p >= len) return len;
     p++;
@@ -88,6 +100,7 @@ static void input_pos_to_screen(int pos, int *row, int *col) {
 }
 
 static void cursor_to(int pos) {
+    if (g_no_cursor) { full_refresh(pos); return; }
     int row, col;
     input_pos_to_screen(pos, &row, &col);
     if (row >= g_rows) row = g_rows - 1;
@@ -101,6 +114,7 @@ static int last_row_of(int len) {
 }
 
 static void redraw(const char *buf, int from, int new_len, int old_len, int pos) {
+    if (g_no_cursor) { g_cur_len = new_len; full_refresh(pos); return; }
     cursor_to(from);
     if (new_len > from) write(1, buf + from, new_len - from);
     sync_start_row(new_len);
@@ -131,6 +145,7 @@ static void insert_str(char *buf, int *len, int *pos, int maxlen, const char *s,
     for (int i = 0; i < slen; i++) buf[*pos + i] = s[i];
     *len += slen;
     buf[*len] = '\0';
+    if (g_no_cursor) { *pos += slen; g_cur_len = *len; full_refresh(*pos); return; }
     cursor_to(*pos);
     write(1, buf + *pos, *len - *pos);
     sync_start_row(*len);
@@ -447,7 +462,12 @@ static void do_completion(char *buf, int *len, int *pos, int maxlen) {
 
 static int readline_edit(char *buf, int maxlen) {
     g_rl_buf = buf;
+    g_cur_len = 0;
     term_update_size();
+    {
+        struct cursor_pos cp;
+        g_no_cursor = (ioctl(1, TIOCGCURSOR, &cp) < 0);
+    }
     g_start_row = term_get_cursor_row() - g_prompt_len / g_cols;
     if (g_start_row < 0) g_start_row = 0;
 
@@ -457,7 +477,7 @@ static int readline_edit(char *buf, int maxlen) {
     saved[0] = '\0'; buf[0] = '\0';
 
     for (;;) {
-        if (g_suggest_cb) {
+        if (g_suggest_cb && !g_no_cursor) {
             const char *sug = NULL;
             cursor_to(len);
             vt_eol();
@@ -674,6 +694,7 @@ char *readline(const char *prompt) {
         tcsetattr(0, TCSANOW, &raw);
     }
 
+    g_prompt_str = prompt;
     if (prompt && prompt[0]) {
         write(1, prompt, strlen(prompt));
         g_prompt_len = prompt_visible_len(prompt);
