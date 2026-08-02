@@ -111,9 +111,11 @@ void vt_write(int n, const char *buf, size_t len) {
     if (ensure_grid(n) < 0) { spinlock_release_irqrestore(&g_lock, f); return; }
 
     if (n == g_active) {
+        erase_cursor();
         putchar_flush_begin();
         for (size_t i = 0; i < len; i++) putchar((int)(unsigned char)buf[i]);
         putchar_flush_end();
+        draw_cursor();
         spinlock_release_irqrestore(&g_lock, f);
         return;
     }
