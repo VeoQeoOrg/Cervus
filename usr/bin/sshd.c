@@ -417,7 +417,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
     return exit_status;
 }
 
-static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub) {
+static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub, const char *peerip) {
     ssh_t *s=calloc(1,sizeof(ssh_t));
     if (!s) { close(fd); return -1; }
     s->fd=fd;
@@ -498,7 +498,11 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     { uint8_t p[64]; size_t pi=0; p8(p,&pi,MSG_SERVICE_ACCEPT); pcstr(p,&pi,"ssh-userauth"); ssh_send(s,p,pi); }
 
     char user[128]; uint32_t uid=0,gid=0; char home[128],shell[128];
-    if (authenticate(s,user,&uid,&gid,home,shell)) { free(s); close(fd); return -1; }
+    if (authenticate(s,user,&uid,&gid,home,shell)) {
+        printf("sshd: authentication failed for connection from %s\n", peerip); fflush(stdout);
+        free(s); close(fd); return -1;
+    }
+    printf("sshd: user '%s' authenticated from %s\n", user, peerip); fflush(stdout);
 
     if (wait_msg(s,MSG_CHANNEL_OPEN)<0) { free(s); close(fd); return -1; }
     uint32_t client_chan, cli_window;
@@ -536,6 +540,7 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     }
 
     run_shell(s, client_chan, cli_window, uid, gid, home, shell, cmd, pcols, prows);
+    printf("sshd: user '%s' (%s) disconnected\n", user, peerip); fflush(stdout);
     free(s); close(fd);
     return 0;
 }
@@ -581,8 +586,10 @@ int main(int argc, char **argv) {
         struct sockaddr_in cli; socklen_t cl=sizeof cli;
         int c=accept(ls,(struct sockaddr*)&cli,&cl);
         if (c<0) { usleep(10000); continue; }
+        char ipstr[32]; strncpy(ipstr, inet_ntoa(cli.sin_addr), sizeof ipstr - 1); ipstr[sizeof ipstr - 1] = 0;
+        printf("sshd: connection from %s\n", ipstr); fflush(stdout);
         pid_t pid=fork();
-        if (pid==0) { close(ls); handle_client(c,hostpriv,hostpub); _exit(0); }
+        if (pid==0) { close(ls); handle_client(c,hostpriv,hostpub,ipstr); _exit(0); }
         close(c);
         int st; while (waitpid(-1,&st,WNOHANG)>0) {}
     }
