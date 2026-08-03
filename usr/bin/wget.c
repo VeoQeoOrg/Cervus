@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <http.h>
+#include <ftp.h>
 
 static void basename_of(const char *url, char *out, int cap) {
     const char *p = url, *q;
@@ -53,21 +54,42 @@ int main(int argc, char **argv) {
     for (int ai = 1; ai < argc; ai++) {
         const char *a = argv[ai];
         if (a[0] != '-' || !a[1]) { url = a; continue; }
-        if      (!strcmp(a, "-q") || !strcmp(a, "--quiet")) o.verbose = 0;
-        else if (!strcmp(a, "-nv") || !strcmp(a, "--no-verbose")) o.verbose = 0;
-        else if (!strcmp(a, "--no-check-certificate") || !strcmp(a, "-k")) o.insecure = 1;
-        else if (!strcmp(a, "-O") || !strcmp(a, "--output-document")) { if (ai+1<argc) ofile = argv[++ai]; }
-        else if (!strcmp(a, "-P") || !strcmp(a, "--directory-prefix")) { if (ai+1<argc) prefix = argv[++ai]; }
-        else if (!strcmp(a, "-U") || !strcmp(a, "--user-agent")) { if (ai+1<argc) o.user_agent = argv[++ai]; }
-        else if (!strcmp(a, "--header")) { if (ai+1<argc && o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = argv[++ai]; }
-        else if (!strcmp(a, "--post-data")) { if (ai+1<argc) { data = strdup(argv[++ai]); datalen = (long)strlen(data); } }
-        else if (!strcmp(a, "--post-file")) { if (ai+1<argc) { data = read_file(argv[++ai], &datalen); if (!data) { fprintf(stderr, "wget: cannot read post file\n"); return 1; } } }
-        else if (!strcmp(a, "--user")) { if (ai+1<argc) user = argv[++ai]; }
-        else if (!strcmp(a, "--password")) { if (ai+1<argc) password = argv[++ai]; }
-        else if (!strcmp(a, "--max-redirect")) { if (ai+1<argc) o.max_redirs = atoi(argv[++ai]); }
-        else if (!strcmp(a, "-t") || !strcmp(a, "--tries") || !strcmp(a, "-T") || !strcmp(a, "--timeout")) { if (ai+1<argc) ai++; }
-        else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
-        else { fprintf(stderr, "wget: unknown option %s\n", a); return 2; }
+        if (!strcmp(a, "-nv")) { o.verbose = 0; continue; }
+        if (a[1] == '-') {
+            if      (!strcmp(a, "--quiet")) o.verbose = 0;
+            else if (!strcmp(a, "--no-verbose")) o.verbose = 0;
+            else if (!strcmp(a, "--no-check-certificate")) o.insecure = 1;
+            else if (!strcmp(a, "--output-document") && ai+1<argc) ofile = argv[++ai];
+            else if (!strcmp(a, "--directory-prefix") && ai+1<argc) prefix = argv[++ai];
+            else if (!strcmp(a, "--user-agent") && ai+1<argc) o.user_agent = argv[++ai];
+            else if (!strcmp(a, "--header") && ai+1<argc) { if (o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = argv[++ai]; }
+            else if (!strcmp(a, "--post-data") && ai+1<argc) { data = strdup(argv[++ai]); datalen = (long)strlen(data); }
+            else if (!strcmp(a, "--post-file") && ai+1<argc) { data = read_file(argv[++ai], &datalen); if (!data) { fprintf(stderr, "wget: cannot read post file\n"); return 1; } }
+            else if (!strcmp(a, "--user") && ai+1<argc) user = argv[++ai];
+            else if (!strcmp(a, "--password") && ai+1<argc) password = argv[++ai];
+            else if (!strcmp(a, "--max-redirect") && ai+1<argc) o.max_redirs = atoi(argv[++ai]);
+            else if ((!strcmp(a, "--tries") || !strcmp(a, "--timeout")) && ai+1<argc) ai++;
+            else if (!strcmp(a, "--help")) { usage(); return 0; }
+            else { fprintf(stderr, "wget: unknown option %s\n", a); return 2; }
+            continue;
+        }
+        for (int ci = 1; a[ci]; ci++) {
+            char c = a[ci];
+            const char *val = 0;
+            int takes = (c=='O'||c=='P'||c=='U'||c=='t'||c=='T');
+            if (takes) { if (a[ci+1]) val = a + ci + 1; else if (ai+1 < argc) val = argv[++ai]; }
+            switch (c) {
+                case 'q': o.verbose = 0; break;
+                case 'k': o.insecure = 1; break;
+                case 'O': ofile = val; break;
+                case 'P': prefix = val; break;
+                case 'U': o.user_agent = val; break;
+                case 't': case 'T': break;
+                case 'h': usage(); return 0;
+                default: fprintf(stderr, "wget: unknown option -%c\n", c); return 2;
+            }
+            if (takes) break;
+        }
     }
     if (!url) { usage(); return 1; }
 
@@ -89,6 +111,15 @@ int main(int argc, char **argv) {
     if (!to_stdout) {
         out = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (out < 0) { fprintf(stderr, "wget: cannot create %s\n", name); return 1; }
+    }
+
+    if (!strncmp(url, "ftp://", 6)) {
+        int rc = ftp_fetch(url, out, o.verbose);
+        if (!to_stdout) close(out);
+        if (data) free(data);
+        if (rc != 0) { if (o.verbose) fprintf(stderr, "wget: download failed\n"); return 1; }
+        if (!to_stdout && o.verbose) fprintf(stderr, "wget: saved to '%s'\n", name);
+        return 0;
     }
 
     int status = http_request(url, out, &o);
