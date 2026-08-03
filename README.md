@@ -506,7 +506,7 @@ up to TLS and SSH. Nothing is ported.
   AES-128/256-GCM, X25519, Ed25519, RSA and ECDSA verification, a CSPRNG) is
   validated against the published RFC and NIST test vectors.
 - **Utilities:** `ping`, `nslookup`, `ifconfig`, `setdns`, `nc`, `wget`, `curl`
-  (both with a Linux-like flag set), `httpd`, `ssh`, `sshd`, `ssh-keygen`,
+  (both with a Linux-like flag set), `ftp`, `httpd`, `ssh`, `sshd`, `ssh-keygen`,
   `wterm` (shared terminal), `crypt` (file encryption).
 
 ### Secure Shell (SSH)
@@ -587,9 +587,26 @@ $ wget -O - https://example.com/ | grep title      # stream to stdout
 $ wget --no-check-certificate https://self-signed.local/
 ```
 
-`curl` supports `-X -d -H -A -e -u -r -L --max-redirs -i -I -D -o -O -k -s -v -f`;
-`wget` supports `-O -P -q -nv --no-check-certificate -U --header --post-data
---post-file --user --password --max-redirect`.
+`curl` supports `-X -d -H -A -e -u -r -L --max-redirs -i -I -D -o -O -k -s -S -v
+-f`, and short flags may be bundled the usual way (`curl -fsSL <url>`); `wget`
+supports `-O -P -q -nv --no-check-certificate -U --header --post-data
+--post-file --user --password --max-redirect`. Both also handle `ftp://` URLs.
+
+### FTP
+
+`ftp` is an interactive client (passive mode) with anonymous or credentialed
+login; `curl`/`wget` download `ftp://` URLs directly.
+
+```text
+$ ftp ftp.example.com                 # log in (anonymous by default)
+ftp> ls
+ftp> cd pub
+ftp> get README                       # download
+ftp> put local.txt                    # upload
+ftp> bye
+$ curl -O ftp://user:pass@host/file.bin
+$ wget ftp://ftp.example.com/pub/file.tar.gz
+```
 
 ### File encryption (`crypt`)
 
