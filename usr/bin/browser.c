@@ -49,6 +49,15 @@ static strv g_lines;
 static strv g_links;
 static char g_title[256];
 
+static int *g_linkrow;
+static int  g_linkrow_cap;
+static int  g_curlink = -1;
+
+static void lr_push(int row) {
+    if (g_links.n > g_linkrow_cap) { g_linkrow_cap = g_linkrow_cap ? g_linkrow_cap * 2 : 64; g_linkrow = realloc(g_linkrow, sizeof(int) * g_linkrow_cap); }
+    g_linkrow[g_links.n - 1] = row;
+}
+
 static char *g_cur;
 static int g_curlen, g_curcap, g_width, g_col;
 
@@ -156,7 +165,7 @@ static void render_html(const char *h, int width) {
                 else if (tag_is(t, "pre")) { emit_break(); pre = 1; }
                 else if (tag_is(t, "a")) {
                     const char *hp = strstr(t, "href");
-                    if (hp) { hp = strchr(hp, '='); if (hp) { hp++; while (*hp==' '||*hp=='"'||*hp=='\'') hp++; char url[1024]; int un=0; while (*hp && *hp!='"' && *hp!='\'' && *hp!=' ' && *hp!='>' && un<1023) url[un++]=*hp++; url[un]=0; sv_push(&g_links, url); char mk[16]; int mn=snprintf(mk,sizeof mk,"[%d]",g_links.n); emit_word(mk, mn); } }
+                    if (hp) { hp = strchr(hp, '='); if (hp) { hp++; while (*hp==' '||*hp=='"'||*hp=='\'') hp++; char url[1024]; int un=0; while (*hp && *hp!='"' && *hp!='\'' && *hp!=' ' && *hp!='>' && un<1023) url[un++]=*hp++; url[un]=0; sv_push(&g_links, url); char mk[16]; int mn=snprintf(mk,sizeof mk,"[%d]",g_links.n); emit_word(mk, mn); lr_push(g_lines.n); } }
                 }
             } else {
                 if (tag_is(t, "pre")) { pre = 0; emit_break(); }
@@ -205,7 +214,16 @@ static void resolve(const char *base, const char *rel, char *out, int cap) {
     snprintf(out, cap, "%s%s%s%s", scheme, hostport, dir, rel);
 }
 
+static void ensure_link_visible(int *top, int view) {
+    if (g_curlink < 0 || g_curlink >= g_links.n) return;
+    int row = g_linkrow[g_curlink];
+    if (row < *top) *top = row;
+    else if (row >= *top + view) *top = row - view + 1;
+    if (*top < 0) *top = 0;
+}
+
 static void load(const char *url) {
+    g_curlink = -1;
     sv_free(&g_lines); sv_free(&g_links);
     char *html = 0; size_t hl = 0;
     int rows, cols; tui_size(&rows, &cols);
@@ -250,10 +268,12 @@ int main(int argc, char **argv) {
                 const char *s = g_lines.v[li];
                 for (const char *q = s; *q; ) {
                     if (*q == '[' && q[1] >= '0' && q[1] <= '9') {
-                        tui_puts("\x1b[38;2;97;175;239m");
+                        int num = atoi(q + 1);
+                        int sel = (num == g_curlink + 1);
+                        tui_puts(sel ? "\x1b[7m\x1b[38;2;97;175;239m" : "\x1b[38;2;97;175;239m");
                         while (*q && *q != ']') { char b[2]={*q,0}; tui_puts(b); q++; }
                         if (*q == ']') { tui_puts("]"); q++; }
-                        tui_puts("\x1b[39m");
+                        tui_puts(sel ? "\x1b[27m\x1b[39m" : "\x1b[39m");
                     } else { char b[2]={*q,0}; tui_puts(b); q++; }
                 }
             }
@@ -262,8 +282,10 @@ int main(int argc, char **argv) {
         tui_puts("\x1b[7m\x1b[K");
         char st[512];
         int pct = g_lines.n > view ? (top * 100 / (g_lines.n - view)) : 100;
-        snprintf(st, sizeof st, " %.40s | %.60s | %d%% | [n]link g:go b:back r:reload q:quit%s%s",
-                 g_title[0] ? g_title : "(no title)", cur, pct, nb ? " #" : "", numbuf);
+        char linkinfo[24]; linkinfo[0] = 0;
+        if (g_curlink >= 0) snprintf(linkinfo, sizeof linkinfo, " link %d/%d", g_curlink + 1, g_links.n);
+        snprintf(st, sizeof st, " %.36s |%s| %d%% | Tab/n:link Enter:open g:go b:back r q:quit%s%s",
+                 g_title[0] ? g_title : "(no title)", linkinfo[0] ? linkinfo : " ", pct, nb ? " #" : "", numbuf);
         int sl = strlen(st); if (sl > cols) sl = cols;
         char tmp[600]; memcpy(tmp, st, sl); tmp[sl] = 0;
         tui_puts(tmp);
@@ -277,18 +299,20 @@ int main(int argc, char **argv) {
         else if (k == TK_PGUP) top -= view - 1;
         else if (k == TK_HOME) top = 0;
         else if (k == TK_END) top = g_lines.n;
+        else if (k == TK_TAB || k == 'n') { if (g_links.n) { g_curlink = (g_curlink + 1) % g_links.n; ensure_link_visible(&top, view); } }
+        else if (k == 'p' || k == 'N') { if (g_links.n) { g_curlink = (g_curlink <= 0 ? g_links.n - 1 : g_curlink - 1); ensure_link_visible(&top, view); } }
         else if (k >= '0' && k <= '9') { if (nb < 6) { numbuf[nb++] = (char)k; numbuf[nb] = 0; } }
         else if (k == TK_BACKSP) { if (nb > 0) numbuf[--nb] = 0; }
         else if (k == TK_ESC) { nb = 0; numbuf[0] = 0; }
         else if (k == TK_ENTER) {
-            if (nb > 0) {
-                int idx = atoi(numbuf); nb = 0; numbuf[0] = 0;
-                if (idx >= 1 && idx <= g_links.n) {
-                    char nu[2048]; resolve(cur, g_links.v[idx-1], nu, sizeof nu);
-                    sv_push(&hist, cur);
-                    strncpy(cur, nu, sizeof cur - 1); cur[sizeof cur - 1] = 0;
-                    load(cur); top = 0;
-                }
+            int idx = -1;
+            if (nb > 0) { idx = atoi(numbuf); nb = 0; numbuf[0] = 0; }
+            else if (g_curlink >= 0) idx = g_curlink + 1;
+            if (idx >= 1 && idx <= g_links.n) {
+                char nu[2048]; resolve(cur, g_links.v[idx-1], nu, sizeof nu);
+                sv_push(&hist, cur);
+                strncpy(cur, nu, sizeof cur - 1); cur[sizeof cur - 1] = 0;
+                load(cur); top = 0;
             }
         }
         else if (k == 'b') {
