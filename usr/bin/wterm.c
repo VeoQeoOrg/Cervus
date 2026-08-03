@@ -62,6 +62,7 @@ static int host_mode(int port) {
     printf("wterm: hosting shared terminal on port %d (attach: wterm <this-ip>)\n", port);
 
     int clients[MAXCLIENTS]; for (int i = 0; i < MAXCLIENTS; i++) clients[i] = -1;
+    int one = 1; ioctl(master, TIOCSNONBLOCK, &one);
     nb(master); nb(ls);
     raw_console();
 
