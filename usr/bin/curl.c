@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <http.h>
+#include <ftp.h>
 
 static void basename_of(const char *url, char *out, int cap) {
     const char *p = url, *q;
@@ -58,42 +59,77 @@ static void usage(void) {
            "  -u U:P basic auth   -r R   byte range      -L     follow redirects\n"
            "  --max-redirs N      -i     include headers -I     head only\n"
            "  -D F   dump headers -o F   output file      -O     remote name\n"
-           "  -k     insecure     -s     silent          -v     verbose   -f fail on error\n");
+           "  -k     insecure     -s     silent   -S show errors   -v verbose   -f fail\n"
+           "  short flags may be combined, e.g. -fsSL\n");
 }
 
 int main(int argc, char **argv) {
     http_opts o; memset(&o, 0, sizeof o);
     o.header_fd = -1; o.data_len = -1; o.max_redirs = 50;
     const char *ofile = 0, *url = 0, *dumphdr = 0;
-    int remote_name = 0;
+    int remote_name = 0, silent = 0, show_error = 0;
     char *data = 0; long datalen = 0;
 
     for (int ai = 1; ai < argc; ai++) {
         const char *a = argv[ai];
         if (a[0] != '-' || !a[1]) { url = a; continue; }
-        if      (!strcmp(a, "-k") || !strcmp(a, "--insecure")) o.insecure = 1;
-        else if (!strcmp(a, "-I") || !strcmp(a, "--head")) { o.head_only = 1; o.include_headers = 1; }
-        else if (!strcmp(a, "-i") || !strcmp(a, "--include")) o.include_headers = 1;
-        else if (!strcmp(a, "-s") || !strcmp(a, "--silent")) o.silent = 1;
-        else if (!strcmp(a, "-v") || !strcmp(a, "--verbose")) o.verbose = 1;
-        else if (!strcmp(a, "-f") || !strcmp(a, "--fail")) o.fail_on_error = 1;
-        else if (!strcmp(a, "-L") || !strcmp(a, "--location")) o.follow = 1;
-        else if (!strcmp(a, "-O") || !strcmp(a, "--remote-name")) remote_name = 1;
-        else if (!strcmp(a, "-o") || !strcmp(a, "--output")) { if (ai+1<argc) ofile = argv[++ai]; }
-        else if (!strcmp(a, "-X") || !strcmp(a, "--request")) { if (ai+1<argc) o.method = argv[++ai]; }
-        else if (!strcmp(a, "-A") || !strcmp(a, "--user-agent")) { if (ai+1<argc) o.user_agent = argv[++ai]; }
-        else if (!strcmp(a, "-e") || !strcmp(a, "--referer")) { if (ai+1<argc) o.referer = argv[++ai]; }
-        else if (!strcmp(a, "-u") || !strcmp(a, "--user")) { if (ai+1<argc) o.userpwd = argv[++ai]; }
-        else if (!strcmp(a, "-r") || !strcmp(a, "--range")) { if (ai+1<argc) o.range = argv[++ai]; }
-        else if (!strcmp(a, "-D") || !strcmp(a, "--dump-header")) { if (ai+1<argc) dumphdr = argv[++ai]; }
-        else if (!strcmp(a, "--max-redirs")) { if (ai+1<argc) o.max_redirs = atoi(argv[++ai]); }
-        else if (!strcmp(a, "-d") || !strcmp(a, "--data") || !strcmp(a, "--data-binary") || !strcmp(a, "--data-raw")) { if (ai+1<argc) add_data(&data, &datalen, argv[++ai]); }
-        else if (!strcmp(a, "-H") || !strcmp(a, "--header")) { if (ai+1<argc && o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = argv[++ai]; }
-        else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return 0; }
-        else { fprintf(stderr, "curl: unknown option %s\n", a); return 2; }
+        if (a[1] == '-') {
+            if      (!strcmp(a, "--insecure")) o.insecure = 1;
+            else if (!strcmp(a, "--head")) { o.head_only = 1; o.include_headers = 1; }
+            else if (!strcmp(a, "--include")) o.include_headers = 1;
+            else if (!strcmp(a, "--silent")) silent = 1;
+            else if (!strcmp(a, "--show-error")) show_error = 1;
+            else if (!strcmp(a, "--verbose")) o.verbose = 1;
+            else if (!strcmp(a, "--fail")) o.fail_on_error = 1;
+            else if (!strcmp(a, "--location")) o.follow = 1;
+            else if (!strcmp(a, "--remote-name")) remote_name = 1;
+            else if (!strcmp(a, "--output") && ai+1<argc) ofile = argv[++ai];
+            else if (!strcmp(a, "--request") && ai+1<argc) o.method = argv[++ai];
+            else if (!strcmp(a, "--user-agent") && ai+1<argc) o.user_agent = argv[++ai];
+            else if (!strcmp(a, "--referer") && ai+1<argc) o.referer = argv[++ai];
+            else if (!strcmp(a, "--user") && ai+1<argc) o.userpwd = argv[++ai];
+            else if (!strcmp(a, "--range") && ai+1<argc) o.range = argv[++ai];
+            else if (!strcmp(a, "--dump-header") && ai+1<argc) dumphdr = argv[++ai];
+            else if (!strcmp(a, "--max-redirs") && ai+1<argc) o.max_redirs = atoi(argv[++ai]);
+            else if ((!strcmp(a, "--data") || !strcmp(a, "--data-binary") || !strcmp(a, "--data-raw")) && ai+1<argc) add_data(&data, &datalen, argv[++ai]);
+            else if (!strcmp(a, "--header") && ai+1<argc) { if (o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = argv[++ai]; }
+            else if (!strcmp(a, "--help")) { usage(); return 0; }
+            else { fprintf(stderr, "curl: unknown option %s\n", a); return 2; }
+            continue;
+        }
+        for (int ci = 1; a[ci]; ci++) {
+            char c = a[ci];
+            const char *val = 0;
+            int takes = (c=='o'||c=='X'||c=='A'||c=='e'||c=='u'||c=='r'||c=='D'||c=='d'||c=='H');
+            if (takes) { if (a[ci+1]) val = a + ci + 1; else if (ai+1 < argc) val = argv[++ai]; }
+            switch (c) {
+                case 'k': o.insecure = 1; break;
+                case 'I': o.head_only = 1; o.include_headers = 1; break;
+                case 'i': o.include_headers = 1; break;
+                case 's': silent = 1; break;
+                case 'S': show_error = 1; break;
+                case 'v': o.verbose = 1; break;
+                case 'f': o.fail_on_error = 1; break;
+                case 'L': o.follow = 1; break;
+                case 'O': remote_name = 1; break;
+                case 'o': ofile = val; break;
+                case 'X': o.method = val; break;
+                case 'A': o.user_agent = val; break;
+                case 'e': o.referer = val; break;
+                case 'u': o.userpwd = val; break;
+                case 'r': o.range = val; break;
+                case 'D': dumphdr = val; break;
+                case 'd': if (val) add_data(&data, &datalen, val); break;
+                case 'H': if (val && o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = val; break;
+                case 'h': usage(); return 0;
+                default: fprintf(stderr, "curl: unknown option -%c\n", c); return 2;
+            }
+            if (takes) break;
+        }
     }
     if (!url) { usage(); return 2; }
 
+    o.silent = silent && !show_error;
     if (data) { o.data = data; o.data_len = datalen; }
 
     int out = 1;
@@ -102,6 +138,14 @@ int main(int argc, char **argv) {
     else if (remote_name) { basename_of(url, name, sizeof name); out = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (out < 0) { fprintf(stderr, "curl: cannot create %s\n", name); return 1; } }
 
     if (dumphdr) { o.header_fd = open(dumphdr, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (o.header_fd < 0) fprintf(stderr, "curl: cannot create %s\n", dumphdr); }
+
+    if (!strncmp(url, "ftp://", 6)) {
+        int rc = ftp_fetch(url, out, o.verbose);
+        if (out != 1) close(out);
+        if (o.header_fd >= 0) close(o.header_fd);
+        if (data) free(data);
+        return rc == 0 ? 0 : 1;
+    }
 
     int status = http_request(url, out, &o);
     if (out != 1) close(out);
