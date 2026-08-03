@@ -162,3 +162,24 @@ int aes_gcm_decrypt(const uint8_t *key, int keybytes, const uint8_t nonce[12],
     for (int i = 0; i < 16; i++) diff |= want[i] ^ tag[i];
     return diff ? -1 : 0;
 }
+
+void aes_128_gcm_encrypt(const uint8_t key[16], const uint8_t nonce[12],
+                         const uint8_t *aad, size_t aadlen,
+                         const uint8_t *pt, size_t ptlen, uint8_t *ct, uint8_t tag[16]) {
+    aes_gcm_encrypt(key, 16, nonce, aad, aadlen, pt, ptlen, ct, tag);
+}
+int aes_128_gcm_decrypt(const uint8_t key[16], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadlen,
+                        const uint8_t *ct, size_t ctlen, const uint8_t tag[16], uint8_t *pt) {
+    return aes_gcm_decrypt(key, 16, nonce, aad, aadlen, ct, ctlen, tag, pt);
+}
+void aes_256_gcm_encrypt(const uint8_t key[32], const uint8_t nonce[12],
+                         const uint8_t *aad, size_t aadlen,
+                         const uint8_t *pt, size_t ptlen, uint8_t *ct, uint8_t tag[16]) {
+    aes_gcm_encrypt(key, 32, nonce, aad, aadlen, pt, ptlen, ct, tag);
+}
+int aes_256_gcm_decrypt(const uint8_t key[32], const uint8_t nonce[12],
+                        const uint8_t *aad, size_t aadlen,
+                        const uint8_t *ct, size_t ctlen, const uint8_t tag[16], uint8_t *pt) {
+    return aes_gcm_decrypt(key, 32, nonce, aad, aadlen, ct, ctlen, tag, pt);
+}
