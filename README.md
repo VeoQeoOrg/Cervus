@@ -505,9 +505,12 @@ up to TLS and SSH. Nothing is ported.
 - **Crypto:** the underlying library (SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305,
   AES-128/256-GCM, X25519, Ed25519, RSA and ECDSA verification, a CSPRNG) is
   validated against the published RFC and NIST test vectors.
+- **Compression:** a from-scratch DEFLATE inflater (gzip/zlib); the HTTP client
+  advertises `Accept-Encoding` and transparently decompresses responses.
 - **Utilities:** `ping`, `nslookup`, `ifconfig`, `setdns`, `nc`, `wget`, `curl`
-  (both with a Linux-like flag set), `ftp`, `httpd`, `ssh`, `sshd`, `ssh-keygen`,
-  `wterm` (shared terminal), `crypt` (file encryption).
+  (both with a Linux-like flag set), `ftp`, `httpd`, `browser` (terminal web
+  browser), `ssh`, `sshd`, `ssh-keygen`, `wterm` (shared terminal), `crypt`
+  (file encryption).
 
 ### Secure Shell (SSH)
 
@@ -591,6 +594,19 @@ $ wget --no-check-certificate https://self-signed.local/
 -f`, and short flags may be bundled the usual way (`curl -fsSL <url>`); `wget`
 supports `-O -P -q -nv --no-check-certificate -U --header --post-data
 --post-file --user --password --max-redirect`. Both also handle `ftp://` URLs.
+
+### Terminal web browser
+
+`browser <url>` fetches a page over the in-tree HTTP/TLS stack (following
+redirects, decompressing gzip), renders the HTML to reflowed text with decoded
+entities and UTF-8 output, and numbers the links so they can be followed.
+
+```text
+$ browser example.com
+  arrows / PgUp / PgDn   scroll
+  <n> then Enter         follow link number n
+  g   go to a new URL      b   back      r   reload      q   quit
+```
 
 ### FTP
 
