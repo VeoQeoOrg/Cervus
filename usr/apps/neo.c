@@ -46,7 +46,14 @@ typedef struct {
 
 enum {
     HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1,
-    HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_PREPROC
+    HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_PREPROC,
+    HL_ESCAPE, HL_TAG, HL_ATTR
+};
+
+enum { LANG_NONE = 0, LANG_C, LANG_JS, LANG_CSS, LANG_HTML, LANG_ASM, LANG_COUNT };
+
+static const char *LANG_NAMES[LANG_COUNT] = {
+    "Plain", "C", "JavaScript", "CSS", "HTML", "Assembly"
 };
 
 typedef struct {
@@ -207,6 +214,75 @@ static const char *C_KEYWORDS[] = {
     "int8_t|", "int16_t|", "int32_t|", "int64_t|", NULL
 };
 
+static const char *JS_KEYWORDS[] = {
+    "function", "return", "if", "else", "for", "while", "do", "switch", "case",
+    "break", "continue", "new", "delete", "typeof", "instanceof", "in", "of",
+    "class", "extends", "super", "import", "export", "from", "as", "default",
+    "try", "catch", "finally", "throw", "async", "await", "yield", "static",
+    "get", "set", "void",
+    "var|", "let|", "const|", "this|", "true|", "false|", "null|", "undefined|",
+    "NaN|", "Infinity|", NULL
+};
+
+static const char *CSS_KEYWORDS[] = {
+    "@media", "@import", "@keyframes", "@font-face", "@supports", "@charset",
+    "important", "inherit", "initial", "unset", "none", "auto", "block",
+    "inline", "flex", "grid", "absolute", "relative", "fixed", "static",
+    "hidden", "visible", "bold", "italic", "solid", "dashed", "dotted",
+    "center", "left", "right", "top", "bottom", "middle",
+    "px|", "em|", "rem|", "vh|", "vw|", "pt|", "deg|", NULL
+};
+
+static const char *ASM_KEYWORDS[] = {
+    "mov", "movq", "movl", "movw", "movb", "lea", "push", "pop", "call", "ret",
+    "jmp", "je", "jne", "jz", "jnz", "jg", "jge", "jl", "jle", "ja", "jb",
+    "add", "sub", "mul", "imul", "div", "idiv", "inc", "dec", "and", "or",
+    "xor", "not", "neg", "shl", "shr", "sar", "sal", "cmp", "test", "int",
+    "syscall", "sysret", "nop", "hlt", "cli", "sti", "iret", "iretq", "leave",
+    "cpuid", "rdmsr", "wrmsr", "in", "out", "loop", "enter",
+    "rax|", "rbx|", "rcx|", "rdx|", "rsi|", "rdi|", "rbp|", "rsp|",
+    "r8|", "r9|", "r10|", "r11|", "r12|", "r13|", "r14|", "r15|",
+    "eax|", "ebx|", "ecx|", "edx|", "esi|", "edi|", "ebp|", "esp|",
+    "ax|", "bx|", "cx|", "dx|", "al|", "bl|", "cl|", "dl|", "rip|",
+    ".text", ".data", ".bss", ".global", ".globl", ".section", ".byte",
+    ".word", ".long", ".quad", ".ascii", ".asciz", ".align", ".equ", ".extern",
+    "section", "global", "extern", "db", "dw", "dd", "dq", "resb", "equ", NULL
+};
+
+typedef struct {
+    const char **kw;
+    const char  *linec;
+    const char  *blockc0;
+    const char  *blockc1;
+    int          sq;
+    int          bt;
+} syntax_def;
+
+static const syntax_def SYNTAX_DEFS[LANG_COUNT] = {
+    { NULL,         NULL, NULL,   NULL,  0, 0 },
+    { C_KEYWORDS,   "//", "/*",   "*/",  1, 0 },
+    { JS_KEYWORDS,  "//", "/*",   "*/",  1, 1 },
+    { CSS_KEYWORDS, NULL, "/*",   "*/",  1, 0 },
+    { NULL,         NULL, NULL,   NULL,  0, 0 },
+    { ASM_KEYWORDS, ";",  NULL,   NULL,  1, 0 },
+};
+
+static int lang_from_ext(const char *filename) {
+    const char *dot = NULL;
+    for (const char *p = filename; *p; p++) if (*p == '.') dot = p;
+    if (!dot) return LANG_NONE;
+    if (!strcmp(dot, ".c") || !strcmp(dot, ".h") || !strcmp(dot, ".cpp") ||
+        !strcmp(dot, ".cc") || !strcmp(dot, ".hpp") || !strcmp(dot, ".cxx")) return LANG_C;
+    if (!strcmp(dot, ".js") || !strcmp(dot, ".ts") || !strcmp(dot, ".jsx") ||
+        !strcmp(dot, ".json") || !strcmp(dot, ".mjs")) return LANG_JS;
+    if (!strcmp(dot, ".css")) return LANG_CSS;
+    if (!strcmp(dot, ".html") || !strcmp(dot, ".htm") || !strcmp(dot, ".xml") ||
+        !strcmp(dot, ".svg")) return LANG_HTML;
+    if (!strcmp(dot, ".s") || !strcmp(dot, ".S") || !strcmp(dot, ".asm") ||
+        !strcmp(dot, ".nasm")) return LANG_ASM;
+    return LANG_NONE;
+}
+
 static int hl_is_space(int c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
 }
@@ -215,17 +291,144 @@ static int hl_is_sep(int c) {
     return c == '\0' || hl_is_space(c) ||
            strchr(",.()+-/*=~%<>[]{};:&|!?^", c) != NULL;
 }
-static int hl_color(int hl) {
+static const char *hl_sgr(int hl) {
     switch (hl) {
         case HL_COMMENT:
-        case HL_MLCOMMENT: return 90;
-        case HL_KEYWORD1:  return 33;
-        case HL_KEYWORD2:  return 32;
-        case HL_STRING:    return 35;
-        case HL_NUMBER:    return 31;
-        case HL_PREPROC:   return 36;
-        default:           return 37;
+        case HL_MLCOMMENT: return "\x1b[38;2;106;115;125m";
+        case HL_KEYWORD1:  return "\x1b[38;2;198;120;221m";
+        case HL_KEYWORD2:  return "\x1b[38;2;229;192;123m";
+        case HL_STRING:    return "\x1b[38;2;152;195;121m";
+        case HL_NUMBER:    return "\x1b[38;2;209;154;102m";
+        case HL_PREPROC:   return "\x1b[38;2;86;182;194m";
+        case HL_ESCAPE:    return "\x1b[38;2;97;175;239m";
+        case HL_TAG:       return "\x1b[38;2;224;108;117m";
+        case HL_ATTR:      return "\x1b[38;2;209;154;102m";
+        default:           return "\x1b[38;2;200;204;212m";
     }
+}
+
+static void hl_generic(neo_row_t *row, int at, const syntax_def *def)
+{
+    char *s = row->render;
+    int i = 0, prev_sep = 1, in_string = 0;
+    int in_comment = (at > 0 && E.row[at - 1].hl_open_comment == 1);
+    int lclen = def->linec ? (int)strlen(def->linec) : 0;
+    int b0len = def->blockc0 ? (int)strlen(def->blockc0) : 0;
+    int b1len = def->blockc1 ? (int)strlen(def->blockc1) : 0;
+
+    while (i < row->rsize) {
+        char c = s[i];
+
+        if (!in_string && !in_comment && lclen &&
+            i + lclen <= row->rsize && strncmp(&s[i], def->linec, lclen) == 0) {
+            memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+            break;
+        }
+        if (!in_string && b0len) {
+            if (in_comment) {
+                row->hl[i] = HL_MLCOMMENT;
+                if (b1len && i + b1len <= row->rsize && strncmp(&s[i], def->blockc1, b1len) == 0) {
+                    memset(&row->hl[i], HL_MLCOMMENT, b1len);
+                    i += b1len; in_comment = 0; prev_sep = 1; continue;
+                }
+                i++; continue;
+            } else if (i + b0len <= row->rsize && strncmp(&s[i], def->blockc0, b0len) == 0) {
+                memset(&row->hl[i], HL_MLCOMMENT, b0len);
+                i += b0len; in_comment = 1; continue;
+            }
+        }
+        if (in_string) {
+            row->hl[i] = HL_STRING;
+            if (c == '\\' && i + 1 < row->rsize) {
+                row->hl[i] = HL_ESCAPE; row->hl[i + 1] = HL_ESCAPE; i += 2; continue;
+            }
+            if (c == in_string) in_string = 0;
+            i++; prev_sep = 1; continue;
+        } else if (c == '"' || (def->sq && c == '\'') || (def->bt && c == '`')) {
+            in_string = c; row->hl[i] = HL_STRING; i++; continue;
+        }
+        if (hl_is_digit((unsigned char)c) && prev_sep) {
+            row->hl[i++] = HL_NUMBER;
+            while (i < row->rsize) {
+                char d = s[i]; char dl = (char)(d | 32);
+                if (hl_is_digit((unsigned char)d) || d == '.' || d == 'x' || d == 'X' ||
+                    (dl >= 'a' && dl <= 'f') || d == 'u' || d == 'l' || d == 'f') {
+                    row->hl[i++] = HL_NUMBER;
+                } else break;
+            }
+            prev_sep = 0; continue;
+        }
+        if (prev_sep && def->kw) {
+            int j;
+            for (j = 0; def->kw[j]; j++) {
+                int klen = (int)strlen(def->kw[j]);
+                int kw2 = def->kw[j][klen - 1] == '|';
+                if (kw2) klen--;
+                int pp = (def->kw[j][0] == '#' || def->kw[j][0] == '.' || def->kw[j][0] == '@');
+                if (i + klen <= row->rsize &&
+                    strncmp(&s[i], def->kw[j], klen) == 0 &&
+                    hl_is_sep(i + klen < row->rsize ? s[i + klen] : '\0')) {
+                    memset(&row->hl[i], pp ? HL_PREPROC : (kw2 ? HL_KEYWORD2 : HL_KEYWORD1), klen);
+                    i += klen; break;
+                }
+            }
+            if (def->kw[j] != NULL) { prev_sep = 0; continue; }
+        }
+        prev_sep = hl_is_sep((unsigned char)c);
+        i++;
+    }
+    row->hl_open_comment = in_comment ? 1 : 0;
+}
+
+static void hl_html(neo_row_t *row, int at)
+{
+    char *s = row->render;
+    int i = 0, in_string = 0;
+    int state = (at > 0) ? E.row[at - 1].hl_open_comment : 0;
+
+    while (i < row->rsize) {
+        char c = s[i];
+        if (state == 1) {
+            row->hl[i] = HL_MLCOMMENT;
+            if (c == '-' && i + 3 <= row->rsize && strncmp(&s[i], "-->", 3) == 0) {
+                memset(&row->hl[i], HL_MLCOMMENT, 3); i += 3; state = 0; continue;
+            }
+            i++; continue;
+        }
+        if (state == 0) {
+            if (c == '<' && i + 4 <= row->rsize && strncmp(&s[i], "<!--", 4) == 0) {
+                memset(&row->hl[i], HL_MLCOMMENT, 4); i += 4; state = 1; continue;
+            }
+            if (c == '<') {
+                row->hl[i++] = HL_TAG; state = 2;
+                while (i < row->rsize && (isalnum((unsigned char)s[i]) || s[i] == '/' || s[i] == '!')) {
+                    row->hl[i++] = HL_TAG;
+                }
+                continue;
+            }
+            if (c == '&') {
+                int j = i + 1;
+                while (j < row->rsize && s[j] != ';' && s[j] != ' ' && j - i < 12) j++;
+                if (j < row->rsize && s[j] == ';') { memset(&row->hl[i], HL_PREPROC, j - i + 1); i = j + 1; continue; }
+            }
+            i++; continue;
+        }
+        if (in_string) {
+            row->hl[i] = HL_STRING;
+            if (c == in_string) in_string = 0;
+            i++; continue;
+        }
+        if (c == '"' || c == '\'') { in_string = c; row->hl[i] = HL_STRING; i++; continue; }
+        if (c == '>') { row->hl[i] = HL_TAG; i++; state = 0; continue; }
+        if (isalpha((unsigned char)c)) {
+            while (i < row->rsize && (isalnum((unsigned char)s[i]) || s[i] == '-' || s[i] == ':')) {
+                row->hl[i++] = HL_ATTR;
+            }
+            continue;
+        }
+        i++;
+    }
+    row->hl_open_comment = state;
 }
 
 static void editor_update_syntax(int at)
@@ -236,72 +439,18 @@ static void editor_update_syntax(int at)
     if (!row->hl) return;
     memset(row->hl, HL_NORMAL, row->rsize ? row->rsize : 1);
 
-    int recur = 0;
-    if (E.syntax) {
-        char *s = row->render;
-        int i = 0, prev_sep = 1, in_string = 0;
-        int in_comment = (at > 0 && E.row[at - 1].hl_open_comment);
+    int old_open = row->hl_open_comment;
 
-        while (i < row->rsize) {
-            char c = s[i];
-            unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
-
-            if (!in_string && !in_comment && c == '/' && i + 1 < row->rsize && s[i + 1] == '/') {
-                memset(&row->hl[i], HL_COMMENT, row->rsize - i);
-                break;
-            }
-            if (!in_string) {
-                if (in_comment) {
-                    row->hl[i] = HL_MLCOMMENT;
-                    if (c == '*' && i + 1 < row->rsize && s[i + 1] == '/') {
-                        row->hl[i + 1] = HL_MLCOMMENT;
-                        i += 2; in_comment = 0; prev_sep = 1; continue;
-                    }
-                    i++; continue;
-                } else if (c == '/' && i + 1 < row->rsize && s[i + 1] == '*') {
-                    row->hl[i] = HL_MLCOMMENT; row->hl[i + 1] = HL_MLCOMMENT;
-                    i += 2; in_comment = 1; continue;
-                }
-            }
-            if (in_string) {
-                row->hl[i] = HL_STRING;
-                if (c == '\\' && i + 1 < row->rsize) { row->hl[i + 1] = HL_STRING; i += 2; continue; }
-                if (c == in_string) in_string = 0;
-                i++; prev_sep = 1; continue;
-            } else if (c == '"' || c == '\'') {
-                in_string = c; row->hl[i] = HL_STRING; i++; continue;
-            }
-            if ((hl_is_digit((unsigned char)c) && (prev_sep || prev_hl == HL_NUMBER)) ||
-                (c == '.' && prev_hl == HL_NUMBER)) {
-                row->hl[i] = HL_NUMBER; i++; prev_sep = 0; continue;
-            }
-            if (prev_sep) {
-                int j;
-                for (j = 0; C_KEYWORDS[j]; j++) {
-                    int klen = (int)strlen(C_KEYWORDS[j]);
-                    int kw2 = C_KEYWORDS[j][klen - 1] == '|';
-                    if (kw2) klen--;
-                    int pp = C_KEYWORDS[j][0] == '#';
-                    if (i + klen <= row->rsize &&
-                        strncmp(&s[i], C_KEYWORDS[j], klen) == 0 &&
-                        hl_is_sep(i + klen < row->rsize ? s[i + klen] : '\0')) {
-                        memset(&row->hl[i], pp ? HL_PREPROC : (kw2 ? HL_KEYWORD2 : HL_KEYWORD1), klen);
-                        i += klen; break;
-                    }
-                }
-                if (C_KEYWORDS[j] != NULL) { prev_sep = 0; continue; }
-            }
-            prev_sep = hl_is_sep((unsigned char)c);
-            i++;
-        }
-        recur = (row->hl_open_comment != in_comment);
-        row->hl_open_comment = in_comment;
-    } else {
-        recur = (row->hl_open_comment != 0);
+    if (E.syntax == LANG_NONE) {
         row->hl_open_comment = 0;
+    } else if (E.syntax == LANG_HTML) {
+        hl_html(row, at);
+    } else {
+        hl_generic(row, at, &SYNTAX_DEFS[E.syntax]);
     }
 
-    if (recur && at + 1 < E.numrows) editor_update_syntax(at + 1);
+    if (row->hl_open_comment != old_open && at + 1 < E.numrows)
+        editor_update_syntax(at + 1);
 }
 
 static void row_update(neo_row_t *row)
@@ -583,13 +732,7 @@ static void editor_open(const char *filename)
     E.filename = malloc(fl + 1);
     memcpy(E.filename, filename, fl + 1);
 
-    E.syntax = 0;
-    const char *dot = NULL;
-    for (const char *p = filename; *p; p++) if (*p == '.') dot = p;
-    if (dot && (!strcmp(dot, ".c")   || !strcmp(dot, ".h")  ||
-                !strcmp(dot, ".cpp") || !strcmp(dot, ".cc") ||
-                !strcmp(dot, ".hpp") || !strcmp(dot, ".cxx")))
-        E.syntax = 1;
+    E.syntax = lang_from_ext(filename);
 
     char full[512];
     snprintf(full, sizeof(full), "%s", filename);
@@ -784,16 +927,14 @@ static void draw_rows(abuf_t *ab)
             while (byte_off + len < rsz && utf8_cont((unsigned char)rnd[byte_off + len])) len++;
 
             unsigned char *hl = E.row[filerow].hl;
-            int cur_color = -1;
+            int cur_hl = -1;
             int k = 0;
             while (k < len) {
                 int hlc = hl ? hl[byte_off + k] : HL_NORMAL;
-                int color = hl_color(hlc);
-                if (color != cur_color) {
-                    char cb[16];
-                    int cl = snprintf(cb, sizeof(cb), "\x1b[%dm", color);
-                    ab_append(ab, cb, cl);
-                    cur_color = color;
+                if (hlc != cur_hl) {
+                    const char *sgr = hl_sgr(hlc);
+                    ab_append(ab, sgr, strlen(sgr));
+                    cur_hl = hlc;
                 }
                 ab_append(ab, &rnd[byte_off + k], 1);
                 k++;
@@ -802,7 +943,7 @@ static void draw_rows(abuf_t *ab)
                     k++;
                 }
             }
-            if (cur_color != -1) ab_append(ab, "\x1b[39m", 5);
+            if (cur_hl != -1) ab_append(ab, "\x1b[39m", 5);
         }
         ab_append(ab, "\x1b[K", 3);
     }
@@ -818,8 +959,8 @@ static void draw_status(abuf_t *ab)
     int len = snprintf(status, sizeof(status), " %.40s%s ",
         E.filename ? E.filename : "[No Name]",
         E.dirty ? " [modified]" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus), "Ln %d, Col %d / %d lines ",
-        E.cy + 1, E.cx + 1, E.numrows);
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%s | Ln %d, Col %d / %d lines ",
+        LANG_NAMES[E.syntax], E.cy + 1, E.cx + 1, E.numrows);
 
     int limit = E.screencols - 1;
     if (limit < 1) limit = 1;
@@ -846,7 +987,7 @@ static void draw_message(abuf_t *ab)
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, E.statusmsg, mlen);
     } else {
-        const char *hint = " ^S save  ^Q quit  ^X cut  ^C copy  ^V paste  ^D dup  ^F find  ^G goto  ^N lineno";
+        const char *hint = " ^S save  ^Q quit  ^X cut  ^C copy  ^V paste  ^F find  ^G goto  ^N lineno  ^L syntax";
         int mlen = strlen(hint);
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, hint, mlen);
@@ -1064,6 +1205,21 @@ static void editor_find(void)
     }
 }
 
+static void editor_choose_language(void)
+{
+    set_status("Syntax  0)Plain 1)C 2)JS 3)CSS 4)HTML 5)ASM   [current: %s]",
+               LANG_NAMES[E.syntax]);
+    refresh_screen();
+    int c = read_key();
+    if (c >= '0' && c <= '0' + (LANG_COUNT - 1)) {
+        E.syntax = c - '0';
+        for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
+        set_status("Syntax: %s", LANG_NAMES[E.syntax]);
+    } else {
+        set_status("");
+    }
+}
+
 static int process_key(void)
 {
     int c = read_key();
@@ -1178,6 +1334,9 @@ static int process_key(void)
             break;
 
         case KEY_CTRL('l'):
+            editor_choose_language();
+            break;
+
         case 0:
             break;
 
