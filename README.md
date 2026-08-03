@@ -126,7 +126,8 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Filesystems** | VFS with ext2, FAT32, ISO9660, UDF, ramfs, initramfs, devfs, procfs |
 | **Storage** | AHCI/SATA, legacy ATA, NVMe; MBR and GPT partitions; block layer |
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
-| **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3 and SSH from scratch |
+| **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3, SSH (client + server), shared terminals — all from scratch |
+| **Crypto** | SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305, AES-128/256-GCM, X25519, Ed25519, RSA/ECDSA; RFC/NIST-verified |
 | **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8 |
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
@@ -501,14 +502,122 @@ up to TLS and SSH. Nothing is ported.
   password and Ed25519 public-key authentication work, and the server runs the
   login shell on a pseudo-terminal, so remote sessions are fully interactive.
   Both ends interoperate with OpenSSH.
-- **Crypto:** the underlying library (SHA-2, HMAC/HKDF, ChaCha20-Poly1305,
-  AES-GCM, X25519, Ed25519, RSA and ECDSA verification, a CSPRNG) is validated
-  against the published RFC and NIST test vectors.
-- **Utilities:** `ping`, `nslookup`, `ifconfig`, `setdns`, `nc`, `wget` (with
-  file downloads), `curl`, `httpd`, `ssh`, `sshd`, `ssh-keygen`.
+- **Crypto:** the underlying library (SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305,
+  AES-128/256-GCM, X25519, Ed25519, RSA and ECDSA verification, a CSPRNG) is
+  validated against the published RFC and NIST test vectors.
+- **Utilities:** `ping`, `nslookup`, `ifconfig`, `setdns`, `nc`, `wget`, `curl`
+  (both with a Linux-like flag set), `httpd`, `ssh`, `sshd`, `ssh-keygen`,
+  `wterm` (shared terminal), `crypt` (file encryption).
 
-Run a VM with networking via `./nb run --net` (host NAT), or link two VMs with a
-QEMU `socket` netdev for VM-to-VM SSH.
+### Secure Shell (SSH)
+
+`sshd` serves a fully interactive login shell on a pseudo-terminal; `ssh` is the
+client. Keys are generated with `ssh-keygen`, and both password and public-key
+auth work. The server logs every connection, login, and disconnect.
+
+```text
+# on the server
+$ ifconfig eth0 10.0.0.1
+$ ssh-keygen                       # writes /etc/ssh host key on first run
+$ sshd &
+sshd: listening on port 22
+
+# on the client
+$ ssh root@10.0.0.1
+root@10.0.0.1's password:
+Cervus $ uname -a
+Cervus 0.0.2 x86_64
+Cervus $ exit                      # or Ctrl-D, or type ~. to force-close
+
+# run a single command without a login shell
+$ ssh root@10.0.0.1 'cat /proc/version'
+```
+
+Server-side, each session is announced:
+
+```text
+sshd: connection from 10.0.0.2
+sshd: user 'root' authenticated from 10.0.0.2
+sshd: user 'root' (10.0.0.2) disconnected
+```
+
+Public-key login (no password prompt):
+
+```text
+$ ssh-keygen                                   # ~/.ssh/id_ed25519[.pub]
+$ cat ~/.ssh/id_ed25519.pub >> /root/.ssh/authorized_keys   # on the server
+$ ssh root@10.0.0.1                            # logs in with the key
+```
+
+### Sharing a terminal (`wterm`)
+
+`ssh` gives each user a *private* session. `wterm` is the opposite — a **shared**
+terminal, like `screen -x` or `tmux attach`: one machine hosts a single shell and
+others attach to it. Everyone sees the same output *and* can type into it.
+
+```text
+# host the session (VM 1)
+$ wterm
+wterm: hosting shared terminal on port 2300 (attach: wterm <this-ip>)
+Cervus $                           # a normal shell, shared from here on
+
+# attach to it (VM 2)
+$ wterm 10.0.0.1
+wterm: attached to 10.0.0.1 (Ctrl-] to detach)
+```
+
+Both terminals now drive the same shell live; press `Ctrl-]` to detach without
+killing the session. Use `-p <port>` on both ends to pick a different port.
+
+### HTTP client (`curl` / `wget`)
+
+Both accept a Linux-like flag set backed by the in-tree HTTP/1.1 + TLS stack.
+
+```text
+$ curl https://example.com/                       # print to stdout
+$ curl -O https://example.com/file.tar.gz         # save as the remote name
+$ curl -L -o out.html https://example.com/         # follow redirects, -o file
+$ curl -I https://example.com/                     # headers only (HEAD)
+$ curl -H 'X-Token: abc' -d 'a=1&b=2' https://api.example.com/post
+$ curl -u user:pass https://example.com/private    # HTTP Basic auth
+$ curl -k https://self-signed.local/               # skip cert verification
+
+$ wget https://example.com/file.iso                # save file, follow redirects
+$ wget -O - https://example.com/ | grep title      # stream to stdout
+$ wget --no-check-certificate https://self-signed.local/
+```
+
+`curl` supports `-X -d -H -A -e -u -r -L --max-redirs -i -I -D -o -O -k -s -v -f`;
+`wget` supports `-O -P -q -nv --no-check-certificate -U --header --post-data
+--post-file --user --password --max-redirect`.
+
+### File encryption (`crypt`)
+
+`crypt` encrypts and decrypts files with a passphrase using **AES-256-GCM**; the
+key is derived with **PBKDF2-HMAC-SHA256** (200 000 iterations) over a random
+salt, and the data is authenticated in chunks so tampering, reordering, or
+truncation is detected.
+
+```text
+$ crypt -e secret.txt              # prompts for a passphrase -> secret.txt.enc
+Passphrase: ****
+Confirm: ****
+secret.txt -> secret.txt.enc
+$ crypt -d secret.txt.enc          # -> secret.txt
+$ crypt -e -p hunter2 -o out.bin data.bin     # non-interactive passphrase
+```
+
+### Two VMs on one host
+
+For VM-to-VM links (SSH, `wterm`, `nc`), a QEMU **multicast** netdev is the most
+robust option — it is order-independent and survives restarts. Give both VMs:
+
+```sh
+-netdev socket,id=net0,mcast=230.0.0.1:12400 -device e1000,netdev=net0
+```
+
+then `ifconfig eth0 10.0.0.1` on one and `10.0.0.2` on the other. For plain
+internet access from a single VM, `./nb run --net` uses host NAT instead.
 
 ---
 
