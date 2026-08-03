@@ -11,10 +11,17 @@ extern void putchar_flush_begin(void);
 extern void putchar_flush_end(void);
 extern void draw_cursor(void);
 extern void erase_cursor(void);
+extern int  console_cursor_visible(void);
+extern uint64_t sched_now_ns(void);
 extern uint32_t get_cursor_row(void);
 extern uint32_t get_cursor_col(void);
 
 static spinlock_t g_lock = SPINLOCK_INIT;
+
+#define BLINK_PERIOD_NS 500000000ULL
+
+static uint64_t g_blink_next;
+static int      g_blink_on = 1;
 
 typedef struct {
     int             in_use;
@@ -116,6 +123,8 @@ void vt_write(int n, const char *buf, size_t len) {
         for (size_t i = 0; i < len; i++) putchar((int)(unsigned char)buf[i]);
         putchar_flush_end();
         draw_cursor();
+        g_blink_on = 1;
+        g_blink_next = sched_now_ns() + BLINK_PERIOD_NS;
         spinlock_release_irqrestore(&g_lock, f);
         return;
     }
@@ -151,6 +160,15 @@ void vt_tick_flush(void) {
     if (!g_inited) return;
     if (!spinlock_try_acquire(&g_lock)) return;
     console_flush_pending();
+    if (!g_vts[g_active].is_monitor && console_cursor_visible()) {
+        uint64_t now = sched_now_ns();
+        if (now >= g_blink_next) {
+            g_blink_on = !g_blink_on;
+            if (g_blink_on) draw_cursor();
+            else            erase_cursor();
+            g_blink_next = now + BLINK_PERIOD_NS;
+        }
+    }
     spinlock_release(&g_lock);
 }
 
