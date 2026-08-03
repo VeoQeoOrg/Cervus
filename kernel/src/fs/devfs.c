@@ -12,9 +12,6 @@
 #include "../../include/smp/percpu.h"
 #include "../../include/console/console.h"
 
-extern void draw_cursor(void);
-extern void erase_cursor(void);
-extern int  console_cursor_visible(void);
 extern int  putchar(int);
 extern void putchar_flush_begin(void);
 extern void putchar_flush_end(void);
@@ -163,37 +160,18 @@ static void tty_echo_char(int vt, char c) {
     vt_write(vt, b, 1);
 }
 
-static int wait_for_char(int vt, vt_tty_t *t, char *out,
-                         uint64_t half_tick, uint64_t *next_blink, int *cursor_on)
+static int wait_for_char(int vt, vt_tty_t *t, char *out)
 {
     while (ring_empty(t) || vt != vt_active()) {
         task_t *me = devfs_cur_task();
-        if (me && me->pending_kill) {
-            if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
-            return -1;
-        }
-        if (vt == vt_active() && half_tick) {
-            uint64_t now = hpet_read_counter();
-            if (now >= *next_blink) {
-                if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
-                else            { vt_cursor(vt, 1); *cursor_on = 1; }
-                *next_blink = now + half_tick;
-            }
-        } else if (vt != vt_active() && *cursor_on) {
-            *cursor_on = 0;
-        }
+        if (me && me->pending_kill) return -1;
         if (me) {
             t->reader = me;
             if (!ring_empty(t) && vt == vt_active()) {
                 t->reader = NULL;
                 continue;
             }
-            if (half_tick) {
-                me->wakeup_time_ns = sched_now_ns() + 300000000ULL;
-                sched_note_wakeup(me->wakeup_time_ns);
-            } else {
-                me->wakeup_time_ns = 0;
-            }
+            me->wakeup_time_ns = 0;
             me->runnable = false;
             me->state = TASK_BLOCKED;
             sched_reschedule();
@@ -202,7 +180,6 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out,
             task_yield();
         }
     }
-    if (*cursor_on) { vt_cursor(vt, 0); *cursor_on = 0; }
     ring_getc(t, out);
     return 0;
 }
@@ -215,11 +192,6 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     vt_tty_t *t         = &g_vtty[vt];
     char     *dst       = buf;
 
-    int      want_cursor = console_cursor_visible();
-    uint64_t freq        = hpet_is_available() ? hpet_get_frequency() : 0;
-    uint64_t half_tick   = (want_cursor && freq) ? freq / 2 : 0;
-    uint64_t next_blink  = half_tick ? (hpet_read_counter() + half_tick) : 0;
-    int      cursor_on   = 0;
     int      canonical   = (t->termios.c_lflag & T_ICANON) != 0;
     int      isig        = (t->termios.c_lflag & T_ISIG) != 0;
     int      echo        = canonical && (t->termios.c_lflag & T_ECHO) != 0;
@@ -229,14 +201,9 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
         && (!canonical || t->line_read >= t->line_len))
         return -EAGAIN;
 
-    if (want_cursor && !(canonical && t->line_read < t->line_len)) {
-        vt_cursor(vt, 1);
-        cursor_on = 1;
-    }
-
     if (!canonical) {
         char c;
-        if (wait_for_char(vt, t, &c, half_tick, &next_blink, &cursor_on) < 0)
+        if (wait_for_char(vt, t, &c) < 0)
             return -EINTR;
         if (isig && c == 0x03) return -EINTR;
         dst[0] = c;
@@ -256,7 +223,7 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
 
         for (;;) {
             char c;
-            if (wait_for_char(vt, t, &c, half_tick, &next_blink, &cursor_on) < 0)
+            if (wait_for_char(vt, t, &c) < 0)
                 return -EINTR;
 
             if (isig && c == 0x03) {
