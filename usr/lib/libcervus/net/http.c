@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <tls.h>
+#include <inflate.h>
 
 typedef struct {
     int fd;
@@ -115,6 +116,19 @@ static void resolve_location(int cur_https, const char *cur_host, int cur_port,
         snprintf(out, cap, "%s://%s:%d%s%s", scheme, cur_host, cur_port, base, loc);
 }
 
+static int body_emit(int enc, int out_fd, uint8_t **cb, size_t *cl, size_t *cc, const unsigned char *b, int n) {
+    if (!enc) { write(out_fd, b, n); return 0; }
+    if (*cl + (size_t)n > *cc) {
+        size_t nc = *cc ? *cc : 16384;
+        while (nc < *cl + (size_t)n) nc *= 2;
+        uint8_t *p = (uint8_t *)realloc(*cb, nc);
+        if (!p) return -1;
+        *cb = p; *cc = nc;
+    }
+    memcpy(*cb + *cl, b, n); *cl += n;
+    return 0;
+}
+
 int http_request(const char *url, int out_fd, const http_opts *opts) {
     http_opts def;
     if (!opts) { memset(&def, 0, sizeof def); def.max_redirs = 20; opts = &def; }
@@ -176,11 +190,13 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             b64enc(opts->userpwd, (int)strlen(opts->userpwd), enc, sizeof enc);
             rl += snprintf(req + rl, sizeof req - rl, "Authorization: Basic %s\r\n", enc);
         }
-        int have_ct = 0;
+        int have_ct = 0, have_ae = 0;
         for (int h = 0; h < opts->nheaders; h++) {
             if (lc_eq(opts->headers[h], "content-type:", 13)) have_ct = 1;
+            if (lc_eq(opts->headers[h], "accept-encoding:", 16)) have_ae = 1;
             rl += snprintf(req + rl, sizeof req - rl, "%s\r\n", opts->headers[h]);
         }
+        if (!have_ae) rl += snprintf(req + rl, sizeof req - rl, "Accept-Encoding: gzip, deflate\r\n");
         if (data) {
             if (!have_ct)
                 rl += snprintf(req + rl, sizeof req - rl, "Content-Type: %s\r\n",
@@ -205,7 +221,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         if (opts->header_fd >= 0) { write(opts->header_fd, line, strlen(line)); write(opts->header_fd, "\r\n", 2); }
 
         long content_len = -1;
-        int chunked = 0;
+        int chunked = 0, cenc = 0;
         char location[2048]; location[0] = 0;
         for (;;) {
             if (hr_line(&r, line, sizeof line) < 0) break;
@@ -215,6 +231,10 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             if (opts->header_fd >= 0) { write(opts->header_fd, line, strlen(line)); write(opts->header_fd, "\r\n", 2); }
             if (lc_eq(line, "content-length:", 15)) content_len = atol(line + 15);
             else if (lc_eq(line, "transfer-encoding:", 18) && strstr(line, "hunked")) chunked = 1;
+            else if (lc_eq(line, "content-encoding:", 17)) {
+                if (strstr(line, "gzip")) cenc = 1;
+                else if (strstr(line, "deflate")) cenc = 2;
+            }
             else if (lc_eq(line, "location:", 9)) {
                 const char *v = line + 9; while (*v == ' ') v++;
                 strncpy(location, v, sizeof location - 1); location[sizeof location - 1] = 0;
@@ -251,6 +271,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
 
         long total = 0;
         unsigned char body[8192];
+        uint8_t *cbuf = 0; size_t clen = 0, ccap = 0;
         if (chunked) {
             for (;;) {
                 if (hr_line(&r, line, sizeof line) < 0) break;
@@ -261,7 +282,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
                     int want = (int)(sz - got); if (want > (int)sizeof body) want = sizeof body;
                     int n = hr_read(&r, body, want);
                     if (n <= 0) break;
-                    write(out_fd, body, n); got += n; total += n;
+                    body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); got += n; total += n;
                 }
                 char crlf[2]; hr_read(&r, (unsigned char *)crlf, 2);
             }
@@ -271,11 +292,21 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
                 int want = (int)(content_len - got); if (want > (int)sizeof body) want = sizeof body;
                 int n = hr_read(&r, body, want);
                 if (n <= 0) break;
-                write(out_fd, body, n); got += n; total += n;
+                body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); got += n; total += n;
             }
         } else {
             int n;
-            while ((n = hr_read(&r, body, sizeof body)) > 0) { write(out_fd, body, n); total += n; }
+            while ((n = hr_read(&r, body, sizeof body)) > 0) { body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); total += n; }
+        }
+
+        if (cenc && cbuf) {
+            uint8_t *ubuf = 0; size_t ulen = 0;
+            int ir = -1;
+            if (cenc == 1) ir = gunzip(cbuf, clen, &ubuf, &ulen);
+            else { ir = zlib_inflate(cbuf, clen, &ubuf, &ulen); if (ir) ir = raw_inflate(cbuf, clen, &ubuf, &ulen); }
+            if (ir == 0) { write(out_fd, ubuf, ulen); free(ubuf); }
+            else write(out_fd, cbuf, clen);
+            free(cbuf);
         }
 
         if (opts->verbose) fprintf(stderr, "* [%ld bytes]\n", total);
