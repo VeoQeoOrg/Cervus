@@ -164,6 +164,35 @@ static void rc_set(int rc) {
     var_set("status", buf);
 }
 
+extern char **environ;
+
+static int capture_command(const char *cmd, char *out, size_t outsz) {
+    int pfd[2];
+    if (pipe(pfd) < 0) { out[0] = 0; return -1; }
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); out[0] = 0; return -1; }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], 1);
+        close(pfd[1]);
+        char *av[] = { "/bin/csh", "-c", (char *)cmd, NULL };
+        execve("/bin/csh", av, environ);
+        _exit(127);
+    }
+    close(pfd[1]);
+    size_t len = 0;
+    while (len + 1 < outsz) {
+        long r = read(pfd[0], out + len, outsz - 1 - len);
+        if (r <= 0) break;
+        len += (size_t)r;
+    }
+    out[len] = 0;
+    close(pfd[0]);
+    int st; waitpid(pid, &st, 0);
+    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r')) out[--len] = 0;
+    return 0;
+}
+
 static void expand_vars(const char *src, char *dst, size_t dsz) {
     size_t di = 0;
     const char *p = src;
@@ -172,8 +201,33 @@ static void expand_vars(const char *src, char *dst, size_t dsz) {
         char qc = *p;
         if (qc == '\'' && !in_dq) { in_sq = !in_sq; dst[di++] = *p++; continue; }
         if (qc == '"'  && !in_sq) { in_dq = !in_dq; dst[di++] = *p++; continue; }
+        if (qc == '`' && !in_sq) {
+            p++;
+            static char csub_in[CSH_LINE_MAX], csub_out[CSH_LINE_MAX];
+            int ci = 0;
+            while (*p && *p != '`' && ci + 1 < CSH_LINE_MAX) csub_in[ci++] = *p++;
+            csub_in[ci] = 0;
+            if (*p == '`') p++;
+            capture_command(csub_in, csub_out, sizeof csub_out);
+            for (char *q = csub_out; *q && di + 1 < dsz; q++) dst[di++] = *q;
+            continue;
+        }
         if (*p != '$' || in_sq) { dst[di++] = *p++; continue; }
         p++;
+        if (*p == '(') {
+            p++;
+            static char dsub_in[CSH_LINE_MAX], dsub_out[CSH_LINE_MAX];
+            int di2 = 0, depth = 1;
+            while (*p && di2 + 1 < CSH_LINE_MAX) {
+                if (*p == '(') depth++;
+                else if (*p == ')') { depth--; if (depth == 0) { p++; break; } }
+                dsub_in[di2++] = *p++;
+            }
+            dsub_in[di2] = 0;
+            capture_command(dsub_in, dsub_out, sizeof dsub_out);
+            for (char *q = dsub_out; *q && di + 1 < dsz; q++) dst[di++] = *q;
+            continue;
+        }
         int braced = (*p == '{');
         if (braced) p++;
         char name[CSH_NAME_MAX];
