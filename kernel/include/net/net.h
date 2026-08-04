@@ -7,6 +7,7 @@
 
 #define ETH_P_IP    0x0800
 #define ETH_P_ARP   0x0806
+#define ETH_P_IPV6  0x86DD
 
 #define IP4(a, b, c, d) (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | \
                          ((uint32_t)(c) << 8) | (uint32_t)(d))
