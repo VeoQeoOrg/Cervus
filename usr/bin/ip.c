@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/netcfg.h>
+#include <arpa/inet.h>
 
 static uint32_t parse_ip(const char *s) {
     uint32_t v = 0; int part = 0, seen = 0, octets = 0;
@@ -43,6 +44,8 @@ static void show_addr(void) {
             printf("    inet "); pip(c.ip); printf("/%d brd ", mask_to_prefix(c.netmask)); pip(brd);
             printf(" scope global %s\n", c.name);
         }
+        int has6 = 0; for (int k = 0; k < 16; k++) if (c.ip6_ll[k]) has6 = 1;
+        if (has6) { char b6[64]; inet_ntop(AF_INET6, c.ip6_ll, b6, sizeof b6); printf("    inet6 %s/64 scope link\n", b6); }
     }
 }
 

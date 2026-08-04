@@ -36,6 +36,11 @@ netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
     d->transmit = transmit;
     d->priv = priv;
 
+    d->ip6_ll[0] = 0xfe; d->ip6_ll[1] = 0x80;
+    d->ip6_ll[8] = mac[0] ^ 0x02; d->ip6_ll[9] = mac[1]; d->ip6_ll[10] = mac[2];
+    d->ip6_ll[11] = 0xff; d->ip6_ll[12] = 0xfe;
+    d->ip6_ll[13] = mac[3]; d->ip6_ll[14] = mac[4]; d->ip6_ll[15] = mac[5];
+
     d->next = g_netdevs;
     g_netdevs = d;
     return d;
@@ -84,6 +89,11 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
         case ETH_P_IP:
             ip_rx(dev, p + 14, len - 14);
             break;
+        case ETH_P_IPV6: {
+            extern void ipv6_rx(netdev_t *dev, const uint8_t *smac, const uint8_t *pkt, size_t len);
+            ipv6_rx(dev, p + 6, p + 14, len - 14);
+            break;
+        }
         default:
             break;
     }
@@ -127,6 +137,7 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     out->rx_bytes = d->rx_bytes; out->tx_bytes = d->tx_bytes;
     out->link_up = d->link_up;
     out->mtu = (int32_t)d->mtu;
+    memcpy(out->ip6_ll, d->ip6_ll, 16);
     return 0;
 }
 
