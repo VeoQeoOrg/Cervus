@@ -142,8 +142,9 @@
 #define SYS_SEMGET            592
 #define SYS_SEMOP             593
 #define SYS_SEMCTL            594
+#define SYS_MOUNT9            595
 
-#define SYSCALL_TABLE_SIZE    595
+#define SYSCALL_TABLE_SIZE    596
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

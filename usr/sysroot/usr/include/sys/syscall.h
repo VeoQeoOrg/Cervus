@@ -133,6 +133,7 @@
 #define SYS_SEMGET          592
 #define SYS_SEMOP           593
 #define SYS_SEMCTL          594
+#define SYS_MOUNT9          595
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
