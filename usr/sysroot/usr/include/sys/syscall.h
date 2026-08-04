@@ -124,6 +124,8 @@
 #define SYS_POLL            583
 #define SYS_SELECT          584
 #define SYS_CLOCK_SET       585
+#define SYS_SENDFD          586
+#define SYS_RECVFD          587
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

@@ -26,8 +26,12 @@ typedef struct unix_sock {
     vnode_t *accept_q[UNIX_ACCEPTQ];
     int      aqh, aqt, aqc;
 
+    vfs_file_t *fd_inbox[8];
+    int      fih, fit, fic;
+
     task_t  *reader;
     task_t  *acceptor;
+    task_t  *fd_waiter;
 
     struct unix_sock *next;
 } unix_sock_t;
@@ -189,6 +193,43 @@ static int64_t unix_write_op(vnode_t *vn, const void *buf, size_t len, uint64_t 
     return (int64_t)done;
 }
 
+int64_t unix_send_fd(vnode_t *vn, vfs_file_t *file) {
+    unix_sock_t *s = vn->fs_data;
+    uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+    unix_sock_t *peer = s->peer;
+    if (!peer || s->peer_gone) { spinlock_release_irqrestore(&g_ulock, f); return -EPIPE; }
+    if (peer->fic >= 8) { spinlock_release_irqrestore(&g_ulock, f); return -EAGAIN; }
+    peer->fd_inbox[peer->fit] = file;
+    peer->fit = (peer->fit + 1) % 8;
+    peer->fic++;
+    task_t *w = peer->fd_waiter;
+    peer->fd_waiter = NULL;
+    spinlock_release_irqrestore(&g_ulock, f);
+    if (w) task_unblock(w);
+    return 0;
+}
+
+vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock) {
+    unix_sock_t *s = vn->fs_data;
+    task_t *me = syscall_cur_task();
+    for (;;) {
+        uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+        if (s->fic > 0) {
+            vfs_file_t *file = s->fd_inbox[s->fih];
+            s->fih = (s->fih + 1) % 8;
+            s->fic--;
+            spinlock_release_irqrestore(&g_ulock, f);
+            return file;
+        }
+        if (s->peer_gone) { spinlock_release_irqrestore(&g_ulock, f); return NULL; }
+        if (nonblock) { spinlock_release_irqrestore(&g_ulock, f); return NULL; }
+        if (me && me->pending_kill) { spinlock_release_irqrestore(&g_ulock, f); return NULL; }
+        if (me) { s->fd_waiter = me; me->runnable = false; me->state = TASK_BLOCKED; }
+        spinlock_release_irqrestore(&g_ulock, f);
+        if (me) sched_reschedule(); else task_yield();
+    }
+}
+
 static int unix_poll_op(vnode_t *vn, int events) {
     (void)events;
     unix_sock_t *s = vn->fs_data;
@@ -210,6 +251,15 @@ static void unix_ref_op(vnode_t *vn) { (void)vn; }
 static void unix_unref_op(vnode_t *vn) {
     unix_sock_t *s = vn->fs_data;
     uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+
+    while (s->fic > 0) {
+        vfs_file_t *pf = s->fd_inbox[s->fih];
+        s->fih = (s->fih + 1) % 8;
+        s->fic--;
+        spinlock_release_irqrestore(&g_ulock, f);
+        fd_put(pf);
+        f = spinlock_acquire_irqsave(&g_ulock);
+    }
 
     if (s->state == U_LISTEN) {
         unix_sock_t **pp = &g_listeners;

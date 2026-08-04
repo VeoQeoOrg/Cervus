@@ -20,6 +20,8 @@ int64_t  unix_op_bind(vnode_t *vn, const char *path);
 int64_t  unix_op_connect(vnode_t *vn, const char *path);
 int64_t  unix_op_listen(vnode_t *vn);
 vnode_t *unix_op_accept(vnode_t *vn, int nonblock);
+int64_t     unix_send_fd(vnode_t *vn, vfs_file_t *file);
+vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock);
 
 int64_t  sock_op_bind(vnode_t *vn, uint32_t ip, uint16_t port);
 int64_t  sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port);
