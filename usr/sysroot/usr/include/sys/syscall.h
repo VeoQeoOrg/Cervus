@@ -121,6 +121,8 @@
 #define SYS_ACCEPT          580
 #define SYS_NET_IFSET       581
 #define SYS_OPENPTY         582
+#define SYS_POLL            583
+#define SYS_SELECT          584
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

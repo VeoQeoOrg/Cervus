@@ -7,6 +7,7 @@
 #include "../../include/drivers/timer.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/syscall/errno.h"
+#include "../../include/fs/poll.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -322,6 +323,19 @@ tcp_tcb_t *tcp_accept(tcp_tcb_t *lst, int nonblock, uint32_t *rip, uint16_t *rpo
         spinlock_release(&g_tcbs_lock);
         if (me) sched_reschedule(); else task_yield();
     }
+}
+
+int tcp_poll(tcp_tcb_t *t) {
+    int r = 0;
+    uint64_t f = spinlock_acquire_irqsave(&t->lock);
+    int st = t->state;
+    if (t->rcv_count > 0 || t->accept_q) r |= POLLIN;
+    if (t->fin_seen || t->reset || st == TCP_CLOSE_WAIT || st == TCP_CLOSED || st == TCP_LAST_ACK)
+        r |= POLLIN;
+    if (t->reset || st == TCP_CLOSED) r |= POLLHUP;
+    if (st == TCP_ESTABLISHED && t->snd_buflen < TCP_SNDBUF) r |= POLLOUT;
+    spinlock_release_irqrestore(&t->lock, f);
+    return r;
 }
 
 static void tcp_accept_syn(tcp_tcb_t *lst, uint32_t src, uint16_t sport, uint32_t seq) {

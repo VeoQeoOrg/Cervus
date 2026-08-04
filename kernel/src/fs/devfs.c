@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "../../include/fs/devfs.h"
 #include "../../include/fs/vfs.h"
+#include "../../include/fs/poll.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
 #include "../../include/drivers/ps2.h"
@@ -355,6 +356,14 @@ static int devfs_stat(vnode_t *node, vfs_stat_t *out) {
     return 0;
 }
 
+static int tty_poll(vnode_t *node, int events) {
+    (void)node; (void)events;
+    vt_tty_t *t = &g_vtty[cur_vt()];
+    int r = POLLOUT;
+    if (!ring_empty(t)) r |= POLLIN;
+    return r;
+}
+
 static const vnode_ops_t tty_ops = {
     .read   = tty_read,
     .write  = tty_write,
@@ -362,6 +371,7 @@ static const vnode_ops_t tty_ops = {
     .stat   = devfs_stat,
     .ref    = devfs_ref,
     .unref  = devfs_unref,
+    .poll   = tty_poll,
 };
 
 static int64_t null_read(vnode_t *n, void *buf, size_t len, uint64_t off) {
