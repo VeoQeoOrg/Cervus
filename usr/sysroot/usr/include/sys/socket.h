@@ -5,7 +5,10 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#define AF_UNIX      1
+#define AF_LOCAL     1
 #define AF_INET      2
+#define PF_UNIX      AF_UNIX
 #define PF_INET      AF_INET
 
 #define SOCK_STREAM  1
