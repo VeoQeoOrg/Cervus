@@ -146,6 +146,10 @@ extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
+extern int64_t sys_shmget(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_shmat(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_shmdt(uint64_t);
+extern int64_t sys_shmctl(uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -209,6 +213,7 @@ W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W2(sys_sendfd)      W1(sys_recvfd)
+W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -320,6 +325,10 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_CLOCK_SET]         = _sys_clock_set,
     [SYS_SENDFD]            = _sys_sendfd,
     [SYS_RECVFD]            = _sys_recvfd,
+    [SYS_SHMGET]            = _sys_shmget,
+    [SYS_SHMAT]             = _sys_shmat,
+    [SYS_SHMDT]             = _sys_shmdt,
+    [SYS_SHMCTL]            = _sys_shmctl,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
