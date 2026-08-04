@@ -275,7 +275,12 @@ int64_t sock_op_bind6(vnode_t *vn, const uint8_t ip6[16], uint16_t port) {
 
 int64_t sock_op_connect6(vnode_t *vn, const uint8_t ip6[16], uint16_t port) {
     sock_t *s = vn->fs_data;
-    if (s->type == SOCK_STREAM) return -EOPNOTSUPP;
+    if (s->type == SOCK_STREAM) {
+        int r = tcp_connect6(ip6, port, &s->tcb);
+        if (r != 0) return r;
+        memcpy(s->peer_ip6, ip6, 16); s->peer_port = port; s->connected = 1;
+        return 0;
+    }
     memcpy(s->peer_ip6, ip6, 16); s->peer_port = port; s->connected = 1;
     return 0;
 }
@@ -286,6 +291,10 @@ int64_t sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t 
     sock_t *s = vn->fs_data;
     netdev_t *dev = netdev_first();
     if (!dev) return -EINVAL;
+    if (s->type == SOCK_STREAM) {
+        if (!s->tcb) return -EINVAL;
+        return tcp_send(s->tcb, buf, len);
+    }
     if (s->type != SOCK_DGRAM) return -EOPNOTSUPP;
 
     const uint8_t *dst = ip6;
@@ -309,6 +318,12 @@ int64_t sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t 
 int64_t sock_op_recvfrom6(vnode_t *vn, void *buf, size_t len, int nonblock, uint8_t src6[16], uint16_t *src_port) {
     sock_t *s = vn->fs_data;
     task_t *me = syscall_cur_task();
+    if (s->type == SOCK_STREAM) {
+        if (!s->tcb) return -EINVAL;
+        if (src6) memcpy(src6, s->peer_ip6, 16);
+        if (src_port) *src_port = s->peer_port;
+        return tcp_recv(s->tcb, buf, len, nonblock);
+    }
     for (;;) {
         uint64_t f = spinlock_acquire_irqsave(&s->lock);
         if (s->qc > 0) {
@@ -332,7 +347,6 @@ int64_t sock_op_recvfrom6(vnode_t *vn, void *buf, size_t len, int nonblock, uint
 vnode_t *sock_new_vnode(int domain, int type, int proto) {
     if (domain != AF_INET && domain != AF_INET6) return NULL;
     if (type != SOCK_DGRAM && type != SOCK_RAW && type != SOCK_STREAM) return NULL;
-    if (domain == AF_INET6 && type != SOCK_DGRAM && type != SOCK_RAW) return NULL;
     if (type == SOCK_DGRAM && proto == 0) proto = IPPROTO_UDP;
     if (type == SOCK_STREAM && proto == 0) proto = IPPROTO_TCP;
 
@@ -362,7 +376,7 @@ int64_t sock_op_listen(vnode_t *vn) {
     sock_t *s = vn->fs_data;
     if (s->type != SOCK_STREAM || !s->bound) return -EINVAL;
     if (s->tcb) return 0;
-    s->tcb = tcp_listen(s->local_port);
+    s->tcb = (s->family == AF_INET6) ? tcp_listen6(s->local_port) : tcp_listen(s->local_port);
     if (!s->tcb) return -ENOMEM;
     return 0;
 }
@@ -381,6 +395,39 @@ vnode_t *sock_op_accept(vnode_t *vn, int nonblock, uint32_t *rip, uint16_t *rpor
     s->tcb = child;
     s->connected = 1;
     s->peer_ip = *rip;
+    s->peer_port = *rport;
+
+    vnode_t *cvn = calloc(1, sizeof(*cvn));
+    if (!cvn) { tcp_close(child); free(s); return NULL; }
+    cvn->type = VFS_NODE_CHARDEV;
+    cvn->mode = 0600;
+    cvn->ino  = g_sock_ino++;
+    cvn->ops  = &sock_vnode_ops;
+    cvn->fs_data = s;
+    cvn->refcount = 1;
+
+    spinlock_acquire(&g_socks_lock);
+    s->next = g_socks;
+    g_socks = s;
+    spinlock_release(&g_socks_lock);
+    return cvn;
+}
+
+vnode_t *sock_op_accept6(vnode_t *vn, int nonblock, uint8_t rip6[16], uint16_t *rport) {
+    sock_t *ls = vn->fs_data;
+    if (ls->type != SOCK_STREAM || !ls->tcb) return NULL;
+
+    tcp_tcb_t *child = tcp_accept6(ls->tcb, nonblock, rip6, rport);
+    if (!child) return NULL;
+
+    sock_t *s = calloc(1, sizeof(*s));
+    if (!s) { tcp_close(child); return NULL; }
+    s->type = SOCK_STREAM;
+    s->proto = IPPROTO_TCP;
+    s->family = AF_INET6;
+    s->tcb = child;
+    s->connected = 1;
+    memcpy(s->peer_ip6, rip6, 16);
     s->peer_port = *rport;
 
     vnode_t *cvn = calloc(1, sizeof(*cvn));

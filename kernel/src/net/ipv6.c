@@ -5,6 +5,7 @@
 #include "../../include/io/serial.h"
 #include <string.h>
 
+#define IPPROTO_TCP     6
 #define IPPROTO_UDP    17
 #define IPPROTO_ICMPV6 58
 #define ND_NS 135
@@ -13,6 +14,7 @@
 #define ICMP6_ECHO_REP 129
 
 extern void udp6_rx(netdev_t *dev, const uint8_t *src, const uint8_t *dst, const uint8_t *p, size_t len);
+extern void tcp6_rx(netdev_t *dev, const uint8_t *src6, const uint8_t *dst6, const uint8_t *seg, size_t len);
 
 static const uint8_t ip6_lo[16] = { 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1 };
 
@@ -156,6 +158,7 @@ void ipv6_rx(netdev_t *dev, const uint8_t *smac, const uint8_t *pkt, size_t len)
 
     if (nexthdr == IPPROTO_ICMPV6 && plen >= 8) icmp6_rx(dev, src, dst, msg, plen);
     else if (nexthdr == IPPROTO_UDP && plen >= 8) udp6_rx(dev, src, dst, msg, plen);
+    else if (nexthdr == IPPROTO_TCP && plen >= 20) tcp6_rx(dev, src, dst, msg, plen);
 }
 
 int ipv6_loopback_drain_one(void) {
