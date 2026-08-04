@@ -74,6 +74,7 @@ typedef struct vnode_ops {
     int64_t (*ioctl)   (vnode_t *node, uint64_t req, void *arg);
     int     (*symlink) (vnode_t *dir, const char *name, const char *target);
     int64_t (*readlink)(vnode_t *node, char *buf, size_t bufsiz);
+    int     (*poll)    (vnode_t *node, int events);
 } vnode_ops_t;
 
 struct vnode {

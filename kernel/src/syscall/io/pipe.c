@@ -2,6 +2,7 @@
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/fs/vfs.h"
+#include "../../../include/fs/poll.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -142,17 +143,37 @@ static void pipe_unref_op(vnode_t *n)
         free(ps);
 }
 
+static int pipe_poll_op(vnode_t *n, int events) {
+    (void)events;
+    pipe_vdata_t  *vd = (pipe_vdata_t *)n->fs_data;
+    pipe_shared_t *ps = vd->shared;
+    int r = 0;
+    uint64_t f = spinlock_acquire_irqsave(&ps->lock);
+    if (vd->end == 0) {
+        if (ps->head != ps->tail) r |= POLLIN;
+        if (ps->writers == 0) r |= POLLIN | POLLHUP;
+    } else {
+        uint32_t next = (ps->tail + 1) % PIPE_BUFSZ;
+        if (next != ps->head) r |= POLLOUT;
+        if (ps->readers == 0) r |= POLLERR;
+    }
+    spinlock_release_irqrestore(&ps->lock, f);
+    return r;
+}
+
 static const vnode_ops_t pipe_read_ops = {
     .read   = pipe_read_op,
     .stat   = pipe_stat_op,
     .ref    = pipe_ref_op,
     .unref  = pipe_unref_op,
+    .poll   = pipe_poll_op,
 };
 static const vnode_ops_t pipe_write_ops = {
     .write  = pipe_write_op,
     .stat   = pipe_stat_op,
     .ref    = pipe_ref_op,
     .unref  = pipe_unref_op,
+    .poll   = pipe_poll_op,
 };
 
 int64_t sys_pipe(uint64_t fds_ptr)

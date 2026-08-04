@@ -5,6 +5,7 @@
 #include "../../include/net/ip.h"
 #include "../../include/net/tcp.h"
 #include "../../include/fs/vfs.h"
+#include "../../include/fs/poll.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/syscall/syscall_internal.h"
@@ -217,12 +218,27 @@ static void sock_unref_op(vnode_t *n) {
     free(n);
 }
 
+static int sock_poll_op(vnode_t *vn, int events) {
+    (void)events;
+    sock_t *s = vn->fs_data;
+    if (s->type == SOCK_STREAM) {
+        if (!s->tcb) return POLLHUP;
+        return tcp_poll(s->tcb);
+    }
+    int r = POLLOUT;
+    uint64_t f = spinlock_acquire_irqsave(&s->lock);
+    if (s->qc > 0) r |= POLLIN;
+    spinlock_release_irqrestore(&s->lock, f);
+    return r;
+}
+
 static const vnode_ops_t sock_vnode_ops = {
     .read  = sock_read_op,
     .write = sock_write_op,
     .stat  = sock_stat_op,
     .ref   = sock_ref_op,
     .unref = sock_unref_op,
+    .poll  = sock_poll_op,
 };
 
 vnode_t *sock_new_vnode(int domain, int type, int proto) {
