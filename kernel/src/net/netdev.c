@@ -14,6 +14,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+extern uint64_t sched_now_ns(void);
+
 const uint8_t eth_broadcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 static netdev_t *g_netdevs;
@@ -95,13 +97,21 @@ static void net_worker(void *arg) {
     dhcp_start(dev);
 
     int tick = 0;
+    uint64_t next_tick = 0;
     for (;;) {
-        tcp_tick();
-        if (++tick % 4 == 0) {
-            if (!dhcp_bound()) dhcp_start(dev);
-            arp_age();
+        int did = 0, spins = 0;
+        while (loopback_drain_one() && ++spins < 8192) did = 1;
+
+        uint64_t now = sched_now_ns();
+        if (now >= next_tick) {
+            tcp_tick();
+            if (++tick % 4 == 0) {
+                if (!dhcp_bound()) dhcp_start(dev);
+                arp_age();
+            }
+            next_tick = now + 250000000ULL;
         }
-        task_sleep_ms(250);
+        task_sleep_ms(did ? 2 : 60);
     }
 }
 

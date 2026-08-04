@@ -4,9 +4,50 @@
 #include "../../include/net/tcp.h"
 #include "../../include/net/net.h"
 #include "../../include/net/arp.h"
+#include "../../include/net/netdev.h"
+#include "../../include/sched/spinlock.h"
 #include <string.h>
 
 static uint16_t g_ip_id = 1;
+
+#define LB_QLEN 32
+#define LB_MAX  1500
+
+typedef struct { netdev_t *dev; size_t len; uint8_t data[LB_MAX]; } lb_pkt_t;
+static lb_pkt_t   g_lb_q[LB_QLEN];
+static int        g_lb_head, g_lb_tail, g_lb_count;
+static spinlock_t g_lb_lock = SPINLOCK_INIT;
+
+static int ip_is_local(netdev_t *dev, uint32_t ip) {
+    return (ip >> 24) == 127 || (dev->ip && ip == dev->ip);
+}
+
+static void loopback_enqueue(netdev_t *dev, const uint8_t *pkt, size_t len) {
+    if (len > LB_MAX) return;
+    uint64_t f = spinlock_acquire_irqsave(&g_lb_lock);
+    if (g_lb_count < LB_QLEN) {
+        g_lb_q[g_lb_tail].dev = dev;
+        g_lb_q[g_lb_tail].len = len;
+        memcpy(g_lb_q[g_lb_tail].data, pkt, len);
+        g_lb_tail = (g_lb_tail + 1) % LB_QLEN;
+        g_lb_count++;
+    }
+    spinlock_release_irqrestore(&g_lb_lock, f);
+}
+
+int loopback_drain_one(void) {
+    lb_pkt_t p;
+    uint64_t f = spinlock_acquire_irqsave(&g_lb_lock);
+    if (g_lb_count == 0) { spinlock_release_irqrestore(&g_lb_lock, f); return 0; }
+    p.dev = g_lb_q[g_lb_head].dev;
+    p.len = g_lb_q[g_lb_head].len;
+    memcpy(p.data, g_lb_q[g_lb_head].data, p.len);
+    g_lb_head = (g_lb_head + 1) % LB_QLEN;
+    g_lb_count--;
+    spinlock_release_irqrestore(&g_lb_lock, f);
+    ip_rx(p.dev, p.data, p.len);
+    return 1;
+}
 
 uint16_t ip_checksum(const void *data, size_t len) {
     const uint8_t *p = data;
@@ -24,17 +65,22 @@ static int same_subnet(netdev_t *dev, uint32_t ip) {
 int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, size_t len) {
     if (len > 1480) return -1;
 
+    int local = ip_is_local(dev, dst);
     uint8_t mac[6];
-    if (dst == 0xFFFFFFFFu) {
-        memcpy(mac, eth_broadcast, 6);
-    } else {
-        if (!dev->ip) return -1;
-        uint32_t nexthop = same_subnet(dev, dst) ? dst : dev->gateway;
-        if (arp_lookup(nexthop, mac) != 0) {
-            arp_request(dev, nexthop);
-            return -1;
+    if (!local) {
+        if (dst == 0xFFFFFFFFu) {
+            memcpy(mac, eth_broadcast, 6);
+        } else {
+            if (!dev->ip) return -1;
+            uint32_t nexthop = same_subnet(dev, dst) ? dst : dev->gateway;
+            if (arp_lookup(nexthop, mac) != 0) {
+                arp_request(dev, nexthop);
+                return -1;
+            }
         }
     }
+
+    uint32_t src = local ? dst : dev->ip;
 
     uint8_t pkt[1500];
     pkt[0] = 0x45;
@@ -45,10 +91,12 @@ int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, siz
     pkt[8] = 64;
     pkt[9] = proto;
     wr16be(pkt + 10, 0);
-    wr32be(pkt + 12, dev->ip);
+    wr32be(pkt + 12, src);
     wr32be(pkt + 16, dst);
     wr16be(pkt + 10, ip_checksum(pkt, 20));
     memcpy(pkt + 20, payload, len);
+
+    if (local) { loopback_enqueue(dev, pkt, 20 + len); return 0; }
 
     return eth_send(dev, mac, ETH_P_IP, pkt, 20 + len);
 }
@@ -65,7 +113,8 @@ void ip_rx(netdev_t *dev, const uint8_t *p, size_t len) {
     uint32_t src   = rd32be(p + 12);
     uint32_t dst   = rd32be(p + 16);
 
-    if (dev->ip && dst != dev->ip && dst != 0xFFFFFFFFu) return;
+    int is_lb = (dst >> 24) == 127;
+    if (!is_lb && dev->ip && dst != dev->ip && dst != 0xFFFFFFFFu) return;
 
     const uint8_t *payload = p + ihl;
     size_t plen = total - ihl;
