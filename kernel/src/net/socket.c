@@ -3,6 +3,7 @@
 #include "../../include/net/net.h"
 #include "../../include/net/udp.h"
 #include "../../include/net/ip.h"
+#include "../../include/net/ipv6.h"
 #include "../../include/net/tcp.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/fs/poll.h"
@@ -18,6 +19,7 @@
 
 typedef struct {
     uint32_t ip;
+    uint8_t  src6[16];
     uint16_t port;
     uint16_t len;
     uint8_t  data[SOCK_DGRAM_MAX];
@@ -26,6 +28,8 @@ typedef struct {
 typedef struct sock {
     int          type;
     int          proto;
+    int          family;
+    uint8_t      peer_ip6[16];
     uint32_t     peer_ip;
     uint16_t     peer_port;
     uint16_t     local_port;
@@ -53,12 +57,13 @@ int sock_is_vnode(const vnode_t *vn) {
     return vn && vn->ops == &sock_vnode_ops;
 }
 
-static void sock_enqueue(sock_t *s, uint32_t ip, uint16_t port, const uint8_t *data, size_t len) {
+static void sock_enqueue2(sock_t *s, uint32_t ip, const uint8_t *ip6, uint16_t port, const uint8_t *data, size_t len) {
     if (len > SOCK_DGRAM_MAX) len = SOCK_DGRAM_MAX;
     uint64_t f = spinlock_acquire_irqsave(&s->lock);
     if (s->qc < SOCK_RXQ) {
         dgram_t *d = &s->q[s->qt];
         d->ip = ip; d->port = port; d->len = (uint16_t)len;
+        if (ip6) memcpy(d->src6, ip6, 16); else memset(d->src6, 0, 16);
         memcpy(d->data, data, len);
         s->qt = (s->qt + 1) % SOCK_RXQ;
         s->qc++;
@@ -70,6 +75,9 @@ static void sock_enqueue(sock_t *s, uint32_t ip, uint16_t port, const uint8_t *d
         spinlock_release_irqrestore(&s->lock, f);
     }
 }
+static void sock_enqueue(sock_t *s, uint32_t ip, uint16_t port, const uint8_t *data, size_t len) {
+    sock_enqueue2(s, ip, 0, port, data, len);
+}
 
 int sock_udp_input(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
                    const uint8_t *data, size_t len) {
@@ -78,6 +86,21 @@ int sock_udp_input(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
     for (sock_t *s = g_socks; s; s = s->next) {
         if (s->type == SOCK_DGRAM && s->bound && s->local_port == dst_port) {
             sock_enqueue(s, src_ip, src_port, data, len);
+            delivered = 1;
+            break;
+        }
+    }
+    spinlock_release(&g_socks_lock);
+    return delivered;
+}
+
+int sock_udp6_input(const uint8_t *src6, uint16_t src_port, uint16_t dst_port,
+                    const uint8_t *data, size_t len) {
+    int delivered = 0;
+    spinlock_acquire(&g_socks_lock);
+    for (sock_t *s = g_socks; s; s = s->next) {
+        if (s->family == AF_INET6 && s->type == SOCK_DGRAM && s->bound && s->local_port == dst_port) {
+            sock_enqueue2(s, 0, src6, src_port, data, len);
             delivered = 1;
             break;
         }
@@ -241,9 +264,75 @@ static const vnode_ops_t sock_vnode_ops = {
     .poll  = sock_poll_op,
 };
 
+int sock_family(const vnode_t *vn) { sock_t *s = vn->fs_data; return s ? s->family : AF_INET; }
+
+int64_t sock_op_bind6(vnode_t *vn, const uint8_t ip6[16], uint16_t port) {
+    (void)ip6;
+    sock_t *s = vn->fs_data;
+    s->local_port = port; s->bound = 1;
+    return 0;
+}
+
+int64_t sock_op_connect6(vnode_t *vn, const uint8_t ip6[16], uint16_t port) {
+    sock_t *s = vn->fs_data;
+    if (s->type == SOCK_STREAM) return -EOPNOTSUPP;
+    memcpy(s->peer_ip6, ip6, 16); s->peer_port = port; s->connected = 1;
+    return 0;
+}
+
+static const uint8_t g_lo6[16] = { 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1 };
+
+int64_t sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t ip6[16], uint16_t port) {
+    sock_t *s = vn->fs_data;
+    netdev_t *dev = netdev_first();
+    if (!dev) return -EINVAL;
+    if (s->type != SOCK_DGRAM) return -EOPNOTSUPP;
+
+    const uint8_t *dst = ip6;
+    uint8_t zero[16]; memset(zero, 0, 16);
+    if (memcmp(dst, zero, 16) == 0) { if (!s->connected) return -EINVAL; dst = s->peer_ip6; port = s->peer_port; }
+
+    if (!s->bound) { s->local_port = g_ephemeral++; if (g_ephemeral == 0) g_ephemeral = 49152; s->bound = 1; }
+
+    uint8_t src[16];
+    if (memcmp(dst, g_lo6, 16) == 0) memcpy(src, g_lo6, 16); else ipv6_get_lladdr(dev, src);
+
+    int r = -1;
+    for (int attempt = 0; attempt < 12; attempt++) {
+        r = udp6_send(dev, src, dst, s->local_port, port, buf, len);
+        if (r == 0) break;
+        task_sleep_ms(5);
+    }
+    return (r == 0) ? (int64_t)len : -EAGAIN;
+}
+
+int64_t sock_op_recvfrom6(vnode_t *vn, void *buf, size_t len, int nonblock, uint8_t src6[16], uint16_t *src_port) {
+    sock_t *s = vn->fs_data;
+    task_t *me = syscall_cur_task();
+    for (;;) {
+        uint64_t f = spinlock_acquire_irqsave(&s->lock);
+        if (s->qc > 0) {
+            dgram_t *d = &s->q[s->qh];
+            size_t n = d->len; if (n > len) n = len;
+            memcpy(buf, d->data, n);
+            if (src6) memcpy(src6, d->src6, 16);
+            if (src_port) *src_port = d->port;
+            s->qh = (s->qh + 1) % SOCK_RXQ; s->qc--;
+            spinlock_release_irqrestore(&s->lock, f);
+            return (int64_t)n;
+        }
+        if (nonblock) { spinlock_release_irqrestore(&s->lock, f); return -EAGAIN; }
+        if (me && me->pending_kill) { spinlock_release_irqrestore(&s->lock, f); return -EINTR; }
+        if (me) { s->reader = me; me->runnable = false; me->state = TASK_BLOCKED; }
+        spinlock_release_irqrestore(&s->lock, f);
+        if (me) sched_reschedule(); else task_yield();
+    }
+}
+
 vnode_t *sock_new_vnode(int domain, int type, int proto) {
-    if (domain != AF_INET) return NULL;
+    if (domain != AF_INET && domain != AF_INET6) return NULL;
     if (type != SOCK_DGRAM && type != SOCK_RAW && type != SOCK_STREAM) return NULL;
+    if (domain == AF_INET6 && type != SOCK_DGRAM && type != SOCK_RAW) return NULL;
     if (type == SOCK_DGRAM && proto == 0) proto = IPPROTO_UDP;
     if (type == SOCK_STREAM && proto == 0) proto = IPPROTO_TCP;
 
@@ -251,6 +340,7 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
     if (!s) return NULL;
     s->type = type;
     s->proto = proto;
+    s->family = domain;
 
     vnode_t *vn = calloc(1, sizeof(*vn));
     if (!vn) { free(s); return NULL; }
