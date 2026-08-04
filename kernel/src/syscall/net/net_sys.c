@@ -212,10 +212,14 @@ int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     if (!lvn) return -EBADF;
     int nonblock = (lf->flags & O_NONBLOCK) ? 1 : 0;
     int is_unix = unix_is_vnode(lvn);
+    int is_v6 = !is_unix && sock_family(lvn) == AF_INET6;
 
     uint32_t rip = 0; uint16_t rport = 0;
-    vnode_t *cvn = is_unix ? unix_op_accept(lvn, nonblock)
-                           : sock_op_accept(lvn, nonblock, &rip, &rport);
+    uint8_t rip6[16]; memset(rip6, 0, 16);
+    vnode_t *cvn;
+    if (is_unix)     cvn = unix_op_accept(lvn, nonblock);
+    else if (is_v6)  cvn = sock_op_accept6(lvn, nonblock, rip6, &rport);
+    else             cvn = sock_op_accept(lvn, nonblock, &rip, &rport);
     fd_put(lf);
     if (!cvn) return nonblock ? -EAGAIN : -EINVAL;
 
@@ -225,7 +229,14 @@ int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     int cfd = fd_alloc(t->fd_table, cf, 0);
     if (cfd < 0) { vfs_file_free(cf); return -EMFILE; }
 
-    if (!is_unix && uaddr && syscall_uptr_validate((void *)uaddr, 16)) {
+    if (is_v6 && uaddr && syscall_uptr_validate((void *)uaddr, 28)) {
+        uint8_t sa[28]; memset(sa, 0, sizeof sa);
+        sa[0] = AF_INET6;
+        wr16be(sa + 2, rport);
+        memcpy(sa + 8, rip6, 16);
+        memcpy((void *)uaddr, sa, 28);
+        if (uaddrlen && syscall_uptr_validate((void *)uaddrlen, sizeof(int))) { int sl = 28; memcpy((void *)uaddrlen, &sl, sizeof(int)); }
+    } else if (!is_unix && uaddr && syscall_uptr_validate((void *)uaddr, 16)) {
         uint8_t sa[16];
         memset(sa, 0, sizeof(sa));
         sa[0] = AF_INET;

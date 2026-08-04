@@ -16,7 +16,12 @@ void        tcp_close(tcp_tcb_t *tcb);
 tcp_tcb_t  *tcp_listen(uint16_t port);
 tcp_tcb_t  *tcp_accept(tcp_tcb_t *lst, int nonblock, uint32_t *rip, uint16_t *rport);
 
+int         tcp_connect6(const uint8_t dst6[16], uint16_t port, tcp_tcb_t **out);
+tcp_tcb_t  *tcp_listen6(uint16_t port);
+tcp_tcb_t  *tcp_accept6(tcp_tcb_t *lst, int nonblock, uint8_t rip6[16], uint16_t *rport);
+
 void        tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, size_t len);
+void        tcp6_rx(netdev_t *dev, const uint8_t *src6, const uint8_t *dst6, const uint8_t *seg, size_t len);
 void        tcp_tick(void);
 
 #endif

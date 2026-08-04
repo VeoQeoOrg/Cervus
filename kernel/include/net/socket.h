@@ -43,5 +43,6 @@ int64_t  sock_op_bind6(vnode_t *vn, const uint8_t ip6[16], uint16_t port);
 int64_t  sock_op_connect6(vnode_t *vn, const uint8_t ip6[16], uint16_t port);
 int64_t  sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t ip6[16], uint16_t port);
 int64_t  sock_op_recvfrom6(vnode_t *vn, void *buf, size_t len, int nonblock, uint8_t src6[16], uint16_t *src_port);
+vnode_t *sock_op_accept6(vnode_t *vn, int nonblock, uint8_t rip6[16], uint16_t *rport);
 
 #endif
