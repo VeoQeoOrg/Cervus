@@ -679,8 +679,10 @@ void sched_reschedule(void) {
 
     if (old && old != &idle_tasks[cpu]) {
         if (old->state == TASK_ZOMBIE) {
-            percpu_t* pc = get_percpu();
-            if (pc) pc->deferred_free_task = old;
+            if (old->parent == NULL) {
+                percpu_t* pc = get_percpu();
+                if (pc) pc->deferred_free_task = old;
+            }
         } else if (old->runnable && old->state != TASK_DEAD) {
             old->time_slice = old->time_slice_init;
             old->last_cpu   = cpu;
