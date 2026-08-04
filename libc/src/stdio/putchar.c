@@ -356,10 +356,11 @@ static int           ps_params[ESC_MAX_PARAMS];
 static int           ps_nparams = 0;
 static int           ps_cur     = 0;
 static int           ps_bold    = 0;
+static int           ps_priv    = 0;
 
 static void ps_reset_params(void) {
     for (int i = 0; i < ESC_MAX_PARAMS; i++) ps_params[i] = -1;
-    ps_nparams = 0; ps_cur = 0;
+    ps_nparams = 0; ps_cur = 0; ps_priv = 0;
 }
 static void ps_push_param(void) {
     if (ps_nparams < ESC_MAX_PARAMS) ps_params[ps_nparams++] = ps_cur;
@@ -371,6 +372,21 @@ static int ps_get(int i, int def) {
 }
 
 static int      ps_reverse = 0;
+
+static uint32_t xterm256_to_rgb(int n) {
+    static const uint8_t steps[6] = { 0, 95, 135, 175, 215, 255 };
+    if (n < 8)   return ansi_color(n, 0);
+    if (n < 16)  return ansi_color(n - 8, 1);
+    if (n <= 231) {
+        n -= 16;
+        return ((uint32_t)steps[(n / 36) % 6] << 16) |
+               ((uint32_t)steps[(n / 6) % 6] << 8) |
+                (uint32_t)steps[n % 6];
+    }
+    int v = 8 + (n - 232) * 10;
+    if (v > 255) v = 255;
+    return ((uint32_t)v << 16) | ((uint32_t)v << 8) | (uint32_t)v;
+}
 
 static void handle_sgr(void) {
     if (ps_nparams == 0) {
@@ -404,6 +420,12 @@ static void handle_sgr(void) {
             else         { if (ps_reverse) text_color = c; else bg_color = c; }
             i += 4;
         }
+        else if ((p == 38 || p == 48) && i + 2 < ps_nparams && ps_params[i + 1] == 5) {
+            uint32_t c = xterm256_to_rgb(ps_params[i + 2] & 0xFF);
+            if (p == 38) { if (ps_reverse) bg_color = c; else text_color = c; }
+            else         { if (ps_reverse) text_color = c; else bg_color = c; }
+            i += 2;
+        }
         else if (p >= 30 && p <= 37) {
             uint32_t c = ansi_color(p-30, ps_bold);
             if (ps_reverse) bg_color = c; else text_color = c;
@@ -427,6 +449,7 @@ static char g_reply[48];
 static int  g_reply_len;
 
 static void reply_ch(char c) { if (g_reply_len < (int)sizeof g_reply) g_reply[g_reply_len++] = c; }
+static void reply_str(const char *s) { while (*s) reply_ch(*s++); }
 static void reply_num(int v) {
     char t[12]; int n = 0;
     if (v <= 0) { reply_ch('0'); return; }
@@ -549,7 +572,7 @@ int putchar(int c) {
         break;
 
     case PS_CSI:
-        if (ch == '?') { ps_state = PS_CSI_PRIV; break; }
+        if (ch == '?' || ch == '>' || ch == '=') { ps_priv = ch; ps_state = PS_CSI_PRIV; break; }
         if (ch == ' ') { ps_push_param(); ps_state = PS_CSI_SP; break; }
         __attribute__((fallthrough));
     case PS_CSI_PRIV:
@@ -562,6 +585,11 @@ int putchar(int c) {
 
             if (ps_state == PS_CSI_PRIV) {
                 int p = ps_get(0, 0);
+                if (ch == 'c' && ps_priv == '>') {
+                    reply_str("\x1b[>0;0;0c");
+                    ps_state = PS_NORMAL;
+                    break;
+                }
                 if (p == 25) {
                     if (ch == 'l') {
                         cursor_visible = 0;
@@ -698,6 +726,9 @@ int putchar(int c) {
                 }
                 break;
             }
+            case 'c':
+                reply_str("\x1b[?1;2c");
+                break;
             default: break;
             }
             ps_state = PS_NORMAL;
