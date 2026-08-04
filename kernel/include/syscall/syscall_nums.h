@@ -132,8 +132,9 @@
 #define SYS_OPENPTY           582
 #define SYS_POLL              583
 #define SYS_SELECT            584
+#define SYS_CLOCK_SET         585
 
-#define SYSCALL_TABLE_SIZE    585
+#define SYSCALL_TABLE_SIZE    586
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

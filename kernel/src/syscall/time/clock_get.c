@@ -119,3 +119,12 @@ int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
 
     return syscall_copy_to_user((void *)ts_ptr, &ts, sizeof(ts));
 }
+
+int64_t sys_clock_set(uint64_t sec)
+{
+    if ((int64_t)sec < 1000000000) return -EINVAL;
+    g_rtc_base_sec    = (int64_t)sec;
+    g_rtc_base_ns     = sched_now_ns();
+    g_rtc_initialized = true;
+    return 0;
+}
