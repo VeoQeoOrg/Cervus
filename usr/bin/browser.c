@@ -2,37 +2,38 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#include <fcntl.h>
 #include <http.h>
 #include <tui.h>
 
 static int g_insecure = 0;
+static http_cookie_jar g_jar;
 
 static int fetch(const char *url, char **out, size_t *outlen) {
-    int pfd[2];
-    if (pipe(pfd) < 0) return -1;
-    pid_t pid = fork();
-    if (pid == 0) {
-        close(pfd[0]);
-        http_opts o; memset(&o, 0, sizeof o);
-        o.header_fd = -1; o.data_len = -1; o.follow = 1; o.max_redirs = 20;
-        o.insecure = g_insecure; o.user_agent = "Cervus-browser/1.0";
-        http_request(url, pfd[1], &o);
-        close(pfd[1]);
-        _exit(0);
-    }
-    close(pfd[1]);
+    char tmp[64];
+    snprintf(tmp, sizeof tmp, "/tmp/.br%d", (int)getpid());
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    http_opts o; memset(&o, 0, sizeof o);
+    o.header_fd = -1; o.data_len = -1; o.follow = 1; o.max_redirs = 20;
+    o.insecure = g_insecure; o.user_agent = "Cervus-browser/1.0";
+    o.jar = &g_jar;
+    http_request(url, fd, &o);
+    close(fd);
+
+    fd = open(tmp, O_RDONLY);
+    if (fd < 0) { unlink(tmp); return -1; }
     size_t cap = 65536, len = 0;
     char *buf = malloc(cap);
-    if (!buf) { close(pfd[0]); return -1; }
+    if (!buf) { close(fd); unlink(tmp); return -1; }
     for (;;) {
         if (len + 8192 > cap) { cap *= 2; char *n = realloc(buf, cap); if (!n) break; buf = n; }
-        long r = read(pfd[0], buf + len, cap - len);
+        long r = read(fd, buf + len, cap - len);
         if (r <= 0) break;
         len += r;
     }
-    close(pfd[0]);
-    int st; waitpid(pid, &st, 0);
+    close(fd);
+    unlink(tmp);
     buf[len] = 0;
     *out = buf; *outlen = len;
     return len > 0 ? 0 : -1;
