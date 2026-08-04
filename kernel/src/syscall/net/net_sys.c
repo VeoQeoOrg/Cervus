@@ -15,6 +15,16 @@ static vnode_t *sock_vnode_from_fd(task_t *t, int fd, vfs_file_t **out_file) {
     return f->vnode;
 }
 
+static int parse_sockaddr6(uint64_t uaddr, uint8_t ip6[16], uint16_t *port) {
+    if (!uaddr) return -1;
+    if (!syscall_uptr_validate((void *)uaddr, 28)) return -2;
+    uint8_t sa[28];
+    memcpy(sa, (void *)uaddr, 28);
+    *port = rd16be(sa + 2);
+    memcpy(ip6, sa + 8, 16);
+    return 0;
+}
+
 static int parse_sun_path(uint64_t uaddr, char *path, int cap) {
     if (!uaddr) return -1;
     if (!syscall_uptr_validate((void *)uaddr, 2 + 108)) return -1;
@@ -60,6 +70,10 @@ int64_t sys_bind(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
         char path[108];
         if (parse_sun_path(uaddr, path, sizeof path) < 0) { fd_put(f); return -EINVAL; }
         r = unix_op_bind(vn, path);
+    } else if (sock_family(vn) == AF_INET6) {
+        uint8_t ip6[16]; uint16_t port;
+        if (parse_sockaddr6(uaddr, ip6, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_bind6(vn, ip6, port);
     } else {
         uint32_t ip; uint16_t port;
         if (parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
@@ -80,6 +94,10 @@ int64_t sys_connect(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
         char path[108];
         if (parse_sun_path(uaddr, path, sizeof path) < 0) { fd_put(f); return -EINVAL; }
         r = unix_op_connect(vn, path);
+    } else if (sock_family(vn) == AF_INET6) {
+        uint8_t ip6[16]; uint16_t port;
+        if (parse_sockaddr6(uaddr, ip6, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_connect6(vn, ip6, port);
     } else {
         uint32_t ip; uint16_t port;
         if (parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
@@ -104,6 +122,10 @@ int64_t sys_sendto(uint64_t fd, uint64_t ubuf, uint64_t len, uint64_t uaddr, uin
     int64_t r;
     if (unix_is_vnode(vn)) {
         r = vn->ops->write(vn, kbuf, (size_t)len, 0);
+    } else if (sock_family(vn) == AF_INET6) {
+        uint8_t ip6[16]; memset(ip6, 0, 16); uint16_t port = 0;
+        if (uaddr && parse_sockaddr6(uaddr, ip6, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_sendto6(vn, kbuf, (size_t)len, ip6, port);
     } else {
         uint32_t ip = 0; uint16_t port = 0;
         if (uaddr && parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
@@ -129,6 +151,24 @@ int64_t sys_recvfrom(uint64_t fd, uint64_t ubuf, uint64_t len, uint64_t uaddr, u
         int64_t r = vn->ops->read(vn, kbuf, (size_t)len, 0);
         fd_put(f);
         if (r > 0) memcpy((void *)ubuf, kbuf, (size_t)r);
+        return r;
+    }
+
+    if (sock_family(vn) == AF_INET6) {
+        uint8_t s6[16]; uint16_t sport6 = 0;
+        int64_t r = sock_op_recvfrom6(vn, kbuf, (size_t)len, nonblock, s6, &sport6);
+        fd_put(f);
+        if (r > 0) {
+            memcpy((void *)ubuf, kbuf, (size_t)r);
+            if (uaddr && syscall_uptr_validate((void *)uaddr, 28)) {
+                uint8_t sa[28]; memset(sa, 0, sizeof sa);
+                sa[0] = AF_INET6;
+                wr16be(sa + 2, sport6);
+                memcpy(sa + 8, s6, 16);
+                memcpy((void *)uaddr, sa, 28);
+                if (uaddrlen && syscall_uptr_validate((void *)uaddrlen, sizeof(int))) { int sl = 28; memcpy((void *)uaddrlen, &sl, sizeof(int)); }
+            }
+        }
         return r;
     }
 
