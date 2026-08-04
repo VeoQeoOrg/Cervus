@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "../fs/vfs.h"
 
+#define AF_UNIX      1
 #define AF_INET      2
 #define SOCK_STREAM  1
 #define SOCK_DGRAM   2
@@ -12,6 +13,13 @@
 
 vnode_t *sock_new_vnode(int domain, int type, int proto);
 int      sock_is_vnode(const vnode_t *vn);
+
+vnode_t *unix_new_vnode(int type);
+int      unix_is_vnode(const vnode_t *vn);
+int64_t  unix_op_bind(vnode_t *vn, const char *path);
+int64_t  unix_op_connect(vnode_t *vn, const char *path);
+int64_t  unix_op_listen(vnode_t *vn);
+vnode_t *unix_op_accept(vnode_t *vn, int nonblock);
 
 int64_t  sock_op_bind(vnode_t *vn, uint32_t ip, uint16_t port);
 int64_t  sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port);

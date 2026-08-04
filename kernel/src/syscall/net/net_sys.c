@@ -10,9 +10,19 @@
 static vnode_t *sock_vnode_from_fd(task_t *t, int fd, vfs_file_t **out_file) {
     vfs_file_t *f = fd_get(t->fd_table, fd);
     if (!f) return NULL;
-    if (!sock_is_vnode(f->vnode)) { fd_put(f); return NULL; }
+    if (!sock_is_vnode(f->vnode) && !unix_is_vnode(f->vnode)) { fd_put(f); return NULL; }
     *out_file = f;
     return f->vnode;
+}
+
+static int parse_sun_path(uint64_t uaddr, char *path, int cap) {
+    if (!uaddr) return -1;
+    if (!syscall_uptr_validate((void *)uaddr, 2 + 108)) return -1;
+    const char *p = (const char *)uaddr + 2;
+    int i = 0;
+    while (i < cap - 1 && i < 108 && p[i]) { path[i] = p[i]; i++; }
+    path[i] = 0;
+    return i ? 0 : -1;
 }
 
 static int parse_sockaddr(uint64_t uaddr, uint32_t *ip, uint16_t *port) {
@@ -28,7 +38,8 @@ static int parse_sockaddr(uint64_t uaddr, uint32_t *ip, uint16_t *port) {
 int64_t sys_socket(uint64_t domain, uint64_t type, uint64_t proto) {
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -ENOMEM;
-    vnode_t *vn = sock_new_vnode((int)domain, (int)type, (int)proto);
+    vnode_t *vn = (domain == AF_UNIX) ? unix_new_vnode((int)type)
+                                      : sock_new_vnode((int)domain, (int)type, (int)proto);
     if (!vn) return -EINVAL;
     vfs_file_t *f = vfs_file_alloc();
     if (!f) { vn->ops->unref(vn); return -ENOMEM; }
@@ -42,11 +53,18 @@ int64_t sys_bind(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     (void)addrlen;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;
-    uint32_t ip; uint16_t port;
-    if (parse_sockaddr(uaddr, &ip, &port) < 0) return -EINVAL;
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
-    int64_t r = sock_op_bind(vn, ip, port);
+    int64_t r;
+    if (unix_is_vnode(vn)) {
+        char path[108];
+        if (parse_sun_path(uaddr, path, sizeof path) < 0) { fd_put(f); return -EINVAL; }
+        r = unix_op_bind(vn, path);
+    } else {
+        uint32_t ip; uint16_t port;
+        if (parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_bind(vn, ip, port);
+    }
     fd_put(f);
     return r;
 }
@@ -55,11 +73,18 @@ int64_t sys_connect(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     (void)addrlen;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;
-    uint32_t ip; uint16_t port;
-    if (parse_sockaddr(uaddr, &ip, &port) < 0) return -EINVAL;
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
-    int64_t r = sock_op_connect(vn, ip, port);
+    int64_t r;
+    if (unix_is_vnode(vn)) {
+        char path[108];
+        if (parse_sun_path(uaddr, path, sizeof path) < 0) { fd_put(f); return -EINVAL; }
+        r = unix_op_connect(vn, path);
+    } else {
+        uint32_t ip; uint16_t port;
+        if (parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_connect(vn, ip, port);
+    }
     fd_put(f);
     return r;
 }
@@ -123,7 +148,7 @@ int64_t sys_listen(uint64_t fd, uint64_t backlog) {
     if (!t || !t->fd_table) return -EBADF;
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
-    int64_t r = sock_op_listen(vn);
+    int64_t r = unix_is_vnode(vn) ? unix_op_listen(vn) : sock_op_listen(vn);
     fd_put(f);
     return r;
 }
@@ -134,9 +159,11 @@ int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     vfs_file_t *lf; vnode_t *lvn = sock_vnode_from_fd(t, (int)fd, &lf);
     if (!lvn) return -EBADF;
     int nonblock = (lf->flags & O_NONBLOCK) ? 1 : 0;
+    int is_unix = unix_is_vnode(lvn);
 
     uint32_t rip = 0; uint16_t rport = 0;
-    vnode_t *cvn = sock_op_accept(lvn, nonblock, &rip, &rport);
+    vnode_t *cvn = is_unix ? unix_op_accept(lvn, nonblock)
+                           : sock_op_accept(lvn, nonblock, &rip, &rport);
     fd_put(lf);
     if (!cvn) return nonblock ? -EAGAIN : -EINVAL;
 
@@ -146,7 +173,7 @@ int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     int cfd = fd_alloc(t->fd_table, cf, 0);
     if (cfd < 0) { vfs_file_free(cf); return -EMFILE; }
 
-    if (uaddr && syscall_uptr_validate((void *)uaddr, 16)) {
+    if (!is_unix && uaddr && syscall_uptr_validate((void *)uaddr, 16)) {
         uint8_t sa[16];
         memset(sa, 0, sizeof(sa));
         sa[0] = AF_INET;
