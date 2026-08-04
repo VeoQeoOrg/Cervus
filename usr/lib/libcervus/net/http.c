@@ -197,6 +197,11 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             rl += snprintf(req + rl, sizeof req - rl, "%s\r\n", opts->headers[h]);
         }
         if (!have_ae) rl += snprintf(req + rl, sizeof req - rl, "Accept-Encoding: gzip, deflate\r\n");
+        if (opts->jar) {
+            char ck[1024];
+            if (http_jar_header(opts->jar, host, ck, sizeof ck) > 0)
+                rl += snprintf(req + rl, sizeof req - rl, "Cookie: %s\r\n", ck);
+        }
         if (data) {
             if (!have_ct)
                 rl += snprintf(req + rl, sizeof req - rl, "Content-Type: %s\r\n",
@@ -234,6 +239,10 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             else if (lc_eq(line, "content-encoding:", 17)) {
                 if (strstr(line, "gzip")) cenc = 1;
                 else if (strstr(line, "deflate")) cenc = 2;
+            }
+            else if (opts->jar && lc_eq(line, "set-cookie:", 11)) {
+                const char *v = line + 11; while (*v == ' ') v++;
+                http_jar_set(opts->jar, host, v);
             }
             else if (lc_eq(line, "location:", 9)) {
                 const char *v = line + 9; while (*v == ' ') v++;

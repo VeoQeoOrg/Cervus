@@ -2,6 +2,21 @@
 #define _CERVUS_HTTP_H
 
 #define HTTP_MAX_HEADERS 32
+#define HTTP_MAX_COOKIES 64
+
+typedef struct {
+    char domain[128];
+    char name[64];
+    char value[256];
+} http_cookie;
+
+typedef struct {
+    http_cookie c[HTTP_MAX_COOKIES];
+    int n;
+} http_cookie_jar;
+
+void http_jar_set(http_cookie_jar *j, const char *host, const char *setcookie);
+int  http_jar_header(http_cookie_jar *j, const char *host, char *out, int cap);
 
 typedef struct {
     const char *method;
@@ -24,6 +39,7 @@ typedef struct {
     int         fail_on_error;
     int         silent;
     int        *out_status;
+    http_cookie_jar *jar;
 } http_opts;
 
 int http_request(const char *url, int out_fd, const http_opts *opts);
