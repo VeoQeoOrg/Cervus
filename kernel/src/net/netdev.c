@@ -136,8 +136,8 @@ int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, ui
     if (!d) return -1;
     d->ip = ip;
     if (netmask) d->netmask = netmask;
-    if (gateway) d->gateway = gateway;
-    if (dns) d->dns = dns;
+    if (gateway == 0xFFFFFFFFu) d->gateway = 0; else if (gateway) d->gateway = gateway;
+    if (dns == 0xFFFFFFFFu) d->dns = 0; else if (dns) d->dns = dns;
     return 0;
 }
 
