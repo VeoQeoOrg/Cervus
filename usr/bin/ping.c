@@ -18,7 +18,7 @@ static uint16_t icmp_csum(const uint8_t *d, int len) {
 }
 
 int main(int argc, char **argv) {
-    int count = 4;
+    int count = -1;
     const char *host = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) count = atoi(argv[++i]);
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
     to.sin_addr.s_addr = dst;
 
     int sent = 0, recvd = 0;
-    for (int seq = 1; seq <= count; seq++) {
+    for (int seq = 1; count < 0 || seq <= count; seq++) {
         uint8_t msg[40];
         memset(msg, 0, sizeof(msg));
         msg[0] = 8;
@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
             usleep(5000);
         }
         if (!got) printf("request timeout for icmp_seq=%d\n", seq);
-        if (seq < count) sleep(1);
+        if (count < 0 || seq < count) sleep(1);
     }
 
     printf("--- %s ping statistics ---\n%d packets transmitted, %d received\n",
