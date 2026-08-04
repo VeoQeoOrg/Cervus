@@ -139,8 +139,11 @@
 #define SYS_SHMAT             589
 #define SYS_SHMDT             590
 #define SYS_SHMCTL            591
+#define SYS_SEMGET            592
+#define SYS_SEMOP             593
+#define SYS_SEMCTL            594
 
-#define SYSCALL_TABLE_SIZE    592
+#define SYSCALL_TABLE_SIZE    595
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

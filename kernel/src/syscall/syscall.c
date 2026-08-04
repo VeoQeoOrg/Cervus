@@ -150,6 +150,9 @@ extern int64_t sys_shmget(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_shmat(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_shmdt(uint64_t);
 extern int64_t sys_shmctl(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_semget(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_semop(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_semctl(uint64_t, uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -214,6 +217,7 @@ W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
+W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -329,6 +333,9 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SHMAT]             = _sys_shmat,
     [SYS_SHMDT]             = _sys_shmdt,
     [SYS_SHMCTL]            = _sys_shmctl,
+    [SYS_SEMGET]            = _sys_semget,
+    [SYS_SEMOP]             = _sys_semop,
+    [SYS_SEMCTL]            = _sys_semctl,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

@@ -130,6 +130,9 @@
 #define SYS_SHMAT           589
 #define SYS_SHMDT           590
 #define SYS_SHMCTL          591
+#define SYS_SEMGET          592
+#define SYS_SEMOP           593
+#define SYS_SEMCTL          594
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
