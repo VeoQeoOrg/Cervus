@@ -423,6 +423,25 @@ static void handle_sgr(void) {
     }
 }
 
+static char g_reply[48];
+static int  g_reply_len;
+
+static void reply_ch(char c) { if (g_reply_len < (int)sizeof g_reply) g_reply[g_reply_len++] = c; }
+static void reply_num(int v) {
+    char t[12]; int n = 0;
+    if (v <= 0) { reply_ch('0'); return; }
+    while (v > 0 && n < 12) { t[n++] = (char)('0' + v % 10); v /= 10; }
+    while (n > 0) reply_ch(t[--n]);
+}
+
+int console_take_reply(char *out, int cap) {
+    int n = g_reply_len;
+    if (n > cap) n = cap;
+    for (int i = 0; i < n; i++) out[i] = g_reply[i];
+    g_reply_len = 0;
+    return n;
+}
+
 static void erase_to_eol(void) {
     uint32_t col = cursor_x / 8, row = cursor_y / 16;
     grid_clear_cells(col, row, (g_gcols > col) ? (g_gcols - col) : 0, bg_color);
@@ -668,6 +687,17 @@ int putchar(int c) {
             }
             case 's': saved_cx = cursor_x; saved_cy = cursor_y; break;
             case 'u': cursor_x = saved_cx; cursor_y = saved_cy; break;
+            case 'n': {
+                int p = ps_get(0, 0);
+                if (p == 6) {
+                    reply_ch(0x1b); reply_ch('[');
+                    reply_num((int)(cursor_y / 16) + 1); reply_ch(';');
+                    reply_num((int)(cursor_x / 8) + 1); reply_ch('R');
+                } else if (p == 5) {
+                    reply_ch(0x1b); reply_ch('['); reply_ch('0'); reply_ch('n');
+                }
+                break;
+            }
             default: break;
             }
             ps_state = PS_NORMAL;

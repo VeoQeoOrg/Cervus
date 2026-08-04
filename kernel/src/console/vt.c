@@ -12,6 +12,8 @@ extern void putchar_flush_end(void);
 extern void draw_cursor(void);
 extern void erase_cursor(void);
 extern int  console_cursor_visible(void);
+extern int  console_take_reply(char *out, int cap);
+extern void tty_vt_input(int vt, char c);
 extern uint64_t sched_now_ns(void);
 extern uint32_t get_cursor_row(void);
 extern uint32_t get_cursor_col(void);
@@ -125,7 +127,9 @@ void vt_write(int n, const char *buf, size_t len) {
         draw_cursor();
         g_blink_on = 1;
         g_blink_next = sched_now_ns() + BLINK_PERIOD_NS;
+        char rep[48]; int rn = console_take_reply(rep, sizeof rep);
         spinlock_release_irqrestore(&g_lock, f);
+        for (int i = 0; i < rn; i++) tty_vt_input(n, rep[i]);
         return;
     }
 
@@ -148,7 +152,9 @@ void vt_write(int n, const char *buf, size_t len) {
     console_set_grid(g_vts[g_active].grid, g_cols, g_rows);
     console_load_state(&saved);
 
+    char rep[48]; int rn = console_take_reply(rep, sizeof rep);
     spinlock_release_irqrestore(&g_lock, f);
+    for (int i = 0; i < rn; i++) tty_vt_input(n, rep[i]);
 }
 
 void vt_handle_chord(int fn) {
