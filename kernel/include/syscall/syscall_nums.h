@@ -133,8 +133,10 @@
 #define SYS_POLL              583
 #define SYS_SELECT            584
 #define SYS_CLOCK_SET         585
+#define SYS_SENDFD            586
+#define SYS_RECVFD            587
 
-#define SYSCALL_TABLE_SIZE    586
+#define SYSCALL_TABLE_SIZE    588
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

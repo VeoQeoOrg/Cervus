@@ -200,6 +200,35 @@ int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     return cfd;
 }
 
+int64_t sys_sendfd(uint64_t sockfd, uint64_t passfd) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *sf; vnode_t *vn = sock_vnode_from_fd(t, (int)sockfd, &sf);
+    if (!vn) return -EBADF;
+    if (!unix_is_vnode(vn)) { fd_put(sf); return -EINVAL; }
+    vfs_file_t *pf = fd_get(t->fd_table, (int)passfd);
+    if (!pf) { fd_put(sf); return -EBADF; }
+    int64_t r = unix_send_fd(vn, pf);
+    if (r < 0) fd_put(pf);
+    fd_put(sf);
+    return r;
+}
+
+int64_t sys_recvfd(uint64_t sockfd) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *sf; vnode_t *vn = sock_vnode_from_fd(t, (int)sockfd, &sf);
+    if (!vn) return -EBADF;
+    if (!unix_is_vnode(vn)) { fd_put(sf); return -EINVAL; }
+    int nonblock = (sf->flags & O_NONBLOCK) ? 1 : 0;
+    vfs_file_t *pf = unix_recv_fd(vn, nonblock);
+    fd_put(sf);
+    if (!pf) return nonblock ? -EAGAIN : -EINVAL;
+    int nfd = fd_alloc(t->fd_table, pf, 0);
+    if (nfd < 0) { fd_put(pf); return -EMFILE; }
+    return nfd;
+}
+
 int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf) {
     if (!syscall_uptr_validate((void *)ubuf, sizeof(net_ifcfg_t))) return -EFAULT;
     net_ifcfg_t cfg;

@@ -144,6 +144,8 @@ extern int64_t sys_accept(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_poll(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
+extern int64_t sys_sendfd(uint64_t, uint64_t);
+extern int64_t sys_recvfd(uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -206,6 +208,7 @@ W5(sys_sendto)      W5(sys_recvfrom)   W2(sys_net_ifcfg)
 W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
+W2(sys_sendfd)      W1(sys_recvfd)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -315,6 +318,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_POLL]              = _sys_poll,
     [SYS_SELECT]            = _sys_select,
     [SYS_CLOCK_SET]         = _sys_clock_set,
+    [SYS_SENDFD]            = _sys_sendfd,
+    [SYS_RECVFD]            = _sys_recvfd,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
