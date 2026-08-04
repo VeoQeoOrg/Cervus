@@ -126,6 +126,10 @@
 #define SYS_CLOCK_SET       585
 #define SYS_SENDFD          586
 #define SYS_RECVFD          587
+#define SYS_SHMGET          588
+#define SYS_SHMAT           589
+#define SYS_SHMDT           590
+#define SYS_SHMCTL          591
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

@@ -135,8 +135,12 @@
 #define SYS_CLOCK_SET         585
 #define SYS_SENDFD            586
 #define SYS_RECVFD            587
+#define SYS_SHMGET            588
+#define SYS_SHMAT             589
+#define SYS_SHMDT             590
+#define SYS_SHMCTL            591
 
-#define SYSCALL_TABLE_SIZE    588
+#define SYSCALL_TABLE_SIZE    592
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1
