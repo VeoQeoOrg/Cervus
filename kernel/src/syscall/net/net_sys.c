@@ -99,12 +99,16 @@ int64_t sys_sendto(uint64_t fd, uint64_t ubuf, uint64_t len, uint64_t uaddr, uin
     uint8_t kbuf[SOCK_IO_MAX];
     if (len) memcpy(kbuf, (void *)ubuf, (size_t)len);
 
-    uint32_t ip = 0; uint16_t port = 0;
-    if (uaddr && parse_sockaddr(uaddr, &ip, &port) < 0) return -EINVAL;
-
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
-    int64_t r = sock_op_sendto(vn, kbuf, (size_t)len, ip, port);
+    int64_t r;
+    if (unix_is_vnode(vn)) {
+        r = vn->ops->write(vn, kbuf, (size_t)len, 0);
+    } else {
+        uint32_t ip = 0; uint16_t port = 0;
+        if (uaddr && parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
+        r = sock_op_sendto(vn, kbuf, (size_t)len, ip, port);
+    }
     fd_put(f);
     return r;
 }
@@ -120,6 +124,14 @@ int64_t sys_recvfrom(uint64_t fd, uint64_t ubuf, uint64_t len, uint64_t uaddr, u
     int nonblock = (f->flags & O_NONBLOCK) ? 1 : 0;
 
     uint8_t kbuf[SOCK_IO_MAX];
+
+    if (unix_is_vnode(vn)) {
+        int64_t r = vn->ops->read(vn, kbuf, (size_t)len, 0);
+        fd_put(f);
+        if (r > 0) memcpy((void *)ubuf, kbuf, (size_t)r);
+        return r;
+    }
+
     uint32_t sip = 0; uint16_t sport = 0;
     int64_t r = sock_op_recvfrom(vn, kbuf, (size_t)len, nonblock, &sip, &sport);
     fd_put(f);
