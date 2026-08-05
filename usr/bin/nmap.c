@@ -95,7 +95,8 @@ int main(int argc, char **argv) {
     printf("Starting scan for %s (%s)\n", host, inet_ntoa(da));
     printf("Scanning %d port%s...\n\n", nports, nports == 1 ? "" : "s");
 
-    int open_ports[MAXPORTS]; int nopen = 0;
+    int *open_ports = malloc(sizeof(int) * nports); int nopen = 0;
+    if (!open_ports) { free(ports); return 1; }
     uint64_t t_start = cervus_uptime_ns();
 
     for (int base = 0; base < nports; base += BATCH) {
@@ -162,5 +163,6 @@ int main(int argc, char **argv) {
            nopen, nports - nopen);
 
     free(ports);
+    free(open_ports);
     return 0;
 }
