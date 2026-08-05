@@ -6,12 +6,18 @@
 #define INFINITY (1.0/0.0)
 #define NAN (0.0/0.0)
 
+#define M_PI 3.14159265358979323846
+
 int abs(int x);
 double fabs(double x);
 double pow(double base, double exp);
 double pow10(int n);
 int isinf(double x);
 int isnan(double x);
+double sin(double x);
+double cos(double x);
+double tan(double x);
+double atan2(double y, double x);
 
 static inline double ldexp(double x, int exp) {
     union { double d; uint64_t u; } v;
@@ -65,6 +71,14 @@ static inline double log2(double x) {
     );
     return result;
 }
+
+static inline float  fabsf(float x)  { return x < 0 ? -x : x; }
+static inline float  floorf(float x) { return (float)floor((double)x); }
+static inline float  ceilf(float x)  { return (float)ceil((double)x); }
+static inline float  cosf(float x)   { return (float)cos((double)x); }
+static inline float  sinf(float x)   { return (float)sin((double)x); }
+static inline long   lrint(double x) { return (long)round(x); }
+static inline long   lrintf(float x) { return (long)round((double)x); }
 
 #define MIN(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a < _b ? _a : _b; })
 #define MAX(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; })
