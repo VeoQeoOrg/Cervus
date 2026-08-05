@@ -70,7 +70,7 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
     if (uaddr <= t->brk_current) return -ENOMEM;
     t->brk_max = uaddr;
 
-    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC;
+    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED;
     for (uint64_t i = 0; i < pages; i++) {
         if (!vmm_map_page(t->pagemap, uaddr + i * 0x1000, phys + i * 0x1000, vf))
             return -ENOMEM;
