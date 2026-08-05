@@ -65,7 +65,7 @@ int64_t sys_shmat(uint64_t id, uint64_t addr, uint64_t flags) {
     s->nattach++;
     spinlock_release_irqrestore(&g_lock, f);
 
-    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_NOEXEC;
+    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_NOEXEC | VMM_SHARED;
     if (!(flags & SHM_RDONLY)) vf |= VMM_WRITE;
     for (size_t i = 0; i < pages; i++) {
         if (!vmm_map_page(t->pagemap, uaddr + i * 0x1000, pmm_virt_to_phys((char *)mem + i * 0x1000), vf)) {

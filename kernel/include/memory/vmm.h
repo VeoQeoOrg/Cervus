@@ -15,6 +15,7 @@
 #define VMM_PSE        (1ULL << 7)
 #define VMM_PAT        (1ULL << 7)
 #define VMM_GLOBAL     (1ULL << 8)
+#define VMM_SHARED     (1ULL << 9)
 #define VMM_NOEXEC     (1ULL << 63)
 
 typedef uint64_t vmm_pte_t;

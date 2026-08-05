@@ -144,6 +144,7 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
     if (!(pt[pt_i] & VMM_PRESENT)) return;
 
     uintptr_t phys = pt[pt_i] & PTE_PHYS_MASK;
+    int shared = (pt[pt_i] & VMM_SHARED) != 0;
 
     pt[pt_i] = 0;
     asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
@@ -152,7 +153,7 @@ void vmm_unmap_page(vmm_pagemap_t* map, uintptr_t virt) {
         ipi_tlb_shootdown_broadcast(&virt, 1);
     }
 
-    if (phys >= PMM_FREE_MIN_PHYS) {
+    if (!shared && phys >= PMM_FREE_MIN_PHYS) {
         pmm_free(pmm_phys_to_virt(phys), 1);
     }
 }
@@ -270,6 +271,11 @@ vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src) {
                 for (size_t pt_i = 0; pt_i < 512; pt_i++) {
                     if (!(src_pt[pt_i] & VMM_PRESENT)) continue;
 
+                    if (src_pt[pt_i] & VMM_SHARED) {
+                        dst_pt[pt_i] = src_pt[pt_i];
+                        continue;
+                    }
+
                     uintptr_t src_phys = src_pt[pt_i] & PTE_PHYS_MASK;
                     if (src_phys < PMM_FREE_MIN_PHYS) continue;
 
@@ -314,6 +320,7 @@ void vmm_free_pagemap(vmm_pagemap_t* map)
 
                 for (size_t pt_i = 0; pt_i < 512; pt_i++) {
                     if (!(pt[pt_i] & VMM_PRESENT)) continue;
+                    if (pt[pt_i] & VMM_SHARED) continue;
                     uintptr_t phys = pt[pt_i] & PTE_PHYS_MASK;
                     if (phys >= PMM_FREE_MIN_PHYS)
                         pmm_free(pmm_phys_to_virt(phys), 1);
