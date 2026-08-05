@@ -89,6 +89,7 @@ int64_t sys_connect(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     if (!t || !t->fd_table) return -EBADF;
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
+    int nonblock = (f->flags & O_NONBLOCK) ? 1 : 0;
     int64_t r;
     if (unix_is_vnode(vn)) {
         char path[108];
@@ -101,7 +102,7 @@ int64_t sys_connect(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     } else {
         uint32_t ip; uint16_t port;
         if (parse_sockaddr(uaddr, &ip, &port) < 0) { fd_put(f); return -EINVAL; }
-        r = sock_op_connect(vn, ip, port);
+        r = sock_op_connect(vn, ip, port, nonblock);
     }
     fd_put(f);
     return r;
