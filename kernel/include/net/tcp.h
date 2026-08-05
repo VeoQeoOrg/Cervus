@@ -8,6 +8,8 @@
 typedef struct tcp_tcb tcp_tcb_t;
 
 int         tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out);
+int         tcp_connect_start(uint32_t ip, uint16_t port, tcp_tcb_t **out);
+int         tcp_connect_status(tcp_tcb_t *tcb);
 int64_t     tcp_send(tcp_tcb_t *tcb, const void *buf, size_t len);
 int64_t     tcp_recv(tcp_tcb_t *tcb, void *buf, size_t len, int nonblock);
 int         tcp_poll(tcp_tcb_t *tcb);

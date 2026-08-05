@@ -139,7 +139,7 @@ static tcp_tcb_t *tcb_find6(const uint8_t *rip6, uint16_t rport, uint16_t lport)
     return NULL;
 }
 
-int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
+int tcp_connect_start(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     netdev_t *dev = tdev();
     if (!dev || !dev->ip) return -EINVAL;
 
@@ -166,6 +166,24 @@ int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     spinlock_release(&g_tcbs_lock);
 
     tcp_output(t, t->iss, TH_SYN, NULL, 0);
+    *out = t;
+    return 0;
+}
+
+int tcp_connect_status(tcp_tcb_t *t) {
+    if (!t) return -EINVAL;
+    uint64_t f = spinlock_acquire_irqsave(&t->lock);
+    int st = t->state, rst = t->reset;
+    spinlock_release_irqrestore(&t->lock, f);
+    if (rst || st == TCP_CLOSED) return -ECONNREFUSED;
+    if (st == TCP_ESTABLISHED)   return 0;
+    return -EINPROGRESS;
+}
+
+int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
+    tcp_tcb_t *t = NULL;
+    int r = tcp_connect_start(ip, port, &t);
+    if (r != 0) { *out = NULL; return r; }
 
     task_t *me = syscall_cur_task();
     uint64_t deadline = now_ms() + 5000;
@@ -178,7 +196,7 @@ int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
         spinlock_release_irqrestore(&t->lock, f);
         if (me) sched_reschedule(); else task_yield();
     }
-    *out = NULL;
+    *out = t;
     return -EINVAL;
 }
 

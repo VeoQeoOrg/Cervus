@@ -125,9 +125,21 @@ int64_t sock_op_bind(vnode_t *vn, uint32_t ip, uint16_t port) {
     return 0;
 }
 
-int64_t sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port) {
+int64_t sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port, int nonblock) {
     sock_t *s = vn->fs_data;
     if (s->type == SOCK_STREAM) {
+        if (s->tcb) {
+            int st = tcp_connect_status(s->tcb);
+            if (st == 0) { int was = s->connected; s->connected = 1; return was ? -EISCONN : 0; }
+            if (st == -EINPROGRESS) return -EALREADY;
+            return st;
+        }
+        if (nonblock) {
+            int r = tcp_connect_start(ip, port, &s->tcb);
+            if (r != 0) return r;
+            s->peer_ip = ip; s->peer_port = port;
+            return -EINPROGRESS;
+        }
         int r = tcp_connect(ip, port, &s->tcb);
         if (r != 0) return r;
         s->peer_ip = ip; s->peer_port = port; s->connected = 1;
