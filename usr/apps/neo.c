@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <termios.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -78,6 +79,9 @@ typedef struct {
     int        clipboard_len;
     int        clipboard_was_line;
     int        syntax;
+    int        autopairs;
+    int        tabstop;
+    int        quit_confirm;
     struct termios orig_termios;
 } neo_t;
 
@@ -183,7 +187,7 @@ static int row_cx_to_rx(neo_row_t *row, int cx)
     int rx = 0;
     for (int j = 0; j < cx && j < row->size; j++) {
         if (utf8_cont((unsigned char)row->chars[j])) continue;
-        if (row->chars[j] == '\t') rx += (NEO_TABSTOP - (rx % NEO_TABSTOP));
+        if (row->chars[j] == '\t') rx += (E.tabstop - (rx % E.tabstop));
         else rx++;
     }
     return rx;
@@ -195,7 +199,7 @@ static int row_rx_to_cx(neo_row_t *row, int rx)
     int cx;
     for (cx = 0; cx < row->size; cx++) {
         if (utf8_cont((unsigned char)row->chars[cx])) continue;
-        if (row->chars[cx] == '\t') cur_rx += (NEO_TABSTOP - (cur_rx % NEO_TABSTOP));
+        if (row->chars[cx] == '\t') cur_rx += (E.tabstop - (cur_rx % E.tabstop));
         else cur_rx++;
         if (cur_rx > rx) return cx;
     }
@@ -458,12 +462,12 @@ static void row_update(neo_row_t *row)
     int tabs = 0;
     for (int j = 0; j < row->size; j++) if (row->chars[j] == '\t') tabs++;
     free(row->render);
-    row->render = malloc(row->size + tabs * (NEO_TABSTOP - 1) + 1);
+    row->render = malloc(row->size + tabs * (E.tabstop - 1) + 1);
     int idx = 0;
     for (int j = 0; j < row->size; j++) {
         if (row->chars[j] == '\t') {
             row->render[idx++] = ' ';
-            while (idx % NEO_TABSTOP != 0) row->render[idx++] = ' ';
+            while (idx % E.tabstop != 0) row->render[idx++] = ' ';
         } else {
             row->render[idx++] = row->chars[j];
         }
@@ -577,11 +581,51 @@ static void row_delete_char(neo_row_t *r, int at)
     E.dirty = 1;
 }
 
+static int ap_closer(int c) { return c == '(' ? ')' : c == '[' ? ']' : c == '{' ? '}' : 0; }
+static int ap_is_quote(int c) { return c == '"' || c == '\'' || c == '`'; }
+static int ap_is_word(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+
+static int ap_next(void) {
+    if (E.cy >= E.numrows) return -1;
+    neo_row_t *r = &E.row[E.cy];
+    return E.cx < r->size ? (unsigned char)r->chars[E.cx] : -1;
+}
+static int ap_prev(void) {
+    if (E.cy >= E.numrows) return -1;
+    neo_row_t *r = &E.row[E.cy];
+    return E.cx > 0 ? (unsigned char)r->chars[E.cx - 1] : -1;
+}
+
 static void editor_insert_char(int ch)
 {
     if (E.cy == E.numrows) row_insert_at(E.numrows, "", 0);
     row_insert_char(&E.row[E.cy], E.cx, ch);
     E.cx++;
+}
+
+static int editor_autopair(int ch)
+{
+    if (!E.autopairs) return 0;
+    int nx = ap_next();
+    int cl = ap_closer(ch);
+    if (cl) {
+        editor_insert_char(ch);
+        editor_insert_char(cl);
+        E.cx--;
+        return 1;
+    }
+    if ((ch == ')' || ch == ']' || ch == '}') && nx == ch) { E.cx++; return 1; }
+    if (ap_is_quote(ch)) {
+        if (nx == ch) { E.cx++; return 1; }
+        int pv = ap_prev();
+        if (!ap_is_word(pv) && !ap_is_word(nx)) {
+            editor_insert_char(ch);
+            editor_insert_char(ch);
+            E.cx--;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void editor_insert_newline(void)
@@ -624,6 +668,18 @@ static void editor_delete_char(void)
     if (E.cx == 0 && E.cy == 0) return;
 
     neo_row_t *r = &E.row[E.cy];
+    if (E.autopairs && E.cx > 0 && E.cx < r->size) {
+        int p = (unsigned char)r->chars[E.cx - 1];
+        int n = (unsigned char)r->chars[E.cx];
+        if ((p == '(' && n == ')') || (p == '[' && n == ']') ||
+            (p == '{' && n == '}') || (p == '"' && n == '"') ||
+            (p == '\'' && n == '\'') || (p == '`' && n == '`')) {
+            row_delete_char(r, E.cx);
+            row_delete_char(r, E.cx - 1);
+            E.cx--;
+            return;
+        }
+    }
     if (E.cx > 0) {
         int start = E.cx - 1;
         while (start > 0 && utf8_cont((unsigned char)r->chars[start])) start--;
@@ -987,7 +1043,7 @@ static void draw_message(abuf_t *ab)
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, E.statusmsg, mlen);
     } else {
-        const char *hint = " ^S save  ^Q quit  ^X cut  ^C copy  ^V paste  ^F find  ^G goto  ^N lineno  ^L syntax";
+        const char *hint = " ^S save  ^Q quit  ^X cut  ^C copy  ^V paste  ^F find  ^G goto  ^L syntax  ^P settings  ^T tree";
         int mlen = strlen(hint);
         if (mlen > E.screencols) mlen = E.screencols;
         ab_append(ab, hint, mlen);
@@ -1220,6 +1276,299 @@ static void editor_choose_language(void)
     }
 }
 
+static void editor_reset_buffer(void)
+{
+    for (int i = 0; i < E.numrows; i++) row_free(&E.row[i]);
+    free(E.row);
+    E.row = NULL;
+    E.numrows = 0; E.rowscap = 0;
+    E.cx = E.cy = E.rx = 0;
+    E.rowoff = E.coloff = 0;
+    E.dirty = 0;
+}
+
+#define TREE_MAX     4096
+#define TREE_EXP_MAX 256
+
+typedef struct { char path[512]; char name[256]; int depth; int is_dir; } tnode_t;
+
+static tnode_t g_tnodes[TREE_MAX];
+static int     g_tn;
+static char    g_expanded[TREE_EXP_MAX][512];
+static int     g_nexp;
+static char    g_tree_root[512];
+
+static void tree_join(const char *dir, const char *name, char *out) {
+    if (!strcmp(dir, "/")) snprintf(out, 512, "/%s", name);
+    else                   snprintf(out, 512, "%s/%s", dir, name);
+}
+
+static int tree_is_expanded(const char *p) {
+    for (int i = 0; i < g_nexp; i++) if (!strcmp(g_expanded[i], p)) return 1;
+    return 0;
+}
+
+static void tree_toggle_exp(const char *p) {
+    for (int i = 0; i < g_nexp; i++) if (!strcmp(g_expanded[i], p)) {
+        for (int j = i; j < g_nexp - 1; j++) memcpy(g_expanded[j], g_expanded[j + 1], 512);
+        g_nexp--;
+        return;
+    }
+    if (g_nexp < TREE_EXP_MAX) snprintf(g_expanded[g_nexp++], 512, "%s", p);
+}
+
+static void tree_expand(const char *p) { if (!tree_is_expanded(p)) tree_toggle_exp(p); }
+
+typedef struct { char name[256]; int is_dir; } tent_t;
+
+static void tree_walk(const char *dir, int depth) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    static tent_t ents[1024];
+    int ne = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && ne < 1024) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char full[512];
+        tree_join(dir, e->d_name, full);
+        struct stat st;
+        int isd = (stat(full, &st) == 0) ? (S_ISDIR(st.st_mode) ? 1 : 0) : 0;
+        snprintf(ents[ne].name, 256, "%s", e->d_name);
+        ents[ne].is_dir = isd;
+        ne++;
+    }
+    closedir(d);
+    for (int i = 0; i < ne - 1; i++)
+        for (int j = i + 1; j < ne; j++) {
+            int sw = (ents[j].is_dir != ents[i].is_dir) ? (ents[j].is_dir > ents[i].is_dir)
+                                                        : (strcmp(ents[i].name, ents[j].name) > 0);
+            if (sw) { tent_t t = ents[i]; ents[i] = ents[j]; ents[j] = t; }
+        }
+    for (int i = 0; i < ne && g_tn < TREE_MAX; i++) {
+        char full[512];
+        tree_join(dir, ents[i].name, full);
+        tnode_t *n = &g_tnodes[g_tn++];
+        snprintf(n->path, 512, "%s", full);
+        snprintf(n->name, 256, "%s", ents[i].name);
+        n->depth = depth;
+        n->is_dir = ents[i].is_dir;
+        if (ents[i].is_dir && tree_is_expanded(full)) tree_walk(full, depth + 1);
+    }
+}
+
+static void tree_rebuild(void) { g_tn = 0; tree_walk(g_tree_root, 0); }
+
+static int tree_input(const char *label, char *buf, int cap) {
+    int len = 0; buf[0] = 0;
+    for (;;) {
+        char line[700];
+        int n = snprintf(line, sizeof line, "\x1b[%d;1H\x1b[43m\x1b[30m %s \x1b[0m %s\x1b[K",
+                         E.screenrows + 2, label, buf);
+        write(1, line, n);
+        int k = read_key();
+        if (k == '\r' || k == '\n') return len > 0 ? 1 : 0;
+        if (k == KEY_ESC) return -1;
+        if (k == KEY_BACKSPACE || k == KEY_CTRL('h')) { if (len > 0) buf[--len] = 0; continue; }
+        if (k >= 32 && k < 127 && len < cap - 1) { buf[len++] = (char)k; buf[len] = 0; }
+    }
+}
+
+static int tree_confirm(const char *msg) {
+    char line[700];
+    int n = snprintf(line, sizeof line, "\x1b[%d;1H\x1b[41m\x1b[97m %s (y/n) \x1b[0m\x1b[K", E.screenrows + 2, msg);
+    write(1, line, n);
+    for (;;) {
+        int k = read_key();
+        if (k == 'y' || k == 'Y') return 1;
+        if (k == 'n' || k == 'N' || k == KEY_ESC) return 0;
+    }
+}
+
+static void tree_target_dir(int sel, char *out) {
+    if (g_tn == 0) { snprintf(out, 512, "%s", g_tree_root); return; }
+    tnode_t *t = &g_tnodes[sel];
+    if (t->is_dir) { snprintf(out, 512, "%s", t->path); tree_expand(t->path); }
+    else {
+        snprintf(out, 512, "%s", t->path);
+        char *s = strrchr(out, '/');
+        if (s) { if (s == out) out[1] = 0; else *s = 0; }
+    }
+}
+
+static void editor_tree(void)
+{
+    if (g_tree_root[0] == 0) {
+        if (E.filename) {
+            snprintf(g_tree_root, 512, "%s", E.filename);
+            char *s = strrchr(g_tree_root, '/');
+            if (s) { if (s == g_tree_root) g_tree_root[1] = 0; else *s = 0; }
+            else if (!getcwd(g_tree_root, 512)) strcpy(g_tree_root, ".");
+        } else if (!getcwd(g_tree_root, 512)) strcpy(g_tree_root, "/");
+    }
+    tree_rebuild();
+
+    int sel = 0, top = 0;
+    for (;;) {
+        int view = E.screenrows;
+        if (view < 1) view = 1;
+        if (sel >= g_tn) sel = g_tn > 0 ? g_tn - 1 : 0;
+        if (sel < top) top = sel;
+        if (sel >= top + view) top = sel - view + 1;
+
+        abuf_t ab = {0};
+        ab_append(&ab, "\x1b[?25l\x1b[H", 9);
+        char hdr[700];
+        int n = snprintf(hdr, sizeof hdr, "\x1b[44m\x1b[97m tree \x1b[0m\x1b[44m %-*.*s\x1b[0m\x1b[K\r\n",
+                         E.screencols - 7, E.screencols - 7, g_tree_root);
+        ab_append(&ab, hdr, n);
+        for (int i = 0; i < view; i++) {
+            int idx = top + i;
+            char line[800];
+            if (idx < g_tn) {
+                tnode_t *t = &g_tnodes[idx];
+                char ind[130]; int k = 0;
+                for (int d = 0; d < t->depth && k < 126; d++) { ind[k++] = ' '; ind[k++] = ' '; }
+                ind[k] = 0;
+                const char *mark = t->is_dir ? (tree_is_expanded(t->path) ? "\x1b[93m- " : "\x1b[93m+ ") : "  ";
+                const char *col  = t->is_dir ? "\x1b[94m" : "";
+                n = snprintf(line, sizeof line, "%s%s%s%s%.*s\x1b[0m\x1b[K\r\n",
+                             idx == sel ? "\x1b[7m" : "", ind, mark, col,
+                             E.screencols - t->depth * 2 - 3, t->name);
+            } else {
+                n = snprintf(line, sizeof line, "\x1b[K\r\n");
+            }
+            ab_append(&ab, line, n);
+        }
+        char foot[800];
+        n = snprintf(foot, sizeof foot,
+                     "\x1b[%d;1H\x1b[46m\x1b[30m \x18\x19 nav  Enter open/expand  a file  m folder  r rename  d del  g refresh  Esc close \x1b[0m\x1b[K",
+                     E.screenrows + 2);
+        ab_append(&ab, foot, n);
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int c = read_key();
+        if (c == KEY_ESC || c == 'q' || c == KEY_CTRL('t')) break;
+        else if (c == KEY_ARROW_UP)   { if (sel > 0) sel--; }
+        else if (c == KEY_ARROW_DOWN) { if (sel < g_tn - 1) sel++; }
+        else if (c == KEY_PAGE_UP)    { sel -= view; if (sel < 0) sel = 0; }
+        else if (c == KEY_PAGE_DOWN)  { sel += view; if (sel > g_tn - 1) sel = g_tn - 1; }
+        else if (c == KEY_HOME)       sel = 0;
+        else if (c == KEY_END)        sel = g_tn - 1;
+        else if (c == KEY_ARROW_LEFT) {
+            if (g_tn && g_tnodes[sel].is_dir && tree_is_expanded(g_tnodes[sel].path)) {
+                tree_toggle_exp(g_tnodes[sel].path); tree_rebuild();
+            } else if (g_tn) {
+                int d = g_tnodes[sel].depth;
+                for (int i = sel - 1; i >= 0; i--) if (g_tnodes[i].depth < d) { sel = i; break; }
+            }
+        }
+        else if (c == '\r' || c == KEY_ARROW_RIGHT) {
+            if (!g_tn) continue;
+            tnode_t *t = &g_tnodes[sel];
+            if (t->is_dir) { tree_toggle_exp(t->path); tree_rebuild(); }
+            else {
+                if (E.dirty && !tree_confirm("Discard unsaved changes?")) continue;
+                char path[512]; snprintf(path, sizeof path, "%s", t->path);
+                editor_reset_buffer();
+                editor_open(path);
+                write(1, "\x1b[2J\x1b[H", 7);
+                return;
+            }
+        }
+        else if (c == 'a' || c == 'A') {
+            char dir[512]; tree_target_dir(sel, dir);
+            char name[256];
+            if (tree_input("New file:", name, sizeof name) == 1) {
+                char full[512]; tree_join(dir, name, full);
+                int fd = open(full, O_WRONLY | O_CREAT, 0644);
+                if (fd >= 0) close(fd);
+                tree_rebuild();
+            }
+        }
+        else if (c == 'm' || c == 'M') {
+            char dir[512]; tree_target_dir(sel, dir);
+            char name[256];
+            if (tree_input("New folder:", name, sizeof name) == 1) {
+                char full[512]; tree_join(dir, name, full);
+                mkdir(full, 0755);
+                tree_rebuild();
+            }
+        }
+        else if (c == 'r' || c == 'R') {
+            if (!g_tn) continue;
+            tnode_t *t = &g_tnodes[sel];
+            char name[256]; snprintf(name, sizeof name, "%s", t->name);
+            if (tree_input("Rename to:", name, sizeof name) == 1) {
+                char dir[512]; snprintf(dir, sizeof dir, "%s", t->path);
+                char *s = strrchr(dir, '/'); if (s) { if (s == dir) dir[1] = 0; else *s = 0; }
+                char dst[512]; tree_join(dir, name, dst);
+                rename(t->path, dst);
+                tree_rebuild();
+            }
+        }
+        else if (c == 'd' || c == 'D') {
+            if (!g_tn) continue;
+            tnode_t *t = &g_tnodes[sel];
+            char msg[300]; snprintf(msg, sizeof msg, "Delete '%s'?", t->name);
+            if (tree_confirm(msg)) {
+                if (t->is_dir) rmdir(t->path);
+                else           unlink(t->path);
+                tree_rebuild();
+            }
+        }
+        else if (c == 'g') tree_rebuild();
+    }
+    write(1, "\x1b[2J\x1b[H", 7);
+    set_status("");
+}
+
+static void editor_settings(void)
+{
+    int sel = 0;
+    const int NITEMS = 5;
+    const char *names[5] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width", "Quit confirm" };
+    for (;;) {
+        static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n";
+        abuf_t ab = {0};
+        ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
+        ab_append(&ab, hdr, (int)(sizeof hdr - 1));
+        char vals[5][40];
+        snprintf(vals[0], sizeof vals[0], "%s", E.autopairs ? "ON" : "OFF");
+        snprintf(vals[1], sizeof vals[1], "%s", E.show_lineno ? "ON" : "OFF");
+        snprintf(vals[2], sizeof vals[2], "%s", LANG_NAMES[E.syntax]);
+        snprintf(vals[3], sizeof vals[3], "%d", E.tabstop);
+        snprintf(vals[4], sizeof vals[4], "%s", E.quit_confirm ? "ON" : "OFF");
+        for (int i = 0; i < NITEMS; i++) {
+            char line[128];
+            int n = snprintf(line, sizeof line, "%s  %-16s %-12s\x1b[0m\r\n",
+                             i == sel ? "\x1b[7m" : "  ", names[i], vals[i]);
+            ab_append(&ab, line, n);
+        }
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int c = read_key();
+        if (c == KEY_ESC || c == 'q') break;
+        else if (c == KEY_ARROW_UP)   sel = (sel + NITEMS - 1) % NITEMS;
+        else if (c == KEY_ARROW_DOWN) sel = (sel + 1) % NITEMS;
+        else if (c == KEY_ARROW_LEFT || c == KEY_ARROW_RIGHT || c == '\r' || c == ' ') {
+            int dir = (c == KEY_ARROW_LEFT) ? -1 : 1;
+            switch (sel) {
+                case 0: E.autopairs = !E.autopairs; break;
+                case 1: E.show_lineno = !E.show_lineno; recompute_lineno_width(); break;
+                case 2: E.syntax = (E.syntax + LANG_COUNT + dir) % LANG_COUNT;
+                        for (int i = 0; i < E.numrows; i++) editor_update_syntax(i); break;
+                case 3: E.tabstop += dir; if (E.tabstop < 1) E.tabstop = 1; if (E.tabstop > 16) E.tabstop = 16;
+                        for (int i = 0; i < E.numrows; i++) row_update(&E.row[i]); break;
+                case 4: E.quit_confirm = !E.quit_confirm; break;
+            }
+        }
+    }
+    write(1, "\x1b[2J\x1b[H", 7);
+    set_status("");
+}
+
 static int process_key(void)
 {
     int c = read_key();
@@ -1231,7 +1580,7 @@ static int process_key(void)
             break;
 
         case KEY_ESC:
-            if (E.dirty && NEO_QUIT_CONFIRM && !E.quit_pending) {
+            if (E.dirty && E.quit_confirm && !E.quit_pending) {
                 set_status("Unsaved changes. ESC again to exit without saving, Ctrl-S to save.");
                 E.quit_pending = 1;
                 return 1;
@@ -1244,7 +1593,7 @@ static int process_key(void)
             break;
 
         case KEY_CTRL('q'):
-            if (E.dirty && NEO_QUIT_CONFIRM && !E.quit_pending) {
+            if (E.dirty && E.quit_confirm && !E.quit_pending) {
                 set_status("Unsaved changes. Ctrl-Q again to force quit.");
                 E.quit_pending = 1;
                 return 1;
@@ -1337,12 +1686,22 @@ static int process_key(void)
             editor_choose_language();
             break;
 
+        case KEY_CTRL('p'):
+            editor_settings();
+            break;
+
+        case KEY_CTRL('t'):
+            editor_tree();
+            break;
+
         case 0:
             break;
 
         default:
             if (c == '\t')               editor_insert_char('\t');
-            else if (c >= 32 && c < 1000) editor_insert_char(c);
+            else if (c >= 32 && c < 1000) {
+                if (!editor_autopair(c)) editor_insert_char(c);
+            }
             break;
     }
     E.quit_pending = 0;
@@ -1365,6 +1724,9 @@ static void init_editor(void)
     E.clipboard = NULL;
     E.clipboard_len = 0;
     E.clipboard_was_line = 0;
+    E.autopairs = 1;
+    E.tabstop = NEO_TABSTOP;
+    E.quit_confirm = NEO_QUIT_CONFIRM;
     get_window_size();
     recompute_lineno_width();
 }
