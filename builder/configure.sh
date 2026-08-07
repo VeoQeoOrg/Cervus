@@ -46,6 +46,8 @@ LIBCERVUS_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector \
 -mno-red-zone -fno-pie -fno-pic -O0 -g -Wall -Wextra \
 -nostdinc -isystem usr/sysroot/usr/include -I usr/lib/libcervus/include"
 
+LIBCERVUS_CFLAGS_OPT="${LIBCERVUS_CFLAGS/-O0/-O2}"
+
 APP_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
 -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2 -mno-red-zone -O0 -g \
 -nostdinc -isystem usr/sysroot/usr/include -Wl,-Ttext-segment=0x401000"
@@ -158,6 +160,12 @@ rule cc_lib
   depfile = \$out.d
   deps = gcc
 
+rule cc_lib_opt
+  command = gcc $LIBCERVUS_CFLAGS_OPT -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(lib*)  \$in
+  depfile = \$out.d
+  deps = gcc
+
 rule cc_app
   command = gcc $APP_CFLAGS -MMD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
   description = CCLD(app) \$out
@@ -200,7 +208,11 @@ EOF
 LIB_OBJS=""
 for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     obj=$(obj_for "$src" libcervus)
-    printf 'build %s: cc_lib %s\n' "$obj" "$src"
+    case "$src" in
+        */image/*|*/compress/inflate.c|*/math/trig.c) rule=cc_lib_opt ;;
+        *) rule=cc_lib ;;
+    esac
+    printf 'build %s: %s %s\n' "$obj" "$rule" "$src"
     LIB_OBJS="$LIB_OBJS $obj"
 done
 printf 'build obj/libcervus/setjmp.o: asm_bare usr/lib/libcervus/setjmp.asm\n'
