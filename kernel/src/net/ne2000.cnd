@@ -1,0 +1,371 @@
+/* This NIC was written in The Cinder Programming Language
+ * Description: Child of C and Rust but raised by C
+ * Link: https://github.com/z3nnix/cinder
+ *
+ * Note: This driver follows the existing C driver style
+ * like polling, i32 error codes to minimize FFI friction
+ */
+
+use "std/x86.cnd";
+
+extern fn pci_register_driver(drv: *void);
+extern fn pci_config_read16(seg: u16, bus: u8, dev: u8, func: u8, off: u16) -> u16;
+extern fn pci_config_write16(seg: u16, bus: u8, dev: u8, func: u8, off: u16, v: u16);
+extern fn netdev_register(mac: *u8, mtu: u32, tx: fn(*void, *void, usize) -> i32, priv: *void) -> *void;
+extern fn net_rx(dev: *void, frame: *void, len: usize);
+extern fn task_create(name: *u8, entry: fn(*void), arg: *void, priority: i32) -> *void;
+extern fn task_sleep_ms(ms: u64);
+extern fn serial_printf(fmt: *u8, ...);
+extern fn ne2000_lock();
+extern fn ne2000_unlock();
+
+const CMD      = 0x00u8;
+const STARTPG  = 0x01u8;
+const STOPPG   = 0x02u8;
+const BOUNDARY = 0x03u8;
+const TPSR     = 0x04u8;
+const TCNTLO   = 0x05u8;
+const TCNTHI   = 0x06u8;
+const ISR      = 0x07u8;
+const CURR     = 0x07u8;
+const RSARLO   = 0x08u8;
+const RSARHI   = 0x09u8;
+const RCNTLO   = 0x0Au8;
+const RCNTHI   = 0x0Bu8;
+const RXCR     = 0x0Cu8;
+const TXCR     = 0x0Du8;
+const DCFG     = 0x0Eu8;
+const IMR      = 0x0Fu8;
+const DATA     = 0x10u8;
+const RESET    = 0x1Fu8;
+
+const E8390_STOP   = 0x01u8;
+const E8390_START  = 0x02u8;
+const E8390_TRANS  = 0x04u8;
+const E8390_RREAD  = 0x08u8;
+const E8390_RWRITE = 0x10u8;
+const E8390_NODMA  = 0x20u8;
+const E8390_PAGE1  = 0x40u8;
+
+const ENISR_TX   = 0x02u8;
+const ENISR_RDC  = 0x40u8;
+const ENRSR_RXOK = 0x01u8;
+
+const RING_START        = 0x46u8;
+const RING_END          = 0x80u8;
+const TX_PAGE           = 0x40u8;
+const TX_MAX            = 1536usize;
+const RING_MAX_FRAMES   = 64usize;
+const FRAME_HDR         = 4usize;
+const ETH_HDR           = 14usize;
+const MIN_FRAME         = 60usize;
+const FRAME_MAX         = 1604usize;
+const MAC_LEN           = 6usize;
+const PROM_LEN          = 12usize;
+const MTU               = 1500u32;
+const ISR_ALL           = 0xFFu8;
+const DCFG_DEFAULT      = 0x48u8;
+const RXCR_PHYSMATCH    = 0x08u8;
+const RXCR_BROADCAST    = 0x04u8;
+const TX_POLL_RETRIES   = 100000usize;
+const POLL_INTERVAL_MS  = 1u64;
+const WORKER_PRIO       = 1i32;
+
+const PCI_COMMAND     = 0x04u16;
+const PCI_CMD_ENABLE  = 0x0005u16;
+
+static_assert(sizeof(pci_bar_t) == 24);
+static_assert(offsetof(pci_bar_t, t) == 16);
+static_assert(sizeof(pci_device_t) == 176);
+static_assert(offsetof(pci_device_t, bars) == 24);
+
+static IO_BASE: u16 = 0;
+static NEXT_PAGE: u8 = RING_START;
+static NDEV: usize = 0;
+static MAC_STORE: [MAC_LEN]u8 = [0; MAC_LEN];
+static PROM_STORE: [PROM_LEN]u8 = [0; PROM_LEN];
+static RXBUF: [TX_MAX]u8 = [0; TX_MAX];
+static DRIVER_BUF: [24]u8 = [0; 24];
+
+struct pci_bar_t {
+    base: u64,
+    size: u64,
+    t: u8,
+    is64: u8,
+    pref: u8,
+    _pad: u8,
+}
+
+struct pci_device_t {
+    segment: u16,
+    bus: u8,
+    device: u8,
+    func: u8,
+    vendor_id: u16,
+    device_id: u16,
+    class_code: u8,
+    subclass: u8,
+    prog_if: u8,
+    revision: u8,
+    header_type: u8,
+    irq_line: u8,
+    irq_pin: u8,
+    _pad: u8,
+    bars: [6]pci_bar_t,
+    cap_msi_off: u8,
+    cap_msix_off: u8,
+    msix_table_size: u16,
+}
+
+struct PCI_Driver {
+    name: *u8,
+    match_vendor: i16,
+    match_device: i16,
+    match_class: i16,
+    match_subclass: i16,
+    probe: fn(*void) -> i32,
+}
+
+fn reg8(off: u8, v: u8) {
+    outb(IO_BASE + off as u16, v);
+}
+
+fn reg8r(off: u8) -> u8 {
+    return inb(IO_BASE + off as u16);
+}
+
+unsafe fn dma_read(dst: *u8, n: usize) {
+    for i in 0usize..n {
+        dst[i] = inb(IO_BASE + DATA as u16);
+    }
+}
+
+unsafe fn dma_write(src: *u8, n: usize) {
+    for i in 0usize..n {
+        outb(IO_BASE + DATA as u16, src[i]);
+    }
+}
+
+unsafe fn transmit(dev: *void, frame: *void, len: usize) -> i32 {
+    if len == 0 {
+        return -1;
+    }
+
+    let mut n = len;
+    if n < MIN_FRAME {
+        n = MIN_FRAME;
+    }
+
+    if n > TX_MAX {
+        return -1;
+    }
+
+    ne2000_lock();
+    outb(IO_BASE + CMD as u16, E8390_NODMA | E8390_START);
+    reg8(TPSR, TX_PAGE);
+    reg8(TCNTLO, (n & 0xff) as u8);
+    reg8(TCNTHI, (n >> 8) as u8);
+    reg8(RSARLO, 0x00u8);
+    reg8(RSARHI, TX_PAGE);
+    reg8(RCNTLO, (n & 0xff) as u8);
+    reg8(RCNTHI, (n >> 8) as u8);
+    outb(IO_BASE + CMD as u16, E8390_RWRITE | E8390_START);
+    dma_write(frame as *u8, len);
+
+    if len < MIN_FRAME {
+        for i in len..MIN_FRAME {
+            outb(IO_BASE + DATA as u16, 0x00u8);
+        }
+    }
+
+    let mut t = 0usize;
+    while t < TX_POLL_RETRIES {
+        if (reg8r(ISR) & ENISR_RDC) != 0 {
+            break;
+        }
+        t += 1;
+    }
+    reg8(ISR, ENISR_RDC);
+    if t >= TX_POLL_RETRIES {
+        ne2000_unlock();
+        return -1;
+    }
+
+    outb(IO_BASE + CMD as u16, E8390_NODMA | E8390_START);
+    outb(IO_BASE + CMD as u16, E8390_TRANS | E8390_START);
+
+    t = 0usize;
+    while t < TX_POLL_RETRIES {
+        if (reg8r(ISR) & ENISR_TX) != 0 {
+            break;
+        }
+        t += 1;
+    }
+
+    reg8(ISR, ENISR_TX);
+    ne2000_unlock();
+    if t >= TX_POLL_RETRIES {
+        return -1;
+    }
+    return 0;
+}
+
+unsafe fn rx_drain_one() -> usize {
+    let io = IO_BASE;
+    if io == 0 {
+        return 0;
+    }
+
+    ne2000_lock();
+    outb(io + CMD as u16, E8390_PAGE1 | E8390_NODMA);
+    let cur = inb(io + CURR as u16);
+    outb(io + CMD as u16, E8390_START);
+
+    let frame = NEXT_PAGE;
+    if frame == cur {
+        ne2000_unlock();
+        return 0;
+    }
+
+    outb(io + CMD as u16, E8390_NODMA | E8390_START);
+    reg8(RSARLO, 0x00u8);
+    reg8(RSARHI, frame);
+    reg8(RCNTLO, FRAME_HDR as u8);
+    reg8(RCNTHI, 0x00u8);
+    outb(io + CMD as u16, E8390_RREAD | E8390_START);
+    let st = inb(io + DATA as u16);
+    let nxt = inb(io + DATA as u16);
+    let llo = inb(io + DATA as u16);
+    let lhi = inb(io + DATA as u16);
+    outb(io + CMD as u16, E8390_NODMA | E8390_START);
+
+    let tlen = (llo as usize) | ((lhi as usize) << 8);
+    if (st & ENRSR_RXOK) == 0 || tlen < FRAME_HDR || tlen > FRAME_MAX {
+        NEXT_PAGE = cur;
+        reg8(BOUNDARY, frame);
+        ne2000_unlock();
+        return 0;
+    }
+
+    let mut plen = tlen - FRAME_HDR;
+    if plen > TX_MAX {
+        plen = TX_MAX;
+    }
+    if plen > 0 {
+        reg8(RCNTLO, (plen & 0xff) as u8);
+        reg8(RCNTHI, (plen >> 8) as u8);
+        outb(io + CMD as u16, E8390_RREAD | E8390_START);
+        dma_read(&RXBUF as *u8, plen);
+        outb(io + CMD as u16, E8390_NODMA | E8390_START);
+    }
+
+    reg8(BOUNDARY, frame);
+    NEXT_PAGE = nxt;
+    ne2000_unlock();
+    return plen;
+}
+
+unsafe fn rx_drain() {
+    let ndev = NDEV;
+    if ndev == 0 {
+        return;
+    }
+
+    let mut guard = 0usize;
+    while guard < RING_MAX_FRAMES {
+        let plen = rx_drain_one();
+        if plen == 0 {
+            break;
+        }
+        if plen >= ETH_HDR {
+            net_rx(ndev as *void, &RXBUF as *void, plen);
+        }
+        guard += 1;
+    }
+}
+
+unsafe fn worker(arg: *void) {
+    loop {
+        rx_drain();
+        task_sleep_ms(POLL_INTERVAL_MS);
+    }
+}
+
+unsafe fn probe(dev: *void) -> i32 {
+    let d = dev as *pci_device_t;
+    let bar0 = &d.bars[0];
+    if bar0.t != 1 {
+        serial_printf(c"[ne2000] no IO BAR\n");
+        return -1;
+    }
+    if bar0.base == 0 {
+        serial_printf(c"[ne2000] BAR0 is zero\n");
+        return -1;
+    }
+    let io = bar0.base as u16;
+    IO_BASE = io;
+    let cmd = pci_config_read16(d.segment, d.bus, d.device, d.func, PCI_COMMAND);
+    pci_config_write16(d.segment, d.bus, d.device, d.func, PCI_COMMAND, cmd | PCI_CMD_ENABLE);
+
+    inb(io + RESET as u16);
+    reg8(ISR, ISR_ALL);
+
+    reg8(STARTPG, RING_START);
+    reg8(STOPPG, RING_END);
+    reg8(BOUNDARY, RING_START);
+    reg8(IMR, 0x00u8);
+    reg8(RXCR, RXCR_PHYSMATCH | RXCR_BROADCAST);
+    reg8(TXCR, 0x00u8);
+    reg8(DCFG, DCFG_DEFAULT);
+    outb(io + CMD as u16, E8390_PAGE1 | E8390_NODMA);
+    outb(io + CURR as u16, RING_START);
+    outb(io + CMD as u16, E8390_START);
+
+    outb(io + CMD as u16, E8390_NODMA | E8390_START);
+    reg8(RSARLO, 0x00u8);
+    reg8(RSARHI, 0x00u8);
+    reg8(RCNTLO, PROM_LEN as u8);
+    reg8(RCNTHI, 0x00u8);
+    outb(io + CMD as u16, E8390_RREAD | E8390_START);
+    for i in 0usize..PROM_LEN {
+        PROM_STORE[i] = inb(io + DATA as u16);
+    }
+    outb(io + CMD as u16, E8390_NODMA | E8390_START);
+    for i in 0usize..MAC_LEN {
+        MAC_STORE[i] = PROM_STORE[2 * i];
+    }
+
+    let ndev = netdev_register(&MAC_STORE as *u8, MTU, transmit, null);
+    if ndev == null {
+        serial_printf(c"[ne2000] netdev_register failed\n");
+        return -1;
+    }
+    NDEV = ndev as usize;
+    NEXT_PAGE = RING_START;
+
+    serial_printf(c"[ne2000] %02x:%02x:%02x:%02x:%02x:%02x link=up irq=poll\n",
+                  MAC_STORE[0] as u32, MAC_STORE[1] as u32, MAC_STORE[2] as u32,
+                  MAC_STORE[3] as u32, MAC_STORE[4] as u32, MAC_STORE[5] as u32);
+    return 0;
+}
+
+export fn ne2000_init() {
+    unsafe {
+        let d = &DRIVER_BUF as *PCI_Driver;
+        d.name = c"ne2000";
+        d.match_vendor = 0x10ECi16;
+        d.match_device = -32727i16;
+        d.match_class = -1i16;
+        d.match_subclass = -1i16;
+        d.probe = probe;
+        pci_register_driver(&DRIVER_BUF as *void);
+    }
+}
+
+export fn ne2000_start_worker() {
+    unsafe {
+        if NDEV != 0 {
+            task_create(c"ne2000_worker", worker, null, WORKER_PRIO);
+        }
+    }
+}
