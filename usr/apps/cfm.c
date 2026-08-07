@@ -13,8 +13,6 @@
 #define PMAX        1024
 #define MAX_ENTRIES 4096
 
-enum { IMG_OFF = 0, IMG_FULL = 1, IMG_INLINE = 2 };
-
 typedef struct {
     char name[256];
     int  is_dir;
@@ -29,12 +27,17 @@ static int      g_rows = 24, g_cols = 80;
 static char     g_clip[PMAX];
 static int      g_clip_cut = 0, g_clip_have = 0;
 static int      g_show_hidden = 0;
-static int      g_img_mode = IMG_FULL;
+static int      g_preview = 1;
 static int      g_confirm_del = 1;
 static char     g_status[256];
 
 static image_t  g_thumb;
 static char     g_thumb_path[PMAX];
+
+static char     g_pvbuf[16384];
+static char    *g_pvlines[1024];
+static int      g_pvn;
+static char     g_pv_path[PMAX];
 
 static int has_ext_ci(const char *name, const char *ext) {
     size_t nl = strlen(name), el = strlen(ext);
@@ -125,12 +128,54 @@ static void load_dir(void) {
     g_top = 0;
 }
 
-static void draw_inline_thumb(const char *path);
+static void draw_inline_thumb(const char *path, int split);
 
 static void fmt_size(long n, char *out, int cap) {
     if (n < 1024)               snprintf(out, cap, "%ldB", n);
     else if (n < 1024 * 1024)   snprintf(out, cap, "%ldK", n / 1024);
     else                        snprintf(out, cap, "%ldM", n / (1024 * 1024));
+}
+
+static void load_preview_text(const char *path) {
+    if (!strcmp(g_pv_path, path)) return;
+    snprintf(g_pv_path, sizeof g_pv_path, "%s", path);
+    g_pvn = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { g_pvlines[g_pvn++] = "(cannot read)"; return; }
+    ssize_t total = 0, r;
+    while (total < (ssize_t)sizeof(g_pvbuf) - 1 &&
+           (r = read(fd, g_pvbuf + total, sizeof(g_pvbuf) - 1 - total)) > 0)
+        total += r;
+    close(fd);
+    if (total < 0) total = 0;
+    g_pvbuf[total] = 0;
+    for (ssize_t i = 0; i < total && i < 512; i++)
+        if (g_pvbuf[i] == 0) { g_pvlines[g_pvn++] = "(binary file)"; return; }
+    g_pvlines[g_pvn++] = g_pvbuf;
+    for (ssize_t i = 0; i < total && g_pvn < 1024; i++) {
+        if (g_pvbuf[i] == '\n') { g_pvbuf[i] = 0; g_pvlines[g_pvn++] = g_pvbuf + i + 1; }
+        else if (g_pvbuf[i] == '\t' || (unsigned char)g_pvbuf[i] == '\r') g_pvbuf[i] = ' ';
+    }
+}
+
+static void load_preview_dir(const char *path) {
+    if (!strcmp(g_pv_path, path)) return;
+    snprintf(g_pv_path, sizeof g_pv_path, "%s", path);
+    g_pvn = 0;
+    DIR *d = opendir(path);
+    if (!d) { g_pvlines[g_pvn++] = "(cannot open)"; return; }
+    char *bp = g_pvbuf; size_t rem = sizeof g_pvbuf;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && g_pvn < 1024 && rem > 260) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (!g_show_hidden && e->d_name[0] == '.') continue;
+        int n = snprintf(bp, rem, "%s", e->d_name);
+        if (n < 0 || (size_t)n >= rem) break;
+        g_pvlines[g_pvn++] = bp;
+        bp += n + 1; rem -= (size_t)n + 1;
+    }
+    closedir(d);
+    if (g_pvn == 0) g_pvlines[g_pvn++] = "(empty)";
 }
 
 static void draw(void) {
@@ -139,11 +184,25 @@ static void draw(void) {
     if (g_sel < g_top) g_top = g_sel;
     if (g_sel >= g_top + listrows) g_top = g_sel - listrows + 1;
 
-    printf("\x1b[?25l");
+    entry_t *sel = (g_n > 0) ? &g_ent[g_sel] : NULL;
+    int split = g_cols, prev_img = 0, prev_txt = 0;
+    if (g_preview && sel && g_cols >= 50) {
+        split = g_cols * 46 / 100;
+        if (is_image(sel->name) && !sel->is_dir) prev_img = 1;
+        else                                     prev_txt = 1;
+    }
+    int leftw = (split < g_cols) ? split - 1 : g_cols;
+    if (leftw < 8) { leftw = g_cols; split = g_cols; prev_img = prev_txt = 0; }
 
+    if (prev_txt) {
+        char full[PMAX]; path_join(g_cwd, sel->name, full);
+        if (sel->is_dir) load_preview_dir(full);
+        else             load_preview_text(full);
+    }
+
+    printf("\x1b[?25l");
     tui_move(1, 1);
-    printf("\x1b[44m\x1b[97m cfm \x1b[0m\x1b[44m %-*.*s\x1b[0m",
-           g_cols - 6, g_cols - 6, g_cwd);
+    printf("\x1b[44m\x1b[97m cfm \x1b[0m\x1b[44m %-*.*s\x1b[0m", g_cols - 6, g_cols - 6, g_cwd);
 
     for (int i = 0; i < listrows; i++) {
         int idx = g_top + i;
@@ -154,14 +213,19 @@ static void draw(void) {
             char sz[24];
             if (e->is_dir) strcpy(sz, "<DIR>");
             else           fmt_size(e->size, sz, sizeof(sz));
-            int namew = g_cols - 12;
-            if (namew < 4) namew = 4;
+            int namew = leftw - 11; if (namew < 4) namew = 4;
             char row[600];
-            snprintf(row, sizeof(row), " %c %-*.*s %7s ",
+            snprintf(row, sizeof(row), " %c %-*.*s %6s",
                      e->is_dir ? '/' : ' ', namew, namew, e->name, sz);
-            if (selrow)         printf("\x1b[7m%s\x1b[0m", row);
-            else if (e->is_dir) printf("\x1b[94m%s\x1b[0m", row);
-            else                printf("%s", row);
+            if (selrow)         printf("\x1b[7m%-*.*s\x1b[0m", leftw, leftw, row);
+            else if (e->is_dir) printf("\x1b[94m%-*.*s\x1b[0m", leftw, leftw, row);
+            else                printf("%-*.*s", leftw, leftw, row);
+        } else {
+            printf("%*s", leftw, "");
+        }
+        if (split < g_cols) {
+            printf("\x1b[90m|\x1b[0m");
+            if (prev_txt && i < g_pvn) printf(" %-.*s", g_cols - split - 2, g_pvlines[i]);
             printf("\x1b[K");
         } else {
             printf("\x1b[K");
@@ -180,19 +244,20 @@ static void draw(void) {
 
     tui_move(g_rows, 1);
     printf("\x1b[46m\x1b[30m"
-           " \x18\x19 nav  Enter view  e run  r rename  d del  c/x/v  "
+           " \x18\x19 nav  Enter open  e run  r rename  d del  c/x/v  "
            "n mkdir  s settings  . hidden  q quit \x1b[0m\x1b[K");
 
-    fflush(stdout);
-
-    if (g_img_mode == IMG_INLINE && g_n > 0 && !g_ent[g_sel].is_dir && is_image(g_ent[g_sel].name)) {
-        char full[PMAX];
-        path_join(g_cwd, g_ent[g_sel].name, full);
-        draw_inline_thumb(full);
-    } else if (g_thumb_path[0]) {
-        image_free(&g_thumb);
-        g_thumb.px = NULL;
-        g_thumb_path[0] = 0;
+    if (prev_img) {
+        char full[PMAX]; path_join(g_cwd, sel->name, full);
+        if (strcmp(g_thumb_path, full) != 0) {
+            tui_move(2, split + 2);
+            printf("\x1b[93m Loading image... \x1b[0m");
+        }
+        fflush(stdout);
+        draw_inline_thumb(full, split);
+    } else {
+        fflush(stdout);
+        if (g_thumb_path[0]) { image_free(&g_thumb); g_thumb.px = NULL; g_thumb_path[0] = 0; }
     }
 }
 
@@ -369,15 +434,14 @@ static void view_image_fullscreen(const char *path) {
     image_free(&im);
 }
 
-static void draw_inline_thumb(const char *path) {
+static void draw_inline_thumb(const char *path, int split) {
     cervus_fb_info_t fbi;
     if (cervus_fb_info(&fbi) != 0) return;
     int cell_w = (int)fbi.width / g_cols;
     int cell_h = (int)fbi.height / g_rows;
     if (cell_w < 2 || cell_h < 2) return;
 
-    int split = g_cols * 52 / 100;
-    int px0 = split * cell_w;
+    int px0 = (split + 1) * cell_w;
     int py0 = 1 * cell_h;
     int rw = (int)fbi.width - px0 - cell_w;
     int rh = (g_rows - 3) * cell_h;
@@ -410,7 +474,7 @@ static void do_open(void) {
     } else {
         char full[PMAX];
         path_join(g_cwd, e->name, full);
-        if (is_image(e->name) && g_img_mode != IMG_OFF)
+        if (is_image(e->name))
             view_image_fullscreen(full);
         else
             view_file(full);
@@ -512,13 +576,12 @@ static void do_paste(void) {
 static void do_settings(void) {
     int sel = 0;
     const int N = 3;
-    const char *names[3] = { "Image view", "Confirm delete", "Show hidden" };
-    const char *imode[3] = { "Off", "Fullscreen", "Inline" };
+    const char *names[3] = { "Preview pane", "Confirm delete", "Show hidden" };
     for (;;) {
         printf("\x1b[?25l\x1b[2J\x1b[H");
         printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n");
         char vals[3][32];
-        snprintf(vals[0], sizeof vals[0], "%s", imode[g_img_mode]);
+        snprintf(vals[0], sizeof vals[0], "%s", g_preview ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", g_confirm_del ? "ON" : "OFF");
         snprintf(vals[2], sizeof vals[2], "%s", g_show_hidden ? "ON" : "OFF");
         for (int i = 0; i < N; i++)
@@ -529,14 +592,14 @@ static void do_settings(void) {
         else if (k == TK_UP)   sel = (sel + N - 1) % N;
         else if (k == TK_DOWN) sel = (sel + 1) % N;
         else if (k == TK_LEFT || k == TK_RIGHT || k == TK_ENTER || k == ' ') {
-            int dir = (k == TK_LEFT) ? -1 : 1;
             switch (sel) {
-                case 0: g_img_mode = (g_img_mode + 3 + dir) % 3; break;
+                case 0: g_preview = !g_preview; break;
                 case 1: g_confirm_del = !g_confirm_del; break;
                 case 2: g_show_hidden = !g_show_hidden; g_sel = 0; load_dir(); break;
             }
         }
     }
+    g_pv_path[0] = 0;
     set_status("");
 }
 
