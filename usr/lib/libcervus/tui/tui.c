@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <termios.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 
 static struct termios g_saved;
@@ -55,6 +56,11 @@ void tui_move(int row, int col) {
     printf("\x1b[%d;%dH", row, col);
 }
 
+static int tui_esc_has_more(void) {
+    struct pollfd p = { 0, POLLIN, 0 };
+    return poll(&p, 1, 40) > 0 && (p.revents & POLLIN);
+}
+
 int tui_read_key(void) {
     char c;
     ssize_t n;
@@ -68,12 +74,12 @@ int tui_read_key(void) {
     }
 
     char seq[3];
-    if (read(0, &seq[0], 1) != 1) return TK_ESC;
-    if (read(0, &seq[1], 1) != 1) return TK_ESC;
+    if (!tui_esc_has_more() || read(0, &seq[0], 1) != 1) return TK_ESC;
+    if (!tui_esc_has_more() || read(0, &seq[1], 1) != 1) return TK_ESC;
 
     if (seq[0] == '[') {
         if (seq[1] >= '0' && seq[1] <= '9') {
-            if (read(0, &seq[2], 1) != 1) return TK_ESC;
+            if (!tui_esc_has_more() || read(0, &seq[2], 1) != 1) return TK_ESC;
             if (seq[2] == '~') {
                 switch (seq[1]) {
                     case '1': case '7': return TK_HOME;
