@@ -43,19 +43,22 @@ int main(int argc, char **argv) {
     image_t scaled = (dw != img.w || dh != img.h) ? image_scale(&img, dw, dh) : img;
     if (!scaled.px) scaled = img;
 
-    uint32_t *frame = malloc((size_t)dw * dh * 4);
-    if (!frame) { image_free(&img); return 1; }
-    for (int i = 0; i < dw * dh; i++) {
-        uint32_t p = scaled.px[i];
-        unsigned a = (p >> 24) & 0xFF;
-        unsigned r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
-        r = r * a / 255; g = g * a / 255; b = b * a / 255;
-        frame[i] = (r << 16) | (g << 8) | b;
-    }
-
     int ox = (sw - dw) / 2, oy = (sh - dh) / 2;
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
+
+    uint32_t *screen = calloc((size_t)sw * sh, 4);
+    if (!screen) { image_free(&img); return 1; }
+    for (int y = 0; y < dh && oy + y < sh; y++) {
+        const uint32_t *s = scaled.px + (size_t)y * dw;
+        uint32_t *d = screen + (size_t)(oy + y) * sw + ox;
+        for (int x = 0; x < dw && ox + x < sw; x++) {
+            uint32_t p = s[x];
+            unsigned a = (p >> 24) & 0xFF;
+            unsigned r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+            d[x] = ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
+        }
+    }
 
     struct termios orig, raw;
     int have_tio = (tcgetattr(0, &orig) == 0);
@@ -67,16 +70,14 @@ int main(int argc, char **argv) {
     }
 
     cervus_fb_acquire();
-    uint32_t *black = calloc((size_t)sw, 4);
-    if (black) { for (int y = 0; y < sh; y++) cervus_fb_blit(black, 0, y, sw, 1); free(black); }
-    for (int y = 0; y < dh; y++) cervus_fb_blit(frame + (size_t)y * dw, ox, oy + y, dw, 1);
+    cervus_fb_blit(screen, 0, 0, sw, sh);
 
     char c;
     read(0, &c, 1);
     cervus_fb_release();
     if (have_tio) tcsetattr(0, TCSAFLUSH, &orig);
 
-    free(frame);
+    free(screen);
     if (scaled.px != img.px) image_free(&scaled);
     image_free(&img);
     return 0;

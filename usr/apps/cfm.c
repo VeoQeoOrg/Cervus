@@ -328,6 +328,7 @@ static void view_file(const char *path) {
 }
 
 static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
+    if (rw <= 0 || rh <= 0) return;
     int dw = im->w, dh = im->h;
     double k = (double)rw / dw;
     if ((double)rh / dh < k) k = (double)rh / dh;
@@ -336,20 +337,21 @@ static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
     if (dh < 1) dh = 1;
     image_t sc = (dw != im->w || dh != im->h) ? image_scale(im, dw, dh) : *im;
     if (!sc.px) return;
-    uint32_t *frame = malloc((size_t)dw * 4);
+    uint32_t *frame = calloc((size_t)rw * rh, 4);
     if (frame) {
-        int ox = px0 + (rw - dw) / 2, oy = py0 + (rh - dh) / 2;
-        if (ox < px0) ox = px0;
-        if (oy < py0) oy = py0;
-        for (int y = 0; y < dh; y++) {
+        int ox = (rw - dw) / 2, oy = (rh - dh) / 2;
+        if (ox < 0) ox = 0;
+        if (oy < 0) oy = 0;
+        for (int y = 0; y < dh && oy + y < rh; y++) {
             const uint32_t *s = sc.px + (size_t)y * dw;
-            for (int x = 0; x < dw; x++) {
+            uint32_t *d = frame + (size_t)(oy + y) * rw + ox;
+            for (int x = 0; x < dw && ox + x < rw; x++) {
                 uint32_t p = s[x];
                 unsigned a = (p >> 24) & 0xFF, r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
-                frame[x] = ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
+                d[x] = ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
             }
-            cervus_fb_blit(frame, ox, oy + y, dw, 1);
         }
+        cervus_fb_blit(frame, px0, py0, rw, rh);
         free(frame);
     }
     if (sc.px != im->px) image_free(&sc);
@@ -361,8 +363,6 @@ static void view_image_fullscreen(const char *path) {
     cervus_fb_info_t fbi;
     if (cervus_fb_info(&fbi) != 0) { image_free(&im); view_file(path); return; }
     cervus_fb_acquire();
-    uint32_t *black = calloc((size_t)fbi.width, 4);
-    if (black) { for (unsigned y = 0; y < fbi.height; y++) cervus_fb_blit(black, 0, y, fbi.width, 1); free(black); }
     blit_fit(&im, 0, 0, (int)fbi.width, (int)fbi.height);
     tui_read_key();
     cervus_fb_release();
