@@ -9,6 +9,7 @@
 #   --fresh           recreate empty disk image(s) before boot
 #   --installed       boot existing disk only, no ISO (simulate real HW)
 #   --net             attach an e1000 NIC with user-mode networking (internet via host NAT)
+#   --net=ne2k        attach a NE2000 (ne2k_pci) NIC instead of e1000
 #
 # The ISO is expected to already exist at demo_iso/Cervus.latest.iso
 # (nb builds it before calling this, except for --installed).
@@ -34,6 +35,7 @@ for a in "$@"; do
         --fresh|--reset-disk) FRESH=true ;;
         --installed) INSTALLED=true ;;
         --net)       NET=" -netdev user,id=net0 -device e1000,netdev=net0" ;;
+        --net=ne2k)  NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
         --disk=ide|--disk=ahci|--disk=nvme|--disk=all|--disk=none)
             DISK=${a#--disk=} ;;
         *) echo "run: unknown option '$a'" >&2; exit 1 ;;
