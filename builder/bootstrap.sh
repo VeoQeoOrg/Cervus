@@ -5,6 +5,7 @@
 #   builder/bootstrap.sh deps     fetch freestnd-c-hdrs, cc-runtime, limine-protocol
 #   builder/bootstrap.sh limine   download + build the Limine bootloader
 #   builder/bootstrap.sh tcc      build the on-OS tcc compiler into the sysroot
+#   builder/bootstrap.sh cinder   install the cinder compiler into /usr/bin
 #
 # The tcc step downloads/patches/builds tcc via builder/build_tcc.sh
 # (patches applied by builder/tcc_patch.pl). It only *reads* libcervus.a/
@@ -79,10 +80,37 @@ do_tcc() {
     sh builder/build_tcc.sh
 }
 
+CINDER_VERSION=0.1
+CINDER_URL="https://github.com/z3nnix/cinder/releases/download/v${CINDER_VERSION}/cinder"
+CINDER_BIN=/usr/bin/cinder
+
+do_cinder() {
+    if [ -x "$CINDER_BIN" ]; then
+        say "cinder already installed at $CINDER_BIN"
+        return 0
+    fi
+    say "fetching cinder compiler v$CINDER_VERSION"
+    SUDO=""
+    [ "$(id -u)" = 0 ] || SUDO="sudo"
+    tmp=$(mktemp)
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 -o "$tmp" "$CINDER_URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$tmp" "$CINDER_URL"
+    else
+        rm -f "$tmp"
+        die "need curl or wget to download cinder"
+    fi
+    $SUDO install -m 0755 "$tmp" "$CINDER_BIN"
+    rm -f "$tmp"
+    say "installed $CINDER_BIN"
+}
+
 [ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|tcc}"
 case "$1" in
     deps)   do_deps ;;
     limine) do_limine ;;
     tcc)    do_tcc ;;
+    cinder) do_cinder ;;
     *)      die "unknown step: $1" ;;
 esac
