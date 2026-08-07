@@ -8,6 +8,7 @@
 #   ./nb flash [/dev/sdX]   write the fresh ISO to a USB stick (removable-only, confirms)
 #   ./nb clean              remove build artifacts (keeps fetched deps/limine/tcc)
 #   ./nb gitclean           deep wipe: also remove deps, limine, tcc, disks, ISOs
+#                           (cinder is a system tool in /usr/bin, left alone)
 #   ./nb cleaniso           drop demo_iso/ only
 #   ./nb reconfigure        regenerate build.ninja only
 #   ./nb help               this text
@@ -118,7 +119,7 @@ clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja
   rm -f initramfs.tar limine.conf
   find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
-  echo "cleaned (deps/limine/tcc kept; './nb gitclean' for a full wipe)"
+  echo "cleaned (deps/limine/tcc kept; cinder lives in /usr/bin; './nb gitclean' for a full wipe)"
   ;;
 gitclean)
   deep_clean

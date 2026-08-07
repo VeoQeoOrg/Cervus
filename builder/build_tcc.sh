@@ -21,7 +21,7 @@ die() { printf '\033[91m[tcc] %s\033[0m\n' "$*" >&2; exit 1; }
 TCC_VERSION=0.9.27
 TCC_TARBALL=tcc-$TCC_VERSION.tar.bz2
 TCC_SRC_DIRNAME=tcc-$TCC_VERSION
-TCC_URL="https://download.savannah.gnu.org/releases/tinycc/$TCC_TARBALL"
+TCC_URL="https://download-mirror.savannah.gnu.org/releases/tinycc/$TCC_TARBALL"
 
 TCC_DIR=usr/tcc
 SRC_DIR=$TCC_DIR/$TCC_SRC_DIRNAME
@@ -35,7 +35,7 @@ LIBTCC1_A=$TCC_DIR/libtcc1.a
 
 # --- 1. download -------------------------------------------------------
 mkdir -p "$TCC_DIR"
-if [ ! -f "$TCC_DIR/$TCC_TARBALL" ]; then
+if [ ! -s "$TCC_DIR/$TCC_TARBALL" ]; then
     say "downloading $TCC_TARBALL"
     if command -v wget >/dev/null 2>&1; then
         wget -q -O "$TCC_DIR/$TCC_TARBALL" "$TCC_URL"
