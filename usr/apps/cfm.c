@@ -7,9 +7,13 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <tui.h>
+#include <image.h>
+#include <sys/cervus.h>
 
 #define PMAX        1024
 #define MAX_ENTRIES 4096
+
+enum { IMG_OFF = 0, IMG_FULL = 1, IMG_INLINE = 2 };
 
 typedef struct {
     char name[256];
@@ -25,7 +29,29 @@ static int      g_rows = 24, g_cols = 80;
 static char     g_clip[PMAX];
 static int      g_clip_cut = 0, g_clip_have = 0;
 static int      g_show_hidden = 0;
+static int      g_img_mode = IMG_FULL;
+static int      g_confirm_del = 1;
 static char     g_status[256];
+
+static image_t  g_thumb;
+static char     g_thumb_path[PMAX];
+
+static int has_ext_ci(const char *name, const char *ext) {
+    size_t nl = strlen(name), el = strlen(ext);
+    if (nl < el) return 0;
+    const char *p = name + nl - el;
+    for (size_t i = 0; i < el; i++) {
+        char a = p[i]; if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (a != ext[i]) return 0;
+    }
+    return 1;
+}
+
+static int is_image(const char *name) {
+    return has_ext_ci(name, ".png") || has_ext_ci(name, ".jpg") ||
+           has_ext_ci(name, ".jpeg") || has_ext_ci(name, ".bmp") ||
+           has_ext_ci(name, ".svg");
+}
 
 static void set_status(const char *s) {
     strncpy(g_status, s, sizeof(g_status) - 1);
@@ -99,6 +125,8 @@ static void load_dir(void) {
     g_top = 0;
 }
 
+static void draw_inline_thumb(const char *path);
+
 static void fmt_size(long n, char *out, int cap) {
     if (n < 1024)               snprintf(out, cap, "%ldB", n);
     else if (n < 1024 * 1024)   snprintf(out, cap, "%ldK", n / 1024);
@@ -152,10 +180,20 @@ static void draw(void) {
 
     tui_move(g_rows, 1);
     printf("\x1b[46m\x1b[30m"
-           " \x18\x19 nav  Enter view  e run  Bksp up  r rename  d del  "
-           "c copy  x cut  v paste  n mkdir  . hidden  q quit \x1b[0m\x1b[K");
+           " \x18\x19 nav  Enter view  e run  r rename  d del  c/x/v  "
+           "n mkdir  s settings  . hidden  q quit \x1b[0m\x1b[K");
 
     fflush(stdout);
+
+    if (g_img_mode == IMG_INLINE && g_n > 0 && !g_ent[g_sel].is_dir && is_image(g_ent[g_sel].name)) {
+        char full[PMAX];
+        path_join(g_cwd, g_ent[g_sel].name, full);
+        draw_inline_thumb(full);
+    } else if (g_thumb_path[0]) {
+        image_free(&g_thumb);
+        g_thumb.px = NULL;
+        g_thumb_path[0] = 0;
+    }
 }
 
 static int read_line_prompt(const char *label, char *buf, int cap) {
@@ -289,6 +327,74 @@ static void view_file(const char *path) {
     free(lines);
 }
 
+static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
+    int dw = im->w, dh = im->h;
+    double k = (double)rw / dw;
+    if ((double)rh / dh < k) k = (double)rh / dh;
+    dw = (int)(im->w * k); dh = (int)(im->h * k);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    image_t sc = (dw != im->w || dh != im->h) ? image_scale(im, dw, dh) : *im;
+    if (!sc.px) return;
+    uint32_t *frame = malloc((size_t)dw * 4);
+    if (frame) {
+        int ox = px0 + (rw - dw) / 2, oy = py0 + (rh - dh) / 2;
+        if (ox < px0) ox = px0;
+        if (oy < py0) oy = py0;
+        for (int y = 0; y < dh; y++) {
+            const uint32_t *s = sc.px + (size_t)y * dw;
+            for (int x = 0; x < dw; x++) {
+                uint32_t p = s[x];
+                unsigned a = (p >> 24) & 0xFF, r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+                frame[x] = ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
+            }
+            cervus_fb_blit(frame, ox, oy + y, dw, 1);
+        }
+        free(frame);
+    }
+    if (sc.px != im->px) image_free(&sc);
+}
+
+static void view_image_fullscreen(const char *path) {
+    image_t im;
+    if (image_load(path, &im) != 0) { set_status("cannot decode image"); return; }
+    cervus_fb_info_t fbi;
+    if (cervus_fb_info(&fbi) != 0) { image_free(&im); view_file(path); return; }
+    cervus_fb_acquire();
+    uint32_t *black = calloc((size_t)fbi.width, 4);
+    if (black) { for (unsigned y = 0; y < fbi.height; y++) cervus_fb_blit(black, 0, y, fbi.width, 1); free(black); }
+    blit_fit(&im, 0, 0, (int)fbi.width, (int)fbi.height);
+    tui_read_key();
+    cervus_fb_release();
+    image_free(&im);
+}
+
+static void draw_inline_thumb(const char *path) {
+    cervus_fb_info_t fbi;
+    if (cervus_fb_info(&fbi) != 0) return;
+    int cell_w = (int)fbi.width / g_cols;
+    int cell_h = (int)fbi.height / g_rows;
+    if (cell_w < 2 || cell_h < 2) return;
+
+    int split = g_cols * 52 / 100;
+    int px0 = split * cell_w;
+    int py0 = 1 * cell_h;
+    int rw = (int)fbi.width - px0 - cell_w;
+    int rh = (g_rows - 3) * cell_h;
+    if (rw < 16 || rh < 16) return;
+
+    if (strcmp(g_thumb_path, path) != 0) {
+        image_free(&g_thumb);
+        g_thumb.px = NULL;
+        image_t im;
+        if (image_load(path, &im) != 0) { g_thumb_path[0] = 0; return; }
+        g_thumb = im;
+        snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
+    }
+    if (!g_thumb.px) return;
+    blit_fit(&g_thumb, px0, py0, rw, rh);
+}
+
 static void do_open(void) {
     if (g_n == 0) return;
     entry_t *e = &g_ent[g_sel];
@@ -304,7 +410,10 @@ static void do_open(void) {
     } else {
         char full[PMAX];
         path_join(g_cwd, e->name, full);
-        view_file(full);
+        if (is_image(e->name) && g_img_mode != IMG_OFF)
+            view_image_fullscreen(full);
+        else
+            view_file(full);
     }
 }
 
@@ -361,7 +470,7 @@ static void do_delete(void) {
     if (g_n == 0 || !strcmp(g_ent[g_sel].name, "..")) return;
     char msg[300];
     snprintf(msg, sizeof(msg), "Delete '%s'?", g_ent[g_sel].name);
-    if (confirm(msg)) {
+    if (!g_confirm_del || confirm(msg)) {
         char full[PMAX];
         path_join(g_cwd, g_ent[g_sel].name, full);
         if (remove_tree(full) == 0) set_status("deleted");
@@ -400,6 +509,37 @@ static void do_paste(void) {
     load_dir();
 }
 
+static void do_settings(void) {
+    int sel = 0;
+    const int N = 3;
+    const char *names[3] = { "Image view", "Confirm delete", "Show hidden" };
+    const char *imode[3] = { "Off", "Fullscreen", "Inline" };
+    for (;;) {
+        printf("\x1b[?25l\x1b[2J\x1b[H");
+        printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n");
+        char vals[3][32];
+        snprintf(vals[0], sizeof vals[0], "%s", imode[g_img_mode]);
+        snprintf(vals[1], sizeof vals[1], "%s", g_confirm_del ? "ON" : "OFF");
+        snprintf(vals[2], sizeof vals[2], "%s", g_show_hidden ? "ON" : "OFF");
+        for (int i = 0; i < N; i++)
+            printf("%s  %-16s %-12s\x1b[0m\r\n", i == sel ? "\x1b[7m" : "  ", names[i], vals[i]);
+        fflush(stdout);
+        int k = tui_read_key();
+        if (k == TK_ESC || k == 'q') break;
+        else if (k == TK_UP)   sel = (sel + N - 1) % N;
+        else if (k == TK_DOWN) sel = (sel + 1) % N;
+        else if (k == TK_LEFT || k == TK_RIGHT || k == TK_ENTER || k == ' ') {
+            int dir = (k == TK_LEFT) ? -1 : 1;
+            switch (sel) {
+                case 0: g_img_mode = (g_img_mode + 3 + dir) % 3; break;
+                case 1: g_confirm_del = !g_confirm_del; break;
+                case 2: g_show_hidden = !g_show_hidden; g_sel = 0; load_dir(); break;
+            }
+        }
+    }
+    set_status("");
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         strncpy(g_cwd, argv[1], sizeof(g_cwd) - 1);
@@ -435,6 +575,7 @@ int main(int argc, char **argv) {
             break;
         }
         case 'e': run_program(); break;
+        case 's': do_settings(); break;
         case 'r': do_rename(); break;
         case 'd': do_delete(); break;
         case 'n': do_mkdir();  break;
