@@ -1470,7 +1470,7 @@ static void editor_tree(void)
                 for (int i = sel - 1; i >= 0; i--) if (g_tnodes[i].depth < d) { sel = i; break; }
             }
         }
-        else if (c == '\r' || c == KEY_ARROW_RIGHT) {
+        else if (c == '\r' || c == '\n' || c == KEY_ARROW_RIGHT) {
             if (!g_tn) continue;
             tnode_t *t = &g_tnodes[sel];
             if (t->is_dir) { tree_toggle_exp(t->path); tree_rebuild(); }
@@ -1571,7 +1571,7 @@ static void editor_settings(void)
         if (c == KEY_ESC || c == 'q') break;
         else if (c == KEY_ARROW_UP)   sel = (sel + NITEMS - 1) % NITEMS;
         else if (c == KEY_ARROW_DOWN) sel = (sel + 1) % NITEMS;
-        else if (c == KEY_ARROW_LEFT || c == KEY_ARROW_RIGHT || c == '\r' || c == ' ') {
+        else if (c == KEY_ARROW_LEFT || c == KEY_ARROW_RIGHT || c == '\r' || c == '\n' || c == ' ') {
             int dir = (c == KEY_ARROW_LEFT) ? -1 : 1;
             switch (sel) {
                 case 0: E.autopairs = !E.autopairs; break;
