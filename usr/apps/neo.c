@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <termios.h>
 #include <dirent.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -120,6 +121,12 @@ static void enable_raw_mode(void)
     write(1, "\x1b[?1049h\x1b[?7l", 13);
 }
 
+static int esc_has_more(void)
+{
+    struct pollfd p = { 0, POLLIN, 0 };
+    return poll(&p, 1, 40) > 0 && (p.revents & POLLIN);
+}
+
 static int read_key(void)
 {
     char c;
@@ -130,12 +137,12 @@ static int read_key(void)
     if (c != 0x1B) return (unsigned char)c;
 
     char seq[4];
-    if (read(0, &seq[0], 1) != 1) return KEY_ESC;
-    if (read(0, &seq[1], 1) != 1) return KEY_ESC;
+    if (!esc_has_more() || read(0, &seq[0], 1) != 1) return KEY_ESC;
+    if (!esc_has_more() || read(0, &seq[1], 1) != 1) return KEY_ESC;
 
     if (seq[0] == '[') {
         if (seq[1] >= '0' && seq[1] <= '9') {
-            if (read(0, &seq[2], 1) != 1) return KEY_ESC;
+            if (!esc_has_more() || read(0, &seq[2], 1) != 1) return KEY_ESC;
             if (seq[2] == '~') {
                 switch (seq[1]) {
                     case '1':
@@ -1483,6 +1490,18 @@ static void editor_tree(void)
                 char full[512]; tree_join(dir, name, full);
                 int fd = open(full, O_WRONLY | O_CREAT, 0644);
                 if (fd >= 0) close(fd);
+                int has_content = E.numrows > 0 && (E.numrows > 1 || E.row[0].size > 0);
+                if (has_content && tree_confirm("Save current text into new file?")) {
+                    free(E.filename);
+                    E.filename = malloc(strlen(full) + 1);
+                    memcpy(E.filename, full, strlen(full) + 1);
+                    E.syntax = lang_from_ext(full);
+                    for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
+                    editor_save();
+                    write(1, "\x1b[2J\x1b[H", 7);
+                    set_status("Saved to %s", full);
+                    return;
+                }
                 tree_rebuild();
             }
         }
