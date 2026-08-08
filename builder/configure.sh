@@ -55,6 +55,7 @@ APP_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-
 DEPS_STAMP=$STAMPS/deps
 LIMINE_STAMP=$STAMPS/limine
 TCC_STAMP=$STAMPS/tcc
+CINDER_STAMP=$STAMPS/cinder
 
 # --- helpers ----------------------------------------------------------------
 # obj/<category>/<flattened-path>.o   (same scheme as build.c)
@@ -150,6 +151,10 @@ rule asm_bare
   command = nasm -f elf64 \$in -o \$out
   description = AS        \$in
 
+rule cinder
+  command = cinder build \$in --target=x86_64-freestanding --emit=llvm -o \$out.ll && llc -O0 -relocation-model=static -code-model=kernel -filetype=obj \$out.ll -o \$out && rm -f \$out.ll
+  description = CNDR      \$in
+
 rule psf
   command = builder/mk_psf.sh \$in \$out
   description = PSF       \$in
@@ -201,6 +206,8 @@ build $DEPS_STAMP: bootstrap
   step = deps
 build $LIMINE_STAMP: bootstrap
   step = limine
+build $CINDER_STAMP: bootstrap
+  step = cinder
 
 EOF
 
@@ -242,7 +249,7 @@ printf 'build %s: bootstrap || %s\n  step = tcc\n\n' "$TCC_STAMP" "$PROG_DEPS"
 
 # --- kernel + libc -> bin/kernel -------------------------------------------
 KOBJS=""
-for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' \) | sort) \
+for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o -name '*.cnd' \) | sort) \
            $(find libc/src -name '*.c' | sort); do
     case "$src" in
         kernel/*) cat=kernel ;;
@@ -253,6 +260,7 @@ for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' \)
     case "$src" in
         *.asm) printf 'build %s: asm %s\n' "$obj" "$src" ;;
         *.psf) printf 'build %s: psf %s\n' "$obj" "$src" ;;
+        *.cnd) printf 'build %s: cinder %s || %s\n' "$obj" "$src" "$CINDER_STAMP" ;;
         *)
             if is_sse "$src"; then rule=cc_sse; else rule=cc_core; fi
             printf 'build %s: %s %s || %s\n' "$obj" "$rule" "$src" "$DEPS_STAMP" ;;

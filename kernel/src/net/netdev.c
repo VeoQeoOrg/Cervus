@@ -9,6 +9,7 @@
 #include "../../include/net/dns.h"
 #include "../../include/net/e1000.h"
 #include "../../include/net/rtl8139.h"
+#include "../../include/net/ne2000.h"
 #include "../../include/sched/sched.h"
 #include "../../include/io/serial.h"
 #include <string.h>
@@ -160,4 +161,5 @@ void net_start_worker(void) {
 void net_init(void) {
     e1000_init();
     rtl8139_init();
+    cinder_ne2000_init();
 }
