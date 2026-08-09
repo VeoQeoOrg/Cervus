@@ -44,6 +44,7 @@
 #include "../include/net/e1000.h"
 #include "../include/net/rtl8139.h"
 #include "../include/net/rtl8169.h"
+#include "../include/net/virtio_net.h"
 #include "../include/net/ne2000.h"
 #include "../include/console/console.h"
 #include "../include/fs/ext2.h"
@@ -183,6 +184,7 @@ static void load_elf_module(void) {
     disk_start_media_worker();
     e1000_start_worker();
     rtl8169_start_worker();
+    virtio_net_start_worker();
     rtl8139_start_worker();
     cinder_ne2000_start_worker();
     net_start_worker();

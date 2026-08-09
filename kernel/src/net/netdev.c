@@ -10,6 +10,7 @@
 #include "../../include/net/e1000.h"
 #include "../../include/net/rtl8139.h"
 #include "../../include/net/rtl8169.h"
+#include "../../include/net/virtio_net.h"
 #include "../../include/net/ne2000.h"
 #include "../../include/sched/sched.h"
 #include "../../include/io/serial.h"
@@ -163,5 +164,6 @@ void net_init(void) {
     e1000_init();
     rtl8139_init();
     rtl8169_init();
+    virtio_net_init();
     cinder_ne2000_init();
 }
