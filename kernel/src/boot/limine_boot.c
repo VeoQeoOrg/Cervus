@@ -31,6 +31,12 @@ static volatile struct limine_module_request module_request = {
     .id = LIMINE_MODULE_REQUEST_ID, .revision = 0
 };
 
+extern void kernel_main(void);
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_entry_point_request entry_point_request = {
+    .id = LIMINE_ENTRY_POINT_REQUEST_ID, .revision = 0, .entry = kernel_main
+};
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
 __attribute__((used, section(".limine_requests_end")))
