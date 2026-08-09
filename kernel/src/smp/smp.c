@@ -1,3 +1,4 @@
+#include "../../include/boot/limine_boot.h"
 #include "../../include/smp/smp.h"
 #include "../../include/smp/percpu.h"
 #include "../../include/acpi/acpi.h"
@@ -224,7 +225,8 @@ static void smp_init_limine(struct limine_mp_response* response) {
     }
 }
 
-void smp_init(struct limine_mp_response* mp_response) {
+void smp_init(void) {
+    struct limine_mp_response* mp_response = limine_mp();
     serial_writestring("\n[SMP] Initialization\n");
     smp_init_limine(mp_response);
 

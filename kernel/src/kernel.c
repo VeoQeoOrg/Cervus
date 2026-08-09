@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <limine.h>
 #include "../include/boot/boot_info.h"
 #include "../include/boot/limine_boot.h"
 #include "../include/graphics/fb/fb.h"
@@ -51,53 +50,6 @@
 #include "../include/console/console.h"
 #include "../include/fs/ext2.h"
 #include "../include/fs/fat32.h"
-
-__attribute__((used, section(".limine_requests")))
-static volatile uint64_t limine_base_revision[] = LIMINE_BASE_REVISION(4);
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_framebuffer_request framebuffer_request = {
-    .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
-    .revision = 0
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_memmap_request memmap_request = {
-    .id = LIMINE_MEMMAP_REQUEST_ID,
-    .revision = 0
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_mp_request mp_request = {
-    .id = LIMINE_MP_REQUEST_ID,
-    .revision = 0,
-    .flags = 0
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_hhdm_request hhdm_request = {
-    .id = LIMINE_HHDM_REQUEST_ID,
-    .revision = 0
-};
-
-__attribute__((used, section(".limine_requests")))
-volatile struct limine_rsdp_request rsdp_request = {
-    .id = LIMINE_RSDP_REQUEST_ID,
-    .revision = 0,
-    .response = NULL
-};
-
-__attribute__((used, section(".limine_requests")))
-static volatile struct limine_module_request module_request = {
-    .id = LIMINE_MODULE_REQUEST_ID,
-    .revision = 0
-};
-
-__attribute__((used, section(".limine_requests_start")))
-static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_MARKER;
-
-__attribute__((used, section(".limine_requests_end")))
-static volatile uint64_t limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
 fb_info_t *global_framebuffer = NULL;
 static fb_info_t s_fb;
@@ -260,10 +212,7 @@ void kernel_main(void) {
     serial_initialize(COM1, 115200);
     serial_writestring("\nCervus serial console ready\n");
 
-    if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
-        serial_writestring("ERROR: Unsupported Limine base revision\n");
-        hcf();
-    }
+    boot_init();
 
     gdt_init();
     init_interrupt_system();
@@ -272,24 +221,6 @@ void kernel_main(void) {
     sse_init();
     enable_fsgsbase();
     serial_writestring("FPU/SSE/FSGSBASE [OK]\n");
-
-    if (!framebuffer_request.response ||
-        framebuffer_request.response->framebuffer_count < 1) {
-        serial_writestring("ERROR: No framebuffer available\n");
-        hcf();
-    }
-    if (!memmap_request.response) {
-        serial_writestring("ERROR: No memory map available\n");
-        hcf();
-    }
-    if (!hhdm_request.response) {
-        serial_writestring("ERROR: No HHDM available\n");
-        hcf();
-    }
-
-    boot_info_init_limine(framebuffer_request.response, memmap_request.response,
-                          hhdm_request.response, rsdp_request.response,
-                          module_request.response);
 
     s_fb.address = (void *)(uintptr_t)boot_info()->fb.addr;
     s_fb.width   = boot_info()->fb.width;
@@ -343,7 +274,7 @@ void kernel_main(void) {
     pci_init();
     serial_writestring("PCI [OK]\n");
     serial_writestring("[stage] smp_init\n");
-    smp_init(mp_request.response);
+    smp_init();
     serial_writestring("SMP [OK]\n");
 
     serial_writestring("Waiting until all APs are fully ready...\n");
@@ -367,9 +298,9 @@ void kernel_main(void) {
            global_framebuffer->width, global_framebuffer->height,
            global_framebuffer->bpp);
     pmm_print_stats();
-    printf("hhdm offset 0x%llx, %llu memory map entries\n",
-           (unsigned long long)hhdm_request.response->offset,
-           (unsigned long long)memmap_request.response->entry_count);
+    printf("hhdm offset 0x%llx, %d memory map entries\n",
+           (unsigned long long)boot_info()->hhdm_offset,
+           boot_info()->mmap_count);
 
     smp_print_info_fb();
     printf("%u cpu%s configured\n", smp_get_cpu_count(),

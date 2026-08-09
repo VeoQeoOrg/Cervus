@@ -195,7 +195,6 @@ bool acpi_is_available(void);
 void* acpi_find_table(const char* signature, uint64_t index);
 void acpi_print_tables(void);
 
-extern volatile struct limine_rsdp_request rsdp_request;
 
 void acpi_shutdown(void);
 void acpi_reboot(void);

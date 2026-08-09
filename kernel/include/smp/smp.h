@@ -45,7 +45,7 @@ typedef struct {
     cpu_info_t cpus[256];
 } smp_info_t;
 
-void smp_init(struct limine_mp_response* mp_response);
+void smp_init(void);
 void smp_boot_aps(struct limine_mp_response* mp_response);
 smp_info_t* smp_get_info(void);
 cpu_info_t* smp_get_current_cpu(void);

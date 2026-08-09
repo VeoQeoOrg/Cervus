@@ -3,10 +3,7 @@
 
 #include <limine.h>
 
-void boot_info_init_limine(struct limine_framebuffer_response *fb,
-                           struct limine_memmap_response      *mm,
-                           struct limine_hhdm_response        *hhdm,
-                           struct limine_rsdp_response        *rsdp,
-                           struct limine_module_response      *mods);
+void                       boot_init(void);
+struct limine_mp_response *limine_mp(void);
 
 #endif
