@@ -298,7 +298,7 @@ void kernel_main(void) {
     s_fb.bpp     = boot_info()->fb.bpp;
     global_framebuffer = &s_fb;
 
-    pmm_init(memmap_request.response, hhdm_request.response);
+    pmm_init(boot_info());
     slab_init();
     serial_writestring("PMM [OK]\n");
     paging_init();

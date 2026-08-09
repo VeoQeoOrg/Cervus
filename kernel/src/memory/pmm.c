@@ -160,16 +160,15 @@ static void _buddy_free_nocoalesce(uintptr_t phys) {
         g_buddy.free_pages = g_buddy.usable_pages;
 }
 
-void pmm_init(struct limine_memmap_response *memmap,
-              struct limine_hhdm_response   *hhdm) {
-    g_buddy.hhdm_offset = hhdm->offset;
+void pmm_init(const boot_info_t *bi) {
+    g_buddy.hhdm_offset = bi->hhdm_offset;
     g_buddy.free_pages  = 0;
 
     uintptr_t max_phys  = 0;
     size_t usable_pages = 0;
-    for (uint64_t i = 0; i < memmap->entry_count; i++) {
-        struct limine_memmap_entry *e = memmap->entries[i];
-        if (e->type == LIMINE_MEMMAP_USABLE) {
+    for (int i = 0; i < bi->mmap_count; i++) {
+        const boot_mmap_entry_t *e = &bi->mmap[i];
+        if (e->type == BOOT_MEM_USABLE) {
             uintptr_t end = e->base + e->length;
             if (end > max_phys) max_phys = end;
             usable_pages += e->length / PAGE_SIZE;
@@ -184,9 +183,9 @@ void pmm_init(struct limine_memmap_response *memmap,
 
     for (int o = 0; o < PMM_MAX_ORDER_NR; o++) _fl_init(&g_buddy.orders[o]);
 
-    for (uint64_t i = 0; i < memmap->entry_count; i++) {
-        struct limine_memmap_entry *e = memmap->entries[i];
-        if (e->type != LIMINE_MEMMAP_USABLE) continue;
+    for (int i = 0; i < bi->mmap_count; i++) {
+        const boot_mmap_entry_t *e = &bi->mmap[i];
+        if (e->type != BOOT_MEM_USABLE) continue;
 
         uintptr_t base = _align_up(e->base, PAGE_SIZE);
         uintptr_t end  = (e->base + e->length) & ~(PAGE_SIZE - 1);

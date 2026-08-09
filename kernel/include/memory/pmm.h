@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <limine.h>
+#include "../boot/boot_info.h"
 
 #define PAGE_SIZE          4096UL
 #define PAGE_SHIFT         12
@@ -58,8 +58,7 @@ typedef struct {
     size_t   total_frees;
 } slab_cache_t;
 
-void  pmm_init(struct limine_memmap_response *memmap,
-               struct limine_hhdm_response   *hhdm);
+void  pmm_init(const boot_info_t *bi);
 
 void *pmm_alloc(size_t pages);
 void *pmm_alloc_zero(size_t pages);
