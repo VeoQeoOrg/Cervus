@@ -72,7 +72,7 @@ typedef struct {
     bool shift, caps_lock, ctrl, alt;
 } kb_state_t;
 
-#define KB_BUF_SIZE 64
+#define KB_BUF_SIZE 256
 
 typedef struct {
     char    buf[KB_BUF_SIZE];

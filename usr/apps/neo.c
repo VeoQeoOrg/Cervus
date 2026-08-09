@@ -121,30 +121,50 @@ static void enable_raw_mode(void)
     write(1, "\x1b[?1049h\x1b[?7l", 13);
 }
 
-static int esc_has_more(void)
+static unsigned char g_ib[256];
+static int g_iblen = 0, g_ibpos = 0;
+
+static int ib_fill(void)
 {
+    ssize_t n = read(0, g_ib, sizeof g_ib);
+    if (n <= 0) { g_iblen = 0; g_ibpos = 0; return 0; }
+    g_iblen = (int)n;
+    g_ibpos = 0;
+    return (int)n;
+}
+
+static int ib_getc(void)
+{
+    while (g_ibpos >= g_iblen) if (!ib_fill()) return -1;
+    return g_ib[g_ibpos++];
+}
+
+static int ib_more(void)
+{
+    if (g_ibpos < g_iblen) return 1;
     struct pollfd p = { 0, POLLIN, 0 };
-    return poll(&p, 1, 40) > 0 && (p.revents & POLLIN);
+    if (poll(&p, 1, 30) > 0 && (p.revents & POLLIN)) return ib_fill() > 0;
+    return 0;
 }
 
 static int read_key(void)
 {
-    char c;
-    ssize_t n;
-    while ((n = read(0, &c, 1)) == 0) { }
-    if (n < 0) return KEY_NONE;
+    int c = ib_getc();
+    if (c < 0) return KEY_NONE;
+    if (c != 0x1B) return c;
 
-    if (c != 0x1B) return (unsigned char)c;
+    if (!ib_more()) return KEY_ESC;
+    int s0 = ib_getc();
+    if (s0 != '[' && s0 != 'O') return KEY_ESC;
+    if (!ib_more()) return KEY_ESC;
+    int s1 = ib_getc();
 
-    char seq[4];
-    if (!esc_has_more() || read(0, &seq[0], 1) != 1) return KEY_ESC;
-    if (!esc_has_more() || read(0, &seq[1], 1) != 1) return KEY_ESC;
-
-    if (seq[0] == '[') {
-        if (seq[1] >= '0' && seq[1] <= '9') {
-            if (!esc_has_more() || read(0, &seq[2], 1) != 1) return KEY_ESC;
-            if (seq[2] == '~') {
-                switch (seq[1]) {
+    if (s0 == '[') {
+        if (s1 >= '0' && s1 <= '9') {
+            if (!ib_more()) return KEY_ESC;
+            int s2 = ib_getc();
+            if (s2 == '~') {
+                switch (s1) {
                     case '1':
                     case '7': return KEY_HOME;
                     case '3': return KEY_DEL;
@@ -154,21 +174,21 @@ static int read_key(void)
                     case '6': return KEY_PAGE_DOWN;
                 }
             }
-        } else {
-            switch (seq[1]) {
-                case 'A': return KEY_ARROW_UP;
-                case 'B': return KEY_ARROW_DOWN;
-                case 'C': return KEY_ARROW_RIGHT;
-                case 'D': return KEY_ARROW_LEFT;
-                case 'H': return KEY_HOME;
-                case 'F': return KEY_END;
-            }
+            return KEY_ESC;
         }
-    } else if (seq[0] == 'O') {
-        switch (seq[1]) {
+        switch (s1) {
+            case 'A': return KEY_ARROW_UP;
+            case 'B': return KEY_ARROW_DOWN;
+            case 'C': return KEY_ARROW_RIGHT;
+            case 'D': return KEY_ARROW_LEFT;
             case 'H': return KEY_HOME;
             case 'F': return KEY_END;
         }
+        return KEY_ESC;
+    }
+    switch (s1) {
+        case 'H': return KEY_HOME;
+        case 'F': return KEY_END;
     }
     return KEY_ESC;
 }
