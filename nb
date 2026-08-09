@@ -19,6 +19,7 @@
 #   --installed    boot existing disk, no ISO (simulate real hardware)
 #   --net[=e1000|rtl8139|ne2k|virtio]  attach NIC + user networking (NAT)
 #   --res=WxH      force framebuffer resolution (e.g. --res=1920x1080)
+#   --grub         boot via GRUB/multiboot2    --limine  boot via Limine (default)
 #
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -105,10 +106,14 @@ case "${1:-}" in
 run)
   shift
   installed=false
-  for a in "$@"; do [ "$a" = --installed ] && installed=true; done
+  grub=false
+  for a in "$@"; do
+    [ "$a" = --installed ] && installed=true
+    [ "$a" = --grub ] && grub=true
+  done
   if ! $installed; then
     configure
-    ninja -j "$JOBS" iso
+    if $grub; then ninja -j "$JOBS" grubiso; else ninja -j "$JOBS" iso; fi
   fi
   exec sh builder/run_qemu.sh "$@"
   ;;

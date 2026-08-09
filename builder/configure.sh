@@ -212,6 +212,11 @@ rule iso
   description = ISO       \$out
   pool = console
 
+rule grubiso
+  command = builder/mk_grub_iso.sh && touch \$out
+  description = GRUBISO   \$out
+  pool = console
+
 # --- one-time bootstrap stamps ---------------------------------------------
 build $DEPS_STAMP: bootstrap
   step = deps
@@ -290,6 +295,10 @@ printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s | %s %s %s
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"
 printf 'build iso: phony %s/iso.stamp\n\n' "$BUILDDIR"
+
+printf 'build %s/grubiso.stamp: grubiso bin/kernel initramfs.tar usr/apps/init.elf\n' \
+    "$BUILDDIR"
+printf 'build grubiso: phony %s/grubiso.stamp\n\n' "$BUILDDIR"
 
 # --- aliases + default -----------------------------------------------------
 printf 'build kernel: phony bin/kernel\n'

@@ -39,6 +39,8 @@ for a in "$@"; do
         --net=ne2k)    NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
         --net=rtl8139) NET=" -netdev user,id=net0 -device rtl8139,netdev=net0" ;;
         --net=virtio)  NET=" -netdev user,id=net0 -device virtio-net-pci,netdev=net0" ;;
+        --grub)      ISO="demo_iso/Cervus-grub.latest.iso" ;;
+        --limine)    ISO="demo_iso/Cervus.latest.iso" ;;
         --res=*)     RES=${a#--res=} ;;
         --disk=ide|--disk=ahci|--disk=nvme|--disk=all|--disk=none)
             DISK=${a#--disk=} ;;
