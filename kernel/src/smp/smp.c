@@ -1,3 +1,4 @@
+#include "../../include/boot/boot_info.h"
 #include "../../include/boot/limine_boot.h"
 #include "../../include/smp/smp.h"
 #include "../../include/smp/percpu.h"
@@ -189,12 +190,11 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
     serial_writestring("[SMP] AP Boot Sequence Complete \n\n");
 }
 
-static void smp_init_limine(struct limine_mp_response* response) {
-    if (!response) { serial_writestring("[SMP] Limine MP response is NULL\n"); return; }
+static void smp_setup_cpus(void) {
+    const boot_info_t* bi = boot_info();
 
-    serial_printf("[SMP] Initializing via Limine MP (CPU count: %u)\n",
-                  response->cpu_count);
-    smp_info.cpu_count    = response->cpu_count;
+    serial_printf("[SMP] CPUs from boot_info: %d\n", bi->cpu_count);
+    smp_info.cpu_count    = bi->cpu_count;
     smp_info.online_count = 1;
 
     acpi_madt_t* madt = (acpi_madt_t*)acpi_find_table("APIC", 0);
@@ -205,30 +205,28 @@ static void smp_init_limine(struct limine_mp_response* response) {
         smp_info.lapic_base = 0xFEE00000;
     }
 
-    for (uint64_t i = 0; i < response->cpu_count; i++) {
-        struct limine_mp_info* cpu = response->cpus[i];
-        smp_info.cpus[i].lapic_id     = cpu->lapic_id;
-        smp_info.cpus[i].processor_id = cpu->lapic_id;
+    for (int i = 0; i < bi->cpu_count; i++) {
+        smp_info.cpus[i].lapic_id     = bi->cpus[i].lapic_id;
+        smp_info.cpus[i].processor_id = bi->cpus[i].lapic_id;
         smp_info.cpus[i].acpi_id      = 0;
         smp_info.cpus[i].state        = CPU_UNINITIALIZED;
-        smp_info.cpus[i].is_bsp       = (cpu->lapic_id == response->bsp_lapic_id);
+        smp_info.cpus[i].is_bsp       = bi->cpus[i].is_bsp;
         smp_info.cpus[i].cpu_index    = i;
 
         if (smp_info.cpus[i].is_bsp) {
-            smp_info.bsp_lapic_id  = cpu->lapic_id;
+            smp_info.bsp_lapic_id  = bi->cpus[i].lapic_id;
             smp_info.cpus[i].state = CPU_ONLINE;
-            serial_printf("[SMP] BSP detected - APIC ID: %u\n", cpu->lapic_id);
+            serial_printf("[SMP] BSP detected - APIC ID: %u\n", bi->cpus[i].lapic_id);
         }
-        serial_printf("[SMP] CPU[%lu] - APIC ID: %u, Processor ID: %u, BSP: %s\n",
-                      i, cpu->lapic_id, cpu->lapic_id,
-                      smp_info.cpus[i].is_bsp ? "YES" : "NO");
+        serial_printf("[SMP] CPU[%d] - APIC ID: %u, BSP: %s\n",
+                      i, bi->cpus[i].lapic_id, bi->cpus[i].is_bsp ? "YES" : "NO");
     }
 }
 
 void smp_init(void) {
     struct limine_mp_response* mp_response = limine_mp();
     serial_writestring("\n[SMP] Initialization\n");
-    smp_init_limine(mp_response);
+    smp_setup_cpus();
 
     uint32_t bsp_index = 0;
     for (uint32_t i = 0; i < smp_info.cpu_count; i++)

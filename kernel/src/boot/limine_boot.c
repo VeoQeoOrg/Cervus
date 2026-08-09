@@ -111,9 +111,21 @@ void boot_init(void) {
         g_bi.module_count = m;
     }
 
-    serial_printf("[boot] boot_info: hhdm=0x%llx fb=%ux%u@%ubpp rsdp=0x%llx mmap=%d mods=%d\n",
+    struct limine_mp_response *mp = mp_request.response;
+    if (mp) {
+        g_bi.bsp_lapic_id = mp->bsp_lapic_id;
+        int c = 0;
+        for (uint64_t i = 0; i < mp->cpu_count && c < BOOT_CPU_MAX; i++) {
+            g_bi.cpus[c].lapic_id = mp->cpus[i]->lapic_id;
+            g_bi.cpus[c].is_bsp   = (mp->cpus[i]->lapic_id == mp->bsp_lapic_id);
+            c++;
+        }
+        g_bi.cpu_count = c;
+    }
+
+    serial_printf("[boot] boot_info: hhdm=0x%llx fb=%ux%u@%ubpp rsdp=0x%llx mmap=%d mods=%d cpus=%d\n",
                   (unsigned long long)g_bi.hhdm_offset,
                   g_bi.fb.width, g_bi.fb.height, g_bi.fb.bpp,
                   (unsigned long long)g_bi.rsdp_addr,
-                  g_bi.mmap_count, g_bi.module_count);
+                  g_bi.mmap_count, g_bi.module_count, g_bi.cpu_count);
 }

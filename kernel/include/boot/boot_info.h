@@ -5,6 +5,7 @@
 
 #define BOOT_MMAP_MAX 160
 #define BOOT_MOD_MAX  8
+#define BOOT_CPU_MAX  64
 
 typedef enum {
     BOOT_MEM_USABLE = 0,
@@ -30,6 +31,11 @@ typedef struct {
 } boot_module_t;
 
 typedef struct {
+    uint32_t lapic_id;
+    uint8_t  is_bsp;
+} boot_cpu_t;
+
+typedef struct {
     uint64_t hhdm_offset;
 
     struct {
@@ -47,6 +53,10 @@ typedef struct {
 
     int               module_count;
     boot_module_t     modules[BOOT_MOD_MAX];
+
+    uint32_t          bsp_lapic_id;
+    int               cpu_count;
+    boot_cpu_t        cpus[BOOT_CPU_MAX];
 } boot_info_t;
 
 const boot_info_t *boot_info(void);
