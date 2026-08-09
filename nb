@@ -17,7 +17,8 @@
 #   --uefi         UEFI/OVMF (default BIOS)   --disk=ide|ahci|nvme|all|none
 #   --live         no disk, live ISO          --fresh   recreate empty disk(s)
 #   --installed    boot existing disk, no ISO (simulate real hardware)
-#   --net          attach e1000 NIC + user networking (internet via host NAT)
+#   --net[=e1000|rtl8139|ne2k|virtio]  attach NIC + user networking (NAT)
+#   --res=WxH      force framebuffer resolution (e.g. --res=1920x1080)
 #
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

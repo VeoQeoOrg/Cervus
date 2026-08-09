@@ -27,6 +27,7 @@ DISK=ide
 FRESH=false
 INSTALLED=false
 NET=""
+RES=""
 
 for a in "$@"; do
     case "$a" in
@@ -34,8 +35,11 @@ for a in "$@"; do
         --live)      DISK=none ;;
         --fresh|--reset-disk) FRESH=true ;;
         --installed) INSTALLED=true ;;
-        --net)       NET=" -netdev user,id=net0 -device e1000,netdev=net0" ;;
-        --net=ne2k)  NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
+        --net)         NET=" -netdev user,id=net0 -device e1000,netdev=net0" ;;
+        --net=ne2k)    NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
+        --net=rtl8139) NET=" -netdev user,id=net0 -device rtl8139,netdev=net0" ;;
+        --net=virtio)  NET=" -netdev user,id=net0 -device virtio-net-pci,netdev=net0" ;;
+        --res=*)     RES=${a#--res=} ;;
         --disk=ide|--disk=ahci|--disk=nvme|--disk=all|--disk=none)
             DISK=${a#--disk=} ;;
         *) echo "run: unknown option '$a'" >&2; exit 1 ;;
@@ -43,6 +47,14 @@ for a in "$@"; do
 done
 
 QEMUFLAGS="$QEMUFLAGS$NET"
+
+if [ -n "$RES" ]; then
+    case "$RES" in
+        *x*) RW=${RES%x*}; RH=${RES#*x} ;;
+        *)   echo "run: --res expects WIDTHxHEIGHT (e.g. --res=1920x1080)" >&2; exit 1 ;;
+    esac
+    QEMUFLAGS="$QEMUFLAGS -vga none -device VGA,edid=on,xres=$RW,yres=$RH"
+fi
 
 green() { printf '\033[92m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[93m%s\033[0m\n' "$*"; }
