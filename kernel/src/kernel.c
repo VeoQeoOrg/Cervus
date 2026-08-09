@@ -208,12 +208,7 @@ static bool find_installed_root(char *out, size_t out_cap) {
     return false;
 }
 
-void kernel_main(void) {
-    serial_initialize(COM1, 115200);
-    serial_writestring("\nCervus serial console ready\n");
-
-    boot_init();
-
+static void kmain(void) {
     gdt_init();
     init_interrupt_system();
     serial_writestring("GDT&IDT [OK]\n");
@@ -413,4 +408,11 @@ void kernel_main(void) {
     while (1) {
         hcf();
     }
+}
+
+void kernel_main(void) {
+    serial_initialize(COM1, 115200);
+    serial_writestring("\nCervus serial console ready\n");
+    boot_init();
+    kmain();
 }
