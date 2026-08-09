@@ -186,7 +186,7 @@ void kb_buf_push(char c) {
 extern uint32_t cursor_x;
 extern uint32_t cursor_y;
 extern uint32_t bg_color;
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 extern void     get_cursor_position(uint32_t *x, uint32_t *y);
 extern uint32_t get_screen_width(void);
 

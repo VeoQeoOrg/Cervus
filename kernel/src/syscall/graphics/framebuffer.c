@@ -1,15 +1,15 @@
+#include "../../../include/graphics/fb/fb.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
-#include <limine.h>
 #include <string.h>
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 extern void console_set_offscreen(int on);
 
 int64_t sys_fb_info(uint64_t info_ptr)
 {
-    struct limine_framebuffer *fb = global_framebuffer;
+    fb_info_t *fb = global_framebuffer;
     if (!fb) return -ENODEV;
     if (!info_ptr) return -EINVAL;
     if (!syscall_uptr_validate((void *)info_ptr, sizeof(cervus_fb_info_t))) return -EFAULT;
@@ -26,7 +26,7 @@ int64_t sys_fb_info(uint64_t info_ptr)
 
 int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64_t h)
 {
-    struct limine_framebuffer *fb = global_framebuffer;
+    fb_info_t *fb = global_framebuffer;
     if (!fb) return -ENODEV;
     if (!buf_ptr) return -EINVAL;
 
@@ -51,7 +51,7 @@ int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64
 
 int64_t sys_fb_map(uint64_t out_addr_ptr)
 {
-    struct limine_framebuffer *fb = global_framebuffer;
+    fb_info_t *fb = global_framebuffer;
     if (!fb) return -ENODEV;
     if (!out_addr_ptr) return -EINVAL;
     if (!syscall_uptr_validate((void *)out_addr_ptr, sizeof(uint64_t))) return -EFAULT;

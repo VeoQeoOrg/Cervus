@@ -5,9 +5,8 @@
 #include "../../include/io/serial.h"
 #include <string.h>
 #include <stdio.h>
-#include <limine.h>
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 
 #define MON_FG        0xAAAAAA
 #define MON_BG        0x000000

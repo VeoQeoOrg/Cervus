@@ -9,7 +9,7 @@ uint32_t cursor_y   = 0;
 uint32_t text_color = COLOR_WHITE;
 uint32_t bg_color   = COLOR_BLACK;
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 
 static int  cursor_visible      = 1;
 static int  cursor_shape        = 1;

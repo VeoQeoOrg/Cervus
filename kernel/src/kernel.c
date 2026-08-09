@@ -99,7 +99,8 @@ static volatile uint64_t limine_requests_start_marker[] = LIMINE_REQUESTS_START_
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t limine_requests_end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
-struct limine_framebuffer *global_framebuffer = NULL;
+fb_info_t *global_framebuffer = NULL;
+static fb_info_t s_fb;
 
 static void hcf(void) {
     for (;;) {
@@ -286,11 +287,16 @@ void kernel_main(void) {
         hcf();
     }
 
-    global_framebuffer = framebuffer_request.response->framebuffers[0];
-
     boot_info_init_limine(framebuffer_request.response, memmap_request.response,
                           hhdm_request.response, rsdp_request.response,
                           module_request.response);
+
+    s_fb.address = (void *)(uintptr_t)boot_info()->fb.addr;
+    s_fb.width   = boot_info()->fb.width;
+    s_fb.height  = boot_info()->fb.height;
+    s_fb.pitch   = boot_info()->fb.pitch;
+    s_fb.bpp     = boot_info()->fb.bpp;
+    global_framebuffer = &s_fb;
 
     pmm_init(memmap_request.response, hhdm_request.response);
     slab_init();

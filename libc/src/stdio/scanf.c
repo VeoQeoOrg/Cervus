@@ -8,7 +8,7 @@
 #include "../../kernel/include/drivers/ps2.h"
 #include "../../kernel/include/graphics/fb/fb.h"
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 extern uint32_t bg_color;
 
 static int readline_buf(char *buf, size_t size) {

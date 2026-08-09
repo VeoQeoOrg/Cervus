@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include "../../../kernel/include/graphics/fb/fb.h"
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 
 void set_cursor_position(uint32_t x, uint32_t y) {
     cursor_x = x;

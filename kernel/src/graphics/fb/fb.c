@@ -2,7 +2,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
-#include <limine.h>
 #include "../../../include/graphics/fb/fb.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/memory/vmm.h"
@@ -12,7 +11,7 @@ uint32_t  g_bb_pitch = 0;
 static uint32_t  g_bb_w = 0;
 static uint32_t  g_bb_h = 0;
 
-void fb_init_backbuffer(struct limine_framebuffer *fb) {
+void fb_init_backbuffer(fb_info_t *fb) {
     if (!fb) return;
     g_bb_w = fb->width;
     g_bb_h = fb->height;
@@ -54,20 +53,20 @@ size_t fb_backbuffer_bytes(void) {
     return (size_t)g_bb_pitch * g_bb_h * sizeof(uint32_t);
 }
 
-static inline uint32_t *fb_get_buf(struct limine_framebuffer *fb) {
+static inline uint32_t *fb_get_buf(fb_info_t *fb) {
     return g_backbuf ? g_backbuf : (uint32_t *)fb->address;
 }
 
-static inline uint32_t fb_get_pitch(struct limine_framebuffer *fb) {
+static inline uint32_t fb_get_pitch(fb_info_t *fb) {
     return g_backbuf ? g_bb_pitch : (fb->pitch / 4);
 }
 
-void fb_flush(struct limine_framebuffer *fb) {
+void fb_flush(fb_info_t *fb) {
     if (!fb || !g_backbuf) return;
     fb_flush_lines(fb, 0, g_bb_h);
 }
 
-void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_end) {
+void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end) {
     if (!fb || !g_backbuf) return;
     if (y_start >= g_bb_h) return;
     if (y_end > g_bb_h) y_end = g_bb_h;
@@ -91,14 +90,14 @@ void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_
     asm volatile ("sfence" ::: "memory");
 }
 
-void fb_draw_pixel(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color) {
+void fb_draw_pixel(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t color) {
     if (x >= fb->width || y >= fb->height) return;
     uint32_t *buf = fb_get_buf(fb);
     uint32_t pitch = fb_get_pitch(fb);
     buf[y * pitch + x] = color;
 }
 
-void fb_fill_rect(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color) {
+void fb_fill_rect(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color) {
     if (!fb) return;
     uint32_t *buf = fb_get_buf(fb);
     uint32_t pitch = fb_get_pitch(fb);
@@ -118,7 +117,7 @@ void fb_fill_rect(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_
     }
 }
 
-void fb_clear(struct limine_framebuffer *fb, uint32_t color) {
+void fb_clear(fb_info_t *fb, uint32_t color) {
     if (!fb) return;
     uint32_t *buf = fb_get_buf(fb);
     size_t total = (size_t)fb_get_pitch(fb) * fb->height;
@@ -189,7 +188,7 @@ static uint32_t codepoint_to_glyph(uint32_t cp) {
     return '?';
 }
 
-void fb_draw_char(struct limine_framebuffer *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color) {
+void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color) {
     const uint8_t *raw = get_font_data();
     uint32_t headersize = *(const uint32_t *)(raw + 8);
     uint32_t charsiz = *(const uint32_t *)(raw + 20);
@@ -214,7 +213,7 @@ void fb_draw_char(struct limine_framebuffer *fb, uint32_t cp, uint32_t x, uint32
     }
 }
 
-void fb_draw_string(struct limine_framebuffer *fb, const char *str, uint32_t x, uint32_t y, uint32_t color) {
+void fb_draw_string(fb_info_t *fb, const char *str, uint32_t x, uint32_t y, uint32_t color) {
     uint32_t orig_x = x;
     if (!psf_validate()) return;
     while (*str) {

@@ -2,9 +2,8 @@
 #include "../../include/graphics/fb/fb.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/sched/spinlock.h"
-#include <limine.h>
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 extern void kb_buf_push(char c);
 extern int  putchar(int);
 extern void putchar_flush_begin(void);

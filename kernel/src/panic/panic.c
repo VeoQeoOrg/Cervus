@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-extern struct limine_framebuffer *global_framebuffer;
+extern fb_info_t *global_framebuffer;
 
 static uint32_t panic_cpu_index(void) {
     uint32_t id = lapic_get_id();
@@ -26,7 +26,7 @@ static uint32_t panic_cpu_index(void) {
 #define COL_GRAY    0xAAAAAA
 
 static uint32_t fb_x = 0, fb_y = 0;
-static struct limine_framebuffer *g_fb = NULL;
+static fb_info_t *g_fb = NULL;
 
 static void fb_nl(void) {
     fb_x = 0;

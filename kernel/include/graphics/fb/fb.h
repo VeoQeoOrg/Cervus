@@ -3,7 +3,14 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <limine.h>
+
+typedef struct {
+    void    *address;
+    uint64_t width;
+    uint64_t height;
+    uint64_t pitch;
+    uint16_t bpp;
+} fb_info_t;
 
 #define RGB(r, g, b) (((r) << 16) | ((g) << 8) | (b))
 
@@ -46,14 +53,14 @@ static inline const struct psf_header* get_psf_header(void) {
 }
 
 int psf_validate(void);
-void fb_draw_pixel(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_t color);
-void fb_fill_rect(struct limine_framebuffer *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
-void fb_clear(struct limine_framebuffer *fb, uint32_t color);
-void fb_draw_char(struct limine_framebuffer *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color);
-void fb_draw_string(struct limine_framebuffer *fb, const char *str, uint32_t x, uint32_t y, uint32_t color);
-void fb_init_backbuffer(struct limine_framebuffer *fb);
-void fb_flush(struct limine_framebuffer *fb);
-void fb_flush_lines(struct limine_framebuffer *fb, uint32_t y_start, uint32_t y_end);
+void fb_draw_pixel(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t color);
+void fb_fill_rect(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
+void fb_clear(fb_info_t *fb, uint32_t color);
+void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color);
+void fb_draw_string(fb_info_t *fb, const char *str, uint32_t x, uint32_t y, uint32_t color);
+void fb_init_backbuffer(fb_info_t *fb);
+void fb_flush(fb_info_t *fb);
+void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end);
 
 void      fb_set_backbuffer(uint32_t *buf);
 uint32_t *fb_get_backbuffer(void);
