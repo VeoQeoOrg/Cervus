@@ -129,9 +129,90 @@ static uint64_t smp_allocate_stack(uint32_t cpu_index, size_t stack_size) {
     return stack_virt;
 }
 
+extern char ap_trampoline_start[], ap_trampoline_end[];
+extern char ap_tramp_cr3[], ap_tramp_entry[], ap_tramp_stack[];
+
+#define AP_TRAMP_PHYS 0x8000ULL
+
+static void smp_prepare_trampoline(void) {
+    vmm_map_page(vmm_get_kernel_pagemap(), AP_TRAMP_PHYS, AP_TRAMP_PHYS,
+                 VMM_PRESENT | VMM_WRITE);
+
+    uint8_t *dst = (uint8_t *)pmm_phys_to_virt(AP_TRAMP_PHYS);
+    size_t   sz  = (size_t)(ap_trampoline_end - ap_trampoline_start);
+    memcpy(dst, ap_trampoline_start, sz);
+
+    uint64_t cr3;
+    asm volatile ("mov %%cr3, %0" : "=r"(cr3));
+    *(volatile uint64_t *)(dst + (ap_tramp_cr3   - ap_trampoline_start)) = cr3;
+    *(volatile uint64_t *)(dst + (ap_tramp_entry - ap_trampoline_start)) =
+        (uint64_t)(uintptr_t)ap_entry_init;
+}
+
+static void smp_set_tramp_stack(uint64_t stack_top) {
+    uint8_t *dst = (uint8_t *)pmm_phys_to_virt(AP_TRAMP_PHYS);
+    *(volatile uint64_t *)(dst + (ap_tramp_stack - ap_trampoline_start)) = stack_top;
+    __sync_synchronize();
+}
+
+static void smp_boot_aps_native(void) {
+    serial_writestring("\n[SMP] Booting APs via native INIT-SIPI-SIPI\n");
+
+    smp_info_t *info   = smp_get_info();
+    uint32_t    online = 0;
+    uint8_t     vector = (uint8_t)(AP_TRAMP_PHYS >> 12);
+
+    smp_prepare_trampoline();
+
+    for (uint32_t i = 0; i < info->cpu_count; i++) {
+        if (info->cpus[i].is_bsp) continue;
+        if (!tss[i] || info->cpus[i].state == CPU_FAULTED) {
+            serial_printf("[SMP] Skipping CPU %u (no TSS)\n", i);
+            continue;
+        }
+
+        uint64_t stack_top = smp_allocate_stack(i, AP_STACK_SIZE);
+        if (stack_top == 0) {
+            info->cpus[i].state = CPU_FAULTED;
+            continue;
+        }
+        info->cpus[i].stack_top = stack_top;
+        info->cpus[i].state     = CPU_BOOTED;
+
+        uint32_t before = __atomic_load_n(&ap_online_count, __ATOMIC_ACQUIRE);
+        smp_set_tramp_stack(stack_top);
+
+        uint32_t lid = info->cpus[i].lapic_id;
+        lapic_send_init(lid);
+        apic_udelay(10000);
+        lapic_send_startup(lid, vector);
+        apic_udelay(200);
+        if (__atomic_load_n(&ap_online_count, __ATOMIC_ACQUIRE) == before) {
+            lapic_send_startup(lid, vector);
+            apic_udelay(200);
+        }
+
+        uint64_t timeout = 50000000;
+        while (__atomic_load_n(&ap_online_count, __ATOMIC_ACQUIRE) == before && timeout--)
+            asm volatile ("pause");
+
+        if (__atomic_load_n(&ap_online_count, __ATOMIC_ACQUIRE) == before) {
+            serial_printf("[SMP] AP %u (LAPIC %u) did not start\n", i, lid);
+            info->cpus[i].state = CPU_FAULTED;
+        } else {
+            online++;
+            serial_printf("[SMP] AP %u (LAPIC %u) online via SIPI\n", i, lid);
+        }
+    }
+
+    info->online_count = 1 + online;
+    expected_online    = 1 + online;
+    serial_printf("[SMP] native bringup complete: %u AP(s) online\n", online);
+}
+
 void smp_boot_aps(struct limine_mp_response* mp_response) {
     if (!mp_response) {
-        serial_writestring("[SMP ERROR] MP response is NULL\n");
+        smp_boot_aps_native();
         return;
     }
 
@@ -190,7 +271,44 @@ void smp_boot_aps(struct limine_mp_response* mp_response) {
     serial_writestring("[SMP] AP Boot Sequence Complete \n\n");
 }
 
+static void smp_enumerate_madt_into_bootinfo(void) {
+    acpi_madt_t* madt = (acpi_madt_t*)acpi_find_table("APIC", 0);
+    if (!madt) {
+        serial_writestring("[SMP] no MADT, staying single-CPU\n");
+        return;
+    }
+
+    boot_info_t* bi  = boot_info_mut();
+    uint32_t     bsp = lapic_get_id();
+    int          n   = 0;
+
+    uint8_t* p   = madt->entries;
+    uint8_t* end = (uint8_t*)madt + madt->header.length;
+    while (p + 2 <= end && n < BOOT_CPU_MAX) {
+        madt_entry_header_t* h = (madt_entry_header_t*)p;
+        if (h->length < 2) break;
+        if (h->type == MADT_ENTRY_LAPIC) {
+            madt_lapic_entry_t* e = (madt_lapic_entry_t*)p;
+            if (e->flags & 1) {
+                bi->cpus[n].lapic_id = e->apic_id;
+                bi->cpus[n].is_bsp   = (e->apic_id == bsp);
+                n++;
+            }
+        }
+        p += h->length;
+    }
+
+    if (n > 0) {
+        bi->cpu_count    = n;
+        bi->bsp_lapic_id = bsp;
+        serial_printf("[SMP] MADT enumerated %d CPU(s), BSP LAPIC %u\n", n, bsp);
+    }
+}
+
 static void smp_setup_cpus(void) {
+    if (!limine_mp())
+        smp_enumerate_madt_into_bootinfo();
+
     const boot_info_t* bi = boot_info();
 
     serial_printf("[SMP] CPUs from boot_info: %d\n", bi->cpu_count);

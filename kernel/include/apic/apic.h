@@ -79,6 +79,8 @@ void lapic_timer_stop(void);
 uint32_t lapic_timer_get_current(void);
 void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector);
 void lapic_send_ipi_to_all_but_self(uint8_t vector);
+void lapic_send_init(uint32_t target_lapic_id);
+void lapic_send_startup(uint32_t target_lapic_id, uint8_t vector);
 void lapic_send_nmi_to_all_but_self(void);
 
 void ioapic_write(uintptr_t base, uint32_t reg, uint32_t value);
@@ -96,6 +98,7 @@ void apic_timer_calibrate(void);
 extern uint64_t g_tsc_khz;
 void tsc_calibrate_bsp(void);
 uint64_t tsc_read(void);
+void apic_udelay(uint64_t us);
 void tsc_recalibrate(uint64_t new_khz);
 bool tsc_deadline_supported(void);
 bool tsc_is_invariant(void);

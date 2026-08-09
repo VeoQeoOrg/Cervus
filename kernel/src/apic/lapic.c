@@ -104,6 +104,24 @@ void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector)
     serial_printf("Sent IPI vector 0x%02x to LAPIC %u\n", vector, target_lapic_id);
 }
 
+void lapic_send_init(uint32_t target_lapic_id)
+{
+    lapic_write(0x310, target_lapic_id << 24);
+    lapic_write(0x300, 0x00004500);
+
+    while (lapic_read(0x300) & (1 << 12))
+        asm volatile ("pause");
+}
+
+void lapic_send_startup(uint32_t target_lapic_id, uint8_t vector)
+{
+    lapic_write(0x310, target_lapic_id << 24);
+    lapic_write(0x300, 0x00004600 | vector);
+
+    while (lapic_read(0x300) & (1 << 12))
+        asm volatile ("pause");
+}
+
 void lapic_send_ipi_to_all_but_self(uint8_t vector)
 {
     uint32_t icr_low = vector | (0 << 8) | (1 << 14) | (3 << 18);

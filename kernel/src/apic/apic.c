@@ -163,6 +163,18 @@ uint64_t tsc_read(void) {
     return rdtsc();
 }
 
+void apic_udelay(uint64_t us) {
+    if (g_tsc_khz == 0) {
+        for (volatile uint64_t i = 0; i < us * 200; i++)
+            asm volatile ("pause");
+        return;
+    }
+    uint64_t cycles = (g_tsc_khz * us) / 1000;
+    uint64_t start  = rdtsc();
+    while ((rdtsc() - start) < cycles)
+        asm volatile ("pause");
+}
+
 void tsc_recalibrate(uint64_t new_khz) {
     if (new_khz == 0 || g_tsc_khz == 0) return;
     uint64_t cur = tsc_elapsed_ns();
