@@ -42,7 +42,7 @@ fi
 {
     [ -f "$WALLPAPER" ] && printf 'wallpaper: %s\n' "$WALLPAPER_DST"
     printf 'timeout: 5\n\n'
-    printf '/%s %s (Install / Live)\n    protocol: limine\n    path: boot():/boot/kernel\n' \
+    printf '/%s %s (Install / Live)\n    protocol: multiboot2\n    path: boot():/boot/kernel\n' \
         "$IMAGE" "$VERSION"
     if [ "$has_elf" = true ]; then
         printf '    module_path: boot():/boot/shell.elf\n    module_cmdline: init\n'

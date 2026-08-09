@@ -36,7 +36,6 @@ KERNEL_BASE="-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding \
 KERNEL_CORE="$KERNEL_BASE -mgeneral-regs-only -mno-sse -mno-sse2 -mno-mmx -mno-3dnow"
 KERNEL_SSE="$KERNEL_BASE -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
 KERNEL_CPP="-I kernel/src -I libc/include \
--I limine-tools/limine-protocol/include \
 -isystem limine-tools/freestnd-c-hdrs/include"
 
 # A file uses the SSE flag set if any of these appears in its path.
@@ -76,14 +75,13 @@ mkdir -p "$(dirname "$LINKER_SCRIPT")"
 _lds_tmp=$(mktemp)
 cat > "$_lds_tmp" <<'LDS'
 OUTPUT_FORMAT(elf64-x86-64)
-ENTRY(kernel_main)
+ENTRY(_mb_start)
 KPHYS = 0x200000;
 PHDRS {
-    boot            PT_LOAD;
-    limine_requests PT_LOAD;
-    text            PT_LOAD;
-    rodata          PT_LOAD;
-    data            PT_LOAD;
+    boot   PT_LOAD;
+    text   PT_LOAD;
+    rodata PT_LOAD;
+    data   PT_LOAD;
 }
 SECTIONS {
     . = 0xffffffff80000000;
@@ -94,12 +92,6 @@ SECTIONS {
     } :boot
     .boot.bss : { *(.boot.bss) } :boot
 
-    . = ALIGN(CONSTANT(MAXPAGESIZE));
-    .limine_requests : {
-        KEEP(*(.limine_requests_start))
-        KEEP(*(.limine_requests))
-        KEEP(*(.limine_requests_end))
-    } :limine_requests
     . = ALIGN(CONSTANT(MAXPAGESIZE));
     .text : {
         __start_isr_handlers = .;
@@ -292,11 +284,11 @@ printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s | %s %s %s
     "$ALL_ELFS" "$LIBCERVUS_A" "$TCC_STAMP" "$LIMINE_STAMP"
 
 # --- ISO -------------------------------------------------------------------
-printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf | %s\n' \
+printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"
 printf 'build iso: phony %s/iso.stamp\n\n' "$BUILDDIR"
 
-printf 'build %s/grubiso.stamp: grubiso bin/kernel initramfs.tar usr/apps/init.elf\n' \
+printf 'build %s/grubiso.stamp: grubiso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_grub_iso.sh\n' \
     "$BUILDDIR"
 printf 'build grubiso: phony %s/grubiso.stamp\n\n' "$BUILDDIR"
 

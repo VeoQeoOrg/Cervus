@@ -1,5 +1,4 @@
 #include "../../include/boot/boot_info.h"
-#include "../../include/boot/limine_boot.h"
 #include "../../include/smp/smp.h"
 #include "../../include/smp/percpu.h"
 #include "../../include/acpi/acpi.h"
@@ -39,8 +38,7 @@ void sched_notify_ready(void) {
 }
 
 __attribute__((used))
-void ap_entry_init(struct limine_mp_info* cpu_info) {
-    (void)cpu_info;
+void ap_entry_init(void) {
     asm volatile ("cli");
 
     lapic_write(0xF0, 0);
@@ -97,23 +95,6 @@ void ap_entry_init(struct limine_mp_info* cpu_info) {
 
     while (1)
         asm volatile ("hlt");
-}
-
-void ap_entry_point(struct limine_mp_info* cpu_info) {
-    uint64_t stack_top;
-    asm volatile (
-        "mov 24(%%rdi), %0"
-        : "=r"(stack_top)
-        : "D"(cpu_info)
-    );
-    asm volatile (
-        "mov %0, %%rsp\n"
-        "cli\n"
-        "jmp ap_entry_init\n"
-        :
-        : "r"(stack_top), "D"(cpu_info)
-        : "memory"
-    );
 }
 
 static uint64_t smp_allocate_stack(uint32_t cpu_index, size_t stack_size) {
@@ -210,65 +191,8 @@ static void smp_boot_aps_native(void) {
     serial_printf("[SMP] native bringup complete: %u AP(s) online\n", online);
 }
 
-void smp_boot_aps(struct limine_mp_response* mp_response) {
-    if (!mp_response) {
-        smp_boot_aps_native();
-        return;
-    }
-
-    serial_writestring("\n[SMP] Booting Application Processors \n");
-
-    smp_info_t* info = smp_get_info();
-    uint32_t bsp_lapic_id = info->bsp_lapic_id;
-    uint32_t ap_count = 0;
-
-    for (uint64_t i = 0; i < mp_response->cpu_count; i++) {
-        struct limine_mp_info* cpu = mp_response->cpus[i];
-        if (cpu->lapic_id == bsp_lapic_id) continue;
-        if (info->cpus[i].state == CPU_FAULTED || !tss[i]) {
-            serial_printf("[SMP] Skipping CPU %lu (no TSS/stacks)\n", i);
-            continue;
-        }
-
-        uint64_t stack_top = smp_allocate_stack(i, AP_STACK_SIZE);
-        if (stack_top == 0) {
-            serial_printf("[SMP] Skipping CPU %u (stack alloc failed)\n", i);
-            info->cpus[i].state = CPU_FAULTED;
-            continue;
-        }
-
-        info->cpus[i].stack_top = stack_top;
-        info->cpus[i].state     = CPU_BOOTED;
-        cpu->extra_argument     = stack_top;
-        cpu->goto_address       = (void*)ap_entry_point;
-
-        serial_printf("[SMP] Configured AP %lu (LAPIC ID %u) to boot at 0x%llx\n",
-                      i, cpu->lapic_id, (uint64_t)ap_entry_point);
-        ap_count++;
-    }
-
-    __sync_synchronize();
-
-    if (ap_count > 0) {
-        serial_printf("[SMP] Waiting for %u AP(s) to initialize...\n", ap_count);
-        uint64_t timeout = 10000000;
-        while (ap_online_count < ap_count && timeout--)
-            asm volatile ("pause");
-
-        uint32_t online = ap_online_count;
-        if (online == ap_count)
-            serial_printf("[SMP SUCCESS] All %u AP(s) online!\n", ap_count);
-        else
-            serial_printf("[SMP WARNING] Only %u/%u AP(s) online (timeout)\n",
-                          online, ap_count);
-        info->online_count = 1 + online;
-        expected_online    = 1 + online;
-    } else {
-        serial_writestring("[SMP] No APs to boot\n");
-        expected_online = 1;
-    }
-
-    serial_writestring("[SMP] AP Boot Sequence Complete \n\n");
+void smp_boot_aps(void) {
+    smp_boot_aps_native();
 }
 
 static void smp_enumerate_madt_into_bootinfo(void) {
@@ -306,8 +230,7 @@ static void smp_enumerate_madt_into_bootinfo(void) {
 }
 
 static void smp_setup_cpus(void) {
-    if (!limine_mp())
-        smp_enumerate_madt_into_bootinfo();
+    smp_enumerate_madt_into_bootinfo();
 
     const boot_info_t* bi = boot_info();
 
@@ -342,7 +265,6 @@ static void smp_setup_cpus(void) {
 }
 
 void smp_init(void) {
-    struct limine_mp_response* mp_response = limine_mp();
     serial_writestring("\n[SMP] Initialization\n");
     smp_setup_cpus();
 
@@ -418,7 +340,7 @@ void smp_init(void) {
     smp_print_info();
     init_percpu_regions();
     tsc_calibrate_bsp();
-    smp_boot_aps(mp_response);
+    smp_boot_aps();
     set_percpu_base(percpu_regions[bsp_index]);
     serial_printf("PerCPU base set for BSP %u: 0x%llx\n",
                   smp_info.bsp_lapic_id, (uint64_t)percpu_regions[bsp_index]);

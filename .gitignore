@@ -37,3 +37,4 @@ usr/sysroot/usr/lib/
 usr/installer/*.elf
 usr/apps/*.elf
 usr/bin/*.elf
+.bash_history

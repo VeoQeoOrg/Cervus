@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../include/boot/boot_info.h"
-#include "../include/boot/limine_boot.h"
 #include "../include/graphics/fb/fb.h"
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
@@ -413,9 +412,3 @@ void kmain(void) {
     }
 }
 
-void kernel_main(void) {
-    serial_initialize(COM1, 115200);
-    serial_writestring("\nCervus serial console ready\n");
-    boot_init();
-    kmain();
-}

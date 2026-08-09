@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <limine.h>
 
 #define AP_STACK_SIZE 16384
 #define MAX_CPUS 256
@@ -46,7 +45,7 @@ typedef struct {
 } smp_info_t;
 
 void smp_init(void);
-void smp_boot_aps(struct limine_mp_response* mp_response);
+void smp_boot_aps(void);
 smp_info_t* smp_get_info(void);
 cpu_info_t* smp_get_current_cpu(void);
 uint32_t smp_get_cpu_count(void);
@@ -55,6 +54,5 @@ bool smp_is_bsp(void);
 void smp_print_info(void);
 void smp_print_info_fb(void);
 void smp_wait_for_ready(void);
-void ap_entry_point(struct limine_mp_info* cpu_info);
 void sched_notify_ready(void);
 #endif
