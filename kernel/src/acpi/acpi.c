@@ -1,4 +1,5 @@
 #include "../../include/acpi/acpi.h"
+#include "../../include/boot/boot_info.h"
 #include "../../include/io/serial.h"
 #include "../../include/io/ports.h"
 #include "../../include/memory/pmm.h"
@@ -170,12 +171,13 @@ static void acpi_enable_mode(acpi_fadt_t *fadt) {
 }
 
 void acpi_init(void) {
-    if (!rsdp_request.response) {
+    uint64_t rsdp_addr = boot_info()->rsdp_addr;
+    if (!rsdp_addr) {
         serial_writestring("ACPI: no RSDP\n");
         return;
     }
 
-    rsdp = (acpi_rsdp2_t *)rsdp_request.response->address;
+    rsdp = (acpi_rsdp2_t *)(uintptr_t)rsdp_addr;
 
     if (!checksum(&rsdp->rsdp_v1, sizeof(acpi_rsdp_t))) {
         serial_writestring("ACPI: bad RSDP checksum\n");
