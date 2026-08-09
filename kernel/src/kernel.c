@@ -133,19 +133,17 @@ static void ps2_diag_task(void *arg) {
 }
 
 static void load_elf_module(void) {
-    if (!module_request.response) {
-        serial_writestring("[ELF] No module response from Limine\n");
-        return;
-    }
-    if (module_request.response->module_count == 0) {
+    const boot_info_t *bi = boot_info();
+    if (bi->module_count == 0) {
         serial_writestring("[ELF] No modules provided\n");
         return;
     }
 
-    struct limine_file *mod = module_request.response->modules[0];
-    serial_printf("[ELF] Module: path='%s' size=%llu addr=%p\n", mod->path, mod->size, mod->address);
+    const boot_module_t *mod = &bi->modules[0];
+    serial_printf("[ELF] Module: path='%s' size=%llu addr=0x%llx\n",
+                  mod->path, (unsigned long long)mod->size, (unsigned long long)mod->addr);
 
-    elf_load_result_t r = elf_load(mod->address, (size_t)mod->size, 0);
+    elf_load_result_t r = elf_load((void *)(uintptr_t)mod->addr, (size_t)mod->size, 0);
     if (r.error != ELF_OK) {
         serial_printf("[ELF] LOAD FAILED: %s\n", elf_strerror(r.error));
         return;
@@ -396,8 +394,7 @@ void kernel_main(void) {
     serial_writestring("[stage] net_init\n");
     net_init();
 
-    bool has_initramfs_module = (module_request.response &&
-                                  module_request.response->module_count >= 2);
+    bool has_initramfs_module = (boot_info()->module_count >= 2);
     static char root_name[16] = {0};
     bool skip_initramfs = false;
     if (has_initramfs_module) {
@@ -435,11 +432,10 @@ void kernel_main(void) {
         }
     }
 
-    if (!skip_initramfs && module_request.response &&
-        module_request.response->module_count >= 2) {
-        struct limine_file *tar = module_request.response->modules[1];
-        serial_printf("[initramfs] module: '%s' size=%llu\n", tar->path, tar->size);
-        int r = initramfs_mount(tar->address, (size_t)tar->size);
+    if (!skip_initramfs && boot_info()->module_count >= 2) {
+        const boot_module_t *tar = &boot_info()->modules[1];
+        serial_printf("[initramfs] module: '%s' size=%llu\n", tar->path, (unsigned long long)tar->size);
+        int r = initramfs_mount((void *)(uintptr_t)tar->addr, (size_t)tar->size);
         if (r == 0) {
             printf("root: initramfs (%llu KiB)\n",
                    (unsigned long long)(tar->size / 1024));
