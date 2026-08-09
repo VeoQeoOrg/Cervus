@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limine.h>
+#include "../include/boot/boot_info.h"
+#include "../include/boot/limine_boot.h"
 #include "../include/graphics/fb/fb.h"
 #include "../include/io/serial.h"
 #include "../include/gdt/gdt.h"
@@ -287,6 +289,10 @@ void kernel_main(void) {
     }
 
     global_framebuffer = framebuffer_request.response->framebuffers[0];
+
+    boot_info_init_limine(framebuffer_request.response, memmap_request.response,
+                          hhdm_request.response, rsdp_request.response,
+                          module_request.response);
 
     pmm_init(memmap_request.response, hhdm_request.response);
     slab_init();
