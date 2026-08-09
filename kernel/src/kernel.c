@@ -208,7 +208,7 @@ static bool find_installed_root(char *out, size_t out_cap) {
     return false;
 }
 
-static void kmain(void) {
+void kmain(void) {
     gdt_init();
     init_interrupt_system();
     serial_writestring("GDT&IDT [OK]\n");

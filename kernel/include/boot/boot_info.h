@@ -60,5 +60,6 @@ typedef struct {
 } boot_info_t;
 
 const boot_info_t *boot_info(void);
+boot_info_t       *boot_info_mut(void);
 
 #endif
