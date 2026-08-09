@@ -1,10 +1,10 @@
-#include "../../include/net/rtl8139.h"
-#include "../../include/net/netdev.h"
-#include "../../include/drivers/pci.h"
-#include "../../include/memory/dma.h"
-#include "../../include/sched/sched.h"
-#include "../../include/sched/spinlock.h"
-#include "../../include/io/serial.h"
+#include "../../../include/drivers/net/rtl8139.h"
+#include "../../../include/net/netdev.h"
+#include "../../../include/drivers/pci.h"
+#include "../../../include/memory/dma.h"
+#include "../../../include/sched/sched.h"
+#include "../../../include/sched/spinlock.h"
+#include "../../../include/io/serial.h"
 #include <string.h>
 #include <stdlib.h>
 

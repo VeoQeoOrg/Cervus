@@ -1,4 +1,4 @@
-#include "../../include/sched/spinlock.h"
+#include "../../../include/sched/spinlock.h"
 
 static spinlock_t g_ne2000_lock = SPINLOCK_INIT;
 
