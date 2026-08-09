@@ -76,7 +76,7 @@ mkdir -p "$(dirname "$LINKER_SCRIPT")"
 _lds_tmp=$(mktemp)
 cat > "$_lds_tmp" <<'LDS'
 OUTPUT_FORMAT(elf64-x86-64)
-ENTRY(_mb_start)
+ENTRY(kernel_main)
 KPHYS = 0x200000;
 PHDRS {
     boot            PT_LOAD;
@@ -86,16 +86,16 @@ PHDRS {
     data            PT_LOAD;
 }
 SECTIONS {
-    . = 0x100000;
-    .boot : {
+    . = 0xffffffff80000000;
+    .boot : AT(KPHYS) {
         KEEP(*(.mb_header))
         *(.boot.text)
         *(.boot.data)
     } :boot
     .boot.bss : { *(.boot.bss) } :boot
 
-    . = 0xffffffff80000000;
-    .limine_requests : AT(KPHYS) {
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    .limine_requests : {
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))

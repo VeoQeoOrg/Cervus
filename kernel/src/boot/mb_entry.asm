@@ -1,6 +1,7 @@
 %define MB2_MAGIC 0xE85250D6
 %define KVIRT     0xffffffff80000000
 %define KPHYS     0x200000
+%define PHYS(x)   ((x) - KVIRT + KPHYS)
 
 section .mb_header
 align 8
@@ -22,7 +23,7 @@ entry_tag:
     dw 3
     dw 0
     dd 12
-    dd _mb_start
+    dd PHYS(_mb_start)
 align 8
 end_tag:
     dw 0
@@ -38,7 +39,7 @@ gdt64:
     dq 0x00AF92000000FFFF
 gdt64_ptr:
     dw gdt64_ptr - gdt64 - 1
-    dd gdt64
+    dd PHYS(gdt64)
 
 section .boot.bss nobits align=4096
 global mb_pml4
@@ -68,20 +69,20 @@ extern mb_boot_stack
 _mb_start:
     cli
     cld
-    mov esp, mb_stack_top
-    mov [mb_magic], eax
-    mov [mb_info], ebx
+    mov esp, PHYS(mb_stack_top)
+    mov [PHYS(mb_magic)], eax
+    mov [PHYS(mb_info)], ebx
     SERIAL '1'
 
     xor eax, eax
-    mov edi, mb_pml4
+    mov edi, PHYS(mb_pml4)
     mov ecx, (4096*4)/4
     rep stosd
-    mov edi, mb_pdpt_id
+    mov edi, PHYS(mb_pdpt_id)
     mov ecx, (4096*3)/4
     rep stosd
 
-    mov edi, mb_pd_id
+    mov edi, PHYS(mb_pd_id)
     mov eax, 0x83
     xor ebx, ebx
     mov ecx, 512*4
@@ -94,7 +95,7 @@ _mb_start:
     dec ecx
     jnz .fill_id
 
-    mov edi, mb_pd_k
+    mov edi, PHYS(mb_pd_k)
     mov eax, KPHYS | 0x83
     mov ecx, 512
 .fill_k:
@@ -105,21 +106,21 @@ _mb_start:
     dec ecx
     jnz .fill_k
 
-    mov dword [mb_pdpt_id + 0],  mb_pd_id + 0*0x1000 + 0x03
-    mov dword [mb_pdpt_id + 8],  mb_pd_id + 1*0x1000 + 0x03
-    mov dword [mb_pdpt_id + 16], mb_pd_id + 2*0x1000 + 0x03
-    mov dword [mb_pdpt_id + 24], mb_pd_id + 3*0x1000 + 0x03
-    mov dword [mb_pdpt_hh + 0],  mb_pd_id + 0*0x1000 + 0x03
-    mov dword [mb_pdpt_hh + 8],  mb_pd_id + 1*0x1000 + 0x03
-    mov dword [mb_pdpt_hh + 16], mb_pd_id + 2*0x1000 + 0x03
-    mov dword [mb_pdpt_hh + 24], mb_pd_id + 3*0x1000 + 0x03
-    mov dword [mb_pdpt_k + 510*8], mb_pd_k + 0x03
+    mov dword [PHYS(mb_pdpt_id) + 0],  PHYS(mb_pd_id) + 0*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_id) + 8],  PHYS(mb_pd_id) + 1*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_id) + 16], PHYS(mb_pd_id) + 2*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_id) + 24], PHYS(mb_pd_id) + 3*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_hh) + 0],  PHYS(mb_pd_id) + 0*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_hh) + 8],  PHYS(mb_pd_id) + 1*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_hh) + 16], PHYS(mb_pd_id) + 2*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_hh) + 24], PHYS(mb_pd_id) + 3*0x1000 + 0x03
+    mov dword [PHYS(mb_pdpt_k) + 510*8], PHYS(mb_pd_k) + 0x03
 
-    mov dword [mb_pml4 + 0*8],   mb_pdpt_id + 0x03
-    mov dword [mb_pml4 + 256*8], mb_pdpt_hh + 0x03
-    mov dword [mb_pml4 + 511*8], mb_pdpt_k  + 0x03
+    mov dword [PHYS(mb_pml4) + 0*8],   PHYS(mb_pdpt_id) + 0x03
+    mov dword [PHYS(mb_pml4) + 256*8], PHYS(mb_pdpt_hh) + 0x03
+    mov dword [PHYS(mb_pml4) + 511*8], PHYS(mb_pdpt_k)  + 0x03
 
-    mov eax, mb_pml4
+    mov eax, PHYS(mb_pml4)
     mov cr3, eax
 
     mov eax, cr4
@@ -137,8 +138,8 @@ _mb_start:
 
     SERIAL '2'
 
-    lgdt [gdt64_ptr]
-    jmp 0x08:long_entry
+    lgdt [PHYS(gdt64_ptr)]
+    jmp 0x08:PHYS(long_entry)
 
 BITS 64
 long_entry:
@@ -154,9 +155,9 @@ long_entry:
     out dx, al
 
     xor edi, edi
-    mov edi, [mb_magic]
+    mov edi, [PHYS(mb_magic)]
     xor esi, esi
-    mov esi, [mb_info]
+    mov esi, [PHYS(mb_info)]
 
     mov rax, mb_boot_stack
     add rax, 65536
