@@ -124,6 +124,7 @@ SECTIONS {
         __percpu_end = .;
     } :data
     .bss : { *(.bss .bss.*) *(COMMON) } :data
+    kernel_lma_end = KPHYS + (. - 0xffffffff80000000);
     /DISCARD/ : { *(.eh_frame*) *(.note .note.*) }
 }
 LDS

@@ -57,6 +57,7 @@ section .boot.text
 BITS 32
 global _mb_start
 extern mb2_main
+extern mb_boot_stack
 
 %macro SERIAL 1
     mov dx, 0x3F8
@@ -152,11 +153,14 @@ long_entry:
     mov al, '3'
     out dx, al
 
-    mov rsp, mb_stack_top
     xor edi, edi
     mov edi, [mb_magic]
     xor esi, esi
     mov esi, [mb_info]
+
+    mov rax, mb_boot_stack
+    add rax, 65536
+    mov rsp, rax
 
     mov rax, mb2_main
     call rax
