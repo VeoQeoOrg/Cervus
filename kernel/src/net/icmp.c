@@ -17,7 +17,7 @@ int icmp_send_echo(netdev_t *dev, uint32_t dst, uint16_t id, uint16_t seq) {
     wr16be(msg + 6, seq);
     for (int i = 0; i < 32; i++) msg[8 + i] = (uint8_t)('a' + (i % 26));
     wr16be(msg + 2, ip_checksum(msg, sizeof(msg)));
-    return ip_send(dev, dst, IPPROTO_ICMP, msg, sizeof(msg));
+    return ip_send(dev, dst, IPPROTO_ICMP, msg, sizeof(msg), IP_DEFAULT_TTL);
 }
 
 void icmp_rx(netdev_t *dev, uint32_t src, const uint8_t *p, size_t len) {
@@ -34,6 +34,6 @@ void icmp_rx(netdev_t *dev, uint32_t src, const uint8_t *p, size_t len) {
         reply[1] = 0;
         wr16be(reply + 2, 0);
         wr16be(reply + 2, ip_checksum(reply, len));
-        ip_send(dev, src, IPPROTO_ICMP, reply, len);
+        ip_send(dev, src, IPPROTO_ICMP, reply, len, IP_DEFAULT_TTL);
     }
 }
