@@ -122,6 +122,7 @@ copy_boot bin/kernel                 "$RFS/boot/kernel"                required
 copy_boot "$INIT_ELF"                "$RFS/boot/shell.elf"             required
 copy_boot limine/limine-bios.sys     "$RFS/boot/limine-bios.sys"       optional
 copy_boot limine/limine-bios-hdd.bin "$RFS/boot/limine-bios-hdd.bin"   optional
+copy_boot builder/grub-bios.img      "$RFS/boot/grub-bios.img"         optional
 copy_boot limine/BOOTX64.EFI         "$RFS/boot/BOOTX64.EFI"           optional
 copy_boot limine/BOOTIA32.EFI        "$RFS/boot/BOOTIA32.EFI"          optional
 copy_boot "$WALLPAPER"               "$RFS/boot/wallpaper.png"         optional

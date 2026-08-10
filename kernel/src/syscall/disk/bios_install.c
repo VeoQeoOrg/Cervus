@@ -6,10 +6,11 @@
 int64_t sys_disk_bios_install(uint64_t a1, uint64_t a2, uint64_t a3,
                               uint64_t a4, uint64_t a5, uint64_t a6)
 {
-    (void)a4; (void)a5; (void)a6;
+    (void)a5; (void)a6;
     const char *disk_name = (const char *)a1;
     const void *sys_data  = (const void *)a2;
     uint32_t    sys_size  = (uint32_t)a3;
+    int         generic   = (int)a4;
 
     if (!disk_name || !sys_data || sys_size < 512) return -EINVAL;
 
@@ -30,11 +31,13 @@ int64_t sys_disk_bios_install(uint64_t a1, uint64_t a2, uint64_t a3,
 
     memcpy(sector0, src, 512);
 
-    memcpy(sector0 + 218, saved_timestamp, 6);
     memcpy(sector0 + 440, saved_parttable, 70);
 
-    uint64_t stage2_loc = 512;
-    memcpy(sector0 + 0x1A4, &stage2_loc, 8);
+    if (!generic) {
+        memcpy(sector0 + 218, saved_timestamp, 6);
+        uint64_t stage2_loc = 512;
+        memcpy(sector0 + 0x1A4, &stage2_loc, 8);
+    }
 
     uint32_t stage2_bytes   = sys_size - 512;
     uint32_t stage2_sectors = (stage2_bytes + 511) / 512;

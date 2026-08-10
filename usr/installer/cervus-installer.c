@@ -1152,10 +1152,6 @@ static int write_limine_conf(const char *path) {
 
 static const char *GRUB_ENTRY =
     "menuentry \"Cervus OS\" {\n"
-    "    insmod part_msdos\n"
-    "    insmod fat\n"
-    "    insmod multiboot2\n"
-    "    search --no-floppy --label CERVUS-ESP --set=root\n"
     "    multiboot2 /boot/kernel\n"
     "    module2 /boot/shell.elf init\n"
     "    boot\n"
@@ -1166,20 +1162,6 @@ static int write_grub_cfg(const char *path) {
     if (fd < 0) return fd;
     const char *hdr = "set timeout=5\nset default=0\n\n";
     write(fd, hdr, strlen(hdr));
-    write(fd, GRUB_ENTRY, strlen(GRUB_ENTRY));
-    close(fd);
-    return 0;
-}
-
-static int write_grub_snippet(const char *path) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return fd;
-    const char *note =
-        "# Cervus OS - paste this into your bootloader's GRUB config\n"
-        "# (e.g. append to /etc/grub.d/40_custom on your Linux, then run\n"
-        "#  update-grub / grub-mkconfig -o /boot/grub/grub.cfg).\n"
-        "# It locates the Cervus ESP by its FAT label (CERVUS-ESP).\n\n";
-    write(fd, note, strlen(note));
     write(fd, GRUB_ENTRY, strlen(GRUB_ENTRY));
     close(fd);
     return 0;
@@ -1607,7 +1589,7 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
                     close(fd);
                     if (!ok) step_fail("short read on stage1", -1);
                     else {
-                        long ir = cervus_disk_bios_install(d->name, sys_buf, sys_size);
+                        long ir = cervus_disk_bios_install(d->name, sys_buf, sys_size, 0);
                         if (ir < 0) step_fail("bios_install syscall", (int)ir);
                         else        step_ok("BIOS stage1 installed");
                     }
@@ -1615,13 +1597,36 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
             }
         }
     } else {
-        step_begin("Writing GRUB config (MBR left untouched)");
+        step_begin("Writing GRUB config");
         ensure_dir("/mnt/esp/boot/grub");
         write_grub_cfg("/mnt/esp/boot/grub/grub.cfg");
-        ensure_dir("/mnt/root/boot");
-        write_grub_snippet("/mnt/root/boot/cervus.grub.cfg");
-        write_grub_snippet("/mnt/esp/cervus.grub.cfg");
-        step_ok("GRUB entry written (see /boot/cervus.grub.cfg)");
+        step_ok("grub.cfg written");
+
+        step_begin("Installing GRUB to MBR");
+        {
+            static uint8_t grub_buf[640 * 1024];
+            struct stat st;
+            int have = (stat("/boot/grub-bios.img", &st) == 0);
+            uint32_t gsz = have ? (uint32_t)st.st_size : 0;
+            if (!have || gsz < 512 || gsz > sizeof(grub_buf)) {
+                step_fail("grub-bios.img missing", -1);
+            } else {
+                int fd = open("/boot/grub-bios.img", O_RDONLY, 0);
+                uint32_t got = 0; int ok = (fd >= 0);
+                while (ok && got < gsz) {
+                    ssize_t n = read(fd, grub_buf + got, gsz - got);
+                    if (n <= 0) { ok = 0; break; }
+                    got += (uint32_t)n;
+                }
+                if (fd >= 0) close(fd);
+                if (!ok) step_fail("read grub-bios.img", -1);
+                else {
+                    long ir = cervus_disk_bios_install(d->name, grub_buf, gsz, 1);
+                    if (ir < 0) step_fail("grub install syscall", (int)ir);
+                    else        step_ok("GRUB installed to MBR");
+                }
+            }
+        }
     }
 
     cervus_disk_umount("/mnt/esp");
@@ -1629,17 +1634,6 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
 
     go_xy(g_step_content_row + g_step_rows_avail + 1, g_step_pane_col);
     fputs(C_GREEN C_BOLD "Installation complete!" C_RESET, stdout);
-    if (bl == BL_GRUB) {
-        go_xy(g_step_content_row + g_step_rows_avail + 2, g_step_pane_col);
-        fputs(C_YELLOW "This disk will NOT boot on its own - no bootloader installed." C_RESET, stdout);
-        go_xy(g_step_content_row + g_step_rows_avail + 3, g_step_pane_col);
-        fputs(C_CYAN "From your other OS add /boot/cervus.grub.cfg to GRUB, run update-grub." C_RESET, stdout);
-        go_xy(g_step_content_row + g_step_rows_avail + 4, g_step_pane_col);
-        fputs("Press any key to return to Live mode.", stdout);
-        fflush(stdout);
-        read_key();
-        return 0;
-    }
     hint_line("Enter reboots, Esc returns to Live mode");
     fflush(stdout);
 
@@ -1688,28 +1682,26 @@ static int detect_existing_install(const disk_entry_t *disks, int n) {
 }
 
 static void info_bootloader(int row, int col, int w) {
-    info_print(&row, col, w, 1, "Choose how Cervus will boot.");
+    info_print(&row, col, w, 1, "Choose which bootloader to install into");
+    info_print(&row, col, w, 1, "this disk's MBR. Both make the disk boot");
+    info_print(&row, col, w, 1, "Cervus on its own and overwrite whatever");
+    info_print(&row, col, w, 1, "bootloader is in the MBR now.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Limine (recommended):");
-    info_print(&row, col, w, 1, "  Installs the Limine bootloader into");
-    info_print(&row, col, w, 1, "  this disk's MBR. The disk then boots");
-    info_print(&row, col, w, 1, "  Cervus on its own. Overwrites whatever");
-    info_print(&row, col, w, 1, "  bootloader is in the MBR now.");
+    info_print(&row, col, w, 0, "Limine:");
+    info_print(&row, col, w, 1, "  Small, fast, Cervus's default loader.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "GRUB (dual-boot only):");
-    info_print(&row, col, w, 1, "  Does NOT install a bootloader and does");
-    info_print(&row, col, w, 1, "  NOT touch your MBR. This disk will NOT");
-    info_print(&row, col, w, 1, "  boot by itself. It writes a GRUB entry");
-    info_print(&row, col, w, 1, "  (/boot/cervus.grub.cfg); add it to an");
-    info_print(&row, col, w, 1, "  existing GRUB (e.g. your Linux) and run");
-    info_print(&row, col, w, 1, "  update-grub. Boots Cervus via");
-    info_print(&row, col, w, 1, "  multiboot2. Pick Limine if unsure.");
+    info_print(&row, col, w, 0, "GRUB:");
+    info_print(&row, col, w, 1, "  Standard PC bootloader (BIOS/i386-pc),");
+    info_print(&row, col, w, 1, "  boots Cervus via multiboot2. Pick this");
+    info_print(&row, col, w, 1, "  if you prefer a GRUB menu.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Pick Limine if unsure.");
 }
 
 static int choose_bootloader(void) {
     const char *items[] = {
-        "Limine - standalone (this disk boots itself)",
-        "GRUB   - dual-boot (add to an EXISTING GRUB)",
+        "Limine  (default - small and fast)",
+        "GRUB    (standard PC bootloader, multiboot2)",
         "Back",
     };
     for (;;) {

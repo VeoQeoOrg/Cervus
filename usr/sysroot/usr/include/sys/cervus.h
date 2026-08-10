@@ -200,7 +200,7 @@ int      cervus_disk_partition(const char *dev, const cervus_mbr_part_t *specs, 
 int      cervus_disk_read_raw(const char *dev, uint64_t lba, uint64_t count, void *buf);
 int      cervus_disk_write_raw(const char *dev, uint64_t lba, uint64_t count, const void *buf);
 long     cervus_disk_list_parts(cervus_part_info_t *out, int max);
-long     cervus_disk_bios_install(const char *disk, const void *sys_data, uint32_t sys_size);
+long     cervus_disk_bios_install(const char *disk, const void *sys_data, uint32_t sys_size, int generic);
 int      cervus_disk_eject(const char *dev);
 int      cervus_disk_partition_gpt(const char *dev,
                                    const struct cervus_gpt_entry_spec *specs, uint64_t n);
