@@ -39,33 +39,7 @@
 #define EXT2_N_BLOCKS       15
 #define EXT2_NAME_LEN       255
 
-#define EXT4_EXTENTS_FL                 0x00080000
-#define EXT4_FEATURE_INCOMPAT_EXTENTS   0x0040
-#define EXT4_FEATURE_INCOMPAT_64BIT     0x0080
-#define EXT4_EXTENT_MAGIC               0xF30A
-#define EXT4_INIT_MAX_LEN               32768
-
-typedef struct __attribute__((packed)) {
-    uint16_t eh_magic;
-    uint16_t eh_entries;
-    uint16_t eh_max;
-    uint16_t eh_depth;
-    uint32_t eh_generation;
-} ext4_extent_header_t;
-
-typedef struct __attribute__((packed)) {
-    uint32_t ei_block;
-    uint32_t ei_leaf_lo;
-    uint16_t ei_leaf_hi;
-    uint16_t ei_unused;
-} ext4_extent_idx_t;
-
-typedef struct __attribute__((packed)) {
-    uint32_t ee_block;
-    uint16_t ee_len;
-    uint16_t ee_start_hi;
-    uint32_t ee_start_lo;
-} ext4_extent_t;
+#define EXT4_EXTENTS_FL     0x00080000
 
 typedef struct __attribute__((packed)) {
     uint32_t s_inodes_count;
@@ -112,7 +86,8 @@ typedef struct __attribute__((packed)) {
     uint32_t s_last_orphan;
     uint32_t s_hash_seed[4];
     uint8_t  s_def_hash_version;
-    uint8_t  s_reserved_pad[3];
+    uint8_t  s_jnl_backup_type;
+    uint16_t s_desc_size;
     uint32_t s_default_mount_options;
     uint32_t s_first_meta_bg;
     uint8_t  s_reserved[760];
@@ -173,6 +148,7 @@ typedef struct {
     uint32_t           inodes_per_block;
     uint32_t           inode_size;
     uint32_t           ptrs_per_block;
+    uint32_t           desc_size;
     bool               dirty;
 } ext2_t;
 
@@ -180,6 +156,9 @@ typedef struct {
     ext2_t  *fs;
     uint32_t ino;
 } ext2_vdata_t;
+
+int ext2_block_read(ext2_t *fs, uint32_t block, void *buf);
+int ext2_block_write(ext2_t *fs, uint32_t block, const void *buf);
 
 int ext2_format(blkdev_t *dev, const char *label);
 vnode_t *ext2_mount(blkdev_t *dev);
