@@ -35,6 +35,7 @@
 #define EXIT_MOUNT_EXISTING 10
 
 typedef enum { BL_LIMINE = 0, BL_GRUB = 1 } bootloader_t;
+typedef enum { FS_EXT2 = 0, FS_EXT4 = 1 } fstype_t;
 
 typedef struct { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; } winsize_t;
 
@@ -1399,7 +1400,7 @@ static void apply_accounts(const account_cfg_t *a) {
     mkdir("/mnt/root/tmp", 01777);
 }
 
-static int do_install(const disk_entry_t *d, const layout_t *L, const account_cfg_t *acc, bootloader_t bl) {
+static int do_install(const disk_entry_t *d, const layout_t *L, const account_cfg_t *acc, bootloader_t bl, fstype_t fs) {
     uint64_t total_sectors = d->sectors;
     if (total_sectors > 0xFFFFFFFEULL) total_sectors = 0xFFFFFFFEULL;
 
@@ -1456,8 +1457,8 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
     if (rc < 0) { step_fail("ESP format", rc); read_key(); return 1; }
     step_ok("ESP formatted");
 
-    step_begin("Formatting root (ext2)");
-    rc = cervus_disk_format(part2, "cervus-root");
+    step_begin(fs == FS_EXT4 ? "Formatting root (ext4)" : "Formatting root (ext2)");
+    rc = cervus_disk_format(part2, "cervus-root", fs == FS_EXT4);
     if (rc < 0) { step_fail("root format", rc); read_key(); return 1; }
     step_ok("root formatted");
 
@@ -1712,6 +1713,34 @@ static int choose_bootloader(void) {
     }
 }
 
+static void info_fstype(int row, int col, int w) {
+    info_print(&row, col, w, 1, "Filesystem for the Cervus root partition.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "ext2:");
+    info_print(&row, col, w, 1, "  Classic, simple, block-mapped. Rock");
+    info_print(&row, col, w, 1, "  solid and well tested in Cervus.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "ext4:");
+    info_print(&row, col, w, 1, "  Uses extents. Readable by Linux as a");
+    info_print(&row, col, w, 1, "  modern ext4 volume. No journal yet.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Pick ext2 if unsure.");
+}
+
+static int choose_fstype(void) {
+    const char *items[] = {
+        "ext2  (default - simple and proven)",
+        "ext4  (extents, Linux-compatible)",
+        "Back",
+    };
+    for (;;) {
+        int sel = menu_in_box("Choose root filesystem", items, 3, 0, info_fstype);
+        if (sel < 0 || sel == 2) return -1;
+        if (sel == 0) return FS_EXT2;
+        if (sel == 1) return FS_EXT4;
+    }
+}
+
 static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
     layout_t L;
     memset(&L, 0, sizeof(L));
@@ -1786,7 +1815,10 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         int bl = choose_bootloader();
         if (bl < 0) continue;
 
-        do_install(&disks[picked], &L, &acc, (bootloader_t)bl);
+        int fs = choose_fstype();
+        if (fs < 0) continue;
+
+        do_install(&disks[picked], &L, &acc, (bootloader_t)bl, (fstype_t)fs);
         return EXIT_CANCEL;
     }
 }
