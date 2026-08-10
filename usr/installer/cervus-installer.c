@@ -1630,14 +1630,17 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
     go_xy(g_step_content_row + g_step_rows_avail + 1, g_step_pane_col);
     fputs(C_GREEN C_BOLD "Installation complete!" C_RESET, stdout);
     if (bl == BL_GRUB) {
-        hint_line("GRUB chosen: your bootloader was NOT modified.");
         go_xy(g_step_content_row + g_step_rows_avail + 2, g_step_pane_col);
-        fputs(C_CYAN "Add /boot/cervus.grub.cfg to your GRUB, then update-grub." C_RESET, stdout);
+        fputs(C_YELLOW "This disk will NOT boot on its own - no bootloader installed." C_RESET, stdout);
         go_xy(g_step_content_row + g_step_rows_avail + 3, g_step_pane_col);
-        fputs("Enter reboots, Esc returns to Live mode", stdout);
-    } else {
-        hint_line("Enter reboots, Esc returns to Live mode");
+        fputs(C_CYAN "From your other OS add /boot/cervus.grub.cfg to GRUB, run update-grub." C_RESET, stdout);
+        go_xy(g_step_content_row + g_step_rows_avail + 4, g_step_pane_col);
+        fputs("Press any key to return to Live mode.", stdout);
+        fflush(stdout);
+        read_key();
+        return 0;
     }
+    hint_line("Enter reboots, Esc returns to Live mode");
     fflush(stdout);
 
     int k = read_key();
@@ -1687,25 +1690,26 @@ static int detect_existing_install(const disk_entry_t *disks, int n) {
 static void info_bootloader(int row, int col, int w) {
     info_print(&row, col, w, 1, "Choose how Cervus will boot.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Limine:");
+    info_print(&row, col, w, 0, "Limine (recommended):");
     info_print(&row, col, w, 1, "  Installs the Limine bootloader into");
-    info_print(&row, col, w, 1, "  this disk's MBR. Self-contained - boots");
-    info_print(&row, col, w, 1, "  Cervus directly. Overwrites whatever");
+    info_print(&row, col, w, 1, "  this disk's MBR. The disk then boots");
+    info_print(&row, col, w, 1, "  Cervus on its own. Overwrites whatever");
     info_print(&row, col, w, 1, "  bootloader is in the MBR now.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "GRUB:");
-    info_print(&row, col, w, 1, "  Does NOT touch your MBR/bootloader.");
-    info_print(&row, col, w, 1, "  For dual-boot: writes a GRUB entry");
-    info_print(&row, col, w, 1, "  (/boot/cervus.grub.cfg) that you add to");
-    info_print(&row, col, w, 1, "  an existing GRUB (e.g. on your Linux),");
-    info_print(&row, col, w, 1, "  then run update-grub. Boots via");
-    info_print(&row, col, w, 1, "  multiboot2.");
+    info_print(&row, col, w, 0, "GRUB (dual-boot only):");
+    info_print(&row, col, w, 1, "  Does NOT install a bootloader and does");
+    info_print(&row, col, w, 1, "  NOT touch your MBR. This disk will NOT");
+    info_print(&row, col, w, 1, "  boot by itself. It writes a GRUB entry");
+    info_print(&row, col, w, 1, "  (/boot/cervus.grub.cfg); add it to an");
+    info_print(&row, col, w, 1, "  existing GRUB (e.g. your Linux) and run");
+    info_print(&row, col, w, 1, "  update-grub. Boots Cervus via");
+    info_print(&row, col, w, 1, "  multiboot2. Pick Limine if unsure.");
 }
 
 static int choose_bootloader(void) {
     const char *items[] = {
-        "Limine  (install to MBR - dedicated disk)",
-        "GRUB    (keep my bootloader - dual-boot)",
+        "Limine - standalone (this disk boots itself)",
+        "GRUB   - dual-boot (add to an EXISTING GRUB)",
         "Back",
     };
     for (;;) {
