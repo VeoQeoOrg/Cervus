@@ -139,10 +139,10 @@ static void read_mac(e1000_t *e, uint8_t mac[6]) {
 static void e1000_rx_drain(e1000_t *e) {
     uint8_t buf[E1000_BUFSZ];
     for (;;) {
-        spinlock_acquire(&e->lock);
+        uint64_t f = spinlock_acquire_irqsave(&e->lock);
         uint32_t i = e->rx_cur;
         if (!(e->rx[i].status & RXD_STAT_DD)) {
-            spinlock_release(&e->lock);
+            spinlock_release_irqrestore(&e->lock, f);
             return;
         }
         uint16_t len = e->rx[i].length;
@@ -151,7 +151,7 @@ static void e1000_rx_drain(e1000_t *e) {
         e->rx[i].status = 0;
         ew(e, E1000_RDT, i);
         e->rx_cur = (i + 1) % E1000_NUM_RX;
-        spinlock_release(&e->lock);
+        spinlock_release_irqrestore(&e->lock, f);
 
         net_rx(e->ndev, buf, len);
     }
@@ -161,10 +161,10 @@ static int e1000_transmit(netdev_t *nd, const void *frame, size_t len) {
     e1000_t *e = nd->priv;
     if (len == 0 || len > E1000_BUFSZ) return -1;
 
-    spinlock_acquire(&e->lock);
+    uint64_t f = spinlock_acquire_irqsave(&e->lock);
     uint32_t i = e->tx_cur;
     if (!(e->tx[i].status & TXD_STAT_DD) && e->tx[i].cmd) {
-        spinlock_release(&e->lock);
+        spinlock_release_irqrestore(&e->lock, f);
         return -1;
     }
     memcpy(e->tx_buf[i], frame, len);
@@ -175,7 +175,7 @@ static int e1000_transmit(netdev_t *nd, const void *frame, size_t len) {
     e->tx[i].status = 0;
     e->tx_cur = (i + 1) % E1000_NUM_TX;
     ew(e, E1000_TDT, e->tx_cur);
-    spinlock_release(&e->lock);
+    spinlock_release_irqrestore(&e->lock, f);
 
     for (int t = 0; t < 1000000; t++) {
         if (e->tx[i].status & TXD_STAT_DD) break;

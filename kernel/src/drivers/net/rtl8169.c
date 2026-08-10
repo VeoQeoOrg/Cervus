@@ -91,10 +91,10 @@ static inline void w32(rtl8169_t *r, uint32_t o, uint32_t v) { *(volatile uint32
 static void rtl_rx_drain(rtl8169_t *r) {
     uint8_t buf[RTL_BUFSZ];
     for (;;) {
-        spinlock_acquire(&r->lock);
+        uint64_t f = spinlock_acquire_irqsave(&r->lock);
         uint32_t i = r->rx_cur;
         uint32_t opts1 = r->rx[i].opts1;
-        if (opts1 & DESC_OWN) { spinlock_release(&r->lock); return; }
+        if (opts1 & DESC_OWN) { spinlock_release_irqrestore(&r->lock, f); return; }
         uint32_t len = opts1 & DESC_LEN_MASK;
         if (len >= 4) len -= 4;
         if (len > RTL_BUFSZ) len = RTL_BUFSZ;
@@ -102,7 +102,7 @@ static void rtl_rx_drain(rtl8169_t *r) {
         uint32_t eor = (i == RTL_NUM_RX - 1) ? DESC_EOR : 0;
         r->rx[i].opts1 = DESC_OWN | eor | RTL_BUFSZ;
         r->rx_cur = (i + 1) % RTL_NUM_RX;
-        spinlock_release(&r->lock);
+        spinlock_release_irqrestore(&r->lock, f);
 
         net_rx(r->ndev, buf, len);
     }
@@ -112,9 +112,9 @@ static int rtl_transmit(netdev_t *nd, const void *frame, size_t len) {
     rtl8169_t *r = nd->priv;
     if (len == 0 || len > RTL_BUFSZ) return -1;
 
-    spinlock_acquire(&r->lock);
+    uint64_t f = spinlock_acquire_irqsave(&r->lock);
     uint32_t i = r->tx_cur;
-    if (r->tx[i].opts1 & DESC_OWN) { spinlock_release(&r->lock); return -1; }
+    if (r->tx[i].opts1 & DESC_OWN) { spinlock_release_irqrestore(&r->lock, f); return -1; }
     memcpy(r->tx_buf[i], frame, len);
     uint32_t eor = (i == RTL_NUM_TX - 1) ? DESC_EOR : 0;
     r->tx[i].addr  = r->tx_buf_phys[i];
@@ -122,7 +122,7 @@ static int rtl_transmit(netdev_t *nd, const void *frame, size_t len) {
     r->tx[i].opts1 = DESC_OWN | DESC_FS | DESC_LS | eor | (uint32_t)len;
     r->tx_cur = (i + 1) % RTL_NUM_TX;
     w8(r, R_TPPOLL, TPPOLL_NPQ);
-    spinlock_release(&r->lock);
+    spinlock_release_irqrestore(&r->lock, f);
 
     for (int t = 0; t < 1000000; t++)
         if (!(r->tx[i].opts1 & DESC_OWN)) break;
