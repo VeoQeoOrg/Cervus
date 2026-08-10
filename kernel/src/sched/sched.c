@@ -756,13 +756,14 @@ void task_yield(void) {
 
 void task_sleep_ns(uint64_t ns) {
     if (ns == 0) return;
+    asm volatile("cli");
     uint32_t cpu = smp_cpu_index();
     task_t *me = current_task[cpu];
-    if (!me) return;
+    if (!me) { asm volatile("sti"); return; }
     me->wakeup_time_ns = sched_now_ns() + ns;
-    sched_note_wakeup(me->wakeup_time_ns);
     me->runnable = false;
     me->state    = TASK_BLOCKED;
+    sched_note_wakeup(me->wakeup_time_ns);
     sched_reschedule();
 }
 

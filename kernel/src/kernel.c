@@ -53,12 +53,6 @@
 fb_info_t *global_framebuffer = NULL;
 static fb_info_t s_fb;
 
-static void hcf(void) {
-    for (;;) {
-        asm ("hlt");
-    }
-}
-
 __attribute__((unused))
 static void ps2_diag_task(void *arg) {
     (void)arg;
@@ -405,10 +399,10 @@ void kmain(void) {
     puzzle_guardian_start();
 
     serial_writestring("Manually triggering first reschedule...\n");
-    sched_reschedule();
 
     while (1) {
-        hcf();
+        sched_reschedule();
+        asm volatile("sti; hlt");
     }
 }
 
