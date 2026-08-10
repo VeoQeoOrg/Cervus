@@ -47,7 +47,7 @@ mb_pml4:      resb 4096
 mb_pdpt_id:   resb 4096
 mb_pdpt_hh:   resb 4096
 mb_pdpt_k:    resb 4096
-mb_pd_id:     resb 4096*4
+mb_pd_id:     resb 4096*16
 mb_pd_k:      resb 4096
 mb_stack:     resb 32768
 mb_stack_top:
@@ -85,7 +85,7 @@ _mb_start:
     mov edi, PHYS(mb_pd_id)
     mov eax, 0x83
     xor ebx, ebx
-    mov ecx, 512*4
+    mov ecx, 512*16
 .fill_id:
     mov [edi], eax
     mov [edi+4], ebx
@@ -110,10 +110,39 @@ _mb_start:
     mov dword [PHYS(mb_pdpt_id) + 8],  PHYS(mb_pd_id) + 1*0x1000 + 0x03
     mov dword [PHYS(mb_pdpt_id) + 16], PHYS(mb_pd_id) + 2*0x1000 + 0x03
     mov dword [PHYS(mb_pdpt_id) + 24], PHYS(mb_pd_id) + 3*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_hh) + 0],  PHYS(mb_pd_id) + 0*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_hh) + 8],  PHYS(mb_pd_id) + 1*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_hh) + 16], PHYS(mb_pd_id) + 2*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_hh) + 24], PHYS(mb_pd_id) + 3*0x1000 + 0x03
+
+    mov eax, 0x80000001
+    cpuid
+    test edx, 1 << 26
+    jz .hh_2mb
+
+    mov edi, PHYS(mb_pdpt_hh)
+    mov eax, 0x83
+    xor ebx, ebx
+    mov ecx, 512
+.hh_1g:
+    mov [edi], eax
+    mov [edi+4], ebx
+    add eax, 0x40000000
+    adc ebx, 0
+    add edi, 8
+    dec ecx
+    jnz .hh_1g
+    jmp .hh_done
+
+.hh_2mb:
+    mov edi, PHYS(mb_pdpt_hh)
+    mov eax, PHYS(mb_pd_id) + 0x03
+    mov ecx, 16
+.hh_2mb_loop:
+    mov [edi], eax
+    mov dword [edi+4], 0
+    add eax, 0x1000
+    add edi, 8
+    dec ecx
+    jnz .hh_2mb_loop
+.hh_done:
+
     mov dword [PHYS(mb_pdpt_k) + 510*8], PHYS(mb_pd_k) + 0x03
 
     mov dword [PHYS(mb_pml4) + 0*8],   PHYS(mb_pdpt_id) + 0x03
