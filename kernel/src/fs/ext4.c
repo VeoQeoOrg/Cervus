@@ -3,6 +3,25 @@
 #include "../../include/syscall/errno.h"
 #include <stdint.h>
 
+void ext4_inode_set_extent(ext2_inode_t *di, uint64_t phys_block, uint16_t num_blocks) {
+    di->i_flags |= EXT4_EXTENTS_FL;
+    uint8_t *p = (uint8_t *)di->i_block;
+    for (int i = 0; i < EXT2_N_BLOCKS; i++) di->i_block[i] = 0;
+    ext4_extent_header_t *eh = (ext4_extent_header_t *)p;
+    eh->eh_magic      = EXT4_EXTENT_MAGIC;
+    eh->eh_entries    = num_blocks ? 1 : 0;
+    eh->eh_max        = 4;
+    eh->eh_depth      = 0;
+    eh->eh_generation = 0;
+    if (num_blocks) {
+        ext4_extent_t *ex = (ext4_extent_t *)(p + sizeof(ext4_extent_header_t));
+        ex->ee_block    = 0;
+        ex->ee_len      = num_blocks;
+        ex->ee_start_hi = (uint16_t)(phys_block >> 32);
+        ex->ee_start_lo = (uint32_t)phys_block;
+    }
+}
+
 int32_t ext4_extent_lookup(ext2_t *fs, ext2_inode_t *di, uint32_t file_block) {
     uint8_t *heap = NULL;
     const uint8_t *node = (const uint8_t *)di->i_block;

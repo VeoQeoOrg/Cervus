@@ -160,9 +160,11 @@ typedef struct {
 int ext2_block_read(ext2_t *fs, uint32_t block, void *buf);
 int ext2_block_write(ext2_t *fs, uint32_t block, const void *buf);
 
-int ext2_format(blkdev_t *dev, const char *label);
+int ext2_format(blkdev_t *dev, const char *label, int ext4);
 vnode_t *ext2_mount(blkdev_t *dev);
 void ext2_unmount(ext2_t *fs);
 void ext2_sync(ext2_t *fs);
+void ext2_priv_sync(void *fs);
+void *ext2_root_to_fs(vnode_t *root);
 
 #endif

@@ -362,11 +362,11 @@ static const char *strip_dev_prefix(const char *name) {
     return name;
 }
 
-int disk_format(const char *devname, const char *label) {
+int disk_format(const char *devname, const char *label, int ext4) {
     const char *raw = strip_dev_prefix(devname);
     blkdev_t *dev = blkdev_get_by_name(raw);
     if (!dev) return -ENODEV;
-    return ext2_format(dev, label ? label : raw);
+    return ext2_format(dev, label ? label : raw, ext4);
 }
 
 static int detect_fs_type(blkdev_t *dev) {
@@ -427,7 +427,13 @@ int disk_mount(const char *devname, const char *path) {
         return -EINVAL;
     }
     if (!root) return -EIO;
-    int r = vfs_mount(path, root);
+    int r;
+    if (t == 2) {
+        void *priv = ext2_root_to_fs(root);
+        r = vfs_mount_fs(path, root, priv, ext2_priv_sync, ext2_priv_sync);
+    } else {
+        r = vfs_mount(path, root);
+    }
     if (r < 0) { vnode_unref(root); return r; }
 
     int si = vfs_set_mount_info(path, raw, fsname);

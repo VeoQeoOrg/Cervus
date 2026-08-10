@@ -34,5 +34,6 @@ typedef struct __attribute__((packed)) {
 } ext4_extent_t;
 
 int32_t ext4_extent_lookup(ext2_t *fs, ext2_inode_t *di, uint32_t file_block);
+void ext4_inode_set_extent(ext2_inode_t *di, uint64_t phys_block, uint16_t num_blocks);
 
 #endif
