@@ -12,6 +12,7 @@
 #define TCSETSW       0x5403
 #define TCSETSF       0x5404
 #define TIOCSWINSZ    0x5414
+#define SIOCSTTL      0x5460
 
 #define IOCTL_TERMIOS_SIZE 48
 
@@ -33,6 +34,7 @@ static size_t ioctl_in_size(uint64_t request)
         case TCSETSF:     return IOCTL_TERMIOS_SIZE;
         case TIOCSWINSZ:  return 8;
         case TIOCSNONBLOCK: return sizeof(int);
+	case SIOCSTTL:    return sizeof(int);
         default:          return 0;
     }
 }

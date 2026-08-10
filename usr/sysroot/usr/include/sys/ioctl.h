@@ -18,6 +18,8 @@
 #define FIONBIO      0x5421
 #define FIOASYNC     0x5452
 
+#define SIOCSTTL     0x5460
+
 struct winsize {
     uint16_t ws_row;
     uint16_t ws_col;
