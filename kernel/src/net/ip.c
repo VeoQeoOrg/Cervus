@@ -62,7 +62,7 @@ static int same_subnet(netdev_t *dev, uint32_t ip) {
     return (ip & dev->netmask) == (dev->ip & dev->netmask);
 }
 
-int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, size_t len) {
+int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, size_t len, uint8_t ttl) {
     if (len > 1480) return -1;
 
     int local = ip_is_local(dev, dst);
@@ -88,7 +88,7 @@ int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, siz
     wr16be(pkt + 2, (uint16_t)(20 + len));
     wr16be(pkt + 4, g_ip_id++);
     wr16be(pkt + 6, 0x4000);
-    pkt[8] = 64;
+    pkt[8] = ttl;
     pkt[9] = proto;
     wr16be(pkt + 10, 0);
     wr32be(pkt + 12, src);
