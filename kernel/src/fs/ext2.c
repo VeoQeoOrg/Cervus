@@ -36,6 +36,11 @@ int ext2_block_read(ext2_t *fs, uint32_t block, void *buf) {
 }
 
 int ext2_block_write(ext2_t *fs, uint32_t block, const void *buf) {
+    if (fs->cur_txn) return jbd2_txn_stage(fs, block, buf);
+    return blkdev_write(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
+}
+
+int ext2_block_write_data(ext2_t *fs, uint32_t block, const void *buf) {
     return blkdev_write(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
 }
 
@@ -72,6 +77,11 @@ static int inode_write(ext2_t *fs, uint32_t ino, const ext2_inode_t *in) {
     if (group >= fs->groups_count) return -EINVAL;
     uint64_t off = (uint64_t)gd(fs, group)->bg_inode_table * fs->block_size
                  + (uint64_t)local * fs->inode_size;
+    if (fs->cur_txn) {
+        uint32_t blk = (uint32_t)(off / fs->block_size);
+        uint32_t boff = (uint32_t)(off % fs->block_size);
+        return jbd2_txn_stage_patch(fs, blk, boff, in, sizeof(*in));
+    }
     return blkdev_write(fs->dev, off, in, sizeof(*in));
 }
 
@@ -322,7 +332,7 @@ static int64_t ext2_file_read(vnode_t *node, void *buf, size_t len, uint64_t off
     return (int64_t)done;
 }
 
-static int64_t ext2_file_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
+static int64_t ext2_file_write_impl(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
     ext2_vdata_t *vd = node->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
@@ -353,7 +363,7 @@ static int64_t ext2_file_write(vnode_t *node, const void *buf, size_t len, uint6
         size_t ch = fs->block_size - bo;
         if (ch > len - done) ch = len - done;
         memcpy(bb + bo, src + done, ch);
-        ext2_block_write(fs, (uint32_t)db, bb);
+        ext2_block_write_data(fs, (uint32_t)db, bb);
         done += ch;
     }
     uint32_t ne = (uint32_t)(offset + done);
@@ -403,7 +413,7 @@ static void free_all_blocks(ext2_t *fs, ext2_inode_t *di) {
     di->i_blocks = 0;
 }
 
-static int ext2_file_truncate(vnode_t *node, uint64_t new_size) {
+static int ext2_file_truncate_impl(vnode_t *node, uint64_t new_size) {
     ext2_vdata_t *vd = node->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
@@ -429,7 +439,7 @@ static int ext2_stat(vnode_t *node, vfs_stat_t *out) {
     return 0;
 }
 
-static int ext2_setattr(vnode_t *node) {
+static int ext2_setattr_impl(vnode_t *node) {
     ext2_vdata_t *vd = node->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
@@ -441,6 +451,30 @@ static int ext2_setattr(vnode_t *node) {
     inode_write(fs, vd->ino, &di);
     fs->dirty = true;
     return 0;
+}
+
+static int64_t ext2_file_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
+    ext2_t *fs = ((ext2_vdata_t *)node->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int64_t r = ext2_file_write_impl(node, buf, len, offset);
+    jbd2_txn_end(fs);
+    return r;
+}
+
+static int ext2_file_truncate(vnode_t *node, uint64_t new_size) {
+    ext2_t *fs = ((ext2_vdata_t *)node->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_file_truncate_impl(node, new_size);
+    jbd2_txn_end(fs);
+    return r;
+}
+
+static int ext2_setattr(vnode_t *node) {
+    ext2_t *fs = ((ext2_vdata_t *)node->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_setattr_impl(node);
+    jbd2_txn_end(fs);
+    return r;
 }
 
 static void ext2_vnode_ref(vnode_t *node)  { (void)node; }
@@ -599,7 +633,7 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
     return 0;
 }
 
-static int ext2_dir_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
+static int ext2_dir_mkdir_impl(vnode_t *dir, const char *name, uint32_t mode) {
     if (!name || !name[0]) return -EINVAL;
     ext2_vdata_t *vd = dir->fs_data;
     ext2_t *fs = vd->fs;
@@ -643,7 +677,7 @@ static int ext2_dir_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
     return 0;
 }
 
-static int ext2_dir_create(vnode_t *dir, const char *name, uint32_t mode, vnode_t **out) {
+static int ext2_dir_create_impl(vnode_t *dir, const char *name, uint32_t mode, vnode_t **out) {
     if (!name || !name[0]) return -EINVAL;
     ext2_vdata_t *vd = dir->fs_data;
     ext2_t *fs = vd->fs;
@@ -666,7 +700,7 @@ static int ext2_dir_create(vnode_t *dir, const char *name, uint32_t mode, vnode_
     return 0;
 }
 
-static int ext2_dir_unlink(vnode_t *dir, const char *name) {
+static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
     ext2_vdata_t *vd = dir->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
@@ -717,7 +751,7 @@ static int ext2_dir_unlink(vnode_t *dir, const char *name) {
     return -ENOENT;
 }
 
-static int ext2_dir_rename(vnode_t *src_dir, const char *src_name,
+static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
                            vnode_t *dst_dir, const char *dst_name) {
     ext2_vdata_t *svd = src_dir->fs_data;
     ext2_t *fs = svd->fs;
@@ -730,7 +764,7 @@ static int ext2_dir_rename(vnode_t *src_dir, const char *src_name,
     vnode_t *ex = NULL;
     if (ext2_dir_lookup(dst_dir, dst_name, &ex) == 0) {
         vnode_unref(ex);
-        ext2_dir_unlink(dst_dir, dst_name);
+        ext2_dir_unlink_impl(dst_dir, dst_name);
     }
     ext2_vdata_t *dvd = dst_dir->fs_data;
     r = ext2_dir_add_entry(fs, dvd->ino, cino, ft, dst_name);
@@ -766,6 +800,39 @@ static int ext2_dir_rename(vnode_t *src_dir, const char *src_name,
     kfree(bb);
     fs->dirty = true;
     return 0;
+}
+
+static int ext2_dir_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
+    ext2_t *fs = ((ext2_vdata_t *)dir->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_mkdir_impl(dir, name, mode);
+    jbd2_txn_end(fs);
+    return r;
+}
+
+static int ext2_dir_create(vnode_t *dir, const char *name, uint32_t mode, vnode_t **out) {
+    ext2_t *fs = ((ext2_vdata_t *)dir->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_create_impl(dir, name, mode, out);
+    jbd2_txn_end(fs);
+    return r;
+}
+
+static int ext2_dir_unlink(vnode_t *dir, const char *name) {
+    ext2_t *fs = ((ext2_vdata_t *)dir->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_unlink_impl(dir, name);
+    jbd2_txn_end(fs);
+    return r;
+}
+
+static int ext2_dir_rename(vnode_t *src_dir, const char *src_name,
+                           vnode_t *dst_dir, const char *dst_name) {
+    ext2_t *fs = ((ext2_vdata_t *)src_dir->fs_data)->fs;
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_rename_impl(src_dir, src_name, dst_dir, dst_name);
+    jbd2_txn_end(fs);
+    return r;
 }
 
 static const vnode_ops_t ext2_dir_ops = {

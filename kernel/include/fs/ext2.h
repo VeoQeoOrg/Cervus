@@ -150,6 +150,7 @@ typedef struct {
     uint32_t           ptrs_per_block;
     uint32_t           desc_size;
     bool               dirty;
+    void              *cur_txn;
 } ext2_t;
 
 typedef struct {
@@ -159,6 +160,7 @@ typedef struct {
 
 int ext2_block_read(ext2_t *fs, uint32_t block, void *buf);
 int ext2_block_write(ext2_t *fs, uint32_t block, const void *buf);
+int ext2_block_write_data(ext2_t *fs, uint32_t block, const void *buf);
 int32_t ext2_bmap(ext2_t *fs, ext2_inode_t *di, uint32_t file_block);
 int ext2_inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out);
 
