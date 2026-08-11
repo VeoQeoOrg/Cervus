@@ -15,15 +15,16 @@ static const char USAGE[] =
     "  <N>MiB | <N>GiB | <N>%   percentage of remaining space\n"
     "  rest                     all remaining sectors\n"
     "\n"
-    "Type is an MBR partition type byte in hex:\n"
+    "Type is a name (ext4/linux, swap, efi, fat32, ntfs, gpt) or a hex byte:\n"
     "  0C  FAT32 (LBA)              82  Linux-compatible swap\n"
     "  83  Linux-compatible         EF  EFI System (ESP)\n"
     "  EE  Protective MBR (GPT)     07  NTFS/exFAT\n"
     "\n"
     "First partition is marked bootable. Partitions are aligned to 1 MiB.\n"
     "\n"
-    "Example:\n"
-    "  mkpart sda 0C:64MiB 83:rest\n";
+    "Examples:\n"
+    "  mkpart sda 0C:64MiB 83:rest\n"
+    "  mkpart sda efi:64MiB ext4:rest\n";
 
 static int parse_size(const char *s, uint64_t total_left, uint64_t *out_sectors)
 {
@@ -56,6 +57,14 @@ static int parse_size(const char *s, uint64_t total_left, uint64_t *out_sectors)
 
 static int parse_type(const char *s, uint8_t *out)
 {
+    if (strcasecmp(s, "ext4") == 0 || strcasecmp(s, "ext2") == 0 ||
+        strcasecmp(s, "ext3") == 0 || strcasecmp(s, "linux") == 0) { *out = 0x83; return 0; }
+    if (strcasecmp(s, "swap") == 0) { *out = 0x82; return 0; }
+    if (strcasecmp(s, "efi") == 0 || strcasecmp(s, "esp") == 0) { *out = 0xEF; return 0; }
+    if (strcasecmp(s, "fat32") == 0 || strcasecmp(s, "vfat") == 0 ||
+        strcasecmp(s, "fat") == 0) { *out = 0x0C; return 0; }
+    if (strcasecmp(s, "ntfs") == 0) { *out = 0x07; return 0; }
+    if (strcasecmp(s, "gpt") == 0) { *out = 0xEE; return 0; }
     char *end = NULL;
     unsigned long v = strtoul(s, &end, 16);
     if (end == s || *end != '\0' || v > 0xFF) return -1;

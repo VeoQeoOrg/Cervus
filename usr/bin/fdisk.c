@@ -53,6 +53,21 @@ static const char *mbr_type_name(uint8_t t) {
     }
 }
 
+static int parse_mbr_type(const char *s, uint8_t *out) {
+    if (strcasecmp(s, "ext4") == 0 || strcasecmp(s, "ext2") == 0 ||
+        strcasecmp(s, "ext3") == 0 || strcasecmp(s, "linux") == 0) { *out = 0x83; return 0; }
+    if (strcasecmp(s, "swap") == 0) { *out = 0x82; return 0; }
+    if (strcasecmp(s, "efi") == 0 || strcasecmp(s, "esp") == 0) { *out = 0xEF; return 0; }
+    if (strcasecmp(s, "fat32") == 0 || strcasecmp(s, "vfat") == 0 ||
+        strcasecmp(s, "fat") == 0) { *out = 0x0C; return 0; }
+    if (strcasecmp(s, "ntfs") == 0) { *out = 0x07; return 0; }
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 16);
+    if (end == s || *end != '\0' || v > 0xFF) return -1;
+    *out = (uint8_t)v;
+    return 0;
+}
+
 static const char *gpt_guid_name(const uint8_t guid[16]) {
     if (memcmp(guid, GUID_EFI,    16) == 0) return "EFI System";
     if (memcmp(guid, GUID_LINUX,  16) == 0) return "Linux-compatible";
@@ -268,11 +283,10 @@ static void cmd_new(fdisk_ctx_t *c) {
         memset(c->parts[slot].name, 0, sizeof(c->parts[slot].name));
         strncpy(c->parts[slot].name, buf, sizeof(c->parts[slot].name) - 1);
     } else {
-        if (read_line("  type (hex, e.g. 83): ", buf, sizeof(buf)) < 0) return;
-        char *end = NULL;
-        unsigned long v = strtoul(buf, &end, 16);
-        if (end == buf || v > 0xFF) { fputs("  bad hex\n", stdout); return; }
-        c->parts[slot].type = (uint8_t)v;
+        if (read_line("  type [ext4/swap/efi/fat32 or hex, default ext4]: ", buf, sizeof(buf)) < 0) return;
+        uint8_t t = 0x83;
+        if (buf[0] && parse_mbr_type(buf, &t) < 0) { fputs("  bad type\n", stdout); return; }
+        c->parts[slot].type = t;
         c->parts[slot].bootable = (slot == 0) ? 1 : 0;
     }
 
