@@ -1,5 +1,6 @@
 #include "../../include/fs/ext2.h"
 #include "../../include/fs/ext4.h"
+#include "../../include/fs/jbd2.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/drivers/disk/blkdev.h"
 #include "../../include/memory/pmm.h"
@@ -946,6 +947,62 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     blkdev_write(dev, (uint64_t)root_blk * block_size, rdb, block_size);
     kfree(rdb);
     gdt[0].bg_used_dirs_count = 1;
+
+    if (ext4) {
+        uint32_t jblocks = 1024;
+        if (gdt[0].bg_free_blocks_count >= jblocks) {
+            uint32_t jstart = (uint32_t)root_blk + 1;
+            uint8_t *bbmp = kmalloc(block_size);
+            blkdev_read(dev, (uint64_t)gdt[0].bg_block_bitmap * block_size, bbmp, block_size);
+            for (uint32_t i = 0; i < jblocks; i++)
+                bmp_set(bbmp, (jstart + i) - first_data_block);
+            blkdev_write(dev, (uint64_t)gdt[0].bg_block_bitmap * block_size, bbmp, block_size);
+            kfree(bbmp);
+            gdt[0].bg_free_blocks_count -= (uint16_t)jblocks;
+            sb.s_free_blocks_count -= jblocks;
+
+            uint64_t jbase_lba = (uint64_t)jstart * sectors_per_block;
+            uint32_t jsectors = jblocks * sectors_per_block, done = 0;
+            while (done < jsectors) {
+                uint32_t batch = jsectors - done;
+                if (batch > chunk_sectors) batch = chunk_sectors;
+                ext2_wsec_retry(dev, jbase_lba + done, batch, zeros_chunk);
+                done += batch;
+            }
+
+            ext2_inode_t jino;
+            memset(&jino, 0, sizeof(jino));
+            jino.i_mode = EXT2_S_IFREG | 0600;
+            jino.i_links_count = 1;
+            jino.i_size = jblocks * block_size;
+            jino.i_blocks = (jblocks * block_size) / 512;
+            ext4_inode_set_extent(&jino, jstart, (uint16_t)jblocks);
+            uint64_t joff = (uint64_t)gdt[0].bg_inode_table * block_size
+                          + (uint64_t)(EXT2_JOURNAL_INO - 1) * inode_size;
+            blkdev_write(dev, joff, &jino, sizeof(jino));
+
+            uint8_t *jbuf = kzalloc(block_size);
+            journal_superblock_t *jsb = (journal_superblock_t *)jbuf;
+            jsb->s_header.h_magic     = __builtin_bswap32(JBD2_MAGIC_NUMBER);
+            jsb->s_header.h_blocktype = __builtin_bswap32(JBD2_SUPERBLOCK_V2);
+            jsb->s_blocksize = __builtin_bswap32(block_size);
+            jsb->s_maxlen    = __builtin_bswap32(jblocks);
+            jsb->s_first     = __builtin_bswap32(1);
+            jsb->s_sequence  = __builtin_bswap32(1);
+            jsb->s_start     = 0;
+            jsb->s_nr_users  = __builtin_bswap32(1);
+            memcpy(jsb->s_uuid, sb.s_uuid, 16);
+            blkdev_write(dev, (uint64_t)jstart * block_size, jbuf, block_size);
+            kfree(jbuf);
+
+            sb.s_feature_compat |= EXT3_FEATURE_COMPAT_HAS_JOURNAL;
+            sb.s_journal_inum = EXT2_JOURNAL_INO;
+            serial_printf("[ext2] ext4 journal: inode 8, %u blocks at %u\n", jblocks, jstart);
+        } else {
+            serial_printf("[ext2] ext4: not enough room for journal, skipped\n");
+        }
+    }
+
     blkdev_write(dev, EXT2_SUPER_OFFSET, &sb, sizeof(sb));
     blkdev_write(dev, (uint64_t)gdt_block * block_size, gdt, gdt_blocks * block_size);
     for (uint32_t g = 1; g < groups_count; g++) {
@@ -992,6 +1049,8 @@ vnode_t *ext2_mount(blkdev_t *dev) {
     if (blkdev_read(dev, (uint64_t)gdt_block * fs->block_size, fs->gdt, gdt_blocks * fs->block_size) < 0) {
         kfree(fs->gdt); kfree(fs); return NULL;
     }
+    if ((fs->sb.s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) && fs->sb.s_journal_inum)
+        jbd2_recover(fs);
     ext2_inode_t root_di;
     if (inode_read(fs, EXT2_ROOT_INO, &root_di) < 0) { kfree(fs->gdt); kfree(fs); return NULL; }
     vnode_t *root = ext2_make_vnode(fs, EXT2_ROOT_INO, &root_di);
@@ -1019,6 +1078,14 @@ void ext2_unmount(ext2_t *fs) {
 
 void ext2_priv_sync(void *fs) {
     ext2_sync((ext2_t *)fs);
+}
+
+int32_t ext2_bmap(ext2_t *fs, ext2_inode_t *di, uint32_t file_block) {
+    return get_block_num(fs, di, file_block);
+}
+
+int ext2_inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out) {
+    return inode_read(fs, ino, out);
 }
 
 void *ext2_root_to_fs(vnode_t *root) {
