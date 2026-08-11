@@ -755,6 +755,35 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
 
 static int disk_is_nonempty(const disk_entry_t *d);
 
+static const char *mbr_type_str(uint8_t t) {
+    switch (t) {
+        case 0x07: return "NTFS/exFAT";
+        case 0x0B: case 0x0C: return "FAT32";
+        case 0x0E: return "FAT16";
+        case 0x82: return "swap";
+        case 0x83: return "Linux";
+        case 0xEE: return "GPT";
+        case 0xEF: return "EFI System";
+        default:   return "other";
+    }
+}
+
+static int read_mbr_parts(const char *dev, cervus_mbr_part_t out[4]) {
+    uint8_t mbr[4096];
+    if (cervus_disk_read_raw(dev, 0, 1, mbr) < 0) return -1;
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA) return 0;
+    int count = 0;
+    for (int i = 0; i < 4; i++) {
+        const uint8_t *e = mbr + 446 + i * 16;
+        out[count].boot_flag = e[0];
+        out[count].type = e[4];
+        memcpy(&out[count].lba_start, e + 8, 4);
+        memcpy(&out[count].sector_count, e + 12, 4);
+        if (out[count].type != 0 && out[count].sector_count != 0) count++;
+    }
+    return count;
+}
+
 static int confirm_screen(const disk_entry_t *d, const layout_t *L) {
     uint32_t esp_mb  = L->esp_mb;
     uint32_t swap_mb = L->have_swap ? L->swap_mb : 0;
@@ -806,14 +835,24 @@ static int confirm_screen(const disk_entry_t *d, const layout_t *L) {
         fputs(C_RESET, stdout);
         fputs(C_RED " will be ERASED!" C_RESET, stdout);
 
-        if (disk_is_nonempty(d)) {
+        cervus_mbr_part_t cur[4];
+        int ncur = read_mbr_parts(d->name, cur);
+        int act_row = content_row + 10;
+        if (ncur > 0) {
             go_xy(content_row + 9, pane_col);
-            fputs(C_YELLOW "  Existing partitions found - another OS?" C_RESET, stdout);
+            fputs(C_YELLOW "  Currently on disk (will be erased):" C_RESET, stdout);
+            for (int i = 0; i < ncur; i++) {
+                go_xy(content_row + 10 + i, pane_col + 2);
+                char sb[20];
+                format_mb((uint64_t)cur[i].sector_count * 512ULL, sb, sizeof(sb));
+                printf(C_GRAY "%d. %-11s %8s" C_RESET, i + 1, mbr_type_str(cur[i].type), sb);
+            }
+            act_row = content_row + 11 + ncur;
         }
 
         const char *acts[2] = { "Cancel", "Yes, install" };
         for (int i = 0; i < 2; i++) {
-            render_menu_item(content_row + 10 + i, pane_col, item_w,
+            render_menu_item(act_row + i, pane_col, item_w,
                              i == sel, acts[i]);
         }
 
