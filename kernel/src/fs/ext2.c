@@ -69,6 +69,16 @@ static int inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out) {
     return blkdev_read(fs->dev, off, out, sizeof(*out));
 }
 
+static void inode_pack(ext2_t *fs, uint32_t ino, const ext2_inode_t *in, uint8_t *buf) {
+    (void)ino;
+    memset(buf, 0, fs->inode_size);
+    memcpy(buf, in, sizeof(*in));
+    if (fs->inode_size > 128) {
+        uint16_t extra = 32;
+        memcpy(buf + 128, &extra, 2);
+    }
+}
+
 static int inode_write(ext2_t *fs, uint32_t ino, const ext2_inode_t *in) {
     if (ino == 0) return -EINVAL;
     uint32_t idx = ino - 1;
@@ -77,12 +87,20 @@ static int inode_write(ext2_t *fs, uint32_t ino, const ext2_inode_t *in) {
     if (group >= fs->groups_count) return -EINVAL;
     uint64_t off = (uint64_t)gd(fs, group)->bg_inode_table * fs->block_size
                  + (uint64_t)local * fs->inode_size;
+    uint32_t isz = fs->inode_size;
+    uint8_t *buf = kmalloc(isz);
+    if (!buf) return -ENOMEM;
+    inode_pack(fs, ino, in, buf);
+    int r;
     if (fs->cur_txn) {
         uint32_t blk = (uint32_t)(off / fs->block_size);
         uint32_t boff = (uint32_t)(off % fs->block_size);
-        return jbd2_txn_stage_patch(fs, blk, boff, in, sizeof(*in));
+        r = jbd2_txn_stage_patch(fs, blk, boff, buf, isz);
+    } else {
+        r = blkdev_write(fs->dev, off, buf, isz);
     }
-    return blkdev_write(fs->dev, off, in, sizeof(*in));
+    kfree(buf);
+    return r;
 }
 
 static bool bmp_test(const uint8_t *bmp, uint32_t bit) {
@@ -848,6 +866,14 @@ static const vnode_ops_t ext2_dir_ops = {
     .unref   = ext2_vnode_unref,
 };
 
+static void mkfs_write_inode(blkdev_t *dev, uint64_t off, const ext2_inode_t *in, uint32_t inode_size) {
+    uint8_t buf[256];
+    memset(buf, 0, sizeof(buf));
+    memcpy(buf, in, sizeof(*in));
+    if (inode_size > 128) { uint16_t e = 32; memcpy(buf + 128, &e, 2); }
+    blkdev_write(dev, off, buf, inode_size > 256 ? 256 : inode_size);
+}
+
 static int ext2_group_has_super(uint32_t g) {
     if (g == 0 || g == 1) return 1;
     for (uint32_t p = 3; p <= g; p *= 3) if (p == g) return 1;
@@ -869,7 +895,7 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     uint32_t groups_count = (total_blocks + blocks_per_group - 1) / blocks_per_group;
     if (groups_count == 0) groups_count = 1;
     uint32_t total_inodes = inodes_per_group * groups_count;
-    uint32_t inode_size = 128;
+    uint32_t inode_size = 256;
     uint32_t it_blocks_pg = (inodes_per_group * inode_size + block_size - 1) / block_size;
 
     uint32_t first_data_block = (block_size == 1024) ? 1 : 0;
@@ -1002,7 +1028,7 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     ri.i_size = block_size;
     ri.i_blocks = block_size / 512;
     uint64_t roff = (uint64_t)gdt[0].bg_inode_table * block_size + (uint64_t)(EXT2_ROOT_INO - 1) * inode_size;
-    blkdev_write(dev, roff, &ri, sizeof(ri));
+    mkfs_write_inode(dev, roff, &ri, inode_size);
     uint8_t *rdb = kzalloc(block_size);
     ext2_dir_entry_t *dot = (ext2_dir_entry_t *)rdb;
     dot->inode = EXT2_ROOT_INO; dot->rec_len = 12; dot->name_len = 1;
@@ -1046,7 +1072,7 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
             ext4_inode_set_extent(&jino, jstart, (uint16_t)jblocks);
             uint64_t joff = (uint64_t)gdt[0].bg_inode_table * block_size
                           + (uint64_t)(EXT2_JOURNAL_INO - 1) * inode_size;
-            blkdev_write(dev, joff, &jino, sizeof(jino));
+            mkfs_write_inode(dev, joff, &jino, inode_size);
 
             uint8_t *jbuf = kzalloc(block_size);
             journal_superblock_t *jsb = (journal_superblock_t *)jbuf;
