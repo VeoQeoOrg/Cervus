@@ -90,7 +90,10 @@ typedef struct __attribute__((packed)) {
     uint16_t s_desc_size;
     uint32_t s_default_mount_options;
     uint32_t s_first_meta_bg;
-    uint8_t  s_reserved[760];
+    uint8_t  s_reserved_a[109];
+    uint8_t  s_checksum_type;
+    uint8_t  s_reserved_b[646];
+    uint32_t s_checksum;
 } ext2_superblock_t;
 
 _Static_assert(sizeof(ext2_superblock_t) == 1024, "ext2 superblock size");
@@ -102,9 +105,15 @@ typedef struct __attribute__((packed)) {
     uint16_t bg_free_blocks_count;
     uint16_t bg_free_inodes_count;
     uint16_t bg_used_dirs_count;
-    uint16_t bg_pad;
-    uint8_t  bg_reserved[12];
+    uint16_t bg_flags;
+    uint32_t bg_exclude_bitmap;
+    uint16_t bg_block_bitmap_csum_lo;
+    uint16_t bg_inode_bitmap_csum_lo;
+    uint16_t bg_itable_unused;
+    uint16_t bg_checksum;
 } ext2_group_desc_t;
+
+#define EXT4_FEATURE_RO_COMPAT_METADATA_CSUM 0x0400
 
 _Static_assert(sizeof(ext2_group_desc_t) == 32, "ext2 group desc size");
 
@@ -151,6 +160,8 @@ typedef struct {
     uint32_t           desc_size;
     bool               dirty;
     void              *cur_txn;
+    bool               has_csum;
+    uint32_t           csum_seed;
 } ext2_t;
 
 typedef struct {
@@ -163,6 +174,7 @@ int ext2_block_write(ext2_t *fs, uint32_t block, const void *buf);
 int ext2_block_write_data(ext2_t *fs, uint32_t block, const void *buf);
 int32_t ext2_bmap(ext2_t *fs, ext2_inode_t *di, uint32_t file_block);
 int ext2_inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out);
+void ext2_csum_finalize(ext2_t *fs);
 
 int ext2_format(blkdev_t *dev, const char *label, int ext4);
 vnode_t *ext2_mount(blkdev_t *dev);

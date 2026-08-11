@@ -65,5 +65,6 @@ void jbd2_txn_begin(ext2_t *fs);
 void jbd2_txn_end(ext2_t *fs);
 int  jbd2_txn_stage(ext2_t *fs, uint32_t block, const void *data);
 int  jbd2_txn_stage_patch(ext2_t *fs, uint32_t block, uint32_t off, const void *data, uint32_t len);
+int  jbd2_txn_read(ext2_t *fs, uint32_t block, void *buf);
 
 #endif

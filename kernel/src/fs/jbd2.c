@@ -250,6 +250,7 @@ static uint32_t txn_max_data(ext2_t *fs) {
 static void txn_stage_meta(struct jbd2_txn *t) {
     ext2_t *fs = t->fs;
     uint32_t bs = fs->block_size;
+    ext2_csum_finalize(fs);
     uint32_t sb_block = (bs == 1024) ? 1 : 0;
     uint32_t sb_off   = (bs == 1024) ? 0 : EXT2_SUPER_OFFSET;
     txblk_t *e = txn_get(t, sb_block, 1);
@@ -371,6 +372,15 @@ void jbd2_txn_end(ext2_t *fs) {
     txn_flush(t);
     if (t->b) kfree(t->b);
     kfree(t);
+}
+
+int jbd2_txn_read(ext2_t *fs, uint32_t block, void *buf) {
+    struct jbd2_txn *t = fs->cur_txn;
+    if (!t) return 0;
+    txblk_t *e = txn_find(t, block);
+    if (!e) return 0;
+    memcpy(buf, e->data, fs->block_size);
+    return 1;
 }
 
 int jbd2_txn_stage(ext2_t *fs, uint32_t block, const void *data) {

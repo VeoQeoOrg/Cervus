@@ -32,6 +32,7 @@ static int ext2_bwrite_retry(blkdev_t *dev, uint64_t off, const void *buf, size_
 }
 
 int ext2_block_read(ext2_t *fs, uint32_t block, void *buf) {
+    if (fs->cur_txn && jbd2_txn_read(fs, block, buf)) return 0;
     return blkdev_read(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
 }
 
@@ -48,14 +49,93 @@ static inline ext2_group_desc_t *gd(ext2_t *fs, uint32_t g) {
     return (ext2_group_desc_t *)((uint8_t *)fs->gdt + (uint64_t)g * fs->desc_size);
 }
 
+static uint32_t g_crc32c_tab[256];
+static int g_crc32c_ready = 0;
+static uint32_t crc32c(uint32_t crc, const void *buf, size_t len) {
+    if (!g_crc32c_ready) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = (c & 1) ? (0x82F63B78u ^ (c >> 1)) : (c >> 1);
+            g_crc32c_tab[i] = c;
+        }
+        g_crc32c_ready = 1;
+    }
+    const uint8_t *p = buf;
+    while (len--) crc = g_crc32c_tab[(crc ^ *p++) & 0xFF] ^ (crc >> 8);
+    return crc;
+}
+
+static uint32_t csum_ino_seed(ext2_t *fs, uint32_t ino, uint32_t gen) {
+    uint32_t c = crc32c(fs->csum_seed, &ino, 4);
+    return crc32c(c, &gen, 4);
+}
+
+static void gd_csum_set(ext2_t *fs, uint32_t g) {
+    if (!fs->has_csum) return;
+    ext2_group_desc_t *d = gd(fs, g);
+    uint32_t le = g;
+    uint16_t saved = d->bg_checksum;
+    d->bg_checksum = 0;
+    uint32_t c = crc32c(fs->csum_seed, &le, 4);
+    c = crc32c(c, d, 0x1E);
+    uint16_t zero = 0;
+    c = crc32c(c, &zero, 2);
+    if (fs->desc_size > 0x20)
+        c = crc32c(c, (uint8_t *)d + 0x20, fs->desc_size - 0x20);
+    d->bg_checksum = (uint16_t)(c & 0xFFFF);
+    (void)saved;
+}
+
+static void bitmap_csum_set(ext2_t *fs, uint32_t g, int is_inode, const void *bmp) {
+    if (!fs->has_csum) return;
+    uint32_t sz = is_inode ? ((fs->sb.s_inodes_per_group + 7) / 8) : fs->block_size;
+    uint32_t c = crc32c(fs->csum_seed, bmp, sz);
+    if (is_inode) gd(fs, g)->bg_inode_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
+    else          gd(fs, g)->bg_block_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
+}
+
+static void inode_csum_set(ext2_t *fs, uint32_t ino, uint8_t *img) {
+    if (!fs->has_csum) return;
+    uint32_t gen;
+    memcpy(&gen, img + 100, 4);
+    memset(img + 0x7C, 0, 2);
+    if (fs->inode_size > 128) memset(img + 0x82, 0, 2);
+    uint32_t c = crc32c(csum_ino_seed(fs, ino, gen), img, fs->inode_size);
+    uint16_t lo = (uint16_t)(c & 0xFFFF), hi = (uint16_t)((c >> 16) & 0xFFFF);
+    memcpy(img + 0x7C, &lo, 2);
+    if (fs->inode_size > 128) memcpy(img + 0x82, &hi, 2);
+}
+
+static void dir_tail_set(ext2_t *fs, uint32_t dir_ino, uint8_t *blk) {
+    if (!fs->has_csum) return;
+    uint32_t bs = fs->block_size;
+    uint8_t *t = blk + bs - 12;
+    memset(t, 0, 12);
+    uint16_t rl = 12;
+    memcpy(t + 4, &rl, 2);
+    t[7] = 0xDE;
+    uint32_t c = crc32c(csum_ino_seed(fs, dir_ino, 0), blk, bs - 12);
+    memcpy(blk + bs - 4, &c, 4);
+}
+
 static int sb_flush(ext2_t *fs) {
+    if (fs->has_csum)
+        fs->sb.s_checksum = crc32c(~0u, &fs->sb, offsetof(ext2_superblock_t, s_checksum));
     return blkdev_write(fs->dev, EXT2_SUPER_OFFSET, &fs->sb, sizeof(fs->sb));
 }
 
 static int gdt_flush(ext2_t *fs) {
+    if (fs->has_csum)
+        for (uint32_t g = 0; g < fs->groups_count; g++) gd_csum_set(fs, g);
     uint32_t gdt_block = (fs->block_size == 1024) ? 2 : 1;
     return blkdev_write(fs->dev, (uint64_t)gdt_block * fs->block_size,
                         fs->gdt, fs->groups_count * fs->desc_size);
+}
+
+void ext2_csum_finalize(ext2_t *fs) {
+    if (!fs->has_csum) return;
+    for (uint32_t g = 0; g < fs->groups_count; g++) gd_csum_set(fs, g);
+    fs->sb.s_checksum = crc32c(~0u, &fs->sb, offsetof(ext2_superblock_t, s_checksum));
 }
 
 static int inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out) {
@@ -66,17 +146,28 @@ static int inode_read(ext2_t *fs, uint32_t ino, ext2_inode_t *out) {
     if (group >= fs->groups_count) return -EINVAL;
     uint64_t off = (uint64_t)gd(fs, group)->bg_inode_table * fs->block_size
                  + (uint64_t)local * fs->inode_size;
+    if (fs->cur_txn) {
+        uint32_t blk = (uint32_t)(off / fs->block_size);
+        uint32_t boff = (uint32_t)(off % fs->block_size);
+        uint8_t *tmp = kmalloc(fs->block_size);
+        if (tmp) {
+            int hit = jbd2_txn_read(fs, blk, tmp);
+            if (hit) memcpy(out, tmp + boff, sizeof(*out));
+            kfree(tmp);
+            if (hit) return 0;
+        }
+    }
     return blkdev_read(fs->dev, off, out, sizeof(*out));
 }
 
 static void inode_pack(ext2_t *fs, uint32_t ino, const ext2_inode_t *in, uint8_t *buf) {
-    (void)ino;
     memset(buf, 0, fs->inode_size);
     memcpy(buf, in, sizeof(*in));
     if (fs->inode_size > 128) {
         uint16_t extra = 32;
         memcpy(buf + 128, &extra, 2);
     }
+    inode_csum_set(fs, ino, buf);
 }
 
 static int inode_write(ext2_t *fs, uint32_t ino, const ext2_inode_t *in) {
@@ -123,6 +214,9 @@ static int32_t alloc_inode(ext2_t *fs) {
             if (!bmp_test(bmp, i)) {
                 bmp_set(bmp, i);
                 ext2_block_write(fs, gd(fs, g)->bg_inode_bitmap, bmp);
+                bitmap_csum_set(fs, g, 1, bmp);
+                uint16_t want = (uint16_t)(fs->sb.s_inodes_per_group - (i + 1));
+                if (gd(fs, g)->bg_itable_unused > want) gd(fs, g)->bg_itable_unused = want;
                 gd(fs, g)->bg_free_inodes_count--;
                 fs->sb.s_free_inodes_count--;
                 fs->dirty = true;
@@ -144,6 +238,7 @@ static void free_inode(ext2_t *fs, uint32_t ino) {
     ext2_block_read(fs, gd(fs, group)->bg_inode_bitmap, bmp);
     bmp_clear(bmp, local);
     ext2_block_write(fs, gd(fs, group)->bg_inode_bitmap, bmp);
+    bitmap_csum_set(fs, group, 1, bmp);
     gd(fs, group)->bg_free_inodes_count++;
     fs->sb.s_free_inodes_count++;
     fs->dirty = true;
@@ -162,6 +257,7 @@ static int32_t alloc_block(ext2_t *fs) {
             if (!bmp_test(bmp, i)) {
                 bmp_set(bmp, i);
                 ext2_block_write(fs, gd(fs, g)->bg_block_bitmap, bmp);
+                bitmap_csum_set(fs, g, 0, bmp);
                 gd(fs, g)->bg_free_blocks_count--;
                 fs->sb.s_free_blocks_count--;
                 fs->dirty = true;
@@ -185,6 +281,7 @@ static void free_block(ext2_t *fs, uint32_t blk) {
     ext2_block_read(fs, gd(fs, group)->bg_block_bitmap, bmp);
     bmp_clear(bmp, local);
     ext2_block_write(fs, gd(fs, group)->bg_block_bitmap, bmp);
+    bitmap_csum_set(fs, group, 0, bmp);
     gd(fs, group)->bg_free_blocks_count++;
     fs->sb.s_free_blocks_count++;
     fs->dirty = true;
@@ -596,6 +693,7 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
     if (r < 0) return r;
     uint8_t nl = (uint8_t)strlen(name);
     uint16_t need = (uint16_t)((8 + nl + 3) & ~3);
+    uint32_t usable = fs->block_size - (fs->has_csum ? 12u : 0u);
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     uint32_t nb = (di.i_size + fs->block_size - 1) / fs->block_size;
@@ -604,7 +702,7 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
         if (db <= 0) continue;
         ext2_block_read(fs, (uint32_t)db, bb);
         uint32_t off = 0;
-        while (off < fs->block_size) {
+        while (off < usable) {
             ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
             if (de->rec_len == 0) break;
             if (de->inode == 0 && de->rec_len >= need) {
@@ -612,6 +710,7 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
                 de->name_len = nl;
                 de->file_type = file_type;
                 memcpy(de->name, name, nl);
+                dir_tail_set(fs, dir_ino, bb);
                 ext2_block_write(fs, (uint32_t)db, bb);
                 kfree(bb);
                 return 0;
@@ -626,6 +725,7 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
                 ne->name_len = nl;
                 ne->file_type = file_type;
                 memcpy(ne->name, name, nl);
+                dir_tail_set(fs, dir_ino, bb);
                 ext2_block_write(fs, (uint32_t)db, bb);
                 kfree(bb);
                 return 0;
@@ -641,10 +741,11 @@ static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
     memset(bb, 0, fs->block_size);
     ext2_dir_entry_t *de = (ext2_dir_entry_t *)bb;
     de->inode = child_ino;
-    de->rec_len = (uint16_t)fs->block_size;
+    de->rec_len = (uint16_t)usable;
     de->name_len = nl;
     de->file_type = file_type;
     memcpy(de->name, name, nl);
+    dir_tail_set(fs, dir_ino, bb);
     ext2_block_write(fs, (uint32_t)new_blk, bb);
     inode_write(fs, dir_ino, &di);
     kfree(bb);
@@ -676,9 +777,11 @@ static int ext2_dir_mkdir_impl(vnode_t *dir, const char *name, uint32_t mode) {
     dot->inode = (uint32_t)ino; dot->rec_len = 12; dot->name_len = 1;
     dot->file_type = EXT2_FT_DIR; dot->name[0] = '.';
     ext2_dir_entry_t *dotdot = (ext2_dir_entry_t *)(bb + 12);
-    dotdot->inode = vd->ino; dotdot->rec_len = (uint16_t)(fs->block_size - 12);
+    dotdot->inode = vd->ino;
+    dotdot->rec_len = (uint16_t)(fs->block_size - 12 - (fs->has_csum ? 12u : 0u));
     dotdot->name_len = 2; dotdot->file_type = EXT2_FT_DIR;
     dotdot->name[0] = '.'; dotdot->name[1] = '.';
+    dir_tail_set(fs, (uint32_t)ino, bb);
     ext2_block_write(fs, (uint32_t)blk, bb);
     kfree(bb);
     inode_write(fs, (uint32_t)ino, &ndi);
@@ -727,6 +830,7 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     size_t nl = strlen(name);
+    uint32_t usable = fs->block_size - (fs->has_csum ? 12u : 0u);
     uint32_t nblocks = (di.i_size + fs->block_size - 1) / fs->block_size;
     for (uint32_t fb = 0; fb < nblocks; fb++) {
         int32_t db = get_block_num(fs, &di, fb);
@@ -734,7 +838,7 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
         ext2_block_read(fs, (uint32_t)db, bb);
         uint32_t off = 0;
         ext2_dir_entry_t *prev = NULL;
-        while (off < fs->block_size) {
+        while (off < usable) {
             ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
             if (de->rec_len == 0) break;
             if (de->inode != 0 && de->name_len == nl && memcmp(de->name, name, nl) == 0) {
@@ -743,9 +847,14 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
                 inode_read(fs, cino, &ci);
                 bool is_dir = ((ci.i_mode & 0xF000) == EXT2_S_IFDIR);
                 free_all_blocks(fs, &ci);
+                ci.i_links_count = 0;
+                ci.i_dtime = 0x66000000u;
+                ci.i_size = 0;
+                inode_write(fs, cino, &ci);
                 free_inode(fs, cino);
                 if (prev) prev->rec_len += de->rec_len;
                 else de->inode = 0;
+                dir_tail_set(fs, vd->ino, bb);
                 ext2_block_write(fs, (uint32_t)db, bb);
                 if (is_dir) {
                     ext2_inode_t pdi;
@@ -792,6 +901,7 @@ static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     size_t snl = strlen(src_name);
+    uint32_t susable = fs->block_size - (fs->has_csum ? 12u : 0u);
     uint32_t nblocks = (sdi.i_size + fs->block_size - 1) / fs->block_size;
     for (uint32_t fb = 0; fb < nblocks; fb++) {
         int32_t db = get_block_num(fs, &sdi, fb);
@@ -799,13 +909,14 @@ static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
         ext2_block_read(fs, (uint32_t)db, bb);
         uint32_t off = 0;
         ext2_dir_entry_t *prev = NULL;
-        while (off < fs->block_size) {
+        while (off < susable) {
             ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
             if (de->rec_len == 0) break;
             if (de->inode == cino && de->name_len == snl &&
                 memcmp(de->name, src_name, snl) == 0) {
                 if (prev) prev->rec_len += de->rec_len;
                 else de->inode = 0;
+                dir_tail_set(fs, svd->ino, bb);
                 ext2_block_write(fs, (uint32_t)db, bb);
                 kfree(bb);
                 fs->dirty = true;
@@ -866,12 +977,10 @@ static const vnode_ops_t ext2_dir_ops = {
     .unref   = ext2_vnode_unref,
 };
 
-static void mkfs_write_inode(blkdev_t *dev, uint64_t off, const ext2_inode_t *in, uint32_t inode_size) {
+static void mkfs_write_inode(ext2_t *mfs, uint64_t off, const ext2_inode_t *in, uint32_t ino) {
     uint8_t buf[256];
-    memset(buf, 0, sizeof(buf));
-    memcpy(buf, in, sizeof(*in));
-    if (inode_size > 128) { uint16_t e = 32; memcpy(buf + 128, &e, 2); }
-    blkdev_write(dev, off, buf, inode_size > 256 ? 256 : inode_size);
+    inode_pack(mfs, ino, in, buf);
+    blkdev_write(mfs->dev, off, buf, mfs->inode_size > 256 ? 256 : mfs->inode_size);
 }
 
 static int ext2_group_has_super(uint32_t g) {
@@ -927,13 +1036,26 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     sb.s_feature_ro_compat = 0x0001;
     if (ext4) {
         sb.s_feature_incompat  |= EXT4_FEATURE_INCOMPAT_EXTENTS;
-        sb.s_feature_ro_compat |= 0x0002;
+        sb.s_feature_ro_compat |= 0x0002 | EXT4_FEATURE_RO_COMPAT_METADATA_CSUM;
+        sb.s_checksum_type = 1;
     }
     if (label) strncpy(sb.s_volume_name, label, 15);
     uint32_t gdt_block = first_data_block + 1;
     uint32_t gdt_blocks = (groups_count * sizeof(ext2_group_desc_t) + block_size - 1) / block_size;
     ext2_group_desc_t *gdt = kzalloc(gdt_blocks * block_size);
     if (!gdt) { kfree(zb); return -ENOMEM; }
+
+    ext2_t mfs;
+    memset(&mfs, 0, sizeof(mfs));
+    mfs.dev = dev;
+    mfs.block_size = block_size;
+    mfs.inode_size = inode_size;
+    mfs.desc_size = sizeof(ext2_group_desc_t);
+    mfs.groups_count = groups_count;
+    mfs.gdt = gdt;
+    mfs.sb = sb;
+    mfs.has_csum = ext4 ? true : false;
+    mfs.csum_seed = crc32c(~0u, sb.s_uuid, 16);
     uint32_t used_total = first_data_block;
     uint32_t last_pct_ext2 = 999;
 
@@ -988,6 +1110,9 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
         for (uint32_t i = inodes_per_group; i < block_size * 8; i++) bmp_set(ibmp, i);
         int br = ext2_bwrite_retry(dev, (uint64_t)gdt[g].bg_block_bitmap * block_size,
                                    bmps, 2 * block_size);
+        bitmap_csum_set(&mfs, g, 0, bbmp);
+        bitmap_csum_set(&mfs, g, 1, ibmp);
+        gdt[g].bg_itable_unused = (uint16_t)(g == 0 ? (inodes_per_group - 10) : inodes_per_group);
         kfree(bmps);
         if (br < 0) {
             serial_printf("[ext2] bitmap write failed group=%u: %d\n", g, br);
@@ -1028,18 +1153,30 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     ri.i_size = block_size;
     ri.i_blocks = block_size / 512;
     uint64_t roff = (uint64_t)gdt[0].bg_inode_table * block_size + (uint64_t)(EXT2_ROOT_INO - 1) * inode_size;
-    mkfs_write_inode(dev, roff, &ri, inode_size);
+    mkfs_write_inode(&mfs, roff, &ri, EXT2_ROOT_INO);
     uint8_t *rdb = kzalloc(block_size);
     ext2_dir_entry_t *dot = (ext2_dir_entry_t *)rdb;
     dot->inode = EXT2_ROOT_INO; dot->rec_len = 12; dot->name_len = 1;
     dot->file_type = EXT2_FT_DIR; dot->name[0] = '.';
     ext2_dir_entry_t *dotdot = (ext2_dir_entry_t *)(rdb + 12);
-    dotdot->inode = EXT2_ROOT_INO; dotdot->rec_len = (uint16_t)(block_size - 12);
+    dotdot->inode = EXT2_ROOT_INO;
+    dotdot->rec_len = (uint16_t)(block_size - 12 - (mfs.has_csum ? 12u : 0u));
     dotdot->name_len = 2; dotdot->file_type = EXT2_FT_DIR;
     dotdot->name[0] = '.'; dotdot->name[1] = '.';
+    dir_tail_set(&mfs, EXT2_ROOT_INO, rdb);
     blkdev_write(dev, (uint64_t)root_blk * block_size, rdb, block_size);
     kfree(rdb);
     gdt[0].bg_used_dirs_count = 1;
+    if (mfs.has_csum) {
+        for (uint32_t ino = 1; ino <= 10; ino++) {
+            if (ino == EXT2_ROOT_INO || ino == EXT2_JOURNAL_INO) continue;
+            ext2_inode_t zi;
+            memset(&zi, 0, sizeof(zi));
+            uint64_t off = (uint64_t)gdt[0].bg_inode_table * block_size
+                         + (uint64_t)(ino - 1) * inode_size;
+            mkfs_write_inode(&mfs, off, &zi, ino);
+        }
+    }
 
     if (ext4) {
         uint32_t jblocks = 1024;
@@ -1072,7 +1209,7 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
             ext4_inode_set_extent(&jino, jstart, (uint16_t)jblocks);
             uint64_t joff = (uint64_t)gdt[0].bg_inode_table * block_size
                           + (uint64_t)(EXT2_JOURNAL_INO - 1) * inode_size;
-            mkfs_write_inode(dev, joff, &jino, inode_size);
+            mkfs_write_inode(&mfs, joff, &jino, EXT2_JOURNAL_INO);
 
             uint8_t *jbuf = kzalloc(block_size);
             journal_superblock_t *jsb = (journal_superblock_t *)jbuf;
@@ -1096,6 +1233,16 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
         }
     }
 
+    if (mfs.has_csum) {
+        uint8_t *b0 = kmalloc(block_size);
+        if (b0) {
+            blkdev_read(dev, (uint64_t)gdt[0].bg_block_bitmap * block_size, b0, block_size);
+            bitmap_csum_set(&mfs, 0, 0, b0);
+            kfree(b0);
+        }
+        for (uint32_t g = 0; g < groups_count; g++) gd_csum_set(&mfs, g);
+        sb.s_checksum = crc32c(~0u, &sb, offsetof(ext2_superblock_t, s_checksum));
+    }
     blkdev_write(dev, EXT2_SUPER_OFFSET, &sb, sizeof(sb));
     blkdev_write(dev, (uint64_t)gdt_block * block_size, gdt, gdt_blocks * block_size);
     for (uint32_t g = 1; g < groups_count; g++) {
@@ -1103,6 +1250,8 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
         uint32_t gs = g * blocks_per_group + first_data_block;
         ext2_superblock_t sbk = sb;
         sbk.s_block_group_nr = (uint16_t)g;
+        if (mfs.has_csum)
+            sbk.s_checksum = crc32c(~0u, &sbk, offsetof(ext2_superblock_t, s_checksum));
         blkdev_write(dev, (uint64_t)gs * block_size, &sbk, sizeof(sbk));
         blkdev_write(dev, (uint64_t)(gs + 1) * block_size, gdt, gdt_blocks * block_size);
     }
@@ -1134,6 +1283,8 @@ vnode_t *ext2_mount(blkdev_t *dev) {
     fs->desc_size = (fs->sb.s_feature_incompat & EXT4_FEATURE_INCOMPAT_64BIT)
                         ? (fs->sb.s_desc_size ? fs->sb.s_desc_size : 64)
                         : sizeof(ext2_group_desc_t);
+    fs->has_csum = (fs->sb.s_feature_ro_compat & EXT4_FEATURE_RO_COMPAT_METADATA_CSUM) != 0;
+    fs->csum_seed = crc32c(~0u, fs->sb.s_uuid, 16);
     uint32_t gdt_block = (fs->block_size == 1024) ? 2 : 1;
     uint32_t gdt_sz = fs->groups_count * fs->desc_size;
     uint32_t gdt_blocks = (gdt_sz + fs->block_size - 1) / fs->block_size;
