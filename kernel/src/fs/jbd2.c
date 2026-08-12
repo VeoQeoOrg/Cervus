@@ -262,8 +262,12 @@ static void txn_stage_meta(struct jbd2_txn *t) {
     uint32_t gdt_bytes = fs->groups_count * fs->desc_size;
     uint32_t gdt_blocks = (gdt_bytes + bs - 1) / bs;
     for (uint32_t i = 0; i < gdt_blocks; i++) {
+        uint8_t *cur = (uint8_t *)fs->gdt + (uint64_t)i * bs;
+        uint8_t *shd = fs->gdt_shadow ? fs->gdt_shadow + (uint64_t)i * bs : NULL;
+        if (shd && memcmp(cur, shd, bs) == 0) continue;
         txblk_t *g = txn_get(t, gdt_block + i, 1);
-        if (g) memcpy(g->data, (uint8_t *)fs->gdt + (uint64_t)i * bs, bs);
+        if (g) memcpy(g->data, cur, bs);
+        if (shd) memcpy(shd, cur, bs);
     }
 }
 
@@ -356,7 +360,11 @@ static void txn_flush(struct jbd2_txn *t) {
     fs->dirty = false;
 }
 
+int jbd2_write_enabled = 0;
+
 void jbd2_txn_begin(ext2_t *fs) {
+    if (!jbd2_write_enabled)
+        return;
     if (!(fs->sb.s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) || !fs->sb.s_journal_inum)
         return;
     if (!fs->journal_writable)

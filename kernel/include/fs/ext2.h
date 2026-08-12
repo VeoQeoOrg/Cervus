@@ -153,6 +153,7 @@ typedef struct {
     blkdev_t          *dev;
     ext2_superblock_t  sb;
     ext2_group_desc_t *gdt;
+    uint8_t           *gdt_shadow;
     uint32_t           block_size;
     uint32_t           groups_count;
     uint32_t           inodes_per_block;

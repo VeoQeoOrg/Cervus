@@ -1466,6 +1466,8 @@ vnode_t *ext2_mount(blkdev_t *dev) {
     if (blkdev_read(dev, (uint64_t)gdt_block * fs->block_size, fs->gdt, gdt_blocks * fs->block_size) < 0) {
         kfree(fs->gdt); kfree(fs); return NULL;
     }
+    fs->gdt_shadow = kmalloc(gdt_blocks * fs->block_size);
+    if (fs->gdt_shadow) memcpy(fs->gdt_shadow, fs->gdt, gdt_blocks * fs->block_size);
     if ((fs->sb.s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) && fs->sb.s_journal_inum)
         jbd2_recover(fs);
     ext2_inode_t root_di;
@@ -1490,6 +1492,7 @@ void ext2_unmount(ext2_t *fs) {
     if (!fs) return;
     ext2_sync(fs);
     if (fs->gdt) kfree(fs->gdt);
+    if (fs->gdt_shadow) kfree(fs->gdt_shadow);
     kfree(fs);
 }
 
