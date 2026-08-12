@@ -330,7 +330,33 @@ static int32_t get_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block) 
     return -EFBIG;
 }
 
+static int extent_set_block(ext2_inode_t *di, uint32_t file_block, uint32_t phys) {
+    ext4_extent_header_t *eh = (ext4_extent_header_t *)di->i_block;
+    if (eh->eh_magic != EXT4_EXTENT_MAGIC || eh->eh_depth != 0) return -EFBIG;
+    ext4_extent_t *ex = (ext4_extent_t *)((uint8_t *)di->i_block + sizeof(*eh));
+    if (eh->eh_entries > 0) {
+        ext4_extent_t *last = &ex[eh->eh_entries - 1];
+        uint64_t st = ((uint64_t)last->ee_start_hi << 32) | last->ee_start_lo;
+        if (last->ee_len < EXT4_INIT_MAX_LEN &&
+            last->ee_block + last->ee_len == file_block &&
+            st + last->ee_len == phys) {
+            last->ee_len++;
+            return 0;
+        }
+    }
+    if (eh->eh_entries >= eh->eh_max) return -EFBIG;
+    ext4_extent_t *ne = &ex[eh->eh_entries];
+    ne->ee_block = file_block;
+    ne->ee_len = 1;
+    ne->ee_start_hi = 0;
+    ne->ee_start_lo = phys;
+    eh->eh_entries++;
+    return 0;
+}
+
 static int set_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block, uint32_t disk_block) {
+    if (di->i_flags & EXT4_EXTENTS_FL)
+        return extent_set_block(di, file_block, disk_block);
     if (file_block < EXT2_NDIR_BLOCKS) {
         di->i_block[file_block] = disk_block;
         return 0;
@@ -494,7 +520,40 @@ static int64_t ext2_file_write_impl(vnode_t *node, const void *buf, size_t len, 
     return (int64_t)done;
 }
 
+static void free_extent_node(ext2_t *fs, const uint8_t *node, int is_root) {
+    const ext4_extent_header_t *eh = (const ext4_extent_header_t *)node;
+    if (eh->eh_magic != EXT4_EXTENT_MAGIC) return;
+    if (eh->eh_depth == 0) {
+        const ext4_extent_t *ex = (const ext4_extent_t *)(node + sizeof(*eh));
+        for (uint16_t i = 0; i < eh->eh_entries; i++) {
+            uint64_t st = ((uint64_t)ex[i].ee_start_hi << 32) | ex[i].ee_start_lo;
+            uint16_t len = ex[i].ee_len;
+            if (len > EXT4_INIT_MAX_LEN) len -= EXT4_INIT_MAX_LEN;
+            for (uint16_t j = 0; j < len; j++) free_block(fs, (uint32_t)(st + j));
+        }
+    } else {
+        const ext4_extent_idx_t *ix = (const ext4_extent_idx_t *)(node + sizeof(*eh));
+        for (uint16_t i = 0; i < eh->eh_entries; i++) {
+            uint64_t child = ((uint64_t)ix[i].ei_leaf_hi << 32) | ix[i].ei_leaf_lo;
+            uint8_t *buf = kmalloc(fs->block_size);
+            if (buf) {
+                ext2_block_read(fs, (uint32_t)child, buf);
+                free_extent_node(fs, buf, 0);
+                kfree(buf);
+            }
+            free_block(fs, (uint32_t)child);
+        }
+    }
+    (void)is_root;
+}
+
 static void free_all_blocks(ext2_t *fs, ext2_inode_t *di) {
+    if (di->i_flags & EXT4_EXTENTS_FL) {
+        free_extent_node(fs, (const uint8_t *)di->i_block, 1);
+        for (int i = 0; i < EXT2_N_BLOCKS; i++) di->i_block[i] = 0;
+        di->i_blocks = 0;
+        return;
+    }
     for (int i = 0; i < EXT2_NDIR_BLOCKS; i++) {
         if (di->i_block[i]) { free_block(fs, di->i_block[i]); di->i_block[i] = 0; }
     }
@@ -690,12 +749,37 @@ static int ext2_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     return -ENOENT;
 }
 
+static void dir_deindex(ext2_t *fs, uint32_t dir_ino, ext2_inode_t *di) {
+    if (!(di->i_flags & EXT4_INDEX_FL)) return;
+    int32_t b0 = get_block_num(fs, di, 0);
+    if (b0 <= 0) { di->i_flags &= ~EXT4_INDEX_FL; return; }
+    uint8_t *bb = kmalloc(fs->block_size);
+    if (!bb) return;
+    ext2_block_read(fs, (uint32_t)b0, bb);
+    uint32_t self   = ((ext2_dir_entry_t *)bb)->inode;
+    uint32_t parent = ((ext2_dir_entry_t *)(bb + 12))->inode;
+    uint32_t usable = fs->block_size - (fs->has_csum ? 12u : 0u);
+    memset(bb, 0, fs->block_size);
+    ext2_dir_entry_t *dot = (ext2_dir_entry_t *)bb;
+    dot->inode = self; dot->rec_len = 12; dot->name_len = 1;
+    dot->file_type = EXT2_FT_DIR; dot->name[0] = '.';
+    ext2_dir_entry_t *dd = (ext2_dir_entry_t *)(bb + 12);
+    dd->inode = parent; dd->rec_len = (uint16_t)(usable - 12); dd->name_len = 2;
+    dd->file_type = EXT2_FT_DIR; dd->name[0] = '.'; dd->name[1] = '.';
+    dir_tail_set(fs, dir_ino, bb);
+    ext2_block_write(fs, (uint32_t)b0, bb);
+    kfree(bb);
+    di->i_flags &= ~EXT4_INDEX_FL;
+    inode_write(fs, dir_ino, di);
+}
+
 static int ext2_dir_add_entry(ext2_t *fs, uint32_t dir_ino, uint32_t child_ino,
                               uint8_t file_type, const char *name) {
     if (!name || !name[0]) return -EINVAL;
     ext2_inode_t di;
     int r = inode_read(fs, dir_ino, &di);
     if (r < 0) return r;
+    dir_deindex(fs, dir_ino, &di);
     uint8_t nl = (uint8_t)strlen(name);
     uint16_t need = (uint16_t)((8 + nl + 3) & ~3);
     uint32_t usable = fs->block_size - (fs->has_csum ? 12u : 0u);
@@ -832,6 +916,7 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
     ext2_inode_t di;
     int r = inode_read(fs, vd->ino, &di);
     if (r < 0) return r;
+    dir_deindex(fs, vd->ino, &di);
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     size_t nl = strlen(name);
@@ -903,6 +988,7 @@ static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
     if (r < 0) return r;
     ext2_inode_t sdi;
     inode_read(fs, svd->ino, &sdi);
+    dir_deindex(fs, svd->ino, &sdi);
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     size_t snl = strlen(src_name);

@@ -40,6 +40,7 @@
 #define EXT2_NAME_LEN       255
 
 #define EXT4_EXTENTS_FL     0x00080000
+#define EXT4_INDEX_FL       0x00001000
 
 typedef struct __attribute__((packed)) {
     uint32_t s_inodes_count;
