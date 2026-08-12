@@ -55,6 +55,7 @@ typedef struct {
     int      have_swap;
     uint32_t swap_mb;
     uint32_t total_mb;
+    fstype_t fs;
 } layout_t;
 
 typedef struct {
@@ -396,9 +397,11 @@ static void info_layout(int row, int col, int w) {
     info_print(&row, col, w, 0, "Swap:");
     info_print(&row, col, w, 1, "  Reserved space, currently unused.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Root (ext2):");
-    info_print(&row, col, w, 1, "  Gets the rest of the disk.");
-    info_print(&row, col, w, 1, "  Holds /bin, /apps, /usr, /home.");
+    info_print(&row, col, w, 0, "Root filesystem:");
+    info_print(&row, col, w, 1, "  ext2 - simple and proven.");
+    info_print(&row, col, w, 1, "  ext4 - extents, journal, Linux-");
+    info_print(&row, col, w, 1, "         compatible. Left/Right toggles.");
+    info_print(&row, col, w, 1, "  Root gets the rest of the disk.");
     info_print(&row, col, w, 1, "");
     info_print(&row, col, w, 0, "Keys:");
     info_print(&row, col, w, 1, "  Up/Down  - move between fields");
@@ -666,11 +669,12 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
         go_xy(content_row + 0, pane_col);  fputs("  ESP size (FAT32):", stdout);
         go_xy(content_row + 1, pane_col);  fputs("  Use swap:        ", stdout);
         go_xy(content_row + 2, pane_col);  fputs("  Swap size:       ", stdout);
-        go_xy(content_row + 3, pane_col);
-        fputs("  Root (ext2):     ", stdout);
+        go_xy(content_row + 3, pane_col);  fputs("  Root filesystem: ", stdout);
+        go_xy(content_row + 4, pane_col);
+        fputs("  Root size:       ", stdout);
         printf(C_GRAY "%u MB" C_RESET, root_mb);
 
-        go_xy(content_row + 5, pane_col);
+        go_xy(content_row + 6, pane_col);
         printf(C_GRAY "  Used: %u MB / %u MB" C_RESET, used, total_mb);
 
         int field_col = pane_col + 22;
@@ -701,10 +705,16 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
             fputs(" MB" C_RESET, stdout);
         }
 
+        brackets_str(buf, sizeof(buf), L->fs == FS_EXT4 ? "ext4" : "ext2", 6);
+        go_xy(content_row + 3, field_col);
+        if (focus == 3) fputs(C_BOLD C_YELLOW, stdout); else fputs(C_GRAY, stdout);
+        fputs(buf, stdout);
+        fputs(C_RESET, stdout);
+
         const char *actions[2] = { "Start installation", "Back" };
         for (int i = 0; i < 2; i++) {
             render_menu_item(content_row + 8 + i, pane_col, item_w,
-                             focus == 3 + i, actions[i]);
+                             focus == 4 + i, actions[i]);
         }
 
         draw_vsplit();
@@ -716,12 +726,14 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
         int k = read_key();
         if (k == KEY_UP) {
             focus--;
-            if (focus < 0) focus = 4;
+            if (focus < 0) focus = 5;
             if (focus == 2 && !L->have_swap) focus = 1;
         } else if (k == KEY_DOWN || k == '\t') {
             focus++;
-            if (focus > 4) focus = 0;
+            if (focus > 5) focus = 0;
             if (focus == 2 && !L->have_swap) focus = 3;
+        } else if ((k == KEY_LEFT || k == KEY_RIGHT) && focus == 3) {
+            L->fs = (L->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
         } else if (k == KEY_ESC) {
             return -1;
         } else if (k == KEY_ENTER) {
@@ -739,6 +751,8 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
                 L->swap_mb = (uint32_t)int_edit(content_row + 2, field_col,
                                                 (int)L->swap_mb, 8, (int)max_swap);
             } else if (focus == 3) {
+                L->fs = (L->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
+            } else if (focus == 4) {
                 if (root_mb < 32) {
                     hint_line(C_RED "Root partition too small - adjust ESP/swap" C_RESET);
                     fflush(stdout);
@@ -746,7 +760,7 @@ static int manual_layout(const disk_entry_t *d, layout_t *L) {
                     continue;
                 }
                 return 0;
-            } else if (focus == 4) {
+            } else if (focus == 5) {
                 return -1;
             }
         }
@@ -829,7 +843,7 @@ static int confirm_screen(const disk_entry_t *d, const layout_t *L) {
         go_xy(content_row + 4, pane_col + 2);
         printf("/dev/%-10s %5u MB  FAT32  (ESP)", part1, esp_mb);
         go_xy(content_row + 5, pane_col + 2);
-        printf("/dev/%-10s %5u MB  ext2   (root)", part2, root_mb);
+        printf("/dev/%-10s %5u MB  %-4s   (root)", part2, root_mb, L->fs == FS_EXT4 ? "ext4" : "ext2");
         if (L->have_swap) {
             go_xy(content_row + 6, pane_col + 2);
             printf("/dev/%-10s %5u MB  swap", part3, swap_mb);
@@ -1798,6 +1812,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
     L.esp_mb    = 64;
     L.have_swap = 1;
     L.swap_mb   = 16;
+    L.fs        = FS_EXT2;
 
     for (;;) {
         const char *mode_items[] = {
@@ -1855,6 +1870,9 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
             L.have_swap = (total_mb >= 128) ? 1 : 0;
             L.swap_mb   = 16;
             L.total_mb  = total_mb;
+            int fs = choose_fstype();
+            if (fs < 0) continue;
+            L.fs = (fstype_t)fs;
         }
         if (confirm_screen(&disks[picked], &L) != 1) continue;
 
@@ -1864,10 +1882,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         int bl = choose_bootloader();
         if (bl < 0) continue;
 
-        int fs = choose_fstype();
-        if (fs < 0) continue;
-
-        do_install(&disks[picked], &L, &acc, (bootloader_t)bl, (fstype_t)fs);
+        do_install(&disks[picked], &L, &acc, (bootloader_t)bl, L.fs);
         return EXIT_CANCEL;
     }
 }
