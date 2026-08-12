@@ -1199,14 +1199,13 @@ static int write_limine_conf(const char *path) {
     if (fd < 0) return fd;
     const char *conf =
         "timeout: 5\n"
-        "default_entry: 1\n"
         "interface_branding: Cervus\n"
         "wallpaper: boot():/boot/wallpaper.png\n"
         "\n"
         "/Cervus v0.0.2 Alpha\n"
-        "    protocol: limine\n"
-        "    path: boot():/kernel\n"
-        "    module_path: boot():/shell.elf\n"
+        "    protocol: multiboot2\n"
+        "    path: boot():/boot/kernel\n"
+        "    module_path: boot():/boot/shell.elf\n"
         "    module_cmdline: init\n";
     write(fd, conf, strlen(conf));
     close(fd);
