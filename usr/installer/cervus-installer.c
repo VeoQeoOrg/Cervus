@@ -1888,6 +1888,131 @@ static int confirm_existing(const disk_entry_t *d, const char *esp, const char *
     }
 }
 
+static void info_pedit(int row, int col, int w) {
+    info_print(&row, col, w, 1, "Build the partition table yourself,");
+    info_print(&row, col, w, 1, "then install onto it.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Partitions are laid out in order from");
+    info_print(&row, col, w, 1, "the start of the disk. You need one");
+    info_print(&row, col, w, 1, "EFI/boot (FAT32) and one Linux (root).");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "n");
+    info_print(&row, col, w, 1, "  add a partition");
+    info_print(&row, col, w, 0, "d");
+    info_print(&row, col, w, 1, "  remove the last partition");
+    info_print(&row, col, w, 0, "w");
+    info_print(&row, col, w, 1, "  write the table and continue");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Nothing is written until you press w.");
+}
+
+static uint64_t pedit_choose_size(uint64_t free_sectors) {
+    static const struct { const char *label; uint64_t sectors; } presets[] = {
+        { "256 MB",  256ULL  * 2048 },
+        { "512 MB",  512ULL  * 2048 },
+        { "1 GB",    1024ULL * 2048 },
+        { "4 GB",    4096ULL * 2048 },
+        { "16 GB",   16384ULL * 2048 },
+        { "64 GB",   65536ULL * 2048 },
+    };
+    const char *items[8];
+    uint64_t vals[8];
+    int n = 0;
+    for (int i = 0; i < 6; i++)
+        if (presets[i].sectors < free_sectors) { items[n] = presets[i].label; vals[n] = presets[i].sectors; n++; }
+    items[n] = "Rest of free space"; vals[n] = free_sectors; n++;
+    items[n] = "Cancel"; vals[n] = 0; n++;
+    int sel = menu_in_box("Partition size", items, n, n - 2, info_pedit);
+    if (sel < 0 || sel == n - 1) return 0;
+    return vals[sel];
+}
+
+static int partition_editor(const disk_entry_t *d, char *esp_out, size_t ec,
+                            char *root_out, size_t rc) {
+    cervus_mbr_part_t specs[4];
+    memset(specs, 0, sizeof(specs));
+    int nparts = 0;
+    uint64_t total = d->sectors;
+    if (total > 0xFFFFFFFEULL) total = 0xFFFFFFFEULL;
+    uint32_t next = 2048;
+
+    for (;;) {
+        hide_cursor();
+        clear_screen();
+        char title[64];
+        snprintf(title, sizeof(title), "Partition editor - %s", d->name);
+        draw_pane_title(2, g_pane_left_col, g_pane_left_w, title);
+        int row = 5, col = g_pane_left_col;
+        char szb[24];
+        format_mb(total * 512ULL, szb, sizeof(szb));
+        go_xy(row++, col); printf("  Disk size: %s", szb);
+        row++;
+        go_xy(row++, col); fputs(C_CYAN "  #  Type         Size" C_RESET, stdout);
+        for (int i = 0; i < nparts; i++) {
+            const char *tn = specs[i].type == MBR_TYPE_FAT32_LBA ? "FAT32 (boot)"
+                           : specs[i].type == MBR_TYPE_LINUX     ? "Linux (root)"
+                           : specs[i].type == MBR_TYPE_LINUX_SWAP ? "swap" : "other";
+            char psz[24];
+            format_mb((uint64_t)specs[i].sector_count * 512ULL, psz, sizeof(psz));
+            go_xy(row++, col + 2); printf("%d  %-12s %10s", i + 1, tn, psz);
+        }
+        uint64_t freeb = (total > next) ? (total - next) : 0;
+        char fb[24]; format_mb(freeb * 512ULL, fb, sizeof(fb));
+        go_xy(row++, col + 2); printf(C_GRAY "-  free         %10s" C_RESET, fb);
+        row += 2;
+        int have_esp = 0, have_root = 0;
+        for (int i = 0; i < nparts; i++) {
+            if (specs[i].type == MBR_TYPE_FAT32_LBA) have_esp = 1;
+            if (specs[i].type == MBR_TYPE_LINUX) have_root = 1;
+        }
+        go_xy(row++, col);
+        if (have_esp && have_root) fputs(C_GREEN "  Ready: press w to write & install" C_RESET, stdout);
+        else fputs(C_YELLOW "  Need one FAT32 boot + one Linux root" C_RESET, stdout);
+        go_xy(row + 1, col);
+        fputs(C_GRAY "  n new   d delete last   w write   Esc back" C_RESET, stdout);
+        draw_vsplit();
+        info_box("Partitioning", info_pedit);
+        hide_cursor(); fflush(stdout);
+
+        int k = read_key();
+        if (k == KEY_ESC || k == 'q' || k == 'Q') return -1;
+        if ((k == 'n' || k == 'N') && nparts < 4 && freeb > 4096) {
+            const char *titems[] = { "EFI / boot (FAT32)", "Linux (root)", "swap", "Cancel" };
+            int t = menu_in_box("Partition type", titems, 4, have_esp ? 1 : 0, info_pedit);
+            if (t < 0 || t == 3) continue;
+            uint8_t type = t == 0 ? MBR_TYPE_FAT32_LBA : t == 1 ? MBR_TYPE_LINUX : MBR_TYPE_LINUX_SWAP;
+            uint64_t sz = pedit_choose_size(freeb);
+            if (sz == 0) continue;
+            if (sz > freeb) sz = freeb;
+            specs[nparts].boot_flag    = (type == MBR_TYPE_FAT32_LBA && !have_esp) ? 1 : 0;
+            specs[nparts].type         = type;
+            specs[nparts].lba_start    = next;
+            specs[nparts].sector_count = (uint32_t)sz;
+            next += (uint32_t)sz;
+            nparts++;
+        } else if ((k == 'd' || k == 'D') && nparts > 0) {
+            nparts--;
+            next = specs[nparts].lba_start;
+            memset(&specs[nparts], 0, sizeof(specs[nparts]));
+        } else if ((k == 'w' || k == 'W') && have_esp && have_root) {
+            int rcpart = cervus_disk_partition(d->name, specs, nparts);
+            if (rcpart < 0) {
+                go_xy(row + 3, col);
+                printf(C_RED "  write failed (%d)" C_RESET, rcpart);
+                fflush(stdout); read_key();
+                continue;
+            }
+            for (int i = 0; i < nparts; i++) {
+                if (specs[i].type == MBR_TYPE_FAT32_LBA && esp_out[0] == 0)
+                    make_part_name(d->name, i + 1, esp_out, ec);
+                if (specs[i].type == MBR_TYPE_LINUX && root_out[0] == 0)
+                    make_part_name(d->name, i + 1, root_out, rc);
+            }
+            return 0;
+        }
+    }
+}
+
 static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
     layout_t L;
     memset(&L, 0, sizeof(L));
@@ -1901,10 +2026,11 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
             "Manual       (choose disk and tune layout)",
             "Install to USB flash drive",
             "Use existing partitions (advanced, dual-boot)",
+            "Create partition layout (advanced)",
             "Back",
         };
-        int mode = menu_in_box("Cervus OS Installer", mode_items, 5, 0, info_mode);
-        if (mode < 0 || mode == 4) return EXIT_CANCEL;
+        int mode = menu_in_box("Cervus OS Installer", mode_items, 6, 0, info_mode);
+        if (mode < 0 || mode == 5) return EXIT_CANCEL;
 
         char use_esp[40] = {0}, use_root[40] = {0};
         int picked = -1;
@@ -1949,6 +2075,12 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
             if (picked < 0) continue;
             if (choose_existing_parts(&disks[picked], use_esp, sizeof(use_esp),
                                       use_root, sizeof(use_root)) < 0) continue;
+        } else if (mode == 4) {
+            picked = disk_select_in_box("Disk to partition",
+                                        disks, n_disks, 0, info_disk);
+            if (picked < 0) continue;
+            if (partition_editor(&disks[picked], use_esp, sizeof(use_esp),
+                                 use_root, sizeof(use_root)) < 0) continue;
         }
 
         if (use_root[0] == 0) {
