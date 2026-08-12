@@ -368,6 +368,7 @@ static int set_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block, uint
             int32_t nb = alloc_block(fs);
             if (nb < 0) return nb;
             di->i_block[EXT2_IND_BLOCK] = (uint32_t)nb;
+            di->i_blocks += fs->block_size / 512;
             uint8_t *z = kzalloc(fs->block_size);
             ext2_block_write(fs, (uint32_t)nb, z);
             kfree(z);
@@ -386,6 +387,7 @@ static int set_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block, uint
             int32_t nb = alloc_block(fs);
             if (nb < 0) return nb;
             di->i_block[EXT2_DIND_BLOCK] = (uint32_t)nb;
+            di->i_blocks += fs->block_size / 512;
             uint8_t *z = kzalloc(fs->block_size);
             ext2_block_write(fs, (uint32_t)nb, z);
             kfree(z);
@@ -399,6 +401,7 @@ static int set_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block, uint
             int32_t nb = alloc_block(fs);
             if (nb < 0) { kfree(dind); return nb; }
             dind[i1] = (uint32_t)nb;
+            di->i_blocks += fs->block_size / 512;
             ext2_block_write(fs, di->i_block[EXT2_DIND_BLOCK], dind);
             uint8_t *z = kzalloc(fs->block_size);
             ext2_block_write(fs, (uint32_t)nb, z);
@@ -592,13 +595,88 @@ static void free_all_blocks(ext2_t *fs, ext2_inode_t *di) {
     di->i_blocks = 0;
 }
 
+static uint64_t ext2_truncate_blocks(ext2_t *fs, ext2_inode_t *di, uint32_t keep) {
+    uint64_t freed = 0;
+    uint32_t ppb = fs->ptrs_per_block;
+
+    if (di->i_flags & EXT4_EXTENTS_FL) {
+        ext4_extent_header_t *eh = (ext4_extent_header_t *)di->i_block;
+        if (eh->eh_magic != EXT4_EXTENT_MAGIC || eh->eh_depth != 0) return 0;
+        ext4_extent_t *ex = (ext4_extent_t *)((uint8_t *)di->i_block + sizeof(*eh));
+        uint16_t out = 0;
+        for (uint16_t i = 0; i < eh->eh_entries; i++) {
+            uint32_t eb = ex[i].ee_block;
+            uint16_t len = ex[i].ee_len;
+            if (len > EXT4_INIT_MAX_LEN) len -= EXT4_INIT_MAX_LEN;
+            uint64_t st = ((uint64_t)ex[i].ee_start_hi << 32) | ex[i].ee_start_lo;
+            if (eb >= keep) {
+                for (uint16_t j = 0; j < len; j++) { free_block(fs, (uint32_t)(st + j)); freed++; }
+            } else if (eb + len > keep) {
+                uint16_t k = (uint16_t)(keep - eb);
+                for (uint16_t j = k; j < len; j++) { free_block(fs, (uint32_t)(st + j)); freed++; }
+                ex[out] = ex[i]; ex[out].ee_len = k; out++;
+            } else { ex[out++] = ex[i]; }
+        }
+        eh->eh_entries = out;
+        return freed;
+    }
+
+    for (uint32_t i = keep; i < EXT2_NDIR_BLOCKS; i++)
+        if (di->i_block[i]) { free_block(fs, di->i_block[i]); di->i_block[i] = 0; freed++; }
+
+    if (di->i_block[EXT2_IND_BLOCK]) {
+        uint32_t base = EXT2_NDIR_BLOCKS;
+        uint32_t first = (keep > base) ? (keep - base) : 0;
+        uint32_t *ind = kmalloc(fs->block_size);
+        if (ind) {
+            ext2_block_read(fs, di->i_block[EXT2_IND_BLOCK], ind);
+            for (uint32_t i = first; i < ppb; i++)
+                if (ind[i]) { free_block(fs, ind[i]); ind[i] = 0; freed++; }
+            if (keep <= base) { free_block(fs, di->i_block[EXT2_IND_BLOCK]); di->i_block[EXT2_IND_BLOCK] = 0; freed++; }
+            else              { ext2_block_write(fs, di->i_block[EXT2_IND_BLOCK], ind); }
+            kfree(ind);
+        }
+    }
+
+    if (di->i_block[EXT2_DIND_BLOCK]) {
+        uint32_t base = EXT2_NDIR_BLOCKS + ppb;
+        uint32_t *dind = kmalloc(fs->block_size);
+        if (dind) {
+            ext2_block_read(fs, di->i_block[EXT2_DIND_BLOCK], dind);
+            for (uint32_t i = 0; i < ppb; i++) {
+                if (!dind[i]) continue;
+                uint32_t sub_base = base + i * ppb;
+                if (sub_base + ppb <= keep) continue;
+                uint32_t first = (keep > sub_base) ? (keep - sub_base) : 0;
+                uint32_t *ind = kmalloc(fs->block_size);
+                if (!ind) continue;
+                ext2_block_read(fs, dind[i], ind);
+                for (uint32_t j = first; j < ppb; j++)
+                    if (ind[j]) { free_block(fs, ind[j]); ind[j] = 0; freed++; }
+                if (first == 0) { free_block(fs, dind[i]); dind[i] = 0; freed++; }
+                else            { ext2_block_write(fs, dind[i], ind); }
+                kfree(ind);
+            }
+            if (keep <= base) { free_block(fs, di->i_block[EXT2_DIND_BLOCK]); di->i_block[EXT2_DIND_BLOCK] = 0; freed++; }
+            else              { ext2_block_write(fs, di->i_block[EXT2_DIND_BLOCK], dind); }
+            kfree(dind);
+        }
+    }
+    return freed;
+}
+
 static int ext2_file_truncate_impl(vnode_t *node, uint64_t new_size) {
     ext2_vdata_t *vd = node->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
     int r = inode_read(fs, vd->ino, &di);
     if (r < 0) return r;
-    if (new_size == 0) free_all_blocks(fs, &di);
+    if (new_size < di.i_size) {
+        uint32_t keep = (uint32_t)((new_size + fs->block_size - 1) / fs->block_size);
+        uint64_t freed = ext2_truncate_blocks(fs, &di, keep);
+        uint64_t sectors = freed * (fs->block_size / 512);
+        di.i_blocks = (di.i_blocks >= sectors) ? (uint32_t)(di.i_blocks - sectors) : 0;
+    }
     di.i_size = (uint32_t)new_size;
     node->size = new_size;
     inode_write(fs, vd->ino, &di);
