@@ -162,7 +162,10 @@ typedef struct {
     void              *cur_txn;
     bool               has_csum;
     uint32_t           csum_seed;
+    bool               journal_writable;
 } ext2_t;
+
+#define EXT4_FEATURE_INCOMPAT_CSUM_SEED 0x2000
 
 typedef struct {
     ext2_t  *fs;

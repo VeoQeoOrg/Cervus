@@ -165,6 +165,8 @@ int jbd2_recover(ext2_t *fs) {
     uint32_t start  = b32(jsb->s_start);
     uint32_t feat   = b32(jsb->s_feature_incompat);
 
+    fs->journal_writable = ((feat & ~(uint32_t)JBD2_FEATURE_INCOMPAT_REVOKE) == 0);
+
     if (start == 0) {
         kfree(sbblk);
         if (fs->sb.s_feature_incompat & EXT3_FEATURE_INCOMPAT_RECOVER) {
@@ -356,6 +358,8 @@ static void txn_flush(struct jbd2_txn *t) {
 
 void jbd2_txn_begin(ext2_t *fs) {
     if (!(fs->sb.s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL) || !fs->sb.s_journal_inum)
+        return;
+    if (!fs->journal_writable)
         return;
     if (fs->cur_txn) { ((struct jbd2_txn *)fs->cur_txn)->depth++; return; }
     struct jbd2_txn *t = kzalloc(sizeof(*t));

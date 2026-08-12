@@ -90,8 +90,13 @@ static void bitmap_csum_set(ext2_t *fs, uint32_t g, int is_inode, const void *bm
     if (!fs->has_csum) return;
     uint32_t sz = is_inode ? ((fs->sb.s_inodes_per_group + 7) / 8) : fs->block_size;
     uint32_t c = crc32c(fs->csum_seed, bmp, sz);
-    if (is_inode) gd(fs, g)->bg_inode_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
-    else          gd(fs, g)->bg_block_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
+    ext2_group_desc_t *d = gd(fs, g);
+    if (is_inode) d->bg_inode_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
+    else          d->bg_block_bitmap_csum_lo = (uint16_t)(c & 0xFFFF);
+    if (fs->desc_size >= 0x40) {
+        uint16_t hi = (uint16_t)((c >> 16) & 0xFFFF);
+        memcpy((uint8_t *)d + (is_inode ? 0x3A : 0x38), &hi, 2);
+    }
 }
 
 static void inode_csum_set(ext2_t *fs, uint32_t ino, uint8_t *img) {
@@ -1284,7 +1289,11 @@ vnode_t *ext2_mount(blkdev_t *dev) {
                         ? (fs->sb.s_desc_size ? fs->sb.s_desc_size : 64)
                         : sizeof(ext2_group_desc_t);
     fs->has_csum = (fs->sb.s_feature_ro_compat & EXT4_FEATURE_RO_COMPAT_METADATA_CSUM) != 0;
-    fs->csum_seed = crc32c(~0u, fs->sb.s_uuid, 16);
+    if (fs->sb.s_feature_incompat & EXT4_FEATURE_INCOMPAT_CSUM_SEED)
+        memcpy(&fs->csum_seed, (uint8_t *)&fs->sb + 0x270, 4);
+    else
+        fs->csum_seed = crc32c(~0u, fs->sb.s_uuid, 16);
+    fs->journal_writable = true;
     uint32_t gdt_block = (fs->block_size == 1024) ? 2 : 1;
     uint32_t gdt_sz = fs->groups_count * fs->desc_size;
     uint32_t gdt_blocks = (gdt_sz + fs->block_size - 1) / fs->block_size;
