@@ -303,12 +303,6 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
 }
 
 void vfs_close(vfs_file_t *file) {
-    if (file) {
-        int acc = file->flags & O_ACCMODE;
-        if (acc == O_WRONLY || acc == O_RDWR) {
-            vfs_sync_all();
-        }
-    }
     vfs_file_free(file);
 }
 
