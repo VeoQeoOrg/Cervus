@@ -43,6 +43,8 @@ typedef struct sock {
 
     tcp_tcb_t   *tcb;
 
+    uint8_t      ttl;
+
     struct sock *next;
 } sock_t;
 
@@ -174,7 +176,7 @@ int64_t sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, ui
         if (s->type == SOCK_DGRAM)
             r = udp_send(dev, ip, s->local_port, port, buf, len);
         else if (s->type == SOCK_RAW && s->proto == IPPROTO_ICMP)
-            r = ip_send(dev, ip, IPPROTO_ICMP, buf, len);
+            r = ip_send(dev, ip, IPPROTO_ICMP, buf, len, s->ttl);
         else
             return -EOPNOTSUPP;
         if (r == 0) break;
@@ -267,6 +269,20 @@ static int sock_poll_op(vnode_t *vn, int events) {
     return r;
 }
 
+#define SIOCSTTL 0x5460
+
+static int64_t sock_ioctl_op(vnode_t *vn, uint64_t req, void *arg) {
+    sock_t *s = vn->fs_data;
+    if (req == SIOCSTTL) {
+        if (!arg) return -EINVAL;
+        int ttl = *(int *)arg;
+        if (ttl < 1 || ttl > 255) return -EINVAL;
+        s->ttl = (uint8_t)ttl;
+        return 0;
+    }
+    return -ENOTTY;
+}
+
 static const vnode_ops_t sock_vnode_ops = {
     .read  = sock_read_op,
     .write = sock_write_op,
@@ -274,6 +290,7 @@ static const vnode_ops_t sock_vnode_ops = {
     .ref   = sock_ref_op,
     .unref = sock_unref_op,
     .poll  = sock_poll_op,
+    .ioctl = sock_ioctl_op,
 };
 
 int sock_family(const vnode_t *vn) { sock_t *s = vn->fs_data; return s ? s->family : AF_INET; }
@@ -367,6 +384,7 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
     s->type = type;
     s->proto = proto;
     s->family = domain;
+    s->ttl = IP_DEFAULT_TTL;
 
     vnode_t *vn = calloc(1, sizeof(*vn));
     if (!vn) { free(s); return NULL; }
