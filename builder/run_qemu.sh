@@ -61,12 +61,24 @@ detect_audiodev() {
 
 SOUND=""
 if $SND_ON; then
+    dev=ac97
     b=$SND_BACKEND
+    case "$SND_BACKEND" in
+        hda)   dev=hda; b=auto ;;
+        hda:*) dev=hda; b=${SND_BACKEND#hda:} ;;
+        ac97:*) b=${SND_BACKEND#ac97:} ;;
+    esac
     [ "$b" = auto ] && b=$(detect_audiodev)
+
     if [ "$b" = wav ]; then
-        SOUND=" -audiodev wav,id=snd0,path=cervus-audio.wav -device AC97,audiodev=snd0"
+        AUDIODEV="-audiodev wav,id=snd0,path=cervus-audio.wav"
     else
-        SOUND=" -audiodev $b,id=snd0 -device AC97,audiodev=snd0"
+        AUDIODEV="-audiodev $b,id=snd0"
+    fi
+    if [ "$dev" = hda ]; then
+        SOUND=" $AUDIODEV -device intel-hda -device hda-duplex,audiodev=snd0"
+    else
+        SOUND=" $AUDIODEV -device AC97,audiodev=snd0"
     fi
 fi
 

@@ -1,5 +1,6 @@
 #include "../../../include/drivers/pci.h"
 #include "../../../include/drivers/audio/ac97.h"
+#include "../../../include/drivers/audio/audio.h"
 #include "../../../include/memory/dma.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/io/ports.h"
@@ -163,6 +164,13 @@ int ac97_close(void) {
     return 0;
 }
 
+static const audio_backend_t g_ac97_backend = {
+    .name  = "ac97",
+    .open  = ac97_open,
+    .write = ac97_write,
+    .close = ac97_close,
+};
+
 static int ac97_probe(pci_device_t *dev) {
     if (g_ac97.present) return -1;
     if (dev->bars[0].type != PCI_BAR_TYPE_IO || dev->bars[1].type != PCI_BAR_TYPE_IO ||
@@ -205,6 +213,7 @@ static int ac97_probe(pci_device_t *dev) {
 
     po_reset();
     g_ac97.present = 1;
+    audio_register(&g_ac97_backend);
     serial_printf("[ac97] audio %04x:%04x NAM=0x%x NABM=0x%x vra=%d\n",
                   dev->vendor_id, dev->device_id, g_ac97.nam, g_ac97.nabm, g_ac97.vra);
     return 0;
