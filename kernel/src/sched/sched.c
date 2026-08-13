@@ -140,8 +140,11 @@ static uint64_t alloc_and_init_stack(task_t* t) {
 
 static void enqueue_global(task_t* t) {
     uint64_t f = spinlock_acquire_irqsave(&ready_queue_lock);
-    t->next = ready_queues[t->priority];
-    ready_queues[t->priority] = t;
+    bool expected = false;
+    if (atomic_cas_bool(&t->on_rq, &expected, true)) {
+        t->next = ready_queues[t->priority];
+        ready_queues[t->priority] = t;
+    }
     spinlock_release_irqrestore(&ready_queue_lock, f);
 }
 
@@ -185,6 +188,7 @@ void sched_init(void) {
         idle->gid             = GID_ROOT;
         idle->capabilities    = CAP_ALL;
         atomic_init_bool(&idle->on_cpu, false);
+        atomic_init_bool(&idle->on_rq, false);
         idle->name[0]='i'; idle->name[1]='d';
         idle->name[2]='l'; idle->name[3]='e';
         idle->rsp = alloc_and_init_stack(idle);
@@ -218,6 +222,7 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
     t->rip             = (uint64_t)entry;
     t->is_userspace    = TASK_TYPE_KERNEL;
     atomic_init_bool(&t->on_cpu, false);
+    atomic_init_bool(&t->on_rq, false);
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
@@ -296,6 +301,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->brk_current     = 0;
     t->brk_max         = 0x0000700000000000ULL;
     atomic_init_bool(&t->on_cpu, false);
+    atomic_init_bool(&t->on_rq, false);
     strncpy(t->name, name, sizeof(t->name) - 1);
     t->cwd[0] = '/'; t->cwd[1] = '\0';
     t->rsp = alloc_and_init_stack(t);
@@ -356,6 +362,7 @@ task_t* task_fork(task_t* parent) {
 
     child->flags |= TASK_FLAG_FORK;
     atomic_init_bool(&child->on_cpu, false);
+    atomic_init_bool(&child->on_rq, false);
     child->rsp = alloc_and_init_stack(child);
     if (!child->rsp) {
         vmm_free_pagemap(child->pagemap);
@@ -626,6 +633,7 @@ static task_t* sched_pick_next(uint32_t cpu) {
                 if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
                     *head   = t->next;
                     t->next = NULL;
+                    atomic_store_bool_rel(&t->on_rq, false);
                     found   = t;
                     break;
                 }
@@ -633,6 +641,7 @@ static task_t* sched_pick_next(uint32_t cpu) {
                 if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD || !t->runnable) {
                     *head = t->next;
                     t->next = NULL;
+                    atomic_store_bool_rel(&t->on_rq, false);
                     t = *head;
                     continue;
                 }

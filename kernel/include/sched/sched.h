@@ -125,6 +125,7 @@ typedef struct task {
     fd_table_t      *fd_table;
 
     atomic_bool on_cpu;
+    atomic_bool on_rq;
 
     int ctty;
 
