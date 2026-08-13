@@ -45,7 +45,7 @@ int udp_send(netdev_t *dev, uint32_t dst_ip, uint16_t src_port, uint16_t dst_por
     wr16be(pkt + 6, 0);
     memcpy(pkt + 8, data, len);
     wr16be(pkt + 6, udp_checksum(dev->ip, dst_ip, pkt, 8 + len));
-    return ip_send(dev, dst_ip, IPPROTO_UDP, pkt, 8 + len);
+    return ip_send(dev, dst_ip, IPPROTO_UDP, pkt, 8 + len, IP_DEFAULT_TTL);
 }
 
 static uint16_t udp6_checksum(const uint8_t *src, const uint8_t *dst, const uint8_t *udp, size_t len) {

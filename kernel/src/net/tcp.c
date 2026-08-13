@@ -122,7 +122,7 @@ static void tcp_output(tcp_tcb_t *t, uint32_t seq, uint8_t flags,
         return;
     }
     wr16be(seg + 16, tcp_csum(t->local_ip, t->remote_ip, seg, 20 + dlen));
-    ip_send(dev, t->remote_ip, IPPROTO_TCP, seg, 20 + dlen);
+    ip_send(dev, t->remote_ip, IPPROTO_TCP, seg, 20 + dlen, IP_DEFAULT_TTL);
 }
 
 static tcp_tcb_t *tcb_find(uint32_t rip, uint16_t rport, uint16_t lport) {
