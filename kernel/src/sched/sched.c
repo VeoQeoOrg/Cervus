@@ -792,6 +792,7 @@ void sched_print_stats(void) {
 
 void task_unblock(task_t* t) {
     if (!t) return;
+    if (t->state != TASK_BLOCKED) return;
     t->runnable = true;
     t->state    = TASK_READY;
     enqueue_global(t);
