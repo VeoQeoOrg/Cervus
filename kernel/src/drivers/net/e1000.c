@@ -61,7 +61,7 @@
 #define IM_RXO        (1u << 6)
 #define IM_RXT0       (1u << 7)
 
-#define E1000_NUM_RX  32
+#define E1000_NUM_RX  128
 #define E1000_NUM_TX  8
 #define E1000_BUFSZ   2048
 

@@ -283,13 +283,19 @@ int64_t tcp_recv(tcp_tcb_t *t, void *buf, size_t len, int nonblock) {
     for (;;) {
         uint64_t f = spinlock_acquire_irqsave(&t->lock);
         if (t->rcv_count > 0) {
+            uint32_t before = t->rcv_count;
             uint32_t n = 0;
             while (n < len && t->rcv_count > 0) {
                 dst[n++] = t->rcvbuf[t->rcv_head];
                 t->rcv_head = (t->rcv_head + 1) % TCP_RCVBUF;
                 t->rcv_count--;
             }
+            int window_reopened = (before >= TCP_RCVBUF - 2 * TCP_MSS) &&
+                                  (t->rcv_count < TCP_RCVBUF - 2 * TCP_MSS) &&
+                                  (t->state == TCP_ESTABLISHED || t->state == TCP_FIN_WAIT1 ||
+                                   t->state == TCP_FIN_WAIT2);
             spinlock_release_irqrestore(&t->lock, f);
+            if (window_reopened) tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
             return (int64_t)n;
         }
         if (t->reset) { spinlock_release_irqrestore(&t->lock, f); return -EINVAL; }
