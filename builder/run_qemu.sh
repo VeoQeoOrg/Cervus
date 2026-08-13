@@ -28,7 +28,8 @@ FRESH=false
 INSTALLED=false
 NET=""
 RES=""
-SOUND=""
+SND_ON=true
+SND_BACKEND=auto
 
 for a in "$@"; do
     case "$a" in
@@ -40,9 +41,9 @@ for a in "$@"; do
         --net=ne2k)    NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
         --net=rtl8139) NET=" -netdev user,id=net0 -device rtl8139,netdev=net0" ;;
         --net=virtio)  NET=" -netdev user,id=net0 -device virtio-net-pci,netdev=net0" ;;
-        --sound)     SOUND=" -audiodev pa,id=snd0 -device AC97,audiodev=snd0" ;;
-        --sound=wav) SOUND=" -audiodev wav,id=snd0,path=cervus-audio.wav -device AC97,audiodev=snd0" ;;
-        --sound=*)   SOUND=" -audiodev ${a#--sound=},id=snd0 -device AC97,audiodev=snd0" ;;
+        --no-sound)  SND_ON=false ;;
+        --sound)     SND_ON=true ;;
+        --sound=*)   SND_ON=true; SND_BACKEND=${a#--sound=} ;;
         --grub)      ISO="demo_iso/Cervus-grub.latest.iso" ;;
         --limine)    ISO="demo_iso/Cervus.latest.iso" ;;
         --res=*)     RES=${a#--res=} ;;
@@ -51,6 +52,23 @@ for a in "$@"; do
         *) echo "run: unknown option '$a'" >&2; exit 1 ;;
     esac
 done
+
+detect_audiodev() {
+    if [ -S "/run/user/$(id -u)/pulse/native" ] || [ -n "${PULSE_SERVER:-}" ]; then echo pa; return; fi
+    if [ -e /dev/snd/timer ] || ls /dev/snd/pcmC* >/dev/null 2>&1; then echo alsa; return; fi
+    echo none
+}
+
+SOUND=""
+if $SND_ON; then
+    b=$SND_BACKEND
+    [ "$b" = auto ] && b=$(detect_audiodev)
+    if [ "$b" = wav ]; then
+        SOUND=" -audiodev wav,id=snd0,path=cervus-audio.wav -device AC97,audiodev=snd0"
+    else
+        SOUND=" -audiodev $b,id=snd0 -device AC97,audiodev=snd0"
+    fi
+fi
 
 QEMUFLAGS="$QEMUFLAGS$NET$SOUND"
 
