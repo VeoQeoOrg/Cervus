@@ -37,6 +37,15 @@
 typedef enum { BL_LIMINE = 0, BL_GRUB = 1 } bootloader_t;
 typedef enum { FS_EXT2 = 0, FS_EXT4 = 1 } fstype_t;
 
+typedef enum { PR_BOOT = 0, PR_ROOT = 1, PR_SWAP = 2, PR_DATA = 3 } prole_t;
+typedef struct {
+    prole_t  role;
+    int      fill;       /* take the rest of the disk */
+    uint32_t size_mb;
+    fstype_t fs;         /* ext2/ext4 for ROOT and DATA */
+} pentry_t;
+#define MAX_PEDIT 4
+
 typedef struct { uint16_t ws_row, ws_col, ws_xpixel, ws_ypixel; } winsize_t;
 
 typedef enum { DISK_KIND_INTERNAL, DISK_KIND_USB, DISK_KIND_OTHER } disk_kind_t;
@@ -387,29 +396,6 @@ static void info_disk(int row, int col, int w) {
     info_print(&row, col, w, 1, "  erased during install.");
 }
 
-static void info_layout(int row, int col, int w) {
-    info_print(&row, col, w, 1, "Customize the partition layout.");
-    info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "ESP (FAT32):");
-    info_print(&row, col, w, 1, "  Holds kernel + Limine bootloader.");
-    info_print(&row, col, w, 1, "  64 MB is plenty; min 16 MB.");
-    info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Swap:");
-    info_print(&row, col, w, 1, "  Reserved space, currently unused.");
-    info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Root filesystem:");
-    info_print(&row, col, w, 1, "  ext2 - simple and proven.");
-    info_print(&row, col, w, 1, "  ext4 - extents, journal, Linux-");
-    info_print(&row, col, w, 1, "         compatible. Left/Right toggles.");
-    info_print(&row, col, w, 1, "  Root gets the rest of the disk.");
-    info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 0, "Keys:");
-    info_print(&row, col, w, 1, "  Up/Down  - move between fields");
-    info_print(&row, col, w, 1, "  Enter    - edit field / start install");
-    info_print(&row, col, w, 1, "  Left/Rt  - decrement / increment");
-    info_print(&row, col, w, 1, "  Digits   - type a value directly");
-}
-
 static void info_confirm(int row, int col, int w) {
     info_print(&row, col, w, 1, "Review the layout carefully.");
     info_print(&row, col, w, 1, "");
@@ -632,139 +618,6 @@ static int bool_edit(int row, int col, int value) {
     fputs(buf, stdout);
     fflush(stdout);
     return value;
-}
-
-static int manual_layout(const disk_entry_t *d, layout_t *L) {
-    uint32_t total_mb = (uint32_t)(d->size_bytes / (1024 * 1024));
-    if (total_mb < 80) {
-        hide_cursor();
-        clear_screen();
-        go_xy(g_rows / 2, g_pane_left_col);
-        fputs(C_RED "  Disk too small for install" C_RESET, stdout);
-        fflush(stdout);
-        read_key();
-        return -1;
-    }
-    L->total_mb  = total_mb;
-    if (L->esp_mb == 0)  L->esp_mb  = (total_mb < 256) ? 32 : 64;
-    if (L->swap_mb == 0) L->swap_mb = 16;
-
-    int title_row = 2;
-    int content_row = 5;
-    int pane_col = g_pane_left_col;
-    int pane_w   = g_pane_left_w;
-    int item_w   = pane_w - 2;
-    int focus = 0;
-
-    for (;;) {
-        hide_cursor();
-        clear_screen();
-        char title[64];
-        snprintf(title, sizeof(title), "Layout - %s (%u MB)", d->name, total_mb);
-        draw_pane_title(title_row, pane_col, pane_w, title);
-
-        uint32_t used = L->esp_mb + (L->have_swap ? L->swap_mb : 0);
-        uint32_t root_mb = (total_mb > used + 8) ? (total_mb - used - 8) : 0;
-
-        go_xy(content_row + 0, pane_col);  fputs("  ESP size (FAT32):", stdout);
-        go_xy(content_row + 1, pane_col);  fputs("  Use swap:        ", stdout);
-        go_xy(content_row + 2, pane_col);  fputs("  Swap size:       ", stdout);
-        go_xy(content_row + 3, pane_col);  fputs("  Root filesystem: ", stdout);
-        go_xy(content_row + 4, pane_col);
-        fputs("  Root size:       ", stdout);
-        printf(C_GRAY "%u MB" C_RESET, root_mb);
-
-        go_xy(content_row + 6, pane_col);
-        printf(C_GRAY "  Used: %u MB / %u MB" C_RESET, used, total_mb);
-
-        int field_col = pane_col + 22;
-        char buf[20];
-
-        brackets_int(buf, sizeof(buf), (int)L->esp_mb, 8);
-        go_xy(content_row + 0, field_col);
-        if (focus == 0) fputs(C_BOLD C_YELLOW, stdout); else fputs(C_GRAY, stdout);
-        fputs(buf, stdout);
-        fputs(" MB" C_RESET, stdout);
-
-        brackets_str(buf, sizeof(buf), L->have_swap ? "Yes" : "No", 5);
-        go_xy(content_row + 1, field_col);
-        if (focus == 1) fputs(C_BOLD C_YELLOW, stdout); else fputs(C_GRAY, stdout);
-        fputs(buf, stdout);
-        fputs(C_RESET, stdout);
-
-        go_xy(content_row + 2, field_col);
-        if (!L->have_swap) {
-            brackets_str(buf, sizeof(buf), "---", 8);
-            fputs(C_GRAY, stdout);
-            fputs(buf, stdout);
-            fputs(" MB" C_RESET, stdout);
-        } else {
-            brackets_int(buf, sizeof(buf), (int)L->swap_mb, 8);
-            if (focus == 2) fputs(C_BOLD C_YELLOW, stdout); else fputs(C_GRAY, stdout);
-            fputs(buf, stdout);
-            fputs(" MB" C_RESET, stdout);
-        }
-
-        brackets_str(buf, sizeof(buf), L->fs == FS_EXT4 ? "ext4" : "ext2", 6);
-        go_xy(content_row + 3, field_col);
-        if (focus == 3) fputs(C_BOLD C_YELLOW, stdout); else fputs(C_GRAY, stdout);
-        fputs(buf, stdout);
-        fputs(C_RESET, stdout);
-
-        const char *actions[2] = { "Start installation", "Back" };
-        for (int i = 0; i < 2; i++) {
-            render_menu_item(content_row + 8 + i, pane_col, item_w,
-                             focus == 4 + i, actions[i]);
-        }
-
-        draw_vsplit();
-        info_box("Help", info_layout);
-        hint_line("Up/Down move   Enter edit/confirm   Left/Right or digits   Esc back");
-        hide_cursor();
-        fflush(stdout);
-
-        int k = read_key();
-        if (k == KEY_UP) {
-            focus--;
-            if (focus < 0) focus = 5;
-            if (focus == 2 && !L->have_swap) focus = 1;
-        } else if (k == KEY_DOWN || k == '\t') {
-            focus++;
-            if (focus > 5) focus = 0;
-            if (focus == 2 && !L->have_swap) focus = 3;
-        } else if ((k == KEY_LEFT || k == KEY_RIGHT) && focus == 3) {
-            L->fs = (L->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
-        } else if (k == KEY_ESC) {
-            return -1;
-        } else if (k == KEY_ENTER) {
-            if (focus == 0) {
-                uint32_t max_esp = (total_mb > 32 + 16) ? (total_mb - 32) : 32;
-                if (max_esp > 1024) max_esp = 1024;
-                L->esp_mb = (uint32_t)int_edit(content_row + 0, field_col,
-                                               (int)L->esp_mb, 16, (int)max_esp);
-            } else if (focus == 1) {
-                L->have_swap = bool_edit(content_row + 1, field_col, L->have_swap);
-            } else if (focus == 2 && L->have_swap) {
-                uint32_t max_swap = (total_mb > L->esp_mb + 32)
-                                    ? (total_mb - L->esp_mb - 32) : 16;
-                if (max_swap > 2048) max_swap = 2048;
-                L->swap_mb = (uint32_t)int_edit(content_row + 2, field_col,
-                                                (int)L->swap_mb, 8, (int)max_swap);
-            } else if (focus == 3) {
-                L->fs = (L->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
-            } else if (focus == 4) {
-                if (root_mb < 32) {
-                    hint_line(C_RED "Root partition too small - adjust ESP/swap" C_RESET);
-                    fflush(stdout);
-                    read_key();
-                    continue;
-                }
-                return 0;
-            } else if (focus == 5) {
-                return -1;
-            }
-        }
-    }
 }
 
 static int disk_is_nonempty(const disk_entry_t *d);
@@ -1461,60 +1314,9 @@ static void apply_accounts(const account_cfg_t *a) {
     mkdir("/mnt/root/tmp", 01777);
 }
 
-static int do_install(const disk_entry_t *d, const layout_t *L, const account_cfg_t *acc,
-                      bootloader_t bl, fstype_t fs) {
-    char part1[40], part2[40];
+static int do_install_common(const disk_entry_t *d, const char *part1, const char *part2,
+                             const account_cfg_t *acc, bootloader_t bl, fstype_t fs) {
     int rc;
-
-    uint64_t total_sectors = d->sectors;
-    if (total_sectors > 0xFFFFFFFEULL) total_sectors = 0xFFFFFFFEULL;
-
-    uint32_t esp_start  = 2048;
-    uint32_t esp_size   = L->esp_mb * 2048;
-    uint32_t root_start = esp_start + esp_size;
-    uint32_t swap_size  = L->have_swap ? (L->swap_mb * 2048) : 0;
-    if ((uint64_t)root_start + swap_size + 32768 > total_sectors) {
-        hide_cursor();
-        clear_screen();
-        go_xy(g_rows / 2, g_pane_left_col);
-        fputs(C_RED "Root would be too small - adjust layout" C_RESET, stdout);
-        fflush(stdout);
-        read_key();
-        return 1;
-    }
-    uint32_t avail      = (uint32_t)total_sectors - root_start - swap_size;
-    uint32_t root_size  = avail;
-    uint32_t swap_start = root_start + root_size;
-
-    install_screen_init(9);
-
-    step_begin("Writing partition table");
-    cervus_mbr_part_t specs[4];
-    memset(specs, 0, sizeof(specs));
-    int n_parts = 0;
-    specs[n_parts].boot_flag    = 1;
-    specs[n_parts].type         = MBR_TYPE_FAT32_LBA;
-    specs[n_parts].lba_start    = esp_start;
-    specs[n_parts].sector_count = esp_size;
-    n_parts++;
-    specs[n_parts].boot_flag    = 0;
-    specs[n_parts].type         = MBR_TYPE_LINUX;
-    specs[n_parts].lba_start    = root_start;
-    specs[n_parts].sector_count = root_size;
-    n_parts++;
-    if (L->have_swap) {
-        specs[n_parts].boot_flag    = 0;
-        specs[n_parts].type         = MBR_TYPE_LINUX_SWAP;
-        specs[n_parts].lba_start    = swap_start;
-        specs[n_parts].sector_count = swap_size;
-        n_parts++;
-    }
-    rc = cervus_disk_partition(d->name, specs, n_parts);
-    if (rc < 0) { step_fail("partition table", rc); read_key(); return 1; }
-    step_ok("partition table");
-
-    make_part_name(d->name, 1, part1, sizeof(part1));
-    make_part_name(d->name, 2, part2, sizeof(part2));
 
     step_begin("Formatting ESP (FAT32)");
     rc = cervus_disk_mkfs_fat32(part1, "CERVUS-ESP");
@@ -1708,6 +1510,48 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
     return 0;
 }
 
+static int do_install(const disk_entry_t *d, const layout_t *L, const account_cfg_t *acc,
+                      bootloader_t bl, fstype_t fs) {
+    uint64_t total_sectors = d->sectors;
+    if (total_sectors > 0xFFFFFFFEULL) total_sectors = 0xFFFFFFFEULL;
+
+    uint32_t esp_start  = 2048;
+    uint32_t esp_size   = L->esp_mb * 2048;
+    uint32_t root_start = esp_start + esp_size;
+    uint32_t swap_size  = L->have_swap ? (L->swap_mb * 2048) : 0;
+    if ((uint64_t)root_start + swap_size + 32768 > total_sectors) {
+        hide_cursor(); clear_screen();
+        go_xy(g_rows / 2, g_pane_left_col);
+        fputs(C_RED "Root would be too small - adjust layout" C_RESET, stdout);
+        fflush(stdout); read_key();
+        return 1;
+    }
+    uint32_t root_size  = (uint32_t)total_sectors - root_start - swap_size;
+    uint32_t swap_start = root_start + root_size;
+
+    install_screen_init(9);
+    step_begin("Writing partition table");
+    cervus_mbr_part_t specs[4];
+    memset(specs, 0, sizeof(specs));
+    int n = 0;
+    specs[n].boot_flag = 1; specs[n].type = MBR_TYPE_FAT32_LBA;
+    specs[n].lba_start = esp_start; specs[n].sector_count = esp_size; n++;
+    specs[n].boot_flag = 0; specs[n].type = MBR_TYPE_LINUX;
+    specs[n].lba_start = root_start; specs[n].sector_count = root_size; n++;
+    if (L->have_swap) {
+        specs[n].boot_flag = 0; specs[n].type = MBR_TYPE_LINUX_SWAP;
+        specs[n].lba_start = swap_start; specs[n].sector_count = swap_size; n++;
+    }
+    int rc = cervus_disk_partition(d->name, specs, n);
+    if (rc < 0) { step_fail("partition table", rc); read_key(); return 1; }
+    step_ok("partition table");
+
+    char part1[40], part2[40];
+    make_part_name(d->name, 1, part1, sizeof(part1));
+    make_part_name(d->name, 2, part2, sizeof(part2));
+    return do_install_common(d, part1, part2, acc, bl, fs);
+}
+
 static int choose_disk_auto(const disk_entry_t *disks, int n) {
     int best = -1;
     uint64_t best_sz = 0;
@@ -1805,6 +1649,214 @@ static int choose_fstype(void) {
     }
 }
 
+static const char *prole_name(prole_t r) {
+    switch (r) {
+        case PR_BOOT: return "EFI Boot";
+        case PR_ROOT: return "Root";
+        case PR_SWAP: return "Swap";
+        default:      return "Data";
+    }
+}
+
+static uint32_t pedit_layout(const pentry_t *p, int np, uint64_t total_sectors,
+                             cervus_mbr_part_t *specs, int *boot_i, int *root_i) {
+    if (total_sectors > 0xFFFFFFFEULL) total_sectors = 0xFFFFFFFEULL;
+    uint64_t fixed = 0;
+    for (int i = 0; i < np; i++) if (!p[i].fill) fixed += (uint64_t)p[i].size_mb * 2048u;
+    uint64_t avail = (total_sectors > 2048 + fixed) ? (total_sectors - 2048 - fixed) : 0;
+    uint32_t cursor = 2048;
+    int nb = 0, nr = 0;
+    if (boot_i) *boot_i = -1;
+    if (root_i) *root_i = -1;
+    for (int i = 0; i < np; i++) {
+        uint32_t sz = p[i].fill ? (uint32_t)avail : p[i].size_mb * 2048u;
+        if (specs) {
+            specs[i].boot_flag = (p[i].role == PR_BOOT) ? 1 : 0;
+            specs[i].type = p[i].role == PR_BOOT ? MBR_TYPE_FAT32_LBA
+                          : p[i].role == PR_SWAP ? MBR_TYPE_LINUX_SWAP
+                          : MBR_TYPE_LINUX;
+            specs[i].lba_start = cursor;
+            specs[i].sector_count = sz;
+        }
+        if (sz < 2048) return 1;
+        if ((uint64_t)cursor + sz > total_sectors) return 2;
+        cursor += sz;
+        if (p[i].role == PR_BOOT) { nb++; if (boot_i) *boot_i = i; }
+        if (p[i].role == PR_ROOT) { nr++; if (root_i) *root_i = i; }
+    }
+    if (nb != 1) return 3;
+    if (nr != 1) return 4;
+    return 0;
+}
+
+static void info_pedit(int row, int col, int w) {
+    info_print(&row, col, w, 1, "Design the disk layout yourself.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "You need exactly one EFI Boot and one");
+    info_print(&row, col, w, 1, "Root. One partition can 'fill the rest'.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "EFI Boot");
+    info_print(&row, col, w, 1, "  FAT32, holds the bootloader.");
+    info_print(&row, col, w, 0, "Root");
+    info_print(&row, col, w, 1, "  the system, mounted at /.");
+    info_print(&row, col, w, 0, "Swap");
+    info_print(&row, col, w, 1, "  reserved area (optional).");
+    info_print(&row, col, w, 0, "Data");
+    info_print(&row, col, w, 1, "  extra volume; mount it yourself.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Nothing is written until you install.");
+}
+
+static int edit_partition(pentry_t *e, uint32_t max_mb) {
+    int focus = 0;
+    for (;;) {
+        int has_size = !e->fill;
+        int has_fs = (e->role == PR_ROOT || e->role == PR_DATA);
+        hide_cursor(); clear_screen();
+        draw_pane_title(2, g_pane_left_col, g_pane_left_w, "Edit partition");
+        int c = g_pane_left_col, fc = c + 16;
+        char buf[24];
+        go_xy(5, c); fputs("  Role:", stdout);
+        brackets_str(buf, sizeof(buf), prole_name(e->role), 10);
+        go_xy(5, fc); fputs(focus == 0 ? C_BOLD C_YELLOW : C_GRAY, stdout); fputs(buf, stdout); fputs(C_RESET, stdout);
+        go_xy(6, c); fputs("  Fill rest:", stdout);
+        brackets_str(buf, sizeof(buf), e->fill ? "Yes" : "No", 5);
+        go_xy(6, fc); fputs(focus == 1 ? C_BOLD C_YELLOW : C_GRAY, stdout); fputs(buf, stdout); fputs(C_RESET, stdout);
+        go_xy(7, c); fputs("  Size (MB):", stdout);
+        go_xy(7, fc);
+        if (has_size) { brackets_int(buf, sizeof(buf), (int)e->size_mb, 8); fputs(focus == 2 ? C_BOLD C_YELLOW : C_GRAY, stdout); fputs(buf, stdout); fputs(C_RESET, stdout); }
+        else fputs(C_GRAY "  (rest of disk)" C_RESET, stdout);
+        go_xy(8, c); fputs("  Filesystem:", stdout);
+        go_xy(8, fc);
+        if (has_fs) { brackets_str(buf, sizeof(buf), e->fs == FS_EXT4 ? "ext4" : "ext2", 6); fputs(focus == 3 ? C_BOLD C_YELLOW : C_GRAY, stdout); fputs(buf, stdout); fputs(C_RESET, stdout); }
+        else fputs(C_GRAY "  --" C_RESET, stdout);
+        const char *acts[3] = { "Save", "Delete this partition", "Cancel" };
+        for (int i = 0; i < 3; i++) render_menu_item(10 + i, c, g_pane_left_w - 2, focus == 4 + i, acts[i]);
+        draw_vsplit(); info_box("Edit partition", info_pedit);
+        hint_line("Up/Down move   Left/Right change   Enter edit/confirm   Esc cancel");
+        hide_cursor(); fflush(stdout);
+
+        int k = read_key();
+        if (k == KEY_UP) {
+            do { focus = (focus + 6) % 7; } while ((focus == 2 && !has_size) || (focus == 3 && !has_fs));
+        } else if (k == KEY_DOWN || k == '\t') {
+            do { focus = (focus + 1) % 7; } while ((focus == 2 && !has_size) || (focus == 3 && !has_fs));
+        } else if (k == KEY_LEFT) {
+            if (focus == 0) e->role = (prole_t)((e->role + 3) % 4);
+            else if (focus == 1) e->fill = !e->fill;
+            else if (focus == 3 && has_fs) e->fs = (e->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
+        } else if (k == KEY_RIGHT) {
+            if (focus == 0) e->role = (prole_t)((e->role + 1) % 4);
+            else if (focus == 1) e->fill = !e->fill;
+            else if (focus == 3 && has_fs) e->fs = (e->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
+        } else if (k == KEY_ENTER || k == ' ') {
+            if (focus == 1) e->fill = !e->fill;
+            else if (focus == 2 && has_size) {
+                int mx = (int)(max_mb ? max_mb : 1000000); if (mx < 1) mx = 1;
+                e->size_mb = (uint32_t)int_edit(7, fc, (int)e->size_mb, 1, mx);
+            } else if (focus == 3 && has_fs) e->fs = (e->fs == FS_EXT2) ? FS_EXT4 : FS_EXT2;
+            else if (focus == 4) return 0;
+            else if (focus == 5) return 1;
+            else if (focus == 6) return -1;
+        } else if (k == KEY_ESC) return -1;
+    }
+}
+
+static int partition_editor(const disk_entry_t *d, pentry_t *parts, int *nparts) {
+    int sel = 0;
+    uint32_t disk_mb = (uint32_t)(d->size_bytes / (1024 * 1024));
+    for (;;) {
+        cervus_mbr_part_t specs[MAX_PEDIT];
+        int bi, ri;
+        uint32_t err = pedit_layout(parts, *nparts, d->sectors, specs, &bi, &ri);
+        hide_cursor(); clear_screen();
+        char title[64], db[24];
+        format_mb(d->size_bytes, db, sizeof(db));
+        snprintf(title, sizeof(title), "Partitions - %s (%s)", d->name, db);
+        draw_pane_title(2, g_pane_left_col, g_pane_left_w, title);
+        int r = 5, c = g_pane_left_col;
+        go_xy(r++, c); fputs(C_CYAN "  #  Role        Size          FS" C_RESET, stdout);
+        for (int i = 0; i < *nparts; i++) {
+            char sz[20];
+            format_mb((uint64_t)specs[i].sector_count * 512ULL, sz, sizeof(sz));
+            const char *fsn = (parts[i].role == PR_ROOT || parts[i].role == PR_DATA) ? (parts[i].fs == FS_EXT4 ? "ext4" : "ext2")
+                            : parts[i].role == PR_BOOT ? "FAT32" : "-";
+            go_xy(r, c);
+            if (sel == i) fputs(C_BOLD C_YELLOW, stdout);
+            printf("  %d  %-10s %11s  %s", i + 1, prole_name(parts[i].role), parts[i].fill ? "rest" : sz, fsn);
+            if (sel == i) fputs(C_RESET, stdout);
+            r++;
+        }
+        int add_row = r + 1;
+        const char *add_label = (*nparts < MAX_PEDIT) ? "+ Add partition" : "(4 partitions max)";
+        render_menu_item(add_row, c, g_pane_left_w - 2, sel == *nparts, add_label);
+        render_menu_item(add_row + 1, c, g_pane_left_w - 2, sel == *nparts + 1, "Continue");
+        render_menu_item(add_row + 2, c, g_pane_left_w - 2, sel == *nparts + 2, "Cancel");
+        go_xy(add_row + 4, c);
+        if (err == 0) fputs(C_GREEN "  Layout OK" C_RESET, stdout);
+        else if (err == 3) fputs(C_YELLOW "  Need exactly one EFI Boot partition" C_RESET, stdout);
+        else if (err == 4) fputs(C_YELLOW "  Need exactly one Root partition" C_RESET, stdout);
+        else fputs(C_YELLOW "  Sizes do not fit the disk" C_RESET, stdout);
+        draw_vsplit(); info_box("Partitions", info_pedit);
+        hint_line("Up/Down move   Enter edit/select   Esc back");
+        hide_cursor(); fflush(stdout);
+
+        int total_items = *nparts + 3;
+        int k = read_key();
+        if (k == KEY_UP) sel = (sel + total_items - 1) % total_items;
+        else if (k == KEY_DOWN || k == '\t') sel = (sel + 1) % total_items;
+        else if (k == KEY_ESC) return -1;
+        else if (k == KEY_ENTER || k == ' ') {
+            if (sel < *nparts) {
+                int er = edit_partition(&parts[sel], disk_mb);
+                if (er == 1) {
+                    for (int j = sel; j < *nparts - 1; j++) parts[j] = parts[j + 1];
+                    (*nparts)--;
+                    if (sel > *nparts + 2) sel = 0;
+                }
+            } else if (sel == *nparts) {
+                if (*nparts < MAX_PEDIT) {
+                    pentry_t ne;
+                    ne.role = PR_DATA; ne.fill = 0; ne.size_mb = 1024; ne.fs = FS_EXT4;
+                    int er = edit_partition(&ne, disk_mb);
+                    if (er == 0) { parts[*nparts] = ne; (*nparts)++; }
+                }
+            } else if (sel == *nparts + 1) {
+                if (err == 0) return 0;
+            } else {
+                return -1;
+            }
+        }
+    }
+}
+
+static int do_install_custom(const disk_entry_t *d, pentry_t *parts, int nparts,
+                             const account_cfg_t *acc, bootloader_t bl) {
+    cervus_mbr_part_t specs[MAX_PEDIT];
+    int bi, ri;
+    if (pedit_layout(parts, nparts, d->sectors, specs, &bi, &ri) != 0) return 1;
+
+    install_screen_init(9);
+    step_begin("Writing partition table");
+    int rc = cervus_disk_partition(d->name, specs, nparts);
+    if (rc < 0) { step_fail("partition table", rc); read_key(); return 1; }
+    step_ok("partition table");
+
+    for (int i = 0; i < nparts; i++) {
+        if (parts[i].role != PR_DATA) continue;
+        char dn[40];
+        make_part_name(d->name, i + 1, dn, sizeof(dn));
+        step_begin("Formatting data partition");
+        cervus_disk_format(dn, "cervus-data", parts[i].fs == FS_EXT4);
+        step_ok("data formatted");
+    }
+
+    char boot_dev[40], root_dev[40];
+    make_part_name(d->name, bi + 1, boot_dev, sizeof(boot_dev));
+    make_part_name(d->name, ri + 1, root_dev, sizeof(root_dev));
+    return do_install_common(d, boot_dev, root_dev, acc, bl, parts[ri].fs);
+}
+
 static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
     layout_t L;
     memset(&L, 0, sizeof(L));
@@ -1816,7 +1868,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
     for (;;) {
         const char *mode_items[] = {
             "Automatic    (best internal disk + defaults)",
-            "Manual       (choose disk and tune layout)",
+            "Manual       (create and edit partitions)",
             "Install to USB flash drive",
             "Back",
         };
@@ -1839,6 +1891,23 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
             picked = disk_select_in_box("Select target disk",
                                         disks, n_disks, 0, info_disk);
             if (picked < 0) continue;
+            pentry_t parts[MAX_PEDIT];
+            int np = 2;
+            parts[0].role = PR_BOOT; parts[0].fill = 0; parts[0].size_mb = 128; parts[0].fs = FS_EXT2;
+            parts[1].role = PR_ROOT; parts[1].fill = 1; parts[1].size_mb = 0;   parts[1].fs = FS_EXT4;
+            if (partition_editor(&disks[picked], parts, &np) < 0) continue;
+            account_cfg_t macc;
+            if (account_setup_screen(&macc) != 1) continue;
+            int mbl = choose_bootloader();
+            if (mbl < 0) continue;
+            {
+                char et[64];
+                snprintf(et, sizeof(et), "Erase %s and install?", disks[picked].name);
+                const char *ci[2] = { "Cancel", "Yes, erase & install" };
+                if (menu_in_box(et, ci, 2, 0, info_pedit) != 1) continue;
+            }
+            do_install_custom(&disks[picked], parts, np, &macc, (bootloader_t)mbl);
+            return EXIT_CANCEL;
         } else if (mode == 2) {
             disk_entry_t usb[MAX_DISKS];
             int n_usb = 0;
@@ -1861,9 +1930,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
             if (picked < 0) continue;
         }
 
-        if (mode == 1) {
-            if (manual_layout(&disks[picked], &L) < 0) continue;
-        } else {
+        {
             uint32_t total_mb = (uint32_t)(disks[picked].size_bytes / (1024 * 1024));
             L.esp_mb    = (total_mb < 256) ? 32 : 64;
             L.have_swap = (total_mb >= 128) ? 1 : 0;
