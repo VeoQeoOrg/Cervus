@@ -6,7 +6,10 @@
 #endif
 
 typedef unsigned long size_t;
+#ifndef __ssize_t_defined
+#define __ssize_t_defined
 typedef long          ssize_t;
+#endif
 typedef long          ptrdiff_t;
 typedef int           wchar_t;
 
