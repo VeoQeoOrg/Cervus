@@ -28,6 +28,7 @@ FRESH=false
 INSTALLED=false
 NET=""
 RES=""
+SOUND=""
 
 for a in "$@"; do
     case "$a" in
@@ -39,6 +40,9 @@ for a in "$@"; do
         --net=ne2k)    NET=" -netdev user,id=net0 -device ne2k_pci,netdev=net0" ;;
         --net=rtl8139) NET=" -netdev user,id=net0 -device rtl8139,netdev=net0" ;;
         --net=virtio)  NET=" -netdev user,id=net0 -device virtio-net-pci,netdev=net0" ;;
+        --sound)     SOUND=" -audiodev pa,id=snd0 -device AC97,audiodev=snd0" ;;
+        --sound=wav) SOUND=" -audiodev wav,id=snd0,path=cervus-audio.wav -device AC97,audiodev=snd0" ;;
+        --sound=*)   SOUND=" -audiodev ${a#--sound=},id=snd0 -device AC97,audiodev=snd0" ;;
         --grub)      ISO="demo_iso/Cervus-grub.latest.iso" ;;
         --limine)    ISO="demo_iso/Cervus.latest.iso" ;;
         --res=*)     RES=${a#--res=} ;;
@@ -48,7 +52,7 @@ for a in "$@"; do
     esac
 done
 
-QEMUFLAGS="$QEMUFLAGS$NET"
+QEMUFLAGS="$QEMUFLAGS$NET$SOUND"
 
 if [ -n "$RES" ]; then
     case "$RES" in

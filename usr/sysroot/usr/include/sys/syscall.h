@@ -134,6 +134,9 @@
 #define SYS_SEMOP           593
 #define SYS_SEMCTL          594
 #define SYS_MOUNT9          595
+#define SYS_AUDIO_OPEN      596
+#define SYS_AUDIO_WRITE     597
+#define SYS_AUDIO_CLOSE     598
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

@@ -144,7 +144,11 @@
 #define SYS_SEMCTL            594
 #define SYS_MOUNT9            595
 
-#define SYSCALL_TABLE_SIZE    596
+#define SYS_AUDIO_OPEN        596
+#define SYS_AUDIO_WRITE       597
+#define SYS_AUDIO_CLOSE       598
+
+#define SYSCALL_TABLE_SIZE    640
 
 #define PROT_NONE    0x0
 #define PROT_READ    0x1

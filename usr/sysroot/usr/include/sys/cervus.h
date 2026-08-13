@@ -244,4 +244,8 @@ void    *cervus_fb_map(void);
 int      cervus_fb_acquire(void);
 int      cervus_fb_release(void);
 
+int      cervus_audio_open(unsigned rate);
+long     cervus_audio_write(const void *pcm, unsigned long len);
+int      cervus_audio_close(void);
+
 #endif

@@ -154,6 +154,9 @@ extern int64_t sys_semget(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semop(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semctl(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_mount9(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_audio_open(uint64_t);
+extern int64_t sys_audio_write(uint64_t, uint64_t);
+extern int64_t sys_audio_close(void);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -220,6 +223,7 @@ W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 W3(sys_mount9)
+W1(sys_audio_open)  W2(sys_audio_write)  W0(sys_audio_close)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -339,6 +343,9 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SEMOP]             = _sys_semop,
     [SYS_SEMCTL]            = _sys_semctl,
     [SYS_MOUNT9]            = _sys_mount9,
+    [SYS_AUDIO_OPEN]        = _sys_audio_open,
+    [SYS_AUDIO_WRITE]       = _sys_audio_write,
+    [SYS_AUDIO_CLOSE]       = _sys_audio_close,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

@@ -45,6 +45,7 @@
 #include "../include/drivers/net/rtl8139.h"
 #include "../include/drivers/net/rtl8169.h"
 #include "../include/drivers/net/virtio_net.h"
+#include "../include/drivers/audio/ac97.h"
 #include "../include/drivers/net/ne2000.h"
 #include "../include/console/console.h"
 #include "../include/fs/ext2.h"
@@ -321,6 +322,9 @@ void kmain(void) {
 
     serial_writestring("[stage] net_init\n");
     net_init();
+
+    serial_writestring("[stage] ac97_init\n");
+    ac97_init();
 
     bool has_initramfs_module = (boot_info()->module_count >= 2);
     static char root_name[16] = {0};
