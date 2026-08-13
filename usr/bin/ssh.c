@@ -496,6 +496,7 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
             long m = read(0, in, sizeof in);
             if (m > 0) {
                 progress = 1;
+                if (interactive) { for (long k = 0; k < m; k++) if (in[k] == '\n') in[k] = '\r'; }
                 uint8_t p[4096 + 16]; size_t pi = 0;
                 p8(p, &pi, MSG_CHANNEL_DATA);
                 p32(p, &pi, rchan);
