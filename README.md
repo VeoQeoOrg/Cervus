@@ -43,6 +43,8 @@
   - [Storage](#storage)
   - [PCI / PCIe](#pci--pcie)
   - [Graphics and the framebuffer console](#graphics-and-the-framebuffer-console)
+  - [Images](#images)
+  - [Audio](#audio)
 - [Filesystems](#filesystems)
 - [Networking](#networking)
 - [Users, Permissions, and Authentication](#users-permissions-and-authentication)
@@ -55,6 +57,7 @@
 - [The Text Editor (neo)](#the-text-editor-neo)
 - [The File Manager (cfm)](#the-file-manager-cfm)
 - [On-Device Compiler (tcc)](#on-device-compiler-tcc)
+- [Cross-Compiling from Linux](#cross-compiling-from-linux-the-x86_64-cervus-toolchain)
 - [The Installer](#the-installer)
 - [Keyboard Reference](#keyboard-reference)
 - [Building from Source](#building-from-source)
@@ -128,11 +131,12 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
 | **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3, SSH (client + server), shared terminals — all from scratch |
 | **Crypto** | SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305, AES-128/256-GCM, X25519, Ed25519, RSA/ECDSA; RFC/NIST-verified |
-| **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8 |
+| **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8, PNG/JPEG/BMP/SVG image decoders |
+| **Audio** | AC'97 and Intel HDA drivers, WAV/MP3 playback (`play`) |
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
 | **Resilience** | Process regeneration and kernel fault recovery |
-| **Userland** | `csh` shell, ~70 utilities, `neo` editor (C syntax highlighting), `cfm` file manager, `tcc` compiler |
+| **Userland** | `csh` shell, ~70 utilities, `neo` editor (multi-language highlighting + file tree), `cfm` file manager, on-device `tcc` and an `x86_64-cervus` cross toolchain |
 | **Terminals** | 12 virtual terminals, per-terminal login, a live debug monitor |
 
 ---
@@ -442,7 +446,11 @@ per-partition device nodes (`/dev/sda1`, `/dev/nvme0n1p2`, and so on).
 PCI configuration space is accessed through the ACPI **MCFG** memory-mapped region
 where available, with a legacy `0xCF8/0xCFC` port fallback. The enumerator walks
 bridges recursively, sizes BARs (including 64-bit), and parses the capability list.
-The `lspci` utility prints the result.
+The `lspci` utility prints the result:
+
+<p align="center">
+  <img src="assets/screenshots/drivers.png" alt="PCI devices listed by lspci" width="760px">
+</p>
 
 ### Graphics and the framebuffer console
 
@@ -452,6 +460,44 @@ Limine provides a linear framebuffer, on which Cervus renders a text console usi
 buffer (so full-screen programs restore the terminal on exit), and UTF-8 output with
 a Cyrillic glyph table. Framebuffer syscalls (`fb_*`) let userland map the
 framebuffer and draw graphics directly.
+
+### Images
+
+`libcervus` includes from-scratch decoders for **PNG**, **JPEG** (baseline), **BMP**
+and a minimal **SVG**, behind a single `image_load` API. The `img` utility decodes an
+image and blits it to the framebuffer:
+
+```sh
+img photo.png
+```
+
+<p align="center">
+  <img src="assets/screenshots/images.png" alt="Viewing a PNG with img" width="760px">
+</p>
+
+### Audio
+
+Two sound-card drivers are implemented from scratch behind a common backend: **AC'97**
+(the QEMU default) and **Intel High Definition Audio** (HDA), the latter driving the
+codec over the immediate command interface and streaming through a cyclic buffer
+descriptor list. Whichever card is present registers itself; the audio syscalls stream
+16-bit stereo PCM to it.
+
+The `play` utility plays **WAV** and **MP3** files (MP3 via a vendored `minimp3`
+decoder), or synthesizes a test tone:
+
+```sh
+play song.mp3            # decode and play an MP3
+play beep.wav            # play a WAV
+play -t 440 2            # a 440 Hz tone for 2 seconds
+```
+
+<p align="center">
+  <img src="assets/screenshots/audio.png" alt="Playing audio with the play utility" width="760px">
+</p>
+
+`./nb run` attaches AC'97 by default; use `./nb run --sound=hda` to test the HDA
+driver instead.
 
 ---
 
@@ -511,6 +557,10 @@ up to TLS and SSH. Nothing is ported.
   (both with a Linux-like flag set), `ftp`, `httpd`, `browser` (terminal web
   browser), `ssh`, `sshd`, `ssh-keygen`, `wterm` (shared terminal), `crypt`
   (file encryption).
+
+<p align="center">
+  <img src="assets/screenshots/network.png" alt="ifconfig and ping over the from-scratch network stack" width="760px">
+</p>
 
 ### Secure Shell (SSH)
 
@@ -1014,19 +1064,28 @@ For built-in shell commands (`cd`, `alias`, `export`, `jobs`, control flow, …)
 `neo` is a small, modeless, nano-style text editor for editing files on the machine.
 
 <p align="center">
-  <img src="assets/screenshots/neo.png" alt="C syntax highlighting in the neo editor" width="760px">
+  <img src="assets/screenshots/neo.png" alt="Syntax highlighting in the neo editor" width="760px">
 </p>
 
-It shows line numbers and a status line with the filename, modified state, and cursor
-position. Control-key shortcuts are listed along the bottom: `^S` save, `^Q` quit,
-`^X` cut, `^C` copy, `^V` paste, `^D` duplicate line, `^F` find, `^G` go to line,
-`^N` toggle line numbers. Arrow keys move the cursor; there are no modes to switch
-between.
+It shows line numbers and a status line with the filename, the detected language,
+the cursor position, and the total line count. Control-key shortcuts are listed along
+the bottom: `^S` save, `^Q` quit, `^X` cut, `^C` copy, `^V` paste, `^F` find,
+`^G` go to line, `^L` cycle the syntax mode, `^P` settings, and `^T` file tree. Arrow
+keys move the cursor; there are no modes to switch between.
 
-Editing C (`.c`/`.h`) files turns on **syntax highlighting** — keywords, types,
-strings, character and numeric literals, `//` and `/* */` comments, and preprocessor
-directives are each colored (as in the screenshot above). Pressing Enter keeps the
-current line's indentation (**auto-indent**), so nested code lines up while you type.
+**Syntax highlighting** is driven by a per-language definition and rendered in a
+modern truecolor theme. `neo` recognizes **C** (`.c`/`.h`), **JavaScript** (`.js`),
+**CSS** (`.css`) and **assembly** (`.s`/`.asm`), coloring keywords, types, strings,
+character and numeric literals, line and block comments, and preprocessor directives
+independently (as in the screenshot above). Pressing Enter keeps the current line's
+indentation (**auto-indent**), so nested code lines up while you type.
+
+Press `^T` to open the **file tree** — a full-screen browser of the directory,
+where folders expand and collapse and files open straight into the editor:
+
+<p align="center">
+  <img src="assets/screenshots/neo-tree.png" alt="The neo editor's file tree" width="760px">
+</p>
 
 ---
 
@@ -1062,6 +1121,30 @@ tcc hello.c -o hello   # compile and link (outputs an executable, +x)
 
 This is what makes Cervus *self-hosting* at the userland level: the tools needed to
 build new programs are present on the running system.
+
+---
+
+## Cross-Compiling from Linux (the x86_64-cervus toolchain)
+
+For larger programs — and for building real software with a full optimizing compiler
+— Cervus ships a **hosted cross toolchain**. `builder/build_cross_toolchain.sh` builds
+**GCC + binutils + libgcc** on a Linux host, targeting `x86_64-cervus` against the
+in-tree sysroot:
+
+```sh
+sh builder/build_cross_toolchain.sh          # build once (into usr/cross/tools)
+export PATH="$PWD/usr/cross/tools/bin:$PATH"
+x86_64-cervus-gcc hello.c -o hello           # produces a static Cervus binary
+```
+
+The toolchain knows about Cervus: it finds the system headers, links `crt0` +
+`libcervus` + `libgcc`, defaults to a static non-PIE executable at the right load
+address, and predefines `__cervus__` — so an ordinary `#include <stdio.h>` program
+just compiles. The resulting binary runs directly on Cervus:
+
+<p align="center">
+  <img src="assets/screenshots/cross-toolchain.png" alt="A program built with x86_64-cervus-gcc running on Cervus" width="760px">
+</p>
 
 ---
 
