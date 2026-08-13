@@ -6,6 +6,10 @@
 #include <stdint.h>
 #include <sys/cervus.h>
 
+#define MINIMP3_IMPLEMENTATION
+#define MINIMP3_NO_SIMD
+#include <minimp3.h>
+
 static uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
@@ -131,6 +135,78 @@ static int play_wav(const char *path) {
     return rc;
 }
 
+static uint8_t *read_all(const char *path, size_t *outlen) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { fprintf(stderr, "play: cannot open %s\n", path); return 0; }
+    off_t end = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
+    if (end <= 0) { close(fd); fprintf(stderr, "play: empty file\n"); return 0; }
+    uint8_t *b = malloc((size_t)end);
+    if (!b) { close(fd); fprintf(stderr, "play: out of memory\n"); return 0; }
+    size_t got = 0; long n;
+    while (got < (size_t)end && (n = read(fd, b + got, (size_t)end - got)) > 0) got += (size_t)n;
+    close(fd);
+    *outlen = got;
+    return b;
+}
+
+static int play_mp3(const char *path) {
+    size_t len = 0;
+    uint8_t *buf = read_all(path, &len);
+    if (!buf) return 1;
+
+    mp3dec_t dec;
+    mp3dec_init(&dec);
+    mp3dec_frame_info_t info;
+    short pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
+    int16_t st[1152 * 2];
+
+    size_t pos = 0;
+    int opened = 0;
+    long total = 0;
+    while (pos < len) {
+        int samples = mp3dec_decode_frame(&dec, buf + pos, (int)(len - pos), pcm, &info);
+        if (info.frame_bytes == 0) break;
+        pos += (size_t)info.frame_bytes;
+        if (samples <= 0) continue;
+        if (!opened) {
+            if (cervus_audio_open((unsigned)info.hz) < 0) {
+                fprintf(stderr, "play: no audio device\n");
+                free(buf); return 1;
+            }
+            printf("playing %s: MP3 %d Hz, %d ch, %d kbps\n",
+                   path, info.hz, info.channels, info.bitrate_kbps);
+            opened = 1;
+        }
+        int ch = info.channels;
+        for (int i = 0; i < samples; i++) {
+            int16_t l = pcm[i * ch];
+            int16_t r = (ch > 1) ? pcm[i * ch + 1] : l;
+            st[i * 2] = l;
+            st[i * 2 + 1] = r;
+        }
+        cervus_audio_write(st, (unsigned long)samples * 4);
+        total += samples;
+    }
+    if (opened) cervus_audio_close();
+    else fprintf(stderr, "play: no MP3 frames found in %s\n", path);
+    free(buf);
+    return opened ? 0 : 1;
+}
+
+static int looks_like_mp3(const char *path) {
+    size_t n = strlen(path);
+    if (n >= 4 && !strcasecmp(path + n - 4, ".mp3")) return 1;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    uint8_t h[3] = {0};
+    read(fd, h, 3);
+    close(fd);
+    if (h[0] == 'I' && h[1] == 'D' && h[2] == '3') return 1;
+    if (h[0] == 0xFF && (h[1] & 0xE0) == 0xE0) return 1;
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && (!strcmp(argv[1], "-t") || !strcmp(argv[1], "--tone"))) {
         unsigned freq = (argc >= 3) ? (unsigned)atoi(argv[2]) : 440;
@@ -138,9 +214,10 @@ int main(int argc, char **argv) {
         return play_tone(freq, secs);
     }
     if (argc < 2) {
-        printf("usage: play file.wav\n");
+        printf("usage: play file.wav | file.mp3\n");
         printf("       play -t [freq] [secs]\n");
         return 1;
     }
+    if (looks_like_mp3(argv[1])) return play_mp3(argv[1]);
     return play_wav(argv[1]);
 }
