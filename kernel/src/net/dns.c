@@ -10,7 +10,7 @@
 static uint16_t g_dns_id;
 static char     g_query_name[128];
 
-static int encode_name(uint8_t *out, const char *name) {
+static int encode_name(uint8_t *out, size_t cap, const char *name) {
     int oi = 0;
     const char *p = name;
     while (*p) {
@@ -18,11 +18,13 @@ static int encode_name(uint8_t *out, const char *name) {
         while (*dot && *dot != '.') dot++;
         int label = (int)(dot - p);
         if (label <= 0 || label > 63) return -1;
+        if ((size_t)oi + 1 + (size_t)label + 1 > cap) return -1;
         out[oi++] = (uint8_t)label;
         memcpy(out + oi, p, (size_t)label);
         oi += label;
         p = (*dot == '.') ? dot + 1 : dot;
     }
+    if ((size_t)oi + 1 > cap) return -1;
     out[oi++] = 0;
     return oi;
 }
@@ -75,7 +77,7 @@ void dns_query(netdev_t *dev, const char *name) {
     wr16be(pkt + 8, 0);
     wr16be(pkt + 10, 0);
 
-    int nl = encode_name(pkt + 12, name);
+    int nl = encode_name(pkt + 12, sizeof(pkt) - 16, name);
     if (nl < 0) return;
     int off = 12 + nl;
     wr16be(pkt + off, 1); off += 2;

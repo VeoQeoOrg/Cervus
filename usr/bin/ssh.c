@@ -288,13 +288,18 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
 
     if (wait_msg(s, MSG_KEX_ECDH_REPLY) < 0) return -1;
     size_t i = 1;
+    if (i + 4 > s->pkt_len) return fail(s, "malformed KEX reply");
     uint32_t kslen = rd_u32(s->pkt + i); i += 4;
+    if (kslen > s->pkt_len - i) return fail(s, "malformed KEX reply");
     const uint8_t *ks = s->pkt + i; i += kslen;
+    if (i + 4 > s->pkt_len) return fail(s, "malformed KEX reply");
     uint32_t qslen = rd_u32(s->pkt + i); i += 4;
+    if (qslen != 32 || qslen > s->pkt_len - i) return fail(s, "malformed KEX reply");
     const uint8_t *qs = s->pkt + i; i += qslen;
+    if (i + 4 > s->pkt_len) return fail(s, "malformed KEX reply");
     uint32_t siglen = rd_u32(s->pkt + i); i += 4;
+    if (siglen > s->pkt_len - i) return fail(s, "malformed KEX reply");
     const uint8_t *sig = s->pkt + i; i += siglen;
-    if (i > s->pkt_len || qslen != 32) return fail(s, "malformed KEX reply");
 
     uint8_t shared[32];
     x25519(shared, cpriv, qs);
@@ -459,7 +464,9 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
             progress = 1;
             uint8_t t = s->pkt[0];
             if (t == MSG_CHANNEL_DATA) {
+                if (s->pkt_len < 9) continue;
                 uint32_t dl = rd_u32(s->pkt + 5);
+                if (dl > s->pkt_len - 9) dl = (uint32_t)(s->pkt_len - 9);
                 write(1, s->pkt + 9, dl);
                 lwin -= dl;
                 if (lwin < 1000000) {
@@ -469,7 +476,9 @@ int ssh_client(ssh_t *s, const char *host, const char *user, const char *pass, c
                     ssh_send(s, p, pi); lwin += 2000000;
                 }
             } else if (t == MSG_CHANNEL_EXTENDED_DATA) {
+                if (s->pkt_len < 13) continue;
                 uint32_t dl = rd_u32(s->pkt + 9);
+                if (dl > s->pkt_len - 13) dl = (uint32_t)(s->pkt_len - 13);
                 write(2, s->pkt + 13, dl);
             } else if (t == MSG_CHANNEL_WINDOW_ADJUST) {
                 ;

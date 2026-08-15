@@ -239,12 +239,19 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
                         char *home_out, char *shell_out) {
     for (;;) {
         if (wait_msg(s, MSG_USERAUTH_REQUEST) < 0) return -1;
-        size_t i=1;
+        size_t i=1, L=s->pkt_len;
+        if (i+4>L) goto authfail;
         uint32_t ul=rd_u32(s->pkt+i); i+=4;
-        char user[128]; if (ul>127) ul=127; memcpy(user,s->pkt+i,ul); user[ul]=0; i+=ul;
-        uint32_t svl=rd_u32(s->pkt+i); i+=4+svl;
+        if (ul>L-i) goto authfail;
+        char user[128]; { size_t un=ul>127?127:ul; memcpy(user,s->pkt+i,un); user[un]=0; } i+=ul;
+        if (i+4>L) goto authfail;
+        uint32_t svl=rd_u32(s->pkt+i); i+=4;
+        if (svl>L-i) goto authfail;
+        i+=svl;
+        if (i+4>L) goto authfail;
         uint32_t ml=rd_u32(s->pkt+i); i+=4;
-        char method[32]; if (ml>31) ml=31; memcpy(method,s->pkt+i,ml); method[ml]=0; i+=rd_u32(s->pkt+i-4);
+        if (ml>L-i) goto authfail;
+        char method[32]; { size_t mn=ml>31?31:ml; memcpy(method,s->pkt+i,mn); method[mn]=0; } i+=ml;
 
         int ok=0;
 #ifdef SSHD_HOST_TEST
@@ -255,9 +262,12 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
         }
 #endif
         if (!strcmp(method,"password")) {
+            if (i+1>L) goto authfail;
             i+=1;
+            if (i+4>L) goto authfail;
             uint32_t pl=rd_u32(s->pkt+i); i+=4;
-            char pass[256]; if (pl>255) pl=255; memcpy(pass,s->pkt+i,pl); pass[pl]=0;
+            if (pl>L-i) goto authfail;
+            char pass[256]; { size_t pn=pl>255?255:pl; memcpy(pass,s->pkt+i,pn); pass[pn]=0; } i+=pl;
             uint32_t uid=0,gid=0; char home[128]="/",shell[128]="/bin/csh";
             if (pw_lookup_name(user,&uid,&gid,home,sizeof home,shell,sizeof shell)==0) {
                 if (syscall2(SYS_AUTH,(uint64_t)uid,(uint64_t)(uintptr_t)pass)==0) {
@@ -268,9 +278,15 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
             }
             memset(pass,0,sizeof pass);
         } else if (!strcmp(method,"publickey")) {
+            if (i+1>L) goto authfail;
             uint8_t has_sig=s->pkt[i]; i+=1;
-            uint32_t algl=rd_u32(s->pkt+i); i+=4+algl;
+            if (i+4>L) goto authfail;
+            uint32_t algl=rd_u32(s->pkt+i); i+=4;
+            if (algl>L-i) goto authfail;
+            i+=algl;
+            if (i+4>L) goto authfail;
             uint32_t pkl=rd_u32(s->pkt+i); i+=4;
+            if (pkl>L-i) goto authfail;
             const uint8_t *pkblob=s->pkt+i;
             size_t sig_off=i+pkl;
             i+=pkl;
@@ -279,6 +295,7 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
                 if (pw_lookup_name(user,&uid,&gid,home,sizeof home,shell,sizeof shell)==0
                     && pubkey_authorized(home,pkblob,pkl)) {
                     const uint8_t *pub=pkblob+19;
+                    if (i+4+19+64>L) goto authfail;
                     const uint8_t *sblob=s->pkt+i+4;
                     const uint8_t *sig=sblob+19;
                     uint8_t signed_data[900]; size_t di=0;
@@ -293,6 +310,7 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
             }
         }
         if (ok) { uint8_t p=MSG_USERAUTH_SUCCESS; ssh_send(s,&p,1); return 0; }
+    authfail:;
         uint8_t p[64]; size_t pi=0;
         p8(p,&pi,MSG_USERAUTH_FAILURE);
         pcstr(p,&pi,"password");
@@ -366,7 +384,9 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             progress=1;
             uint8_t t=s->pkt[0];
             if (t==MSG_CHANNEL_DATA) {
+                if (s->pkt_len<9) continue;
                 uint32_t dl=rd_u32(s->pkt+5);
+                if (dl>s->pkt_len-9) dl=(uint32_t)(s->pkt_len-9);
                 if (inw>=0) write(inw,s->pkt+9,dl);
                 local_window-=dl;
                 if (local_window<1000000) {
