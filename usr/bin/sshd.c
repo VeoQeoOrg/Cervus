@@ -47,7 +47,9 @@ typedef struct {
     int fd;
     uint32_t send_seq, recv_seq;
     int enc_send, enc_recv;
+    int cipher, keylen;
     uint8_t key_c2s[64], key_s2c[64];
+    uint8_t iv_c2s[12], iv_s2c[12];
     uint8_t session_id[32];
     uint8_t rx[RXSZ]; size_t head, tail;
     uint8_t pkt[MAXPKT]; size_t pkt_len;
@@ -63,6 +65,8 @@ static void pbytes(uint8_t *b,size_t *i,const void *d,size_t n){ memcpy(b+*i,d,n
 static void pstr(uint8_t *b,size_t *i,const void *d,size_t n){ p32(b,i,(uint32_t)n); pbytes(b,i,d,n); }
 static void pcstr(uint8_t *b,size_t *i,const char *s){ pstr(b,i,s,strlen(s)); }
 
+enum { CIPHER_CHACHA20=0, CIPHER_AESGCM=1 };
+
 static void chacha20_ssh(const uint8_t key[32], uint64_t seq, uint32_t counter,
                          const uint8_t *in, uint8_t *out, size_t len) {
     uint8_t nonce[12];
@@ -72,6 +76,21 @@ static void chacha20_ssh(const uint8_t key[32], uint64_t seq, uint32_t counter,
     chacha20(key, nonce, counter, in, out, len);
 }
 
+static void gcm_iv_incr(uint8_t iv[12]) { for (int i=11;i>=4;i--) if (++iv[i]) break; }
+
+static int kex_namelist(const uint8_t *p, size_t len, int idx, const uint8_t **out, uint32_t *outlen) {
+    size_t i=17;
+    for (int f=0;;f++) {
+        if (i+4>len) return -1;
+        uint32_t l=rd_u32(p+i); i+=4;
+        if (l>len-i) return -1;
+        if (f==idx){ *out=p+i; *outlen=l; return 0; }
+        i+=l;
+    }
+}
+
+static int tok_is(const uint8_t *tok, size_t n, const char *lit) { return strlen(lit)==n && !memcmp(tok,lit,n); }
+
 static int io_write_full(int fd, const uint8_t *b, size_t n) {
     size_t off=0; int spin=0;
     while (off<n) { long r=send(fd,b+off,n-off,0); if(r>0){off+=r;spin=0;} else { if(++spin>200000) return -1; usleep(200);} }
@@ -79,7 +98,7 @@ static int io_write_full(int fd, const uint8_t *b, size_t n) {
 }
 
 static int ssh_send(ssh_t *s, const uint8_t *payload, size_t plen) {
-    size_t bs=8, padlen;
+    size_t bs=(s->enc_send && s->cipher==CIPHER_AESGCM)?16:8, padlen;
     if (s->enc_send) padlen = bs - ((1+plen)%bs); else padlen = bs - ((5+plen)%bs);
     if (padlen<4) padlen+=bs;
     uint32_t length=(uint32_t)(1+plen+padlen);
@@ -91,6 +110,13 @@ static int ssh_send(ssh_t *s, const uint8_t *payload, size_t plen) {
         uint8_t hdr[4]; wr_u32(hdr,length);
         if (io_write_full(s->fd,hdr,4)) return -1;
         if (io_write_full(s->fd,s->sbody,length)) return -1;
+    } else if (s->cipher==CIPHER_AESGCM) {
+        uint8_t aad[4],tag[16]; wr_u32(aad,length);
+        aes_gcm_encrypt(s->key_s2c,s->keylen,s->iv_s2c,aad,4,s->sbody,length,s->senc,tag);
+        if (io_write_full(s->fd,aad,4)) return -1;
+        if (io_write_full(s->fd,s->senc,length)) return -1;
+        if (io_write_full(s->fd,tag,16)) return -1;
+        gcm_iv_incr(s->iv_s2c);
     } else {
         const uint8_t *mk=s->key_s2c, *hk=s->key_s2c+32;
         uint8_t enclen[4], lenbytes[4]; wr_u32(lenbytes,length);
@@ -123,12 +149,18 @@ static int ssh_recv(ssh_t *s, int blocking) {
         size_t avail=s->tail-s->head;
         if (avail>=4) {
             uint32_t length;
-            if (s->enc_recv){ uint8_t dl[4]; chacha20_ssh(s->key_c2s+32,s->recv_seq,0,s->rx+s->head,dl,4); length=rd_u32(dl); }
+            if (s->enc_recv && s->cipher==CIPHER_AESGCM) length=rd_u32(s->rx+s->head);
+            else if (s->enc_recv){ uint8_t dl[4]; chacha20_ssh(s->key_c2s+32,s->recv_seq,0,s->rx+s->head,dl,4); length=rd_u32(dl); }
             else length=rd_u32(s->rx+s->head);
             if (length<1||length>MAXPKT-64) return -2;
             size_t total = s->enc_recv?(4+length+16):(4+length);
             if (avail>=total) {
-                if (s->enc_recv) {
+                if (s->enc_recv && s->cipher==CIPHER_AESGCM) {
+                    uint8_t aad[4]; memcpy(aad,s->rx+s->head,4);
+                    const uint8_t *tag=s->rx+s->head+4+length;
+                    if (aes_gcm_decrypt(s->key_c2s,s->keylen,s->iv_c2s,aad,4,s->rx+s->head+4,length,tag,s->pkt)!=0) return -3;
+                    gcm_iv_incr(s->iv_c2s);
+                } else if (s->enc_recv) {
                     uint8_t polykey[32],zeros[32]; memset(zeros,0,32);
                     chacha20_ssh(s->key_c2s,s->recv_seq,0,zeros,polykey,32);
                     poly1305_ctx pc; poly1305_init(&pc,polykey);
@@ -191,6 +223,35 @@ static void derive_key(ssh_t *s, char letter, const uint8_t *kmp, size_t kl, con
     sha256_init(&d); sha256_update(&d,kmp,kl); sha256_update(&d,H,32);
     sha256_update(&d,k1,32); sha256_final(&d,k2);
     memcpy(out,k1,32); memcpy(out+32,k2,32);
+}
+
+static void derive_n(ssh_t *s, char letter, const uint8_t *kmp, size_t kl, const uint8_t H[32], uint8_t *out, size_t outlen) {
+    sha256_ctx d; uint8_t block[32];
+    sha256_init(&d); sha256_update(&d,kmp,kl); sha256_update(&d,H,32);
+    uint8_t c=(uint8_t)letter; sha256_update(&d,&c,1);
+    sha256_update(&d,s->session_id,32); sha256_final(&d,block);
+    size_t got=outlen<32?outlen:32; memcpy(out,block,got);
+    while (got<outlen) {
+        sha256_init(&d); sha256_update(&d,kmp,kl); sha256_update(&d,H,32);
+        sha256_update(&d,out,got); sha256_final(&d,block);
+        size_t n=(outlen-got)<32?(outlen-got):32; memcpy(out+got,block,n); got+=n;
+    }
+}
+
+static int negotiate_cipher(ssh_t *s, const uint8_t *cli, size_t len) {
+    const uint8_t *el; uint32_t ell;
+    if (kex_namelist(cli,len,2,&el,&ell)!=0) return -1;
+    size_t start=0;
+    for (size_t i=0;i<=ell;i++) {
+        if (i==ell || el[i]==',') {
+            const uint8_t *tok=el+start; size_t n=i-start;
+            if (tok_is(tok,n,"chacha20-poly1305@openssh.com")) { s->cipher=CIPHER_CHACHA20; s->keylen=32; return 0; }
+            if (tok_is(tok,n,"aes256-gcm@openssh.com")) { s->cipher=CIPHER_AESGCM; s->keylen=32; return 0; }
+            if (tok_is(tok,n,"aes128-gcm@openssh.com")) { s->cipher=CIPHER_AESGCM; s->keylen=16; return 0; }
+            start=i+1;
+        }
+    }
+    return -1;
 }
 
 static int b64v(int c){
@@ -449,8 +510,8 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     crypto_random(is+isl,16); isl+=16;
     pcstr(is,&isl,"curve25519-sha256");
     pcstr(is,&isl,"ssh-ed25519");
-    pcstr(is,&isl,"chacha20-poly1305@openssh.com");
-    pcstr(is,&isl,"chacha20-poly1305@openssh.com");
+    pcstr(is,&isl,"chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com");
+    pcstr(is,&isl,"chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com");
     pcstr(is,&isl,"hmac-sha2-256");
     pcstr(is,&isl,"hmac-sha2-256");
     pcstr(is,&isl,"none");
@@ -464,6 +525,7 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     uint8_t ic[2048]; size_t icl=s->pkt_len;
     if (icl>sizeof ic) { free(s); close(fd); return -1; }
     memcpy(ic,s->pkt,icl);
+    if (negotiate_cipher(s,ic,icl)!=0) { free(s); close(fd); return -1; }
 
     if (wait_msg(s,MSG_KEX_ECDH_INIT)<0) { free(s); close(fd); return -1; }
     uint8_t qc[32];
@@ -505,8 +567,15 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     if (ssh_send(s,rep,rl)) { free(s); close(fd); return -1; }
 
     memcpy(s->session_id,H,32);
-    derive_key(s,'C',kmp,kl,H,s->key_c2s);
-    derive_key(s,'D',kmp,kl,H,s->key_s2c);
+    if (s->cipher==CIPHER_AESGCM) {
+        derive_n(s,'A',kmp,kl,H,s->iv_c2s,12);
+        derive_n(s,'B',kmp,kl,H,s->iv_s2c,12);
+        derive_n(s,'C',kmp,kl,H,s->key_c2s,(size_t)s->keylen);
+        derive_n(s,'D',kmp,kl,H,s->key_s2c,(size_t)s->keylen);
+    } else {
+        derive_key(s,'C',kmp,kl,H,s->key_c2s);
+        derive_key(s,'D',kmp,kl,H,s->key_s2c);
+    }
 
     uint8_t nk=MSG_NEWKEYS;
     if (ssh_send(s,&nk,1)) { free(s); close(fd); return -1; }
