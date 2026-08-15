@@ -37,7 +37,14 @@ fi
 {
     printf 'set timeout=3\n'
     printf 'set default=0\n\n'
+    printf 'insmod all_video\n'
+    printf 'insmod gfxterm\n'
+    printf 'set gfxmode=auto\n'
+    printf 'set gfxpayload=keep\n'
+    printf 'terminal_output gfxterm\n\n'
     printf 'menuentry "%s %s (multiboot2)" {\n' "$IMAGE" "$VERSION"
+    printf '    insmod all_video\n'
+    printf '    set gfxpayload=keep\n'
     printf '    multiboot2 /boot/kernel\n'
     [ "$has_elf" = true ]       && printf '    module2 /boot/shell.elf init\n'
     [ "$has_initramfs" = true ] && printf '    module2 /boot/initramfs.tar initramfs\n'
@@ -50,6 +57,7 @@ iso="demo_iso/${IMAGE}-grub.${VERSION}.${ts}.iso"
 
 "$MKRESCUE" -o "$iso" grub_root >/dev/null 2>&1
 
-ln -sf "$(basename "$iso")" "demo_iso/${IMAGE}-grub.latest.iso"
+rm -f "demo_iso/${IMAGE}-grub.latest.iso"
+cp -f "$iso" "demo_iso/${IMAGE}-grub.latest.iso"
 rm -rf grub_root
 green "GRUB ISO ready: $iso"

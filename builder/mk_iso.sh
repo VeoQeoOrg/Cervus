@@ -70,6 +70,7 @@ xorriso -as mkisofs -R -r -J \
 
 ./limine/limine bios-install "$iso"
 
-ln -sf "$(basename "$iso")" "demo_iso/${IMAGE}.latest.iso"
+rm -f "demo_iso/${IMAGE}.latest.iso"
+cp -f "$iso" "demo_iso/${IMAGE}.latest.iso"
 rm -rf iso_root
 green "ISO ready: $iso"

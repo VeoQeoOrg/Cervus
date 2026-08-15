@@ -10,6 +10,8 @@
 #include <sys/syscall.h>
 #include <stddef.h>
 
+#include <errno.h>
+
 #define NVT 12
 #define C_RESET  "\x1b[0m"
 #define C_RED    "\x1b[1;31m"
@@ -17,6 +19,8 @@
 #define C_YELLOW "\x1b[1;33m"
 
 static int vt_pid[NVT];
+static uint64_t vt0_spawn_ns;
+static int vt0_fastfails;
 static char g_shell[256] = "/bin/csh";
 static int g_login = 0;
 
@@ -175,9 +179,13 @@ static void spawn_shell(int vt) {
         }
         char *argv[] = { g_shell, NULL };
         execve(g_shell, argv, environ);
+        char m[128];
+        int mn = snprintf(m, sizeof m, "\ninit: cannot exec %s (errno %d)\n", g_shell, errno);
+        if (mn > 0) write(2, m, (size_t)mn);
         _exit(127);
     }
     vt_pid[vt] = pid;
+    if (vt == 0) vt0_spawn_ns = cervus_uptime_ns();
 }
 
 int main(void) {
@@ -198,8 +206,26 @@ int main(void) {
             for (int i = 0; i < NVT; i++) {
                 if (vt_pid[i] == d) {
                     vt_pid[i] = 0;
-                    if (i == 0) spawn_shell(0);
-                    else        cervus_vt_clear_shell(i);
+                    if (i == 0) {
+                        uint64_t elapsed = cervus_uptime_ns() - vt0_spawn_ns;
+                        if (elapsed < 1000000000ULL) {
+                            if (vt0_fastfails < 1000000) vt0_fastfails++;
+                        } else {
+                            vt0_fastfails = 0;
+                        }
+                        if (vt0_fastfails == 5) {
+                            const char *msg =
+                                "\ninit: the shell keeps exiting immediately.\n"
+                                "  The boot image is probably broken or incomplete"
+                                " (missing /bin/csh, or the root filesystem did not mount).\n"
+                                "  Rebuild the ISO and re-flash the media.\n";
+                            write(1, msg, strlen(msg));
+                        }
+                        if (vt0_fastfails >= 5) usleep(3000000);
+                        spawn_shell(0);
+                    } else {
+                        cervus_vt_clear_shell(i);
+                    }
                     break;
                 }
             }
