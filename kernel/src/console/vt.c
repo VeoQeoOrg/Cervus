@@ -256,7 +256,7 @@ void vt_font_changed(void) {
     spinlock_release_irqrestore(&g_lock, f);
 
     extern struct task *task_find_foreground(void);
-    extern void signal_send_group(uint32_t pgid, int sig);
+    extern void signal_send_subtree(struct task *root, int sig);
     struct task *fg = task_find_foreground();
-    if (fg && fg->pgid) signal_send_group(fg->pgid, 28);
+    if (fg) signal_send_subtree(fg, 28);
 }

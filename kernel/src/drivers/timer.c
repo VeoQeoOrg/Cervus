@@ -61,12 +61,11 @@ DEFINE_IRQ(0x20, timer_handler)
         bool isig = tty_has_isig_global();
 
         if (isig) {
-            extern void signal_send_group(uint32_t pgid, int sig);
+            extern void signal_send_subtree(task_t *root, int sig);
             vt_write(vt, "^C\n", 3);
             task_t *fg = task_find_foreground();
-            if (fg && fg->pgid) signal_send_group(fg->pgid, 2);
-            else if (fg)        task_kill_foreground_group(fg);
-            else                tty_vt_input(vt, 0x03);
+            if (fg) signal_send_subtree(fg, 2);
+            else    tty_vt_input(vt, 0x03);
         } else {
             tty_vt_input(vt, 0x03);
         }

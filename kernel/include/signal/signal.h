@@ -48,6 +48,7 @@ typedef struct {
 
 void    signal_send(struct task *t, int sig);
 void    signal_send_group(uint32_t pgid, int sig);
+void    signal_send_subtree(struct task *root, int sig);
 bool    signal_pending_deliverable(struct task *t);
 int64_t signal_deliver_pending(struct task *t, int64_t retval);
 

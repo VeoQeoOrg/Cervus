@@ -614,6 +614,20 @@ void task_kill_foreground_group(task_t *fg) {
     task_kill_subtree(root);
 }
 
+void signal_send_subtree(task_t *root, int sig) {
+    if (!root) return;
+    extern void signal_send(task_t *t, int sig);
+    uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+    task_t *child = root->children;
+    spinlock_release_irqrestore(&children_lock, _cf);
+    while (child) {
+        task_t *next = child->sibling;
+        signal_send_subtree(child, sig);
+        child = next;
+    }
+    signal_send(root, sig);
+}
+
 static task_t* sched_pick_next(uint32_t cpu) {
     uint64_t _irqf;
 
