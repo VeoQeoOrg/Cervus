@@ -1079,6 +1079,7 @@ static void draw_message(abuf_t *ab)
 
 static void refresh_screen(void)
 {
+    get_window_size();
     recompute_lineno_width();
     scroll();
     abuf_t ab = {0};

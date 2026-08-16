@@ -454,11 +454,12 @@ static int menu_in_box(const char *title, const char *items[], int n_items,
 
     int title_row = 2;
     int item_start_row = 5;
-    int pane_col = g_pane_left_col;
-    int pane_w   = g_pane_left_w;
-    int item_w   = pane_w - 2;
 
     for (;;) {
+        term_size_query();
+        int pane_col = g_pane_left_col;
+        int pane_w   = g_pane_left_w;
+        int item_w   = pane_w - 2;
         hide_cursor();
         clear_screen();
         draw_pane_title(title_row, pane_col, pane_w, title);
@@ -472,7 +473,8 @@ static int menu_in_box(const char *title, const char *items[], int n_items,
         fflush(stdout);
 
         int k = read_key();
-        if (k == KEY_UP)        { if (sel > 0) sel--; else sel = n_items - 1; }
+        if (k == 12)            { continue; }
+        else if (k == KEY_UP)        { if (sel > 0) sel--; else sel = n_items - 1; }
         else if (k == KEY_DOWN) { if (sel + 1 < n_items) sel++; else sel = 0; }
         else if (k == KEY_ENTER || k == ' ') return sel;
         else if (k == KEY_ESC || k == 'q' || k == 'Q') return -1;

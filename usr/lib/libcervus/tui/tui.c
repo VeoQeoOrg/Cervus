@@ -85,6 +85,7 @@ int tui_read_key(void) {
     if (c != 0x1B) {
         if (c == '\n' || c == '\r') return TK_ENTER;
         if (c == 8 || c == 127)     return TK_BACKSP;
+        if (c == 12)                return TK_RESIZE;
         return c;
     }
 

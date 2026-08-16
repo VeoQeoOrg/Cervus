@@ -10,6 +10,7 @@
 #define TK_PGUP   1006
 #define TK_PGDN   1007
 #define TK_DEL    1008
+#define TK_RESIZE 1009
 #define TK_ENTER  '\r'
 #define TK_ESC    27
 #define TK_BACKSP 127

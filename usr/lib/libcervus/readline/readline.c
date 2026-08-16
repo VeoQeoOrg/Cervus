@@ -595,6 +595,11 @@ static int readline_edit(char *buf, int maxlen) {
             } else if (pos < len) { pos = utf8_next(buf, len, pos); cursor_to(pos); }
             continue;
         }
+        if (c == 12) {
+            g_cur_len = len;
+            full_refresh(pos);
+            continue;
+        }
         if (c == '\t') {
             do_completion(buf, &len, &pos, maxlen);
             continue;

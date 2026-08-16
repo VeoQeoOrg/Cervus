@@ -619,9 +619,12 @@ int main(int argc, char **argv) {
 
     int running = 1;
     while (running) {
+        tui_size(&g_rows, &g_cols);
+        if (g_cols > 590) g_cols = 590;
         draw();
         int k = tui_read_key();
         switch (k) {
+        case TK_RESIZE: break;
         case TK_UP:    if (g_sel > 0) g_sel--; break;
         case TK_DOWN:  if (g_sel < g_n - 1) g_sel++; break;
         case TK_PGUP:  g_sel -= (g_rows - 3); if (g_sel < 0) g_sel = 0; break;

@@ -299,10 +299,13 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
     if (req == TIOCGWINSZ) {
         if (!arg) return -EFAULT;
         struct cervus_winsize *ws = (struct cervus_winsize *)arg;
+        extern uint32_t fb_font_width(void);
+        extern uint32_t fb_font_height(void);
         uint32_t w = get_screen_width();
         uint32_t h = get_screen_height();
-        ws->ws_col    = (uint16_t)(w / 8);
-        ws->ws_row    = (uint16_t)(h / 16);
+        uint32_t cw = fb_font_width(), ch = fb_font_height();
+        ws->ws_col    = (uint16_t)(w / (cw ? cw : 8));
+        ws->ws_row    = (uint16_t)(h / (ch ? ch : 16));
         ws->ws_xpixel = (uint16_t)w;
         ws->ws_ypixel = (uint16_t)h;
         return 0;
