@@ -158,6 +158,8 @@ static void draw_panic_screen(const char *msg, struct int_frame_t *regs) {
 
     fb_nl();
     fb_puts_col("System halted. Check serial output for details.\n", COL_GRAY);
+
+    fb_flush(g_fb);
 }
 
 static void serial_panic_dump(const char *msg, struct int_frame_t *regs) {

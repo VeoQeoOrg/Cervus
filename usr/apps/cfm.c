@@ -400,9 +400,7 @@ static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
     dw = (int)(im->w * k); dh = (int)(im->h * k);
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
-    write(2, "[scale]", 7);
     image_t sc = (dw != im->w || dh != im->h) ? image_scale(im, dw, dh) : *im;
-    write(2, "[scaled]", 8);
     if (!sc.px) return;
     uint32_t *frame = calloc((size_t)rw * rh, 4);
     if (frame) {
@@ -418,9 +416,7 @@ static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
                 d[x] = ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
             }
         }
-        write(2, "[fbblit]", 8);
         cervus_fb_blit(frame, px0, py0, rw, rh);
-        write(2, "[fbdone]", 8);
         free(frame);
     }
     if (sc.px != im->px) image_free(&sc);
@@ -455,9 +451,7 @@ static void draw_inline_thumb(const char *path, int split) {
         image_free(&g_thumb);
         g_thumb.px = NULL;
         image_t im;
-        write(2, "[load]", 6);
         if (image_load(path, &im) != 0) { g_thumb_path[0] = 0; return; }
-        write(2, "[loaded]", 8);
         g_thumb = im;
         snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
     }

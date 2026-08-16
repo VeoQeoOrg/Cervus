@@ -52,7 +52,7 @@ fi
     printf 'insmod all_video\n'
     printf 'insmod gfxterm\n'
     [ "$have_font" = true ] && printf 'loadfont /boot/grub/fonts/unicode.pf2\n'
-    printf 'set gfxmode=1920x1080x32,1600x900x32,1366x768x32,1280x1024x32,1280x720x32,1024x768x32,800x600x32,auto\n'
+    printf 'set gfxmode=auto\n'
     printf 'set gfxpayload=keep\n'
     printf 'terminal_output gfxterm\n\n'
     printf 'menuentry "%s %s (multiboot2)" {\n' "$IMAGE" "$VERSION"

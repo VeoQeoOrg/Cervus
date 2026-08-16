@@ -37,14 +37,25 @@ int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64
 
     if (!syscall_uptr_validate((void *)buf_ptr, w * h * 4)) return -EFAULT;
 
-    uint32_t fb_pitch = (uint32_t)(fb->pitch / 4);
-    const uint32_t *src = (const uint32_t *)buf_ptr;
-    uint32_t *dst = (uint32_t *)fb->address;
+    extern uint32_t *fb_get_backbuffer(void);
+    extern uint32_t  fb_backbuffer_pitch(void);
+    extern void      fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end);
 
-    for (uint64_t row = 0; row < h; row++) {
-        uint32_t *drow = dst + (y + row) * fb_pitch + x;
-        const uint32_t *srow = src + row * w;
-        memcpy(drow, srow, (size_t)w * 4);
+    const uint32_t *src = (const uint32_t *)buf_ptr;
+    uint32_t *bb = fb_get_backbuffer();
+
+    if (bb) {
+        uint32_t bpitch = fb_backbuffer_pitch();
+        for (uint64_t row = 0; row < h; row++) {
+            uint32_t *drow = bb + (y + row) * bpitch + x;
+            memcpy(drow, src + row * w, (size_t)w * 4);
+        }
+        fb_flush_lines(fb, (uint32_t)y, (uint32_t)(y + h));
+    } else {
+        uint32_t fb_pitch = (uint32_t)(fb->pitch / 4);
+        uint32_t *dst = (uint32_t *)fb->address;
+        for (uint64_t row = 0; row < h; row++)
+            memcpy(dst + (y + row) * fb_pitch + x, src + row * w, (size_t)w * 4);
     }
     return (int64_t)(w * h * 4);
 }

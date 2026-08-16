@@ -15,11 +15,12 @@ void fb_init_backbuffer(fb_info_t *fb) {
     if (!fb) return;
     g_bb_w = fb->width;
     g_bb_h = fb->height;
-    g_bb_pitch = fb->pitch / 4;
+    g_bb_pitch = fb->width;
     size_t sz = (size_t)g_bb_pitch * g_bb_h * sizeof(uint32_t);
 
     uintptr_t fb_virt = (uintptr_t)fb->address & ~0xFFFULL;
-    size_t fb_pages = (sz + 0xFFF) >> 12;
+    size_t vram_bytes = (size_t)fb->pitch * fb->height;
+    size_t fb_pages = (vram_bytes + 0xFFF) >> 12;
     if (vmm_remap_range_wc(vmm_get_kernel_pagemap(), fb_virt, fb_pages)) {
         serial_printf("[FB] Framebuffer remapped as WC: %zu pages from 0x%llx\n",
                       fb_pages, (unsigned long long)fb_virt);
@@ -29,9 +30,9 @@ void fb_init_backbuffer(fb_info_t *fb) {
 
     g_backbuf = (uint32_t *)malloc(sz);
     if (g_backbuf) {
-        memcpy(g_backbuf, fb->address, sz);
-        serial_printf("[FB] Backbuffer allocated: %ux%u (%zu KB)\n",
-                      g_bb_w, g_bb_h, sz / 1024);
+        memset(g_backbuf, 0, sz);
+        serial_printf("[FB] Backbuffer allocated: %ux%u bpp=%u (%zu KB)\n",
+                      g_bb_w, g_bb_h, (unsigned)fb->bpp, sz / 1024);
     } else {
         serial_printf("[FB] WARNING: backbuffer alloc failed, using direct VRAM\n");
     }
@@ -71,21 +72,41 @@ void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end) {
     if (y_start >= g_bb_h) return;
     if (y_end > g_bb_h) y_end = g_bb_h;
     if (y_start >= y_end) return;
-    uint32_t *dst = (uint32_t *)fb->address + y_start * g_bb_pitch;
-    uint32_t *src = g_backbuf + y_start * g_bb_pitch;
-    size_t bytes = (size_t)(y_end - y_start) * g_bb_pitch * sizeof(uint32_t);
 
-    size_t qwords = bytes >> 3;
-    size_t tail   = bytes &  7;
-    asm volatile (
-        "rep movsq\n\t"
-        : "+D"(dst), "+S"(src), "+c"(qwords)
-        :: "memory"
-    );
-    if (tail) {
-        uint8_t *db = (uint8_t *)dst;
-        uint8_t *sb = (uint8_t *)src;
-        for (size_t i = 0; i < tail; i++) db[i] = sb[i];
+    uint32_t bpp    = fb->bpp ? (uint32_t)fb->bpp : 32;
+    uint32_t w      = g_bb_w;
+    uint8_t *vram   = (uint8_t *)fb->address;
+    uint64_t vpitch = fb->pitch;
+
+    if (bpp == 32) {
+        for (uint32_t y = y_start; y < y_end; y++) {
+            uint32_t *d = (uint32_t *)(vram + (size_t)y * vpitch);
+            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
+            memcpy(d, s, (size_t)w * 4);
+        }
+    } else if (bpp == 24) {
+        for (uint32_t y = y_start; y < y_end; y++) {
+            uint8_t *d = vram + (size_t)y * vpitch;
+            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t c = s[x];
+                d[0] = (uint8_t)(c);
+                d[1] = (uint8_t)(c >> 8);
+                d[2] = (uint8_t)(c >> 16);
+                d += 3;
+            }
+        }
+    } else if (bpp == 16) {
+        for (uint32_t y = y_start; y < y_end; y++) {
+            uint16_t *d = (uint16_t *)(vram + (size_t)y * vpitch);
+            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t c = s[x];
+                d[x] = (uint16_t)((((c >> 16) & 0xF8) << 8) |
+                                  (((c >> 8)  & 0xFC) << 3) |
+                                  (( c        & 0xF8) >> 3));
+            }
+        }
     }
     asm volatile ("sfence" ::: "memory");
 }
