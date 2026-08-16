@@ -124,7 +124,8 @@ bool paging_map_range(vmm_pagemap_t* pagemap, uintptr_t virt_start,
             }
             uint64_t existing_flags;
             if (vmm_get_page_flags(pagemap, virt, &existing_flags)) {
-                if (existing_flags != (flags & 0xFFF)) {
+                if (!(existing_flags & VMM_PSE) &&
+                    existing_flags != (flags & 0xFFF)) {
                     vmm_unmap_page(pagemap, virt);
                     vmm_map_page(pagemap, virt, phys, flags);
                 }

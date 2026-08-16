@@ -198,8 +198,16 @@ bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
+    if (pdpt[pdpt_i] & VMM_PSE) {
+        *phys_out = (pdpt[pdpt_i] & PTE_PHYS_MASK & ~0x3FFFFFFFULL) | (virt & 0x3FFFFFFF);
+        return true;
+    }
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
+    if (pd[pd_i] & VMM_PSE) {
+        *phys_out = (pd[pd_i] & PTE_PHYS_MASK & ~0x1FFFFFULL) | (virt & 0x1FFFFF);
+        return true;
+    }
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
 
@@ -218,8 +226,16 @@ bool vmm_get_page_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out)
     if (!(map->pml4[pml4_i] & VMM_PRESENT)) return false;
     vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
     if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
+    if (pdpt[pdpt_i] & VMM_PSE) {
+        *flags_out = pdpt[pdpt_i] & (0xFFF | (1ULL << 63));
+        return true;
+    }
     vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
     if (!(pd[pd_i] & VMM_PRESENT)) return false;
+    if (pd[pd_i] & VMM_PSE) {
+        *flags_out = pd[pd_i] & (0xFFF | (1ULL << 63));
+        return true;
+    }
     vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(pd[pd_i] & PTE_PHYS_MASK);
     if (!(pt[pt_i] & VMM_PRESENT)) return false;
 
