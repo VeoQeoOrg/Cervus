@@ -17,7 +17,7 @@ fb_tag:
     dd 20
     dd 0
     dd 0
-    dd 0
+    dd 32
 align 8
 entry_tag:
     dw 3
