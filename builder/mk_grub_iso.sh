@@ -49,15 +49,9 @@ fi
 {
     printf 'set timeout=3\n'
     printf 'set default=0\n\n'
-    printf 'insmod all_video\n'
-    printf 'insmod gfxterm\n'
-    [ "$have_font" = true ] && printf 'loadfont /boot/grub/fonts/unicode.pf2\n'
-    printf 'set gfxmode=auto,1920x1080,1600x900,1366x768,1280x1024,1280x720,1024x768,800x600\n'
-    printf 'set gfxpayload=keep\n'
-    printf 'terminal_output gfxterm\n\n'
+    printf 'insmod all_video\n\n'
     printf 'menuentry "%s %s (multiboot2)" {\n' "$IMAGE" "$VERSION"
     printf '    insmod all_video\n'
-    printf '    set gfxpayload=keep\n'
     printf '    multiboot2 /boot/kernel\n'
     [ "$has_elf" = true ]       && printf '    module2 /boot/shell.elf init\n'
     [ "$has_initramfs" = true ] && printf '    module2 /boot/initramfs.tar initramfs\n'
