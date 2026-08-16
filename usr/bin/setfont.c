@@ -160,9 +160,11 @@ static int load_ttf(const uint8_t *f, size_t len, unsigned px) {
     uint8_t *glyphs = NULL;
     uint16_t *cp2 = malloc((size_t)CPN * sizeof(uint16_t));
     if (!cp2) { fprintf(stderr, "setfont: out of memory\n"); return 1; }
+    fprintf(stderr, "setfont: rasterizing"); fflush(stderr);
     if (cervus_ttf_render(f, len, px, &w, &h, &n, &glyphs, cp2) != 0) {
-        free(cp2); fprintf(stderr, "setfont: cannot rasterize font\n"); return 1;
+        free(cp2); fprintf(stderr, "\nsetfont: cannot rasterize font\n"); return 1;
     }
+    fprintf(stderr, " done (%ux%u, %u glyphs), applying...\n", w, h, n); fflush(stderr);
     int r = cervus_setfont(w, h, n, glyphs, cp2);
     free(glyphs); free(cp2);
     if (r < 0) { fprintf(stderr, "setfont: kernel rejected font (err %d)\n", r); return 1; }

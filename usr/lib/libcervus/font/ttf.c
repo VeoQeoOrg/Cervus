@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 #include <sys/cervus.h>
 
 static double ttf_fmod(double a, double b) {
@@ -83,6 +84,7 @@ int cervus_ttf_render(const unsigned char *ttf, unsigned long len, unsigned px,
     unsigned slot = 0;
     for (unsigned r = 0; r < NRANGES; r++) {
         for (uint32_t cp = RANGES[r][0]; cp <= RANGES[r][1]; cp++, slot++) {
+            if ((slot & 31) == 0) write(2, ".", 1);
             if (cp < CERVUS_FONT_CP_MAP_SIZE) cp2glyph[cp] = (uint16_t)slot;
             int x0, y0, x1, y1;
             stbtt_GetCodepointBitmapBox(&f, (int)cp, scale, scale, &x0, &y0, &x1, &y1);
