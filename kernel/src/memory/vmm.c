@@ -61,6 +61,8 @@ static vmm_pte_t* get_table(vmm_pte_t* parent, size_t index, uint64_t flags) {
                         | VMM_PRESENT
                         | VMM_WRITE
                         | (flags & VMM_USER);
+    } else if (parent[index] & VMM_PSE) {
+        return NULL;
     } else if (flags & VMM_USER) {
         parent[index] |= VMM_USER;
     }
@@ -102,8 +104,11 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     size_t pd_i   = (virt >> 21) & MASK;
     size_t pt_i   = (virt >> 12) & MASK;
     vmm_pte_t* pdpt = get_table(map->pml4, pml4_i, flags);
+    if (!pdpt) return false;
     vmm_pte_t* pd   = get_table(pdpt,      pdpt_i, flags);
+    if (!pd) return false;
     vmm_pte_t* pt   = get_table(pd,        pd_i,   flags);
+    if (!pt) return false;
     pt[pt_i] = (phys & PTE_PHYS_MASK) | (flags | VMM_PRESENT);
 
     asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
