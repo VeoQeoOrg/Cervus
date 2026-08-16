@@ -30,16 +30,17 @@ static fb_info_t *g_fb = NULL;
 
 static void fb_nl(void) {
     fb_x = 0;
-    fb_y += 18;
+    fb_y += fb_font_height() + 2;
 }
 
 static void fb_puts_col(const char *s, uint32_t col) {
     if (!g_fb) return;
+    uint32_t cw = fb_font_width() + 1;
     while (*s) {
         if (*s == '\n') { fb_nl(); s++; continue; }
         fb_draw_char(g_fb, (uint8_t)*s, fb_x, fb_y, col);
-        fb_x += 9;
-        if (fb_x + 9 > (uint32_t)g_fb->width) fb_nl();
+        fb_x += cw;
+        if (fb_x + cw > (uint32_t)g_fb->width) fb_nl();
         s++;
     }
 }

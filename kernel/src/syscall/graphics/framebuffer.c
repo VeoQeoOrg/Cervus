@@ -92,3 +92,31 @@ int64_t sys_fb_release(void)
     console_force_full_redraw();
     return 0;
 }
+
+int64_t sys_setfont(uint64_t w, uint64_t h, uint64_t nglyph,
+                    uint64_t glyphs_ptr, uint64_t cp2_ptr)
+{
+    extern void vt_font_changed(void);
+
+    if (w == 0) {
+        fb_font_reset();
+        vt_font_changed();
+        return 0;
+    }
+    if (w < 4 || w > FONT_MAX_W || h < 6 || h > FONT_MAX_H) return -EINVAL;
+    if (nglyph == 0 || nglyph > 65536) return -EINVAL;
+
+    size_t gbytes = (size_t)w * h * nglyph;
+    if (gbytes > (8u * 1024u * 1024u)) return -EINVAL;
+    size_t mbytes = (size_t)FONT_CP_MAP_SIZE * sizeof(uint16_t);
+
+    if (!syscall_uptr_validate((void *)glyphs_ptr, gbytes)) return -EFAULT;
+    if (!syscall_uptr_validate((void *)cp2_ptr, mbytes))    return -EFAULT;
+
+    if (fb_set_font((uint16_t)w, (uint16_t)h, (uint32_t)nglyph,
+                    (const uint8_t *)glyphs_ptr, (const uint16_t *)cp2_ptr) != 0)
+        return -EINVAL;
+
+    vt_font_changed();
+    return 0;
+}

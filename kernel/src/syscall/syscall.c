@@ -123,6 +123,7 @@ extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fb_map    (uint64_t);
 extern int64_t sys_fb_acquire(void);
 extern int64_t sys_fb_release(void);
+extern int64_t sys_setfont(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_mouse_state(uint64_t);
 extern int64_t sys_keymap_config(uint64_t, uint64_t);
 extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
@@ -207,6 +208,7 @@ W2(sys_symlink)     W3(sys_readlink)
 W2(sys_chmod)       W3(sys_chown)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
+W5(sys_setfont)
 W2(sys_keymap_config)
 W4(sys_klog)
 W3(sys_puzzle)
@@ -346,6 +348,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_AUDIO_OPEN]        = _sys_audio_open,
     [SYS_AUDIO_WRITE]       = _sys_audio_write,
     [SYS_AUDIO_CLOSE]       = _sys_audio_close,
+    [SYS_SETFONT]           = _sys_setfont,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

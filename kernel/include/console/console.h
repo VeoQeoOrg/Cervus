@@ -47,6 +47,7 @@ void vt_mark_shell_running(int n, int running);
 void vt_write(int vt, const char *buf, size_t len);
 void vt_cursor(int vt, int on);
 void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
+void vt_font_changed(void);
 
 void tty_vt_init(void);
 void tty_vt_input(int vt, char c);

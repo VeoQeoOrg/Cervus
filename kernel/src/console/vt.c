@@ -46,8 +46,8 @@ static vt_cell_t *grid_alloc(void) {
 
 void vt_init(void) {
     if (g_inited) return;
-    g_cols = global_framebuffer ? global_framebuffer->width  / 8  : 80;
-    g_rows = global_framebuffer ? global_framebuffer->height / 16 : 25;
+    g_cols = global_framebuffer ? global_framebuffer->width  / fb_font_width()  : 80;
+    g_rows = global_framebuffer ? global_framebuffer->height / fb_font_height() : 25;
     for (int i = 0; i < VT_COUNT; i++) {
         g_vts[i].in_use      = 0;
         g_vts[i].is_monitor  = (i == VT_MONITOR_INDEX);
@@ -197,8 +197,8 @@ void vt_get_cursor(int vt, uint32_t *row, uint32_t *col) {
         if (row) *row = get_cursor_row();
         if (col) *col = get_cursor_col();
     } else {
-        if (row) *row = g_vts[vt].state.cursor_y / 16;
-        if (col) *col = g_vts[vt].state.cursor_x / 8;
+        if (row) *row = g_vts[vt].state.cursor_y / fb_font_height();
+        if (col) *col = g_vts[vt].state.cursor_x / fb_font_width();
     }
     spinlock_release_irqrestore(&g_lock, f);
 }
@@ -226,4 +226,31 @@ void vt_mark_shell_running(int n, int running) {
     if (n < 0 || n >= VT_COUNT) return;
     g_vts[n].has_shell = running ? 1 : 0;
     if (!running) g_vts[n].needs_shell = 0;
+}
+
+void vt_font_changed(void) {
+    if (!g_inited || !global_framebuffer) return;
+    uint32_t nc = (uint32_t)(global_framebuffer->width  / fb_font_width());
+    uint32_t nr = (uint32_t)(global_framebuffer->height / fb_font_height());
+    if (nc < 1) nc = 1;
+    if (nr < 1) nr = 1;
+
+    uint64_t f = spinlock_acquire_irqsave(&g_lock);
+    g_cols = nc;
+    g_rows = nr;
+    for (int i = 0; i < VT_COUNT; i++) {
+        if (g_vts[i].is_monitor || !g_vts[i].grid) continue;
+        vt_cell_t *ng = grid_alloc();
+        if (ng) { kfree(g_vts[i].grid); g_vts[i].grid = ng; }
+        g_vts[i].state.cursor_x = 0;
+        g_vts[i].state.cursor_y = 0;
+    }
+    if (!g_vts[g_active].is_monitor && g_vts[g_active].grid) {
+        console_set_grid(g_vts[g_active].grid, g_cols, g_rows);
+        console_load_state(&g_vts[g_active].state);
+        fb_clear(global_framebuffer, 0);
+        console_redraw_grid();
+        fb_flush(global_framebuffer);
+    }
+    spinlock_release_irqrestore(&g_lock, f);
 }

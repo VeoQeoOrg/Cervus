@@ -32,18 +32,19 @@ static int g_in_csi;
 static char g_csi[8];
 static int g_csi_len;
 
-static uint32_t mon_cols(void) { return global_framebuffer ? global_framebuffer->width  / 8  : 80; }
-static uint32_t mon_rows(void) { return global_framebuffer ? global_framebuffer->height / 16 : 25; }
+static uint32_t mon_cols(void) { return global_framebuffer ? global_framebuffer->width  / fb_font_width()  : 80; }
+static uint32_t mon_rows(void) { return global_framebuffer ? global_framebuffer->height / fb_font_height() : 25; }
 
 static void mon_draw_line(uint32_t row, const char *s, uint32_t fg, uint32_t bg) {
     if (!global_framebuffer) return;
-    uint32_t y = row * 16;
-    fb_fill_rect(global_framebuffer, 0, y, global_framebuffer->width, 16, bg);
+    uint32_t cw = fb_font_width(), chh = fb_font_height();
+    uint32_t y = row * chh;
+    fb_fill_rect(global_framebuffer, 0, y, global_framebuffer->width, chh, bg);
     uint32_t cols = mon_cols();
     uint32_t x = 0;
     for (uint32_t i = 0; i < cols && s[i]; i++) {
         fb_draw_char(global_framebuffer, (uint8_t)s[i], x, y, fg);
-        x += 8;
+        x += cw;
     }
 }
 
@@ -54,10 +55,11 @@ static void mon_draw_line(uint32_t row, const char *s, uint32_t fg, uint32_t bg)
 
 static void mon_draw_hl(uint32_t row, const char *s, int is_cursor) {
     if (!global_framebuffer) return;
-    uint32_t y = row * 16;
+    uint32_t cw = fb_font_width(), chh = fb_font_height();
+    uint32_t y = row * chh;
     uint32_t base_fg = is_cursor ? MON_CUR_FG : MON_FG;
     uint32_t base_bg = is_cursor ? MON_CUR_BG : MON_BG;
-    fb_fill_rect(global_framebuffer, 0, y, global_framebuffer->width, 16, base_bg);
+    fb_fill_rect(global_framebuffer, 0, y, global_framebuffer->width, chh, base_bg);
     uint32_t cols = mon_cols();
     int qlen = (int)strlen(g_last);
     char hit[512];
@@ -72,8 +74,8 @@ static void mon_draw_hl(uint32_t row, const char *s, int is_cursor) {
     for (uint32_t i = 0; i < cols && s[i]; i++) {
         uint32_t fg = base_fg, bg = base_bg;
         if (i < (uint32_t)sizeof(hit) && hit[i]) { fg = MON_HIT_FG; bg = MON_HIT_BG; }
-        if (bg != base_bg) fb_fill_rect(global_framebuffer, i * 8, y, 8, 16, bg);
-        fb_draw_char(global_framebuffer, (uint8_t)s[i], i * 8, y, fg);
+        if (bg != base_bg) fb_fill_rect(global_framebuffer, i * cw, y, cw, chh, bg);
+        fb_draw_char(global_framebuffer, (uint8_t)s[i], i * cw, y, fg);
     }
 }
 
@@ -162,7 +164,7 @@ static void mon_append_live(int show_status) {
         return;
     }
 
-    mon_scroll_region(content * 16, (uint32_t)nnew * 16);
+    mon_scroll_region(content * fb_font_height(), (uint32_t)nnew * fb_font_height());
     char line[KLOG_LINE_MAX];
     char display[KLOG_LINE_MAX + 16];
     for (uint64_t i = 0; i < nnew; i++) {
@@ -195,7 +197,7 @@ static void mon_boot_echo(void) {
         if (g_boot_row >= rows) g_boot_row = 0;
         int got = klog_get_line(g_shown, line, sizeof line);
         mon_draw_line(g_boot_row, got >= 0 ? line : "", MON_FG, MON_BG);
-        fb_flush_lines(global_framebuffer, g_boot_row * 16, g_boot_row * 16 + 16);
+        fb_flush_lines(global_framebuffer, g_boot_row * fb_font_height(), g_boot_row * fb_font_height() + fb_font_height());
         g_boot_row++;
         g_shown++;
     }

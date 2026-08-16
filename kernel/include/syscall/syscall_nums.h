@@ -148,6 +148,8 @@
 #define SYS_AUDIO_WRITE       597
 #define SYS_AUDIO_CLOSE       598
 
+#define SYS_SETFONT           599
+
 #define SYSCALL_TABLE_SIZE    640
 
 #define PROT_NONE    0x0

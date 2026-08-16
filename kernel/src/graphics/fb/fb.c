@@ -139,25 +139,29 @@ int psf_validate(void) {
     return 0;
 }
 
-#define CP_MAP_SIZE 0x600
+typedef struct {
+    uint16_t width, height;
+    uint16_t bpp;
+    uint16_t bytes_per_row;
+    uint32_t charsize;
+    uint32_t nglyph;
+    const uint8_t *glyphs;
+    void *owned;
+    uint16_t cp2glyph[FONT_CP_MAP_SIZE];
+    int ready;
+} console_font_t;
 
-static uint16_t g_cp2glyph[CP_MAP_SIZE];
-static int      g_cp_map_ready = 0;
+static console_font_t g_font;
 
-static void build_unicode_map(void) {
-    for (uint32_t i = 0; i < CP_MAP_SIZE; i++) g_cp2glyph[i] = 0xFFFF;
-
-    const uint8_t *raw = get_font_data();
+static void font_build_map_psf2(const uint8_t *raw) {
+    for (uint32_t i = 0; i < FONT_CP_MAP_SIZE; i++) g_font.cp2glyph[i] = 0xFFFF;
     uint32_t headersize = *(const uint32_t *)(raw + 8);
     uint32_t flags      = *(const uint32_t *)(raw + 12);
     uint32_t nglyph     = *(const uint32_t *)(raw + 16);
     uint32_t charsiz    = *(const uint32_t *)(raw + 20);
-
-    if (!(flags & 1)) { g_cp_map_ready = 1; return; }
-
+    if (!(flags & 1)) return;
     const uint8_t *ut  = raw + headersize + (size_t)nglyph * charsiz;
     const uint8_t *end = raw + get_font_data_size();
-
     uint32_t glyph = 0;
     const uint8_t *p = ut;
     while (p < end && glyph < nglyph) {
@@ -172,53 +176,120 @@ static void build_unicode_map(void) {
                 cp = ((uint32_t)(b & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6)
                    | (p[2] & 0x3F); p += 3;
             } else { p += 1; continue; }
-            if (cp < CP_MAP_SIZE && g_cp2glyph[cp] == 0xFFFF)
-                g_cp2glyph[cp] = (uint16_t)glyph;
+            if (cp < FONT_CP_MAP_SIZE && g_font.cp2glyph[cp] == 0xFFFF)
+                g_font.cp2glyph[cp] = (uint16_t)glyph;
         }
         if (p < end) p++;
         glyph++;
     }
-    g_cp_map_ready = 1;
 }
 
+void fb_font_init(void) {
+    if (g_font.ready) return;
+    const uint8_t *raw = get_font_data();
+    if (psf_validate() == 2) {
+        uint32_t headersize = *(const uint32_t *)(raw + 8);
+        g_font.nglyph   = *(const uint32_t *)(raw + 16);
+        g_font.charsize = *(const uint32_t *)(raw + 20);
+        g_font.height   = (uint16_t)*(const uint32_t *)(raw + 24);
+        g_font.width    = (uint16_t)*(const uint32_t *)(raw + 28);
+        g_font.bytes_per_row = (uint16_t)((g_font.width + 7) / 8);
+        g_font.glyphs   = raw + headersize;
+        font_build_map_psf2(raw);
+    } else {
+        for (uint32_t i = 0; i < FONT_CP_MAP_SIZE; i++) g_font.cp2glyph[i] = 0xFFFF;
+        g_font.width = 8; g_font.height = 16;
+        g_font.bytes_per_row = 1; g_font.charsize = 16;
+        g_font.nglyph = 256;
+        g_font.glyphs = raw + (psf_validate() == 1 ? 4 : 0);
+    }
+    g_font.bpp = 1;
+    g_font.owned = NULL;
+    g_font.ready = 1;
+}
+
+uint32_t fb_font_width(void)  { if (!g_font.ready) fb_font_init(); return g_font.width; }
+uint32_t fb_font_height(void) { if (!g_font.ready) fb_font_init(); return g_font.height; }
+
 static uint32_t codepoint_to_glyph(uint32_t cp) {
-    if (cp < 128) return cp;
-    if (!g_cp_map_ready) build_unicode_map();
-    if (cp < CP_MAP_SIZE && g_cp2glyph[cp] != 0xFFFF) return g_cp2glyph[cp];
+    if (cp < FONT_CP_MAP_SIZE && g_font.cp2glyph[cp] != 0xFFFF) return g_font.cp2glyph[cp];
+    if (cp < 128 && cp < g_font.nglyph) return cp;
     return '?';
 }
 
+static inline uint32_t blend_ch(uint32_t fg, uint32_t dst, uint8_t cov) {
+    if (cov == 0)   return dst;
+    if (cov == 255) return fg;
+    uint32_t inv = 255u - cov;
+    uint32_t r = (((fg >> 16) & 0xFF) * cov + ((dst >> 16) & 0xFF) * inv) / 255;
+    uint32_t g = (((fg >>  8) & 0xFF) * cov + ((dst >>  8) & 0xFF) * inv) / 255;
+    uint32_t b = (( fg        & 0xFF) * cov + ( dst        & 0xFF) * inv) / 255;
+    return (r << 16) | (g << 8) | b;
+}
+
 void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color) {
-    const uint8_t *raw = get_font_data();
-    uint32_t headersize = *(const uint32_t *)(raw + 8);
-    uint32_t charsiz = *(const uint32_t *)(raw + 20);
-    uint8_t *glyphs = (uint8_t*)raw + headersize;
+    if (!g_font.ready) fb_font_init();
+    uint32_t w = g_font.width, h = g_font.height;
+    if (x + w > fb->width || y + h > fb->height) return;
 
-    uint32_t glyph_index = codepoint_to_glyph(cp);
-    if (glyph_index >= 512) glyph_index = '?';
+    uint32_t gi = codepoint_to_glyph(cp);
+    if (gi >= g_font.nglyph) gi = codepoint_to_glyph('?');
+    if (gi >= g_font.nglyph) return;
 
-    uint8_t *glyph = &glyphs[glyph_index * charsiz];
+    const uint8_t *glyph = g_font.glyphs + (size_t)gi * g_font.charsize;
     uint32_t *buf = fb_get_buf(fb);
     uint32_t pitch = fb_get_pitch(fb);
 
-    if (x + 8 > fb->width || y + 16 > fb->height) return;
-
-    for (uint32_t row = 0; row < 16; row++) {
-        uint8_t byte = glyph[row];
-        uint32_t *line = buf + (y + row) * pitch + x;
-        for (uint32_t col = 0; col < 8; col++) {
-            if (byte & (0x80 >> col))
-                line[col] = color;
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t *line = buf + (size_t)(y + row) * pitch + x;
+        const uint8_t *grow = glyph + (size_t)row * g_font.bytes_per_row;
+        if (g_font.bpp == 1) {
+            for (uint32_t col = 0; col < w; col++)
+                if (grow[col >> 3] & (0x80 >> (col & 7))) line[col] = color;
+        } else {
+            for (uint32_t col = 0; col < w; col++) {
+                uint8_t cov = grow[col];
+                if (cov) line[col] = blend_ch(color, line[col], cov);
+            }
         }
     }
 }
 
+int fb_set_font(uint16_t w, uint16_t h, uint32_t nglyph,
+                const uint8_t *glyphs8, const uint16_t *cp2glyph) {
+    if (w < 4 || w > FONT_MAX_W || h < 6 || h > FONT_MAX_H) return -1;
+    if (nglyph == 0 || nglyph > 65536) return -1;
+    size_t charsize = (size_t)w * h;
+    size_t total = charsize * nglyph;
+    uint8_t *copy = (uint8_t *)malloc(total);
+    if (!copy) return -1;
+    memcpy(copy, glyphs8, total);
+    if (!g_font.ready) fb_font_init();
+    void *old = g_font.owned;
+    g_font.width = w; g_font.height = h;
+    g_font.bpp = 8; g_font.bytes_per_row = w; g_font.charsize = (uint32_t)charsize;
+    g_font.nglyph = nglyph;
+    g_font.glyphs = copy;
+    g_font.owned = copy;
+    for (uint32_t i = 0; i < FONT_CP_MAP_SIZE; i++) g_font.cp2glyph[i] = cp2glyph[i];
+    g_font.ready = 1;
+    if (old) free(old);
+    return 0;
+}
+
+void fb_font_reset(void) {
+    void *old = g_font.owned;
+    g_font.ready = 0;
+    g_font.owned = NULL;
+    fb_font_init();
+    if (old) free(old);
+}
+
 void fb_draw_string(fb_info_t *fb, const char *str, uint32_t x, uint32_t y, uint32_t color) {
-    uint32_t orig_x = x;
-    if (!psf_validate()) return;
+    uint32_t orig_x = x, w = fb_font_width(), h = fb_font_height();
     while (*str) {
-        if (*str == '\n') { x = orig_x; y += 16; }
-        else { fb_draw_char(fb, (uint8_t)*str, x, y, color); x += 8; }
+        if (*str == '\n') { x = orig_x; y += h; }
+        else { fb_draw_char(fb, (uint8_t)*str, x, y, color); x += w; }
         str++;
     }
 }

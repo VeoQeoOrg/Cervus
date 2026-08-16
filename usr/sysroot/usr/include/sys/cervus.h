@@ -244,6 +244,13 @@ void    *cervus_fb_map(void);
 int      cervus_fb_acquire(void);
 int      cervus_fb_release(void);
 
+#define CERVUS_FONT_CP_MAP_SIZE 0x600
+#define CERVUS_FONT_MAX_W       32
+#define CERVUS_FONT_MAX_H       64
+int      cervus_setfont(unsigned w, unsigned h, unsigned nglyph,
+                        const unsigned char *glyphs8, const unsigned short *cp2glyph);
+int      cervus_setfont_reset(void);
+
 int      cervus_audio_open(unsigned rate);
 long     cervus_audio_write(const void *pcm, unsigned long len);
 int      cervus_audio_close(void);

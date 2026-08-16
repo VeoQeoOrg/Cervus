@@ -52,12 +52,23 @@ static inline const struct psf_header* get_psf_header(void) {
     return (const struct psf_header*)&_binary_font_psf_start;
 }
 
+#define FONT_CP_MAP_SIZE 0x600
+#define FONT_MAX_W 32
+#define FONT_MAX_H 64
+
 int psf_validate(void);
 void fb_draw_pixel(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t color);
 void fb_fill_rect(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
 void fb_clear(fb_info_t *fb, uint32_t color);
 void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color);
 void fb_draw_string(fb_info_t *fb, const char *str, uint32_t x, uint32_t y, uint32_t color);
+
+void     fb_font_init(void);
+uint32_t fb_font_width(void);
+uint32_t fb_font_height(void);
+int      fb_set_font(uint16_t w, uint16_t h, uint32_t nglyph,
+                     const uint8_t *glyphs8, const uint16_t *cp2glyph);
+void     fb_font_reset(void);
 void fb_init_backbuffer(fb_info_t *fb);
 void fb_flush(fb_info_t *fb);
 void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end);
