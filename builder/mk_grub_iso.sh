@@ -52,6 +52,7 @@ fi
     printf 'insmod all_video\n\n'
     printf 'menuentry "%s %s (multiboot2)" {\n' "$IMAGE" "$VERSION"
     printf '    insmod all_video\n'
+    printf '    set gfxpayload=%s\n' "${CERVUS_GRUB_GFXMODE:-1280x1024}"
     printf '    multiboot2 /boot/kernel\n'
     [ "$has_elf" = true ]       && printf '    module2 /boot/shell.elf init\n'
     [ "$has_initramfs" = true ] && printf '    module2 /boot/initramfs.tar initramfs\n'
