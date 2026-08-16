@@ -23,6 +23,7 @@ struct __cervus_FILE {
     char  *buf;
     size_t buf_size;
     size_t buf_pos;
+    int    unget;
 };
 
 int __cervus_fflush(struct __cervus_FILE *s);
