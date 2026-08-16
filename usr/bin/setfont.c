@@ -148,10 +148,33 @@ static int load_psf(const uint8_t *f, size_t len) {
     return 0;
 }
 
+static int is_ttf(const uint8_t *f, size_t len) {
+    if (len < 4) return 0;
+    uint32_t m = ((uint32_t)f[0] << 24) | ((uint32_t)f[1] << 16) | ((uint32_t)f[2] << 8) | f[3];
+    return m == 0x00010000 || m == 0x74727565 || m == 0x4F54544F ||
+           m == 0x74746366 || m == 0x74797031;
+}
+
+static int load_ttf(const uint8_t *f, size_t len, unsigned px) {
+    unsigned w = 0, h = 0, n = 0;
+    uint8_t *glyphs = NULL;
+    uint16_t *cp2 = malloc((size_t)CPN * sizeof(uint16_t));
+    if (!cp2) { fprintf(stderr, "setfont: out of memory\n"); return 1; }
+    if (cervus_ttf_render(f, len, px, &w, &h, &n, &glyphs, cp2) != 0) {
+        free(cp2); fprintf(stderr, "setfont: cannot rasterize font\n"); return 1;
+    }
+    int r = cervus_setfont(w, h, n, glyphs, cp2);
+    free(glyphs); free(cp2);
+    if (r < 0) { fprintf(stderr, "setfont: kernel rejected font (err %d)\n", r); return 1; }
+    printf("Loaded %ux%u TTF font at %upx, %u glyphs\n", w, h, px, n);
+    return 0;
+}
+
 static void usage(void) {
     fprintf(stderr,
-        "usage: setfont <font.psf|font.psfu>   load a console font\n"
-        "       setfont -r                     reset to the built-in font\n");
+        "usage: setfont <font.psf|font.psfu>        load a bitmap console font\n"
+        "       setfont <font.ttf|font.otf> [px]    rasterize a vector font (default 18px)\n"
+        "       setfont -r                          reset to the built-in font\n");
 }
 
 int main(int argc, char **argv) {
@@ -166,7 +189,15 @@ int main(int argc, char **argv) {
     size_t len = 0;
     uint8_t *f = read_file(argv[1], &len);
     if (!f) return 1;
-    int r = load_psf(f, len);
+
+    int r;
+    if (is_ttf(f, len)) {
+        unsigned px = 18;
+        if (argc >= 3) { int v = atoi(argv[2]); if (v > 0) px = (unsigned)v; }
+        r = load_ttf(f, len, px);
+    } else {
+        r = load_psf(f, len);
+    }
     free(f);
     return r;
 }

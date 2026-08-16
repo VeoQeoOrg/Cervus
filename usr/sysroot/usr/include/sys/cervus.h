@@ -250,6 +250,9 @@ int      cervus_fb_release(void);
 int      cervus_setfont(unsigned w, unsigned h, unsigned nglyph,
                         const unsigned char *glyphs8, const unsigned short *cp2glyph);
 int      cervus_setfont_reset(void);
+int      cervus_ttf_render(const unsigned char *ttf, unsigned long len, unsigned px,
+                           unsigned *out_w, unsigned *out_h, unsigned *out_n,
+                           unsigned char **out_glyphs, unsigned short *cp2glyph);
 
 int      cervus_audio_open(unsigned rate);
 long     cervus_audio_write(const void *pcm, unsigned long len);
