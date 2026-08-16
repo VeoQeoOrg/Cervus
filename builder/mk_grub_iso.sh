@@ -17,8 +17,20 @@ command -v grub-mkrescue >/dev/null 2>&1 || command -v grub2-mkrescue >/dev/null
 MKRESCUE=$(command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue)
 
 rm -rf grub_root
-mkdir -p grub_root/boot/grub demo_iso
+mkdir -p grub_root/boot/grub grub_root/boot/grub/fonts demo_iso
 cp bin/kernel grub_root/boot/kernel
+
+have_font=false
+for pf2 in /usr/share/grub/unicode.pf2 /usr/lib/grub/unicode.pf2 \
+           /boot/grub/fonts/unicode.pf2 /usr/share/grub2/unicode.pf2; do
+    if [ -f "$pf2" ]; then
+        cp "$pf2" grub_root/boot/grub/fonts/unicode.pf2
+        have_font=true
+        green "gfxterm font: $pf2"
+        break
+    fi
+done
+[ "$have_font" = true ] || red "unicode.pf2 not found - gfxterm may render garbled"
 
 has_elf=false
 if [ -f "$INIT_ELF" ]; then
@@ -39,6 +51,7 @@ fi
     printf 'set default=0\n\n'
     printf 'insmod all_video\n'
     printf 'insmod gfxterm\n'
+    [ "$have_font" = true ] && printf 'loadfont /boot/grub/fonts/unicode.pf2\n'
     printf 'set gfxmode=auto\n'
     printf 'set gfxpayload=keep\n'
     printf 'terminal_output gfxterm\n\n'
