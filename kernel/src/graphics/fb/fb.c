@@ -239,6 +239,7 @@ void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t c
     const uint8_t *glyph = g_font.glyphs + (size_t)gi * g_font.charsize;
     uint32_t *buf = fb_get_buf(fb);
     uint32_t pitch = fb_get_pitch(fb);
+    int have_bb = (g_backbuf != NULL);
 
     for (uint32_t row = 0; row < h; row++) {
         uint32_t *line = buf + (size_t)(y + row) * pitch + x;
@@ -249,7 +250,9 @@ void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t c
         } else {
             for (uint32_t col = 0; col < w; col++) {
                 uint8_t cov = grow[col];
-                if (cov) line[col] = blend_ch(color, line[col], cov);
+                if (cov == 0) continue;
+                if (cov == 255 || !have_bb) line[col] = color;
+                else line[col] = blend_ch(color, line[col], cov);
             }
         }
     }
