@@ -163,9 +163,11 @@ static void tty_echo_char(int vt, char c) {
 
 static int wait_for_char(int vt, vt_tty_t *t, char *out)
 {
+    extern bool signal_pending_deliverable(task_t *t);
     while (ring_empty(t) || vt != vt_active()) {
         task_t *me = devfs_cur_task();
         if (me && me->pending_kill) return -1;
+        if (me && signal_pending_deliverable(me)) return -2;
         if (me) {
             t->reader = me;
             if (!ring_empty(t) && vt == vt_active()) {
@@ -177,6 +179,7 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out)
             me->state = TASK_BLOCKED;
             sched_reschedule();
             t->reader = NULL;
+            if (signal_pending_deliverable(me)) return -2;
         } else {
             task_yield();
         }

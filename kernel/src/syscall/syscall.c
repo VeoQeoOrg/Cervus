@@ -124,6 +124,11 @@ extern int64_t sys_fb_map    (uint64_t);
 extern int64_t sys_fb_acquire(void);
 extern int64_t sys_fb_release(void);
 extern int64_t sys_setfont(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_rt_sigaction(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_rt_sigprocmask(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_kill(uint64_t, uint64_t);
+extern int64_t sys_rt_sigreturn(void);
+extern int64_t signal_deliver_pending(task_t *t, int64_t retval);
 extern int64_t sys_mouse_state(uint64_t);
 extern int64_t sys_keymap_config(uint64_t, uint64_t);
 extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
@@ -209,6 +214,7 @@ W2(sys_chmod)       W3(sys_chown)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W5(sys_setfont)
+W4(sys_rt_sigaction) W4(sys_rt_sigprocmask) W2(sys_kill) W0(sys_rt_sigreturn)
 W2(sys_keymap_config)
 W4(sys_klog)
 W3(sys_puzzle)
@@ -349,6 +355,10 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_AUDIO_WRITE]       = _sys_audio_write,
     [SYS_AUDIO_CLOSE]       = _sys_audio_close,
     [SYS_SETFONT]           = _sys_setfont,
+    [SYS_RT_SIGACTION]      = _sys_rt_sigaction,
+    [SYS_RT_SIGPROCMASK]    = _sys_rt_sigprocmask,
+    [SYS_KILL]              = _sys_kill,
+    [SYS_RT_SIGRETURN]      = _sys_rt_sigreturn,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)
@@ -402,6 +412,8 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         vmm_switch_pagemap(vmm_get_kernel_pagemap());
         task_exit();
     }
+    if (me && nr != SYS_RT_SIGRETURN)
+        ret = signal_deliver_pending(me, ret);
     return ret;
 }
 

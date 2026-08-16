@@ -1,9 +1,10 @@
 #include <signal.h>
-#include <string.h>
+#include <sys/syscall.h>
+
+extern long __cervus_sys_ret(long r);
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
-    (void)how; (void)set;
-    if (oldset) memset(oldset, 0, sizeof(*oldset));
-    return 0;
+    return (int)__cervus_sys_ret(
+        (long)syscall4(SYS_RT_SIGPROCMASK, how, (unsigned long)set, (unsigned long)oldset, 8));
 }

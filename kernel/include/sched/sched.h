@@ -140,6 +140,13 @@ typedef struct task {
 
     struct puzzle_process *puzzle;
 
+    uint64_t sig_pending;
+    uint64_t sig_blocked;
+    uint64_t sig_handler[32];
+    uint64_t sig_flags[32];
+    uint64_t sig_restorer[32];
+    uint64_t sig_mask[32];
+
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)

@@ -2,6 +2,7 @@
 #include "../../include/graphics/fb/fb.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/sched/spinlock.h"
+#include "../../include/sched/sched.h"
 
 extern fb_info_t *global_framebuffer;
 extern void kb_buf_push(char c);
@@ -253,4 +254,9 @@ void vt_font_changed(void) {
         fb_flush(global_framebuffer);
     }
     spinlock_release_irqrestore(&g_lock, f);
+
+    extern struct task *task_find_foreground(void);
+    extern void signal_send_group(uint32_t pgid, int sig);
+    struct task *fg = task_find_foreground();
+    if (fg && fg->pgid) signal_send_group(fg->pgid, 28);
 }
