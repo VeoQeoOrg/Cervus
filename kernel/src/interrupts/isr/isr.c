@@ -221,6 +221,8 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         case EXCEPTION_INVALID_OPCODE:
         case EXCEPTION_DEVICE_NOT_AVAILABLE:
         case EXCEPTION_X87_FPU_ERROR:
+        case EXCEPTION_ALIGNMENT_CHECK:
+        case EXCEPTION_SIMD_FPU_EXCEPTION:
             if ((regs->cs & 3) == 3) {
                 serial_printf("[ISR] %s in userspace at RIP=0x%llx — killing task\n",
                               exception_names[regs->interrupt], regs->rip);

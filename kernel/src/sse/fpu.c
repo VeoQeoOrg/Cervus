@@ -1,7 +1,24 @@
 #include "../../include/sse/fpu.h"
 #include "../../include/io/serial.h"
+#include <string.h>
 
 #define COM1 0x3F8
+
+#define FXSAVE_AREA_SIZE   512
+#define FXSAVE_OFF_FCW     0
+#define FXSAVE_OFF_MXCSR   24
+#define FPU_DEFAULT_FCW    0x037F
+#define FPU_DEFAULT_MXCSR  0x1F80
+
+void fpu_state_init(void *state) {
+    if (!state) return;
+    uint8_t *p = (uint8_t *)state;
+    memset(p, 0, FXSAVE_AREA_SIZE);
+    uint16_t fcw   = FPU_DEFAULT_FCW;
+    uint32_t mxcsr = FPU_DEFAULT_MXCSR;
+    memcpy(p + FXSAVE_OFF_FCW,   &fcw,   sizeof(fcw));
+    memcpy(p + FXSAVE_OFF_MXCSR, &mxcsr, sizeof(mxcsr));
+}
 
 void fpu_init(void) {
     serial_writestring("[FPU] Initializing x87 FPU...\n");

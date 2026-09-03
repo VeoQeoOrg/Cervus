@@ -13,11 +13,11 @@ hdr_start:
 align 8
 fb_tag:
     dw 5
-    dw 0
+    dw 1
     dd 20
-    dd 0
-    dd 0
-    dd 0
+    dd 1280
+    dd 1024
+    dd 32
 align 8
 entry_tag:
     dw 3

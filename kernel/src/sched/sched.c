@@ -9,6 +9,7 @@
 #include "../include/apic/apic.h"
 #include "../include/drivers/timer.h"
 #include "../include/gdt/gdt.h"
+#include "../include/sse/fpu.h"
 #include "../include/fs/vfs.h"
 #include "../include/panic/panic.h"
 #include "../include/console/console.h"
@@ -227,6 +228,7 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+    fpu_state_init(t->fpu_state);
     t->create_time_ns = sched_now_ns();
     pid_register(t);
     enqueue_global(t);
@@ -307,6 +309,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->rsp = alloc_and_init_stack(t);
     if (!t->rsp) { free(t); return NULL; }
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+    fpu_state_init(t->fpu_state);
 
     t->fd_table = fd_table_create();
     if (t->fd_table) {
@@ -371,6 +374,7 @@ task_t* task_fork(task_t* parent) {
     }
     vmm_sync_kernel_mappings(child->pagemap);
     child->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+    fpu_state_init(child->fpu_state);
     if (child->fpu_state && parent->fpu_state) {
         memcpy(child->fpu_state, parent->fpu_state, sizeof(fpu_state_t));
         child->fpu_used = parent->fpu_used;
