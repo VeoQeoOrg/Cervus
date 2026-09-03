@@ -280,8 +280,9 @@ printf 'build bin/kernel: link_kernel%s | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 # --- initramfs.tar ---------------------------------------------------------
 # Real content (kernel, init, all app ELFs) are EXPLICIT inputs so a change
 # repacks the image; toolchain stamps stay order-only (after the '|').
-printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s | %s %s %s\n\n' \
-    "$ALL_ELFS" "$LIBCERVUS_A" "$TCC_STAMP" "$LIMINE_STAMP"
+SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
+printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s | %s %s %s\n\n' \
+    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$TCC_STAMP" "$LIMINE_STAMP"
 
 # --- ISO -------------------------------------------------------------------
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh | %s\n' \

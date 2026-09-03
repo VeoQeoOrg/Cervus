@@ -6,9 +6,12 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <tui.h>
 #include <image.h>
 #include <sys/cervus.h>
+
+#define TIOCSNONBLOCK 0x5481
 
 #define PMAX        1024
 #define MAX_ENTRIES 4096
@@ -29,6 +32,9 @@ static int      g_clip_cut = 0, g_clip_have = 0;
 static int      g_show_hidden = 0;
 static int      g_preview = 1;
 static int      g_confirm_del = 1;
+static int      g_sort = 0;
+static int      g_preview_pct = 46;
+static int      g_gif_anim = 1;
 static char     g_status[256];
 
 static image_t  g_thumb;
@@ -53,7 +59,7 @@ static int has_ext_ci(const char *name, const char *ext) {
 static int is_image(const char *name) {
     return has_ext_ci(name, ".png") || has_ext_ci(name, ".jpg") ||
            has_ext_ci(name, ".jpeg") || has_ext_ci(name, ".bmp") ||
-           has_ext_ci(name, ".svg");
+           has_ext_ci(name, ".svg")  || has_ext_ci(name, ".gif");
 }
 
 static void set_status(const char *s) {
@@ -78,8 +84,19 @@ static void parent_dir(const char *dir, char *out) {
     else              *slash = 0;
 }
 
+static const char *ext_of(const char *n) {
+    const char *dot = strrchr(n, '.');
+    return dot ? dot + 1 : "";
+}
+
 static int ent_cmp(const entry_t *a, const entry_t *b) {
     if (a->is_dir != b->is_dir) return b->is_dir - a->is_dir;
+    if (g_sort == 1) {
+        if (a->size != b->size) return (a->size < b->size) ? 1 : -1;
+    } else if (g_sort == 2) {
+        int e = strcmp(ext_of(a->name), ext_of(b->name));
+        if (e) return e;
+    }
     return strcmp(a->name, b->name);
 }
 
@@ -187,7 +204,7 @@ static void draw(void) {
     entry_t *sel = (g_n > 0) ? &g_ent[g_sel] : NULL;
     int split = g_cols, prev_img = 0, prev_txt = 0;
     if (g_preview && sel && g_cols >= 50) {
-        split = g_cols * 46 / 100;
+        split = g_cols * g_preview_pct / 100;
         if (is_image(sel->name) && !sel->is_dir) prev_img = 1;
         else                                     prev_txt = 1;
     }
@@ -422,11 +439,58 @@ static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
     if (sc.px != im->px) image_free(&sc);
 }
 
+static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 6) { fclose(f); return -1; }
+    uint8_t *buf = malloc((size_t)sz);
+    if (!buf) { fclose(f); return -1; }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+
+    gif_anim_t a;
+    if (got != (size_t)sz || memcmp(buf, "GIF8", 4) != 0 ||
+        gif_decode(buf, got, &a) != 0) { free(buf); return -1; }
+    free(buf);
+    if (a.nframes < 2) { gif_free(&a); return -1; }
+
+    int v = 1;
+    ioctl(0, TIOCSNONBLOCK, &v);
+    cervus_fb_acquire();
+
+    int quit = 0;
+    while (!quit) {
+        for (int i = 0; i < a.nframes && !quit; i++) {
+            image_t fr = { a.w, a.h, a.frames[i] };
+            blit_fit(&fr, 0, 0, (int)fbi->width, (int)fbi->height);
+            int ms = a.delays_ms[i] < 20 ? 20 : a.delays_ms[i];
+            for (int slept = 0; slept < ms && !quit; slept += 20) {
+                usleep(20000);
+                char c;
+                if (read(0, &c, 1) == 1) quit = 1;
+            }
+        }
+    }
+
+    cervus_fb_release();
+    v = 0;
+    ioctl(0, TIOCSNONBLOCK, &v);
+    gif_free(&a);
+    return 0;
+}
+
 static void view_image_fullscreen(const char *path) {
+    cervus_fb_info_t fbi;
+    if (cervus_fb_info(&fbi) != 0) { view_file(path); return; }
+
+    if (g_gif_anim && has_ext_ci(path, ".gif") &&
+        play_gif_fullscreen(path, &fbi) == 0) return;
+
     image_t im;
     if (image_load(path, &im) != 0) { set_status("cannot decode image"); return; }
-    cervus_fb_info_t fbi;
-    if (cervus_fb_info(&fbi) != 0) { image_free(&im); view_file(path); return; }
     cervus_fb_acquire();
     blit_fit(&im, 0, 0, (int)fbi.width, (int)fbi.height);
     tui_read_key();
@@ -573,17 +637,66 @@ static void do_paste(void) {
     load_dir();
 }
 
+static void cfm_config_path(char *out, size_t cap) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) home = "/root";
+    snprintf(out, cap, "%s/.cfmrc", home);
+}
+
+static void cfm_config_load(void) {
+    char path[PMAX];
+    cfm_config_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        int v = atoi(eq + 1);
+        if      (!strcmp(line, "preview"))     g_preview     = v ? 1 : 0;
+        else if (!strcmp(line, "confirmdel"))  g_confirm_del = v ? 1 : 0;
+        else if (!strcmp(line, "hidden"))      g_show_hidden = v ? 1 : 0;
+        else if (!strcmp(line, "sort"))        g_sort        = (v >= 0 && v <= 2) ? v : 0;
+        else if (!strcmp(line, "previewpct"))  g_preview_pct = (v >= 20 && v <= 80) ? v : 46;
+        else if (!strcmp(line, "gifanim"))     g_gif_anim    = v ? 1 : 0;
+    }
+    fclose(f);
+}
+
+static int cfm_config_save(void) {
+    char path[PMAX];
+    cfm_config_path(path, sizeof path);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "preview=%d\n",    g_preview);
+    fprintf(f, "confirmdel=%d\n", g_confirm_del);
+    fprintf(f, "hidden=%d\n",     g_show_hidden);
+    fprintf(f, "sort=%d\n",       g_sort);
+    fprintf(f, "previewpct=%d\n", g_preview_pct);
+    fprintf(f, "gifanim=%d\n",    g_gif_anim);
+    fclose(f);
+    return 0;
+}
+
 static void do_settings(void) {
     int sel = 0;
-    const int N = 3;
-    const char *names[3] = { "Preview pane", "Confirm delete", "Show hidden" };
+    const int N = 7;
+    const char *names[7] = { "Preview pane", "Confirm delete", "Show hidden",
+                             "Sort by", "Preview width", "Animate GIFs",
+                             "Save settings" };
+    static const char *sort_names[3] = { "name", "size", "type" };
     for (;;) {
         printf("\x1b[?25l\x1b[2J\x1b[H");
         printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n");
-        char vals[3][32];
+        char vals[7][32];
         snprintf(vals[0], sizeof vals[0], "%s", g_preview ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", g_confirm_del ? "ON" : "OFF");
         snprintf(vals[2], sizeof vals[2], "%s", g_show_hidden ? "ON" : "OFF");
+        snprintf(vals[3], sizeof vals[3], "%s", sort_names[g_sort]);
+        snprintf(vals[4], sizeof vals[4], "%d%%", g_preview_pct);
+        snprintf(vals[5], sizeof vals[5], "%s", g_gif_anim ? "ON" : "OFF");
+        snprintf(vals[6], sizeof vals[6], "%s", "<Enter>");
         for (int i = 0; i < N; i++)
             printf("%s  %-16s %-12s\x1b[0m\r\n", i == sel ? "\x1b[7m" : "  ", names[i], vals[i]);
         fflush(stdout);
@@ -592,10 +705,18 @@ static void do_settings(void) {
         else if (k == TK_UP)   sel = (sel + N - 1) % N;
         else if (k == TK_DOWN) sel = (sel + 1) % N;
         else if (k == TK_LEFT || k == TK_RIGHT || k == TK_ENTER || k == ' ') {
+            int dir = (k == TK_LEFT) ? -1 : 1;
             switch (sel) {
                 case 0: g_preview = !g_preview; break;
                 case 1: g_confirm_del = !g_confirm_del; break;
                 case 2: g_show_hidden = !g_show_hidden; g_sel = 0; load_dir(); break;
+                case 3: g_sort = (g_sort + 3 + dir) % 3; load_dir(); break;
+                case 4: g_preview_pct += dir * 2;
+                        if (g_preview_pct < 20) g_preview_pct = 20;
+                        if (g_preview_pct > 80) g_preview_pct = 80;
+                        break;
+                case 5: g_gif_anim = !g_gif_anim; break;
+                case 6: cfm_config_save(); break;
             }
         }
     }
@@ -611,6 +732,7 @@ int main(int argc, char **argv) {
         strcpy(g_cwd, "/");
     }
 
+    cfm_config_load();
     tui_begin();
     tui_size(&g_rows, &g_cols);
     if (g_cols > 590) g_cols = 590;

@@ -83,6 +83,9 @@ typedef struct {
     int        autopairs;
     int        tabstop;
     int        quit_confirm;
+    int        expandtab;
+    int        autoindent;
+    int        trim_on_save;
     struct termios orig_termios;
 } neo_t;
 
@@ -666,9 +669,10 @@ static void editor_insert_newline(void)
 
     neo_row_t *r = &E.row[E.cy];
     int indent = 0;
-    while (indent < E.cx && indent < r->size &&
-           (r->chars[indent] == ' ' || r->chars[indent] == '\t'))
-        indent++;
+    if (E.autoindent)
+        while (indent < E.cx && indent < r->size &&
+               (r->chars[indent] == ' ' || r->chars[indent] == '\t'))
+            indent++;
 
     int tail_len = r->size - E.cx;
     int new_len = indent + tail_len;
@@ -858,8 +862,23 @@ static void editor_open(const char *filename)
 
 static char *prompt(const char *prompt_fmt);
 
+static void trim_trailing_ws(void) {
+    for (int i = 0; i < E.numrows; i++) {
+        neo_row_t *r = &E.row[i];
+        int n = r->size;
+        while (n > 0 && (r->chars[n - 1] == ' ' || r->chars[n - 1] == '\t')) n--;
+        if (n != r->size) {
+            r->size = n;
+            r->chars[n] = '\0';
+            row_update(r);
+            E.dirty = 1;
+        }
+    }
+}
+
 static int editor_save(void)
 {
+    if (E.trim_on_save) trim_trailing_ws();
     if (!E.filename) {
         char *name = prompt("Save as (ESC to cancel): %s");
         if (!name) {
@@ -1563,22 +1582,73 @@ static void editor_tree(void)
     set_status("");
 }
 
+
+static void neo_config_path(char *out, size_t cap) {
+    const char *home = getenv("HOME");
+    if (!home || !home[0]) home = "/root";
+    snprintf(out, cap, "%s/.neorc", home);
+}
+
+static void neo_config_load(void) {
+    char path[512];
+    neo_config_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[128];
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        int v = atoi(eq + 1);
+        if      (!strcmp(line, "autopairs"))    E.autopairs    = v ? 1 : 0;
+        else if (!strcmp(line, "lineno"))       E.show_lineno  = v ? 1 : 0;
+        else if (!strcmp(line, "tabstop"))      E.tabstop      = (v >= 1 && v <= 16) ? v : E.tabstop;
+        else if (!strcmp(line, "quitconfirm"))  E.quit_confirm = v ? 1 : 0;
+        else if (!strcmp(line, "expandtab"))    E.expandtab    = v ? 1 : 0;
+        else if (!strcmp(line, "autoindent"))   E.autoindent   = v ? 1 : 0;
+        else if (!strcmp(line, "trimonsave"))   E.trim_on_save = v ? 1 : 0;
+    }
+    fclose(f);
+}
+
+static int neo_config_save(void) {
+    char path[512];
+    neo_config_path(path, sizeof path);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "autopairs=%d\n",   E.autopairs);
+    fprintf(f, "lineno=%d\n",      E.show_lineno);
+    fprintf(f, "tabstop=%d\n",     E.tabstop);
+    fprintf(f, "quitconfirm=%d\n", E.quit_confirm);
+    fprintf(f, "expandtab=%d\n",   E.expandtab);
+    fprintf(f, "autoindent=%d\n",  E.autoindent);
+    fprintf(f, "trimonsave=%d\n",  E.trim_on_save);
+    fclose(f);
+    return 0;
+}
+
 static void editor_settings(void)
 {
     int sel = 0;
-    const int NITEMS = 5;
-    const char *names[5] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width", "Quit confirm" };
+    const int NITEMS = 9;
+    const char *names[9] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width",
+                             "Quit confirm", "Expand tabs", "Auto indent",
+                             "Trim on save", "Save settings" };
     for (;;) {
         static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n";
         abuf_t ab = {0};
         ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
         ab_append(&ab, hdr, (int)(sizeof hdr - 1));
-        char vals[5][40];
+        char vals[9][40];
         snprintf(vals[0], sizeof vals[0], "%s", E.autopairs ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", E.show_lineno ? "ON" : "OFF");
         snprintf(vals[2], sizeof vals[2], "%s", LANG_NAMES[E.syntax]);
         snprintf(vals[3], sizeof vals[3], "%d", E.tabstop);
         snprintf(vals[4], sizeof vals[4], "%s", E.quit_confirm ? "ON" : "OFF");
+        snprintf(vals[5], sizeof vals[5], "%s", E.expandtab ? "ON" : "OFF");
+        snprintf(vals[6], sizeof vals[6], "%s", E.autoindent ? "ON" : "OFF");
+        snprintf(vals[7], sizeof vals[7], "%s", E.trim_on_save ? "ON" : "OFF");
+        snprintf(vals[8], sizeof vals[8], "%s", "<Enter>");
         for (int i = 0; i < NITEMS; i++) {
             char line[128];
             int n = snprintf(line, sizeof line, "%s  %-16s %-12s\x1b[0m\r\n",
@@ -1602,6 +1672,13 @@ static void editor_settings(void)
                 case 3: E.tabstop += dir; if (E.tabstop < 1) E.tabstop = 1; if (E.tabstop > 16) E.tabstop = 16;
                         for (int i = 0; i < E.numrows; i++) row_update(&E.row[i]); break;
                 case 4: E.quit_confirm = !E.quit_confirm; break;
+                case 5: E.expandtab = !E.expandtab; break;
+                case 6: E.autoindent = !E.autoindent; break;
+                case 7: E.trim_on_save = !E.trim_on_save; break;
+                case 8:
+                    if (neo_config_save() == 0) set_status("settings saved to ~/.neorc");
+                    else                        set_status("cannot write ~/.neorc");
+                    break;
             }
         }
     }
@@ -1738,7 +1815,14 @@ static int process_key(void)
             break;
 
         default:
-            if (c == '\t')               editor_insert_char('\t');
+            if (c == '\t') {
+                if (E.expandtab) {
+                    int n = E.tabstop - (E.cx % E.tabstop);
+                    for (int i = 0; i < n; i++) editor_insert_char(' ');
+                } else {
+                    editor_insert_char('\t');
+                }
+            }
             else if (c >= 32 && c < 1000) {
                 if (!editor_autopair(c)) editor_insert_char(c);
             }
@@ -1767,6 +1851,10 @@ static void init_editor(void)
     E.autopairs = 1;
     E.tabstop = NEO_TABSTOP;
     E.quit_confirm = NEO_QUIT_CONFIRM;
+    E.expandtab = 0;
+    E.autoindent = 1;
+    E.trim_on_save = 0;
+    neo_config_load();
     get_window_size();
     recompute_lineno_width();
 }
