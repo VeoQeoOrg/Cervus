@@ -548,9 +548,6 @@ static void draw_inline_thumb(const char *path, int split) {
     int rh = (g_rows - 3) * cell_h;
     if (rw < 16 || rh < 16) return;
 
-    g_thumb_px0 = px0; g_thumb_py0 = py0;
-    g_thumb_rw = rw;   g_thumb_rh = rh;
-
     if (strcmp(g_thumb_path, path) != 0) {
         thumb_drop();
         if (g_gif_anim && has_ext_ci(path, ".gif") && thumb_load_gif(path) == 0) {
@@ -562,6 +559,9 @@ static void draw_inline_thumb(const char *path, int split) {
             snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
         }
     }
+
+    g_thumb_px0 = px0; g_thumb_py0 = py0;
+    g_thumb_rw = rw;   g_thumb_rh = rh;
 
     if (g_thumb_gif_ok) {
         image_t fr = { g_thumb_gif.w, g_thumb_gif.h, g_thumb_gif.frames[g_thumb_frame] };
