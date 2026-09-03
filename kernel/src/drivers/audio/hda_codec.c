@@ -153,23 +153,28 @@ int hda_codec_present(hda_cmd_fn cmd, const hda_path_t *p) {
 }
 
 void hda_codec_amp(hda_cmd_fn cmd, const hda_path_t *p, int volume, int mute, int enable) {
+    int silent = (!enable) || mute || volume <= 0;
+
     for (int i = 0; i < p->nchain; i++) {
         int nid = p->chain[i];
         if (!(param(cmd, nid, PARAM_WIDGET_CAP) & WCAP_OUT_AMP)) continue;
         uint32_t ampcap = param(cmd, nid, PARAM_OUT_AMP_CAP);
         int steps = (int)((ampcap >> 8) & 0x7F);
-        int gain = steps;
-        int m = 0;
+        int mute_cap = (ampcap & 0x80000000u) != 0;
 
-        if (nid == p->amp_nid) {
+        int gain;
+        if (silent) {
+            gain = 0;
+        } else if (nid == p->amp_nid) {
             gain = (p->amp_steps * volume) / 100;
-            if (volume > 0 && gain == 0) gain = 1;
-            m = (mute || volume == 0);
+            if (gain == 0) gain = 1;
+        } else {
+            gain = steps;
         }
-        if (!enable) m = 1;
 
         uint16_t payload = (uint16_t)(AMP_SET_OUT | AMP_SET_LEFT | AMP_SET_RIGHT |
-                                      (m ? AMP_MUTE : 0) | (gain & 0x7F));
+                                      ((silent && mute_cap) ? AMP_MUTE : 0) |
+                                      (gain & 0x7F));
         cmd(nid, VERB4(V_SET_AMP, payload));
     }
 }
