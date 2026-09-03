@@ -65,6 +65,48 @@ static int launch_installer_boot(void) {
     return (status >> 8) & 0xFF;
 }
 
+static void restore_console_font(void) {
+    int fd = open("/mnt/etc/vconsole.conf", O_RDONLY, 0);
+    if (fd < 0) fd = open("/etc/vconsole.conf", O_RDONLY, 0);
+    if (fd < 0) return;
+    char buf[512];
+    long n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return;
+    buf[n] = '\0';
+
+    char font[320] = { 0 };
+    char size[16]  = { 0 };
+    char *line = buf;
+    while (line && *line) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
+        if (!strncmp(line, "FONT=", 5))          strncpy(font, line + 5, sizeof(font) - 1);
+        else if (!strncmp(line, "FONTSIZE=", 9)) strncpy(size, line + 9, sizeof(size) - 1);
+        line = nl ? nl + 1 : NULL;
+    }
+    if (!font[0]) return;
+
+    struct stat st;
+    if (stat(font, &st) != 0) return;
+
+    pid_t child = fork();
+    if (child < 0) return;
+    if (child == 0) {
+        const char *argv[5];
+        int i = 0;
+        argv[i++] = "/bin/setfont";
+        argv[i++] = "--once";
+        argv[i++] = font;
+        if (size[0]) argv[i++] = size;
+        argv[i] = NULL;
+        execve("/bin/setfont", (char *const *)argv, environ);
+        _exit(127);
+    }
+    int status = 0;
+    waitpid(child, &status, 0);
+}
+
 static void read_default_shell(void) {
     int fd = open("/mnt/etc/shell", O_RDONLY, 0);
     if (fd < 0) fd = open("/etc/shell", O_RDONLY, 0);
@@ -194,6 +236,8 @@ int main(void) {
     boot_stage("start");
     boot_setup();
     term_cooked();
+
+    restore_console_font();
 
     boot_stage("spawning shell on vt0");
     spawn_shell(0);

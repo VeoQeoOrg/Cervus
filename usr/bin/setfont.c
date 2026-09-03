@@ -116,7 +116,8 @@ static int load_psf(const uint8_t *f, size_t len) {
         ut = glyphs + (size_t)nglyph * charsize;
         utf8 = 0;
     } else {
-        fprintf(stderr, "setfont: not a PSF font\n");
+        fprintf(stderr, "setfont: unrecognised font format "
+                        "(expected PSF/PSFU bitmap or TTF/OTF vector)\n");
         return 1;
     }
 
@@ -172,34 +173,63 @@ static int load_ttf(const uint8_t *f, size_t len, unsigned px) {
     return 0;
 }
 
+#define VCONSOLE_CONF "/etc/vconsole.conf"
+
+static void save_config(const char *path, unsigned px, int vector) {
+    char abs[1024];
+    if (path[0] == '/') {
+        snprintf(abs, sizeof abs, "%s", path);
+    } else {
+        char cwd[768];
+        if (!getcwd(cwd, sizeof cwd)) return;
+        if (!strcmp(cwd, "/")) snprintf(abs, sizeof abs, "/%s", path);
+        else                   snprintf(abs, sizeof abs, "%s/%s", cwd, path);
+    }
+    FILE *fp = fopen(VCONSOLE_CONF, "w");
+    if (!fp) { fprintf(stderr, "setfont: cannot save %s\n", VCONSOLE_CONF); return; }
+    fprintf(fp, "FONT=%s\n", abs);
+    if (vector) fprintf(fp, "FONTSIZE=%u\n", px);
+    fclose(fp);
+}
+
 static void usage(void) {
     fprintf(stderr,
         "usage: setfont <font.psf|font.psfu>        load a bitmap console font\n"
         "       setfont <font.ttf|font.otf> [px]    rasterize a vector font (default 18px)\n"
-        "       setfont -r                          reset to the built-in font\n");
+        "       setfont -r                          reset to the built-in font\n"
+        "       setfont --once <font> [px]          load without saving as the default\n"
+        "\nThe chosen font is saved to " VCONSOLE_CONF " and restored at boot.\n");
 }
 
 int main(int argc, char **argv) {
     if (argc < 2) { usage(); return 1; }
     if (!strcmp(argv[1], "-r") || !strcmp(argv[1], "--reset")) {
         if (cervus_setfont_reset() < 0) { fprintf(stderr, "setfont: reset failed\n"); return 1; }
+        unlink(VCONSOLE_CONF);
         printf("Reset to built-in font\n");
         return 0;
     }
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) { usage(); return 0; }
 
+    int save = 1, ai = 1;
+    if (!strcmp(argv[1], "--once")) { save = 0; ai = 2; }
+    if (ai >= argc) { usage(); return 1; }
+
+    const char *path = argv[ai];
     size_t len = 0;
-    uint8_t *f = read_file(argv[1], &len);
+    uint8_t *f = read_file(path, &len);
     if (!f) return 1;
 
     int r;
-    if (is_ttf(f, len)) {
-        unsigned px = 18;
-        if (argc >= 3) { int v = atoi(argv[2]); if (v > 0) px = (unsigned)v; }
+    unsigned px = 18;
+    int vector = is_ttf(f, len);
+    if (vector) {
+        if (ai + 1 < argc) { int v = atoi(argv[ai + 1]); if (v > 0) px = (unsigned)v; }
         r = load_ttf(f, len, px);
     } else {
         r = load_psf(f, len);
     }
     free(f);
+    if (r == 0 && save) save_config(path, px, vector);
     return r;
 }

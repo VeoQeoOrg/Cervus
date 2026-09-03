@@ -237,14 +237,41 @@ void vt_font_changed(void) {
     if (nr < 1) nr = 1;
 
     uint64_t f = spinlock_acquire_irqsave(&g_lock);
+
+    uint32_t oc = g_cols, orow = g_rows;
+    uint32_t ocw = (oc    > 0) ? (uint32_t)(global_framebuffer->width  / oc)   : fb_font_width();
+    uint32_t och = (orow  > 0) ? (uint32_t)(global_framebuffer->height / orow) : fb_font_height();
+    if (ocw < 1) ocw = 1;
+    if (och < 1) och = 1;
+    uint32_t ncw = fb_font_width(), nch = fb_font_height();
+
+    if (!g_vts[g_active].is_monitor && g_vts[g_active].grid)
+        console_save_state(&g_vts[g_active].state);
+
     g_cols = nc;
     g_rows = nr;
+
+    uint32_t cc = (oc   < nc) ? oc   : nc;
+    uint32_t cr = (orow < nr) ? orow : nr;
+
     for (int i = 0; i < VT_COUNT; i++) {
         if (g_vts[i].is_monitor || !g_vts[i].grid) continue;
+
+        vt_cell_t *og = g_vts[i].grid;
         vt_cell_t *ng = grid_alloc();
-        if (ng) { kfree(g_vts[i].grid); g_vts[i].grid = ng; }
-        g_vts[i].state.cursor_x = 0;
-        g_vts[i].state.cursor_y = 0;
+        if (!ng) { kfree(og); g_vts[i].grid = NULL; continue; }
+        for (uint32_t r = 0; r < cr; r++)
+            for (uint32_t c = 0; c < cc; c++)
+                ng[(size_t)r * nc + c] = og[(size_t)r * oc + c];
+        kfree(og);
+        g_vts[i].grid = ng;
+
+        uint32_t col = g_vts[i].state.cursor_x / ocw;
+        uint32_t row = g_vts[i].state.cursor_y / och;
+        if (col >= nc) col = nc - 1;
+        if (row >= nr) row = nr - 1;
+        g_vts[i].state.cursor_x = col * ncw;
+        g_vts[i].state.cursor_y = row * nch;
     }
     if (!g_vts[g_active].is_monitor && g_vts[g_active].grid) {
         console_set_grid(g_vts[g_active].grid, g_cols, g_rows);
