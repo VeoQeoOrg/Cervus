@@ -127,6 +127,7 @@ static void parse_capabilities(pci_device_t *d)
         uint8_t cap_id   = pci_config_read8(d->segment, d->bus, d->device, d->function, off);
         uint8_t next     = pci_config_read8(d->segment, d->bus, d->device, d->function, off + 1) & 0xFC;
         if (cap_id == PCI_CAP_ID_PM)   d->cap_pm_off   = off;
+        if (cap_id == PCI_CAP_ID_EXP)  d->cap_exp_off  = off;
         if (cap_id == PCI_CAP_ID_MSI)  d->cap_msi_off  = off;
         if (cap_id == PCI_CAP_ID_MSIX) {
             d->cap_msix_off = off;
@@ -391,6 +392,20 @@ int pci_power_up(pci_device_t *dev)
     pmcsr = pci_config_read16(dev->segment, dev->bus, dev->device,
                              dev->function, dev->cap_pm_off + 4);
     return ((pmcsr & 0x3) == 0) ? 0 : -1;
+}
+
+
+int pci_disable_aspm(pci_device_t *dev)
+{
+    if (!dev || !dev->cap_exp_off) return -1;
+    uint16_t lnkctl = pci_config_read16(dev->segment, dev->bus, dev->device,
+                                        dev->function, dev->cap_exp_off + 0x10);
+    if ((lnkctl & 0x3) == 0) return 0;
+    serial_printf("[pci] %02x:%02x.%u ASPM lnkctl=0x%04x, disabling L0s/L1\n",
+                  dev->bus, dev->device, dev->function, lnkctl);
+    pci_config_write16(dev->segment, dev->bus, dev->device, dev->function,
+                       dev->cap_exp_off + 0x10, (uint16_t)(lnkctl & ~0x3u));
+    return 0;
 }
 
 int pci_enable_msi(pci_device_t *dev, uint8_t vector, uint32_t apic_lapic_id)

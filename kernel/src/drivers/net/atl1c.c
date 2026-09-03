@@ -15,6 +15,7 @@
 #define ATL_GPHY_CTRL           0x140C
 #define ATL_IDLE_STATUS         0x1410
 #define ATL_CLK_GATING_CTRL     0x1814
+#define ATL_PM_CTRL             0x12F8
 #define ATL_MDIO_CTRL           0x1414
 #define ATL_MAC_CTRL            0x1480
 #define ATL_MAC_IPG_IFG         0x1484
@@ -42,6 +43,7 @@
 #define ATL_IMR                 0x1604
 
 #define MASTER_SOFT_RST         (1u << 0)
+#define MASTER_OOB_DIS          (1u << 6)
 #define MASTER_MTIMER_EN        (1u << 8)
 #define MASTER_ITIMER_EN        (1u << 11)
 #define MASTER_INT_RDCLR        (1u << 14)
@@ -236,11 +238,27 @@ static int atl_mdio_write(atl1c_t *a, uint8_t reg, uint16_t val) {
     return -1;
 }
 
+static void atl_stop_mac(atl1c_t *a) {
+    uint32_t v = ar32(a, ATL_RXQ_CTRL);
+    aw32(a, ATL_RXQ_CTRL, v & ~RXQ_CTRL_EN);
+    v = ar32(a, ATL_TXQ_CTRL);
+    aw32(a, ATL_TXQ_CTRL, v & ~TXQ_CTRL_EN);
+    atl_delay(20);
+    v = ar32(a, ATL_MAC_CTRL);
+    aw32(a, ATL_MAC_CTRL, v & ~(MAC_TX_EN | MAC_RX_EN));
+    for (int i = 0; i < 100; i++) {
+        if (!(ar32(a, ATL_IDLE_STATUS) & IDLE_BUSY_MASK)) break;
+        atl_delay(10);
+    }
+}
+
 static int atl_reset(atl1c_t *a) {
     aw32(a, ATL_IMR, 0);
     aw32(a, ATL_ISR, 0xFFFFFFFFu);
 
-    aw32(a, ATL_MASTER_CTRL, MASTER_SOFT_RST);
+    atl_stop_mac(a);
+
+    aw32(a, ATL_MASTER_CTRL, MASTER_SOFT_RST | MASTER_OOB_DIS);
     atl_delay(50);
 
     for (int i = 0; i < 100; i++) {
@@ -474,6 +492,7 @@ static int atl1c_probe(pci_device_t *dev) {
     }
 
     pci_power_up(dev);
+    pci_disable_aspm(dev);
 
     uint16_t cmd = pci_config_read16(dev->segment, dev->bus, dev->device, dev->function, PCI_COMMAND);
     cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
@@ -499,7 +518,14 @@ static int atl1c_probe(pci_device_t *dev) {
     uint8_t mac[6];
     atl_read_mac(a, mac);
 
+    {
+        uint32_t pm = ar32(a, ATL_PM_CTRL);
+        pm &= ~((1u << 12) | (1u << 11) | (1u << 3) | (1u << 2));
+        aw32(a, ATL_PM_CTRL, pm);
+    }
+
     if (atl_reset(a) != 0) { free(a); return -1; }
+    aw32(a, ATL_MASTER_CTRL, MASTER_OOB_DIS | MASTER_INT_RDCLR);
     aw32(a, ATL_CLK_GATING_CTRL, CLK_GATING_EN_ALL);
     if (ar32(a, ATL_CLK_GATING_CTRL) == 0)
         serial_printf("[atl1c] warning: CLK_GATING_CTRL does not retain writes\n");

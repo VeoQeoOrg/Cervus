@@ -35,6 +35,7 @@
 #define PCI_HEADER_TYPE_CARDBUS 0x02
 
 #define PCI_CAP_ID_PM     0x01
+#define PCI_CAP_ID_EXP    0x10
 #define PCI_CAP_ID_MSI    0x05
 #define PCI_CAP_ID_MSIX   0x11
 
@@ -71,6 +72,7 @@ typedef struct {
     pci_bar_t bars[6];
 
     uint8_t  cap_pm_off;
+    uint8_t  cap_exp_off;
     uint8_t  cap_msi_off;
     uint8_t  cap_msix_off;
     uint16_t msix_table_size;
@@ -106,6 +108,7 @@ const pci_device_t *pci_find_by_class(uint8_t class_code, uint8_t subclass);
 void pci_register_driver(const pci_driver_t *drv);
 
 int pci_power_up(pci_device_t *dev);
+int pci_disable_aspm(pci_device_t *dev);
 int pci_enable_msi(pci_device_t *dev, uint8_t vector, uint32_t apic_lapic_id);
 int pci_enable_msix(pci_device_t *dev, uint8_t base_vector, uint32_t apic_lapic_id);
 
