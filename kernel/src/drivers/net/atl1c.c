@@ -544,6 +544,35 @@ static int atl1c_probe(pci_device_t *dev) {
     atl_setup_mac(a, 100, 1);
 
     {
+        static const struct { uint32_t off; const char *nm; } probe_regs[] = {
+            { ATL_MASTER_CTRL,       "master   " },
+            { ATL_RFD0_HEAD_ADDR_LO, "rfd_head " },
+            { ATL_RRD0_HEAD_ADDR_LO, "rrd_head " },
+            { ATL_TPD_PRI0_ADDR_LO,  "tpd_head " },
+            { ATL_RFD_RING_SIZE,     "rfd_size " },
+            { ATL_RRD_RING_SIZE,     "rrd_size " },
+            { ATL_TPD_RING_SIZE,     "tpd_size " },
+            { ATL_RX_BUF_SIZE,       "rx_bufsz " },
+            { ATL_MTU,               "mtu      " },
+            { ATL_TXQ_CTRL,          "txq_ctrl " },
+            { ATL_RXQ_CTRL,          "rxq_ctrl " },
+            { ATL_DMA_CTRL,          "dma_ctrl " },
+            { ATL_CLK_GATING_CTRL,   "clk_gate " },
+            { ATL_IMR,               "imr      " },
+        };
+        serial_printf("[atl1c] register map probe (cur / after-all-ones):\n");
+        for (unsigned i = 0; i < sizeof(probe_regs) / sizeof(probe_regs[0]); i++) {
+            uint32_t off = probe_regs[i].off;
+            uint32_t cur = ar32(a, off);
+            aw32(a, off, 0xFFFFFFFFu);
+            uint32_t ones = ar32(a, off);
+            aw32(a, off, cur);
+            serial_printf("[atl1c]   %s @0x%04x cur=0x%08x ones=0x%08x\n",
+                          probe_regs[i].nm, off, cur, ones);
+        }
+    }
+
+    {
         uint32_t save = ar32(a, ATL_TXQ_CTRL);
         aw32(a, ATL_TXQ_CTRL, 0xFFFFFFFFu);
         uint32_t all1 = ar32(a, ATL_TXQ_CTRL);
