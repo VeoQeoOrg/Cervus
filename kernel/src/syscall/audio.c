@@ -4,7 +4,9 @@
 
 int64_t sys_audio_open(uint64_t rate) {
     int r = audio_open((uint32_t)rate);
-    return r < 0 ? -ENODEV : 0;
+    if (r < 0) return -ENODEV;
+    audio_set_owner(syscall_cur_task());
+    return 0;
 }
 
 int64_t sys_audio_write(uint64_t buf_ptr, uint64_t len) {

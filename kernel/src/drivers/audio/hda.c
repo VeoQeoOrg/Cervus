@@ -66,6 +66,8 @@ typedef struct {
     uintptr_t  sd_base;
 
     uint8_t   w;
+    uint32_t  fill;
+    uint64_t  queued;
     int       running;
 } hda_t;
 
@@ -176,6 +178,8 @@ int hda_open(uint32_t rate) {
 
     g_hda.running = 0;
     g_hda.w = 0;
+    g_hda.fill = 0;
+    g_hda.queued = 0;
 
     sd_w8(SD_CTL, 0);
     stream_reset();
@@ -200,37 +204,54 @@ static void hda_start(void) {
     g_hda.running = 1;
 }
 
+static int hda_wait_slot(void) {
+    uint32_t lpib = sd_r32(SD_LPIB);
+    uint8_t play = (uint8_t)((lpib / HDA_BUFSZ) % HDA_NBUF);
+    uint8_t inflight = (uint8_t)((g_hda.w - play + HDA_NBUF) % HDA_NBUF);
+    return !(g_hda.running && inflight >= HDA_NBUF - 1);
+}
+
 long hda_write(const void *pcm, size_t bytes) {
     if (!g_hda.present) return -1;
     const uint8_t *src = pcm;
     size_t off = 0;
 
     while (off < bytes) {
-        uint32_t lpib = sd_r32(SD_LPIB);
-        uint8_t play = (uint8_t)((lpib / HDA_BUFSZ) % HDA_NBUF);
-        uint8_t inflight = (uint8_t)((g_hda.w - play + HDA_NBUF) % HDA_NBUF);
-        if (g_hda.running && inflight >= HDA_NBUF - 1) {
+        if (g_hda.fill == 0 && !hda_wait_slot()) {
             task_sleep_ms(2);
             continue;
         }
 
+        size_t space = HDA_BUFSZ - g_hda.fill;
         size_t chunk = bytes - off;
-        if (chunk > HDA_BUFSZ) chunk = HDA_BUFSZ;
-        memcpy(g_hda.buf[g_hda.w], src + off, chunk);
-        if (chunk < HDA_BUFSZ) memset(g_hda.buf[g_hda.w] + chunk, 0, HDA_BUFSZ - chunk);
-
-        g_hda.w = (uint8_t)((g_hda.w + 1) % HDA_NBUF);
+        if (chunk > space) chunk = space;
+        memcpy(g_hda.buf[g_hda.w] + g_hda.fill, src + off, chunk);
+        g_hda.fill += (uint32_t)chunk;
         off += chunk;
 
-        if (!g_hda.running && g_hda.w >= 2) hda_start();
+        if (g_hda.fill == HDA_BUFSZ) {
+            g_hda.fill = 0;
+            g_hda.w = (uint8_t)((g_hda.w + 1) % HDA_NBUF);
+            g_hda.queued++;
+            if (!g_hda.running && g_hda.queued >= 2) hda_start();
+        }
     }
 
-    hda_start();
+    if (g_hda.queued >= 2) hda_start();
     return (long)off;
 }
 
 int hda_close(void) {
     if (!g_hda.present) return -1;
+
+    if (g_hda.fill > 0) {
+        memset(g_hda.buf[g_hda.w] + g_hda.fill, 0, HDA_BUFSZ - g_hda.fill);
+        g_hda.fill = 0;
+        g_hda.w = (uint8_t)((g_hda.w + 1) % HDA_NBUF);
+        g_hda.queued++;
+    }
+    if (g_hda.queued > 0) hda_start();
+
     if (g_hda.running) {
         for (int guard = 0; guard < 20000; guard++) {
             uint32_t lpib = sd_r32(SD_LPIB);
@@ -244,6 +265,19 @@ int hda_close(void) {
     }
     g_hda.running = 0;
     g_hda.w = 0;
+    g_hda.fill = 0;
+    g_hda.queued = 0;
+    return 0;
+}
+
+static int hda_abort(void) {
+    if (!g_hda.present) return -1;
+    sd_w8(SD_CTL, (uint8_t)(sd_r8(SD_CTL) & ~SDCTL_RUN));
+    sd_w8(SD_STS, 0x1C);
+    g_hda.running = 0;
+    g_hda.w = 0;
+    g_hda.fill = 0;
+    g_hda.queued = 0;
     return 0;
 }
 
@@ -298,6 +332,7 @@ static const audio_backend_t g_hda_backend = {
     .open       = hda_open,
     .write      = hda_write,
     .close      = hda_close,
+    .abort      = hda_abort,
     .mixer_get  = hda_mixer_get,
     .set_volume = hda_set_volume,
     .set_mute   = hda_set_mute,

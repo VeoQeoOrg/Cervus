@@ -207,6 +207,15 @@ static int ac97_set_mute(int mute) {
     return 0;
 }
 
+static int ac97_abort(void) {
+    if (!g_ac97.present) return -1;
+    po_w8(PO_CR, (uint8_t)(po_r8(PO_CR) & ~CR_RPBM));
+    po_w16(PO_SR, SR_CLEAR);
+    g_ac97.running = 0;
+    g_ac97.head = 0;
+    return 0;
+}
+
 static int ac97_set_output(int idx) {
     if (!g_ac97.present) return -1;
     return (idx <= 0) ? 0 : -1;
@@ -217,6 +226,7 @@ static const audio_backend_t g_ac97_backend = {
     .open       = ac97_open,
     .write      = ac97_write,
     .close      = ac97_close,
+    .abort      = ac97_abort,
     .mixer_get  = ac97_mixer_get,
     .set_volume = ac97_set_volume,
     .set_mute   = ac97_set_mute,

@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
     if (!strcmp(a, "status")) { print_status(); return 0; }
     if (!strcmp(a, "save"))    return save_config();
     if (!strcmp(a, "restore")) return restore_config(0);
-    if (!strcmp(a, "--quiet-restore")) return restore_config(1);
+    if (!strcmp(a, "--quiet-restore")) { restore_config(1); return 0; }
 
     cervus_audio_mixer_t m;
     if (load_mixer(&m) != 0) return 1;

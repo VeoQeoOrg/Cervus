@@ -33,6 +33,7 @@ typedef struct {
     int  (*open)(uint32_t rate);
     long (*write)(const void *pcm, size_t bytes);
     int  (*close)(void);
+    int  (*abort)(void);
     int  (*mixer_get)(audio_mixer_t *m);
     int  (*set_volume)(int pct);
     int  (*set_mute)(int mute);
@@ -45,6 +46,9 @@ int  audio_present(void);
 int  audio_open(uint32_t rate);
 long audio_write(const void *pcm, size_t bytes);
 int  audio_close(void);
+
+void audio_set_owner(void *task);
+void audio_task_exit(void *task);
 
 int  audio_mixer_get(audio_mixer_t *m);
 int  audio_set_volume(int pct);

@@ -2,6 +2,7 @@
 #include "../../../include/io/serial.h"
 
 static const audio_backend_t *g_backend;
+static void *g_owner;
 
 void audio_register(const audio_backend_t *b) {
     if (!b) return;
@@ -24,7 +25,16 @@ long audio_write(const void *pcm, size_t bytes) {
 
 int audio_close(void) {
     if (!g_backend) return -1;
+    g_owner = 0;
     return g_backend->close();
+}
+
+void audio_set_owner(void *task) { g_owner = task; }
+
+void audio_task_exit(void *task) {
+    if (!g_backend || !task || g_owner != task) return;
+    g_owner = 0;
+    if (g_backend->abort) g_backend->abort();
 }
 
 int audio_mixer_get(audio_mixer_t *m) {

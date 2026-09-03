@@ -492,6 +492,9 @@ __attribute__((noreturn)) void task_exit(void)
 
     tty_clear_nonblock_owner(me);
 
+    extern void audio_task_exit(void *who);
+    audio_task_exit(me);
+
     extern void shm_task_exit(task_t *who);
     shm_task_exit(me);
 
