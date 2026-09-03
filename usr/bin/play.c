@@ -150,6 +150,20 @@ static uint8_t *read_all(const char *path, size_t *outlen) {
     return b;
 }
 
+static const char *describe_container(const uint8_t *b, size_t n) {
+    if (n >= 12 && !memcmp(b + 4, "ftyp", 4))
+        return "MP4/M4A container (usually AAC), not MPEG audio - remux to .mp3";
+    if (n >= 4 && !memcmp(b, "OggS", 4))
+        return "Ogg container (Vorbis/Opus), not supported";
+    if (n >= 4 && !memcmp(b, "fLaC", 4))
+        return "FLAC stream, not supported";
+    if (n >= 4 && !memcmp(b, "RIFF", 4))
+        return "RIFF/WAVE file with an .mp3 name - rename it to .wav";
+    if (n >= 4 && !memcmp(b, "\x1a\x45\xdf\xa3", 4))
+        return "Matroska/WebM container, not supported";
+    return "no MPEG audio frames found";
+}
+
 static int play_mp3(const char *path) {
     size_t len = 0;
     uint8_t *buf = read_all(path, &len);
@@ -189,7 +203,7 @@ static int play_mp3(const char *path) {
         total += samples;
     }
     if (opened) cervus_audio_close();
-    else fprintf(stderr, "play: no MP3 frames found in %s\n", path);
+    else fprintf(stderr, "play: %s: %s\n", path, describe_container(buf, len));
     free(buf);
     return opened ? 0 : 1;
 }
