@@ -19,7 +19,7 @@ cd "$ROOT"
 say() { printf '\033[96m[bootstrap]\033[0m %s\n' "$*"; }
 die() { printf '\033[91m[bootstrap] %s\033[0m\n' "$*" >&2; exit 1; }
 
-LIMINE_VERSION=12.5.2
+LIMINE_VERSION=12.7.0
 LIMINE_TARBALL=limine-binary.tar.gz
 LIMINE_URL="https://github.com/limine-bootloader/limine/releases/download/v${LIMINE_VERSION}/${LIMINE_TARBALL}"
 
