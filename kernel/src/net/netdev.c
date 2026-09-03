@@ -140,6 +140,7 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     out->ip = d->ip; out->netmask = d->netmask; out->gateway = d->gateway; out->dns = d->dns;
     out->rx_packets = d->rx_packets; out->tx_packets = d->tx_packets;
     out->rx_bytes = d->rx_bytes; out->tx_bytes = d->tx_bytes;
+    out->rx_dropped = d->rx_dropped; out->tx_dropped = d->tx_dropped;
     out->link_up = d->link_up;
     out->mtu = (int32_t)d->mtu;
     memcpy(out->ip6_ll, d->ip6_ll, 16);

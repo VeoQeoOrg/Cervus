@@ -12,6 +12,7 @@ typedef struct {
     int32_t  link_up;
     int32_t  mtu;
     uint8_t  ip6_ll[16];
+    uint64_t rx_dropped, tx_dropped;
 } net_ifcfg_t;
 
 int netif_get(int index, net_ifcfg_t *out);

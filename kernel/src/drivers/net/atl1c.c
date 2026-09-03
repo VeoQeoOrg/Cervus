@@ -114,6 +114,7 @@
 #define RRS_PKT_SIZE_MASK       0x3FFFu
 #define RRS_RX_ERR_SUM          (1u << 20)
 #define RRS_RXD_UPDATED         (1u << 31)
+#define ATL_ISR_DIS_INT         0x80000000u
 
 #define ATL_NUM_RFD             64
 #define ATL_NUM_TPD             64
@@ -361,6 +362,7 @@ static int atl1c_transmit(netdev_t *nd, const void *frame, size_t len) {
 }
 
 static void atl1c_rx_drain(atl1c_t *a) {
+    uint64_t rf = spinlock_acquire_irqsave(&a->lock);
     for (int guard = 0; guard < ATL_NUM_RFD * 2; guard++) {
         atl_rrd_t *r = &a->rrd[a->rrd_next];
         uint32_t w3 = r->word3;
@@ -388,6 +390,7 @@ static void atl1c_rx_drain(atl1c_t *a) {
         a->rfd_prod = (uint16_t)((index + nbuf) % ATL_NUM_RFD);
         aw32(a, ATL_MB_RFD0_PROD_IDX, a->rfd_prod);
     }
+    spinlock_release_irqrestore(&a->lock, rf);
 }
 
 static void atl1c_link_poll(atl1c_t *a) {
@@ -410,8 +413,9 @@ static void atl1c_irq(void *ctx) {
     atl1c_t *a = ctx;
     uint32_t isr = ar32(a, ATL_ISR);
     if (!isr) return;
-    aw32(a, ATL_ISR, isr);
+    aw32(a, ATL_ISR, ATL_ISR_DIS_INT);
     atl1c_rx_drain(a);
+    aw32(a, ATL_ISR, 0);
 }
 
 static void atl1c_worker(void *arg) {
@@ -419,7 +423,7 @@ static void atl1c_worker(void *arg) {
     int tick = 0;
     for (;;) {
         for (atl1c_t *a = g_nics; a; a = a->next) {
-            if (a->polled) atl1c_rx_drain(a);
+            atl1c_rx_drain(a);
             if ((tick % 500) == 0) atl1c_link_poll(a);
         }
         tick++;

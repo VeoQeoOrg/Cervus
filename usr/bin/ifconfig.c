@@ -49,6 +49,9 @@ static void show(void) {
         printf("\tRX packets %u bytes %u   TX packets %u bytes %u\n",
                (unsigned)c.rx_packets, (unsigned)c.rx_bytes,
                (unsigned)c.tx_packets, (unsigned)c.tx_bytes);
+        if (c.rx_dropped || c.tx_dropped)
+            printf("\tRX dropped %u   TX dropped %u\n",
+                   (unsigned)c.rx_dropped, (unsigned)c.tx_dropped);
     }
     if (!found) printf("ifconfig: no network interfaces\n");
 }
