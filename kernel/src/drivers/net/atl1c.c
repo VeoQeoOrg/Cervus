@@ -473,6 +473,8 @@ static int atl1c_probe(pci_device_t *dev) {
         return -1;
     }
 
+    pci_power_up(dev);
+
     uint16_t cmd = pci_config_read16(dev->segment, dev->bus, dev->device, dev->function, PCI_COMMAND);
     cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
     pci_config_write16(dev->segment, dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
@@ -481,6 +483,10 @@ static int atl1c_probe(pci_device_t *dev) {
     if (!a) return -1;
     a->regs = (volatile uint8_t *)mmio_map(dev->bars[0].base, dev->bars[0].size);
     if (!a->regs) { free(a); return -1; }
+
+    serial_printf("[atl1c] BAR0 phys=0x%llx size=0x%llx\n",
+                  (unsigned long long)dev->bars[0].base,
+                  (unsigned long long)dev->bars[0].size);
 
     uint32_t probe_reg = ar32(a, ATL_MASTER_CTRL);
     if (probe_reg == 0xFFFFFFFFu) {
@@ -495,6 +501,8 @@ static int atl1c_probe(pci_device_t *dev) {
 
     if (atl_reset(a) != 0) { free(a); return -1; }
     aw32(a, ATL_CLK_GATING_CTRL, CLK_GATING_EN_ALL);
+    if (ar32(a, ATL_CLK_GATING_CTRL) == 0)
+        serial_printf("[atl1c] warning: CLK_GATING_CTRL does not retain writes\n");
     atl_phy_init(a);
     atl_write_mac(a, mac);
 
@@ -508,6 +516,17 @@ static int atl1c_probe(pci_device_t *dev) {
     }
     atl_start_queues(a);
     atl_setup_mac(a, 100, 1);
+
+    {
+        uint32_t save = ar32(a, ATL_TXQ_CTRL);
+        aw32(a, ATL_TXQ_CTRL, 0xFFFFFFFFu);
+        uint32_t all1 = ar32(a, ATL_TXQ_CTRL);
+        aw32(a, ATL_TXQ_CTRL, 0x00000020u);
+        uint32_t en   = ar32(a, ATL_TXQ_CTRL);
+        aw32(a, ATL_TXQ_CTRL, save);
+        serial_printf("[atl1c] txq wr-test: all1=0x%08x en=0x%08x master=0x%08x\n",
+                      all1, en, ar32(a, ATL_MASTER_CTRL));
+    }
 
     a->ndev = netdev_register(mac, 1500, atl1c_transmit, a);
     if (!a->ndev) { free(a); return -1; }

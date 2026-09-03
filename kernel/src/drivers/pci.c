@@ -126,6 +126,7 @@ static void parse_capabilities(pci_device_t *d)
     while (off && guard++ < 48) {
         uint8_t cap_id   = pci_config_read8(d->segment, d->bus, d->device, d->function, off);
         uint8_t next     = pci_config_read8(d->segment, d->bus, d->device, d->function, off + 1) & 0xFC;
+        if (cap_id == PCI_CAP_ID_PM)   d->cap_pm_off   = off;
         if (cap_id == PCI_CAP_ID_MSI)  d->cap_msi_off  = off;
         if (cap_id == PCI_CAP_ID_MSIX) {
             d->cap_msix_off = off;
@@ -371,6 +372,25 @@ void pci_register_driver(const pci_driver_t *drv)
             drv->probe(d);
         }
     }
+}
+
+
+int pci_power_up(pci_device_t *dev)
+{
+    if (!dev) return -1;
+    if (!dev->cap_pm_off) return 0;
+    uint16_t pmcsr = pci_config_read16(dev->segment, dev->bus, dev->device,
+                                       dev->function, dev->cap_pm_off + 4);
+    uint16_t state = pmcsr & 0x3;
+    if (state == 0) return 0;
+    serial_printf("[pci] %02x:%02x.%u in D%u, waking to D0\n",
+                  dev->bus, dev->device, dev->function, state);
+    pci_config_write16(dev->segment, dev->bus, dev->device, dev->function,
+                       dev->cap_pm_off + 4, (uint16_t)(pmcsr & ~0x3u));
+    for (volatile int d = 0; d < 2000000; d++) { }
+    pmcsr = pci_config_read16(dev->segment, dev->bus, dev->device,
+                             dev->function, dev->cap_pm_off + 4);
+    return ((pmcsr & 0x3) == 0) ? 0 : -1;
 }
 
 int pci_enable_msi(pci_device_t *dev, uint8_t vector, uint32_t apic_lapic_id)
