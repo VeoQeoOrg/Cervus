@@ -14,6 +14,7 @@
 #define ATL_MASTER_CTRL         0x1400
 #define ATL_GPHY_CTRL           0x140C
 #define ATL_IDLE_STATUS         0x1410
+#define ATL_CLK_GATING_CTRL     0x1814
 #define ATL_MDIO_CTRL           0x1414
 #define ATL_MAC_CTRL            0x1480
 #define ATL_MAC_IPG_IFG         0x1484
@@ -99,6 +100,8 @@
 #define TXQ_CTRL_EN             (1u << 5)
 #define TXQ_CTRL_ENH_MODE       (1u << 6)
 #define TXQ_TPD_BURST_SHIFT     0
+#define TXQ_TXF_BURST_SHIFT     16
+#define TXQ_TXF_BURST_PREF      0x200u
 #define TXQ_TPD_BURST_DEF       5u
 
 #define RXQ_RFD_BURST_SHIFT     20
@@ -115,6 +118,16 @@
 #define RRS_RX_ERR_SUM          (1u << 20)
 #define RRS_RXD_UPDATED         (1u << 31)
 #define ATL_ISR_DIS_INT         0x80000000u
+
+#define CLK_GATING_DMAW_EN      0x0001u
+#define CLK_GATING_DMAR_EN      0x0002u
+#define CLK_GATING_TXQ_EN       0x0004u
+#define CLK_GATING_RXQ_EN       0x0008u
+#define CLK_GATING_TXMAC_EN     0x0010u
+#define CLK_GATING_RXMAC_EN     0x0020u
+#define CLK_GATING_EN_ALL       (CLK_GATING_DMAW_EN | CLK_GATING_DMAR_EN | \
+                                 CLK_GATING_TXQ_EN  | CLK_GATING_RXQ_EN  | \
+                                 CLK_GATING_TXMAC_EN | CLK_GATING_RXMAC_EN)
 
 #define DMA_RORDER_MODE_OUT     4u
 #define DMA_RREQ_PRI_DATA       (1u << 10)
@@ -348,6 +361,7 @@ static void atl_start_queues(atl1c_t *a) {
     aw32(a, ATL_DMA_CTRL, dma);
     aw32(a, ATL_TXQ_CTRL,
          TXQ_CTRL_EN | TXQ_CTRL_ENH_MODE |
+         (TXQ_TXF_BURST_PREF << TXQ_TXF_BURST_SHIFT) |
          (TXQ_TPD_BURST_DEF << TXQ_TPD_BURST_SHIFT));
     aw32(a, ATL_RXQ_CTRL,
          RXQ_CTRL_EN | (RXQ_RFD_BURST_DEF << RXQ_RFD_BURST_SHIFT));
@@ -480,6 +494,7 @@ static int atl1c_probe(pci_device_t *dev) {
     atl_read_mac(a, mac);
 
     if (atl_reset(a) != 0) { free(a); return -1; }
+    aw32(a, ATL_CLK_GATING_CTRL, CLK_GATING_EN_ALL);
     atl_phy_init(a);
     atl_write_mac(a, mac);
 
@@ -517,9 +532,10 @@ static int atl1c_probe(pci_device_t *dev) {
         a->polled = 1;
     }
 
-    serial_printf("[atl1c] %s: dma_ctrl=0x%08x idle=0x%08x txq=0x%08x rxq=0x%08x\n",
+    serial_printf("[atl1c] %s: dma_ctrl=0x%08x idle=0x%08x txq=0x%08x rxq=0x%08x clk=0x%08x\n",
                   a->ndev->name, ar32(a, ATL_DMA_CTRL), ar32(a, ATL_IDLE_STATUS),
-                  ar32(a, ATL_TXQ_CTRL), ar32(a, ATL_RXQ_CTRL));
+                  ar32(a, ATL_TXQ_CTRL), ar32(a, ATL_RXQ_CTRL),
+                  ar32(a, ATL_CLK_GATING_CTRL));
     serial_printf("[atl1c] %s: MAC %02x:%02x:%02x:%02x:%02x:%02x link=%s irq=%s\n",
                   a->ndev->name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   a->ndev->link_up ? "up" : "down",
