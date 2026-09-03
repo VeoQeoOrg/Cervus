@@ -3,9 +3,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <image.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
+
+#define TIOCSNONBLOCK 0x5481
 
 static const char USAGE[] =
     "Usage: img <file>\n"
@@ -32,7 +35,6 @@ static void fit(int iw, int ih) {
 static void render(const image_t *img, uint32_t *screen) {
     image_t scaled = (dw != img->w || dh != img->h) ? image_scale(img, dw, dh) : *img;
     if (!scaled.px) scaled = *img;
-    memset(screen, 0, (size_t)sw * sh * 4);
     for (int y = 0; y < dh && oy + y < sh; y++) {
         const uint32_t *s = scaled.px + (size_t)y * dw;
         uint32_t *d = screen + (size_t)(oy + y) * sw + ox;
@@ -104,7 +106,7 @@ int main(int argc, char **argv) {
     if (have_tio) {
         raw = orig;
         raw.c_lflag &= ~(ECHO | ICANON | ISIG);
-        raw.c_cc[VMIN] = animated ? 0 : 1;
+        raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
         tcsetattr(0, TCSAFLUSH, &raw);
     }
@@ -113,6 +115,9 @@ int main(int argc, char **argv) {
 
     if (animated) {
         fit(anim.w, anim.h);
+        memset(screen, 0, (size_t)sw * sh * 4);
+        int nb = 1;
+        ioctl(0, TIOCSNONBLOCK, &nb);
         int quit = 0;
         while (!quit) {
             for (int i = 0; i < anim.nframes && !quit; i++) {
@@ -128,9 +133,12 @@ int main(int argc, char **argv) {
                 }
             }
         }
+        nb = 0;
+        ioctl(0, TIOCSNONBLOCK, &nb);
         gif_free(&anim);
     } else {
         fit(still.w, still.h);
+        memset(screen, 0, (size_t)sw * sh * 4);
         render(&still, screen);
         cervus_fb_blit(screen, 0, 0, sw, sh);
         char c;
