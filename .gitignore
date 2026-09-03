@@ -39,3 +39,7 @@ usr/apps/*.elf
 usr/bin/*.elf
 .bash_history
 usr/cross/
+
+# песни держим только локально, в репозиторий не кладём
+usr/sysroot/usr/share/media/*.mp3
+usr/sysroot/usr/share/media/*.wav
