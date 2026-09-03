@@ -486,6 +486,8 @@ static void atl1c_worker(void *arg) {
 }
 
 static int atl1c_probe(pci_device_t *dev) {
+    serial_printf("[atl1c] probe %02x:%02x.%u vendor=%04x device=%04x\n",
+                  dev->bus, dev->device, dev->function, dev->vendor_id, dev->device_id);
     if (dev->bars[0].type != PCI_BAR_TYPE_MEM || !dev->bars[0].base) {
         serial_printf("[atl1c] BAR0 not MMIO, skipping\n");
         return -1;
