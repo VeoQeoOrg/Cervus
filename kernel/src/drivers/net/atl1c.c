@@ -116,6 +116,21 @@
 #define RRS_RXD_UPDATED         (1u << 31)
 #define ATL_ISR_DIS_INT         0x80000000u
 
+#define DMA_RORDER_MODE_OUT     4u
+#define DMA_RREQ_PRI_DATA       (1u << 10)
+#define DMA_RREQ_BLEN_SHIFT     4
+#define DMA_WREQ_BLEN_SHIFT     7
+#define DMA_REQ_BLEN_128        0u
+#define DMA_RDLY_CNT_SHIFT      11
+#define DMA_RDLY_CNT_DEF        15u
+#define DMA_WDLY_CNT_SHIFT      16
+#define DMA_WDLY_CNT_DEF        4u
+
+#define IDLE_STATUS_TXQ_BUSY    (1u << 3)
+#define IDLE_STATUS_RXQ_BUSY    (1u << 2)
+#define IDLE_STATUS_TXMAC_BUSY  (1u << 1)
+#define IDLE_STATUS_RXMAC_BUSY  (1u << 0)
+
 #define ATL_NUM_RFD             64
 #define ATL_NUM_TPD             64
 #define ATL_BUFSZ               2048
@@ -313,6 +328,7 @@ static int atl_setup_rings(atl1c_t *a) {
     aw32(a, ATL_TPD_RING_SIZE, ATL_NUM_TPD & 0xFFFFu);
     aw32(a, ATL_RX_BUF_SIZE,   ATL_BUFSZ   & 0xFFFFu);
     aw32(a, ATL_MTU, 1500 + 18);
+    aw32(a, ATL_RFD_FREE_THRESH, (ATL_NUM_RFD / 8) & 0x3Fu);
 
     a->rfd_prod = ATL_NUM_RFD - 1;
     a->rrd_next = 0;
@@ -323,7 +339,13 @@ static int atl_setup_rings(atl1c_t *a) {
 }
 
 static void atl_start_queues(atl1c_t *a) {
-    aw32(a, ATL_DMA_CTRL, ar32(a, ATL_DMA_CTRL));
+    uint32_t dma = (DMA_RORDER_MODE_OUT & 7u)
+                 | DMA_RREQ_PRI_DATA
+                 | (DMA_REQ_BLEN_128 << DMA_RREQ_BLEN_SHIFT)
+                 | (DMA_REQ_BLEN_128 << DMA_WREQ_BLEN_SHIFT)
+                 | (DMA_RDLY_CNT_DEF << DMA_RDLY_CNT_SHIFT)
+                 | (DMA_WDLY_CNT_DEF << DMA_WDLY_CNT_SHIFT);
+    aw32(a, ATL_DMA_CTRL, dma);
     aw32(a, ATL_TXQ_CTRL,
          TXQ_CTRL_EN | TXQ_CTRL_ENH_MODE |
          (TXQ_TPD_BURST_DEF << TXQ_TPD_BURST_SHIFT));
@@ -446,6 +468,14 @@ static int atl1c_probe(pci_device_t *dev) {
     a->regs = (volatile uint8_t *)mmio_map(dev->bars[0].base, dev->bars[0].size);
     if (!a->regs) { free(a); return -1; }
 
+    uint32_t probe_reg = ar32(a, ATL_MASTER_CTRL);
+    if (probe_reg == 0xFFFFFFFFu) {
+        serial_printf("[atl1c] MMIO reads back all-ones at phys 0x%llx - BAR not usable\n",
+                      (unsigned long long)dev->bars[0].base);
+        free(a);
+        return -1;
+    }
+
     uint8_t mac[6];
     atl_read_mac(a, mac);
 
@@ -487,6 +517,9 @@ static int atl1c_probe(pci_device_t *dev) {
         a->polled = 1;
     }
 
+    serial_printf("[atl1c] %s: dma_ctrl=0x%08x idle=0x%08x txq=0x%08x rxq=0x%08x\n",
+                  a->ndev->name, ar32(a, ATL_DMA_CTRL), ar32(a, ATL_IDLE_STATUS),
+                  ar32(a, ATL_TXQ_CTRL), ar32(a, ATL_RXQ_CTRL));
     serial_printf("[atl1c] %s: MAC %02x:%02x:%02x:%02x:%02x:%02x link=%s irq=%s\n",
                   a->ndev->name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                   a->ndev->link_up ? "up" : "down",
