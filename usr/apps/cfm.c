@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <tui.h>
 #include <image.h>
 #include <sys/cervus.h>
@@ -39,6 +40,11 @@ static char     g_status[256];
 
 static image_t  g_thumb;
 static char     g_thumb_path[PMAX];
+
+static gif_anim_t g_thumb_gif;
+static int        g_thumb_gif_ok;
+static int        g_thumb_frame;
+static int        g_thumb_px0, g_thumb_py0, g_thumb_rw, g_thumb_rh;
 
 static char     g_pvbuf[16384];
 static char    *g_pvlines[1024];
@@ -146,6 +152,7 @@ static void load_dir(void) {
 }
 
 static void draw_inline_thumb(const char *path, int split);
+static void thumb_drop(void);
 
 static void fmt_size(long n, char *out, int cap) {
     if (n < 1024)               snprintf(out, cap, "%ldB", n);
@@ -274,7 +281,7 @@ static void draw(void) {
         draw_inline_thumb(full, split);
     } else {
         fflush(stdout);
-        if (g_thumb_path[0]) { image_free(&g_thumb); g_thumb.px = NULL; g_thumb_path[0] = 0; }
+        if (g_thumb_path[0]) thumb_drop();
     }
 }
 
@@ -439,21 +446,29 @@ static void blit_fit(const image_t *im, int px0, int py0, int rw, int rh) {
     if (sc.px != im->px) image_free(&sc);
 }
 
-static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
+static uint8_t *read_whole(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb");
-    if (!f) return -1;
+    if (!f) return NULL;
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz <= 6) { fclose(f); return -1; }
+    if (sz <= 6) { fclose(f); return NULL; }
     uint8_t *buf = malloc((size_t)sz);
-    if (!buf) { fclose(f); return -1; }
+    if (!buf) { fclose(f); return NULL; }
     size_t got = fread(buf, 1, (size_t)sz, f);
     fclose(f);
+    if (got != (size_t)sz || memcmp(buf, "GIF8", 4) != 0) { free(buf); return NULL; }
+    *len = got;
+    return buf;
+}
+
+static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
+    size_t got = 0;
+    uint8_t *buf = read_whole(path, &got);
+    if (!buf) return -1;
 
     gif_anim_t a;
-    if (got != (size_t)sz || memcmp(buf, "GIF8", 4) != 0 ||
-        gif_decode(buf, got, &a) != 0) { free(buf); return -1; }
+    if (gif_decode(buf, got, &a) != 0) { free(buf); return -1; }
     free(buf);
     if (a.nframes < 2) { gif_free(&a); return -1; }
 
@@ -498,6 +513,28 @@ static void view_image_fullscreen(const char *path) {
     image_free(&im);
 }
 
+static void thumb_drop(void) {
+    if (g_thumb_gif_ok) { gif_free(&g_thumb_gif); g_thumb_gif_ok = 0; }
+    image_free(&g_thumb);
+    g_thumb.px = NULL;
+    g_thumb_path[0] = 0;
+    g_thumb_frame = 0;
+    g_thumb_rw = 0;
+}
+
+static int thumb_load_gif(const char *path) {
+    size_t len = 0;
+    uint8_t *data = read_whole(path, &len);
+    if (!data) return -1;
+    int rc = gif_decode(data, len, &g_thumb_gif);
+    free(data);
+    if (rc != 0) return -1;
+    if (g_thumb_gif.nframes < 2) { gif_free(&g_thumb_gif); return -1; }
+    g_thumb_gif_ok = 1;
+    g_thumb_frame = 0;
+    return 0;
+}
+
 static void draw_inline_thumb(const char *path, int split) {
     cervus_fb_info_t fbi;
     if (cervus_fb_info(&fbi) != 0) return;
@@ -511,16 +548,50 @@ static void draw_inline_thumb(const char *path, int split) {
     int rh = (g_rows - 3) * cell_h;
     if (rw < 16 || rh < 16) return;
 
+    g_thumb_px0 = px0; g_thumb_py0 = py0;
+    g_thumb_rw = rw;   g_thumb_rh = rh;
+
     if (strcmp(g_thumb_path, path) != 0) {
-        image_free(&g_thumb);
-        g_thumb.px = NULL;
-        image_t im;
-        if (image_load(path, &im) != 0) { g_thumb_path[0] = 0; return; }
-        g_thumb = im;
-        snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
+        thumb_drop();
+        if (g_gif_anim && has_ext_ci(path, ".gif") && thumb_load_gif(path) == 0) {
+            snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
+        } else {
+            image_t im;
+            if (image_load(path, &im) != 0) { g_thumb_path[0] = 0; return; }
+            g_thumb = im;
+            snprintf(g_thumb_path, sizeof g_thumb_path, "%s", path);
+        }
+    }
+
+    if (g_thumb_gif_ok) {
+        image_t fr = { g_thumb_gif.w, g_thumb_gif.h, g_thumb_gif.frames[g_thumb_frame] };
+        blit_fit(&fr, px0, py0, rw, rh);
+        return;
     }
     if (!g_thumb.px) return;
     blit_fit(&g_thumb, px0, py0, rw, rh);
+}
+
+static int thumb_next_frame(void) {
+    if (!g_thumb_gif_ok || g_thumb_rw <= 0) return 0;
+    int delay = g_thumb_gif.delays_ms[g_thumb_frame];
+    g_thumb_frame = (g_thumb_frame + 1) % g_thumb_gif.nframes;
+    image_t fr = { g_thumb_gif.w, g_thumb_gif.h, g_thumb_gif.frames[g_thumb_frame] };
+    blit_fit(&fr, g_thumb_px0, g_thumb_py0, g_thumb_rw, g_thumb_rh);
+    return delay < 20 ? 20 : delay;
+}
+
+static int read_key_animated(void) {
+    if (!g_thumb_gif_ok || g_thumb_rw <= 0) return tui_read_key();
+    for (;;) {
+        struct pollfd pfd = { 0, POLLIN, 0 };
+        int delay = g_thumb_gif.delays_ms[g_thumb_frame];
+        if (delay < 20) delay = 20;
+        int r = poll(&pfd, 1, delay);
+        if (r > 0) return tui_read_key();
+        if (r < 0) return tui_read_key();
+        thumb_next_frame();
+    }
 }
 
 static void do_open(void) {
@@ -744,7 +815,7 @@ int main(int argc, char **argv) {
         tui_size(&g_rows, &g_cols);
         if (g_cols > 590) g_cols = 590;
         draw();
-        int k = tui_read_key();
+        int k = read_key_animated();
         switch (k) {
         case TK_RESIZE: break;
         case TK_UP:    if (g_sel > 0) g_sel--; break;
