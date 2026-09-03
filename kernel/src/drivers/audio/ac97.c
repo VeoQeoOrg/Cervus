@@ -10,6 +10,7 @@
 
 #define NAM_RESET       0x00
 #define NAM_MASTER_VOL  0x02
+#define NAM_HP_VOL      0x04
 #define NAM_PCM_VOL     0x18
 #define NAM_EXT_ID      0x28
 #define NAM_EXT_CTRL    0x2A
@@ -52,6 +53,9 @@ typedef struct {
     uint16_t  nam;
     uint16_t  nabm;
     int       vra;
+    int       vol_steps;
+    int       volume;
+    int       mute;
 
     ac97_bd_t *bdl;   uintptr_t bdl_phys;
     uint8_t   *buf[AC97_NBUF];
@@ -164,11 +168,59 @@ int ac97_close(void) {
     return 0;
 }
 
+static void ac97_apply_vol(void) {
+    int steps = g_ac97.vol_steps;
+    int atten = (steps * (100 - g_ac97.volume)) / 100;
+    if (atten > steps) atten = steps;
+    if (atten < 0) atten = 0;
+    uint16_t v = (uint16_t)((atten << 8) | atten);
+    if (g_ac97.mute || g_ac97.volume == 0) v |= 0x8000;
+    nam_w16(NAM_MASTER_VOL, v);
+    nam_w16(NAM_HP_VOL, v);
+}
+
+static int ac97_mixer_get(audio_mixer_t *m) {
+    if (!g_ac97.present) return -1;
+    memset(m, 0, sizeof *m);
+    strncpy(m->driver, "ac97", sizeof m->driver - 1);
+    m->volume   = g_ac97.volume;
+    m->mute     = g_ac97.mute;
+    m->noutputs = 1;
+    m->current  = 0;
+    strncpy(m->outputs[0].name, "Line Out", sizeof m->outputs[0].name - 1);
+    m->outputs[0].kind = AUDIO_OUT_LINEOUT;
+    m->outputs[0].present = 1;
+    return 0;
+}
+
+static int ac97_set_volume(int pct) {
+    if (!g_ac97.present) return -1;
+    g_ac97.volume = pct;
+    ac97_apply_vol();
+    return 0;
+}
+
+static int ac97_set_mute(int mute) {
+    if (!g_ac97.present) return -1;
+    g_ac97.mute = mute;
+    ac97_apply_vol();
+    return 0;
+}
+
+static int ac97_set_output(int idx) {
+    if (!g_ac97.present) return -1;
+    return (idx <= 0) ? 0 : -1;
+}
+
 static const audio_backend_t g_ac97_backend = {
-    .name  = "ac97",
-    .open  = ac97_open,
-    .write = ac97_write,
-    .close = ac97_close,
+    .name       = "ac97",
+    .open       = ac97_open,
+    .write      = ac97_write,
+    .close      = ac97_close,
+    .mixer_get  = ac97_mixer_get,
+    .set_volume = ac97_set_volume,
+    .set_mute   = ac97_set_mute,
+    .set_output = ac97_set_output,
 };
 
 static int ac97_probe(pci_device_t *dev) {
@@ -195,8 +247,12 @@ static int ac97_probe(pci_device_t *dev) {
         spin(10000);
     }
 
-    nam_w16(NAM_MASTER_VOL, 0x0000);
-    nam_w16(NAM_PCM_VOL,    0x0000);
+    nam_w16(NAM_MASTER_VOL, 0x2020);
+    g_ac97.vol_steps = (nam_r16(NAM_MASTER_VOL) & 0x20) ? 0x3F : 0x1F;
+    g_ac97.volume = 75;
+    g_ac97.mute = 0;
+    ac97_apply_vol();
+    nam_w16(NAM_PCM_VOL, 0x0808);
 
     uint16_t ext = nam_r16(NAM_EXT_ID);
     if (ext & EXT_VRA) {
@@ -214,8 +270,9 @@ static int ac97_probe(pci_device_t *dev) {
     po_reset();
     g_ac97.present = 1;
     audio_register(&g_ac97_backend);
-    serial_printf("[ac97] audio %04x:%04x NAM=0x%x NABM=0x%x vra=%d\n",
-                  dev->vendor_id, dev->device_id, g_ac97.nam, g_ac97.nabm, g_ac97.vra);
+    serial_printf("[ac97] audio %04x:%04x NAM=0x%x NABM=0x%x vra=%d volsteps=%d\n",
+                  dev->vendor_id, dev->device_id, g_ac97.nam, g_ac97.nabm,
+                  g_ac97.vra, g_ac97.vol_steps);
     return 0;
 }
 

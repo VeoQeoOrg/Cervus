@@ -1,0 +1,47 @@
+NAME
+       mixer - adjust playback volume and pick the audio output
+
+SYNOPSIS
+       mixer
+       mixer status
+       mixer <0-100> | +N | -N
+       mixer mute | unmute | toggle
+       mixer out <n|auto>
+       mixer save | restore
+
+DESCRIPTION
+       Controls the mixer of whichever audio driver claimed the card
+       (hda or ac97). With no arguments it opens an interactive screen
+       showing a volume bar and the list of output devices the codec
+       reports.
+
+       On HDA the outputs come from the codec's pin configuration
+       defaults, so internal speakers, a headphone jack and a line out
+       appear separately. Jacks with presence detection are shown as
+       connected or not connected.
+
+KEYS
+       left, right  volume down / up in steps of 5
+       up, down     move through the output list
+       Enter        route playback to the selected output
+       m            mute / unmute
+       s            save the current settings
+       q, Esc       quit
+
+OUTPUT SELECTION
+       Selecting Auto lets the driver follow the jacks: a plugged
+       headphone wins over the line out, which wins over the internal
+       speaker. Selecting a device by name pins playback to it even
+       when nothing is plugged in.
+
+FILES
+       /etc/audio.conf
+              Saved volume, mute state and output. Written by
+              "mixer save" (or s in the interactive screen) and applied
+              at boot by init.
+
+EXAMPLES
+       mixer 60            set the volume to 60%
+       mixer -10           turn it down by ten points
+       mixer out 1         send playback to output 1
+       mixer out auto      go back to following the jacks

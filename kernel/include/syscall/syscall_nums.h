@@ -156,6 +156,7 @@
 #define SYS_RT_SIGRETURN      603
 
 #define SYS_DISK_FORMAT_PROGRESS 604
+#define SYS_AUDIO_MIXER       605
 
 #define SYSCALL_TABLE_SIZE    640
 

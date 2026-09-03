@@ -259,4 +259,33 @@ int      cervus_audio_open(unsigned rate);
 long     cervus_audio_write(const void *pcm, unsigned long len);
 int      cervus_audio_close(void);
 
+#define CERVUS_AUDIO_MAX_OUTPUTS 8
+
+#define CERVUS_AUDIO_OUT_SPEAKER    0
+#define CERVUS_AUDIO_OUT_HEADPHONE  1
+#define CERVUS_AUDIO_OUT_LINEOUT    2
+#define CERVUS_AUDIO_OUT_DIGITAL    3
+#define CERVUS_AUDIO_OUT_OTHER      4
+
+typedef struct {
+    char          name[24];
+    unsigned char kind;
+    unsigned char present;
+    unsigned char _pad[2];
+} cervus_audio_output_t;
+
+typedef struct {
+    char                  driver[16];
+    int                   volume;
+    int                   mute;
+    int                   noutputs;
+    int                   current;
+    cervus_audio_output_t outputs[CERVUS_AUDIO_MAX_OUTPUTS];
+} cervus_audio_mixer_t;
+
+int      cervus_audio_mixer_get(cervus_audio_mixer_t *m);
+int      cervus_audio_set_volume(int pct);
+int      cervus_audio_set_mute(int mute);
+int      cervus_audio_set_output(int idx);
+
 #endif
