@@ -1,0 +1,28 @@
+NAME
+       pipe - create a pipe
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int pipe(int fd[2]);
+
+DESCRIPTION
+       Creates a one-way channel. FD[0] is the read end and FD[1] the
+       write end. Data written to one comes out of the other in order.
+
+       A read blocks while the pipe is empty and some writer still has
+       the write end open; once every writer has closed it, the read
+       returns 0. Writing to a pipe with no reader raises SIGPIPE.
+
+       Each end should be closed in the process that does not use it,
+       or the end-of-file will never arrive.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       EMFILE  no free descriptors
+       EFAULT  fd points outside the address space
+
+SEE ALSO
+       dup(2), poll(2), fork(2)

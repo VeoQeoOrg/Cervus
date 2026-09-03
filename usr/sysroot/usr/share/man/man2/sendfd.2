@@ -1,0 +1,23 @@
+NAME
+       sendfd, recvfd - pass a descriptor between processes
+
+SYNOPSIS
+       int cervus_sendfd(int sock, int fd);
+       int cervus_recvfd(int sock);
+
+DESCRIPTION
+       Sends an open descriptor over a Unix domain socket. The receiver
+       gets a descriptor of its own referring to the same open file, so
+       a process can hand out access to something the other side could
+       not have opened itself.
+
+RETURN VALUE
+       sendfd returns 0; recvfd returns the new descriptor. Both return
+       negative on failure.
+
+ERRORS
+       EBADF     the descriptor is not open
+       ENOTSOCK  the socket is not a Unix domain socket
+
+SEE ALSO
+       socket(2), dup(2), fdpass(1)

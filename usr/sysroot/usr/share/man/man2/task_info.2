@@ -1,0 +1,26 @@
+NAME
+       task_info, task_kill - inspect and stop tasks
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_task_info(int pid, cervus_task_info_t *out);
+       int cervus_task_kill(int pid);
+
+DESCRIPTION
+       task_info fills in the pid, parent, owner, capabilities, name,
+       state, priority, accumulated runtime, resident size and creation
+       time of one task. Walking the pid space is how ps, top and
+       sysmon build their tables.
+
+       task_kill stops a task outright, without the signal machinery.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+ERRORS
+       ESRCH   no such task
+       EPERM   not permitted to inspect or stop that task
+
+SEE ALSO
+       ps(1), top(1), kill(2), procfs under /proc

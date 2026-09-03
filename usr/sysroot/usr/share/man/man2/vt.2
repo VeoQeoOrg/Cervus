@@ -1,0 +1,33 @@
+NAME
+       vt_switch, vt_set_ctty, vt_spawn_poll - virtual consoles
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_vt_switch(int n);
+       int cervus_vt_set_ctty(int n);
+       int cervus_vt_spawn_poll(void);
+       int cervus_vt_clear_shell(int n);
+
+DESCRIPTION
+       The console is a set of virtual terminals, each with its own
+       grid, cursor and attributes. Ctrl-Alt-F1 through F12 switch
+       between them from the keyboard; vt_switch does the same from a
+       program.
+
+       One of the terminals is the kernel debug monitor rather than a
+       shell.
+
+       init calls vt_spawn_poll to learn which terminals have been
+       asked for a shell but do not have one yet, and vt_set_ctty to
+       make a terminal the controlling one for the shell it starts
+       there.
+
+       Terminal contents survive a font change: the grid is reflowed to
+       the new cell size and the cursor moved to match.
+
+RETURN VALUE
+       0 or a terminal number on success, negative on failure.
+
+SEE ALSO
+       setfont(2), openpty(2), init(1)

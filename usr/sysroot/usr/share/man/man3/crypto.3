@@ -1,0 +1,37 @@
+NAME
+       crypto - hashes, ciphers and signatures
+
+SYNOPSIS
+       #include <crypto.h>
+
+       void sha256(const void *d, size_t n, uint8_t out[32]);
+       void sha512(const void *d, size_t n, uint8_t out[64]);
+       void hmac_sha256(const uint8_t *key, size_t klen,
+                        const uint8_t *msg, size_t mlen, uint8_t out[32]);
+       void hkdf_extract(...);   void hkdf_expand(...);
+       void pbkdf2_hmac_sha256(...);
+
+       void chacha20_poly1305_encrypt(...);
+       int  chacha20_poly1305_decrypt(...);
+       void aes_gcm_encrypt(...);
+       int  aes_gcm_decrypt(...);
+
+DESCRIPTION
+       The cipher suite behind TLS, SSH and crypt(1): SHA-256 and
+       SHA-512, HMAC, HKDF and PBKDF2; ChaCha20-Poly1305 and AES-GCM;
+       X25519 key agreement; Ed25519 and ECDSA signatures over P-256
+       and P-384; and RSA.
+
+       The AEAD decrypt functions verify the tag and return failure
+       without producing plaintext, so tampering is detected rather
+       than passed on.
+
+       Every primitive is checked against the RFC and NIST test
+       vectors.
+
+RETURN VALUE
+       Decrypt and verify functions return 0 on success and non-zero
+       when authentication fails.
+
+SEE ALSO
+       tls(3), crypt(1), ssh(1), ssh-keygen(1)

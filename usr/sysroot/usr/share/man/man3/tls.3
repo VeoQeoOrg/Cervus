@@ -1,0 +1,23 @@
+NAME
+       tls - TLS 1.3 client
+
+SYNOPSIS
+       #include <tls.h>
+
+DESCRIPTION
+       A TLS 1.3 client over an established socket. The suites offered
+       are ChaCha20-Poly1305 and AES-128-GCM.
+
+       The server certificate chain is verified against the bundle in
+       /etc/ssl/certs, including the name and the validity dates, so a
+       mismatch fails the handshake. Both wget and curl accept a flag
+       to skip that, which is only for a host you already trust.
+
+RETURN VALUE
+       0 on success, negative on handshake or verification failure.
+
+FILES
+       /etc/ssl/certs
+
+SEE ALSO
+       crypto(3), wget(1), curl(1)

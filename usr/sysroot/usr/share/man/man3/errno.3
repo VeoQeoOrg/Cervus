@@ -1,0 +1,29 @@
+NAME
+       errno - the last error
+
+SYNOPSIS
+       #include <errno.h>
+
+DESCRIPTION
+       Set by a failing library or system call. It is only meaningful
+       after a call that reported failure, and is not cleared by one
+       that succeeded, so test the return value first.
+
+COMMON VALUES
+       ENOENT   no such file or directory
+       EACCES   permission denied
+       EEXIST   the file already exists
+       EBADF    bad file descriptor
+       ENOTDIR  a path component is not a directory
+       EISDIR   the target is a directory
+       ENOMEM   out of memory
+       EINVAL   invalid argument
+       EAGAIN   the operation would block
+       EINTR    interrupted by a signal
+       ENODEV   no such device
+       EPERM    operation not permitted
+       ENOSPC   no space left on device
+       EXDEV    cross-device link
+
+SEE ALSO
+       open(2), read(2), poll(2)

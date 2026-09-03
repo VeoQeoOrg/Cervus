@@ -1,0 +1,41 @@
+NAME
+       tui - full-screen terminal helper
+
+SYNOPSIS
+       #include <tui.h>
+
+       void tui_begin(void);
+       void tui_end(void);
+       void tui_size(int *rows, int *cols);
+       void tui_clear(void);
+       void tui_move(int row, int col);
+       void tui_hide_cursor(void);
+       void tui_show_cursor(void);
+       void tui_puts(const char *s);
+       int  tui_read_key(void);
+
+DESCRIPTION
+       tui_begin puts the terminal in raw mode, switches to the
+       alternate screen and hides the cursor; tui_end undoes all three,
+       which restores the shell and its scrollback exactly as it was.
+
+       tui_size asks the terminal for its size, which the console
+       recomputes when the font changes.
+
+       tui_read_key decodes escape sequences and returns TK_UP,
+       TK_DOWN, TK_LEFT, TK_RIGHT, TK_HOME, TK_END, TK_PGUP, TK_PGDN,
+       TK_DEL and TK_RESIZE for the special keys. It also normalises
+       what the keyboard actually sends: Enter arrives as a newline
+       rather than a carriage return, and Backspace as a backspace
+       rather than delete, so compare against TK_ENTER and TK_BACKSP.
+
+       All output goes through stdio, so mixing tui calls with printf
+       keeps its order.
+
+NOTES
+       tui_read_key blocks. To animate while waiting, wait with poll(2)
+       on descriptor 0 for the frame time and call tui_read_key only
+       once poll reports input.
+
+SEE ALSO
+       termios(3), poll(2), cfm(1), neo(1)

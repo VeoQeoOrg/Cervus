@@ -1,0 +1,27 @@
+NAME
+       getpid, getppid, getuid, getgid, setuid, setgid - process ids
+
+SYNOPSIS
+       #include <unistd.h>
+
+       pid_t getpid(void);
+       pid_t getppid(void);
+       uid_t getuid(void);
+       gid_t getgid(void);
+       int   setuid(uid_t uid);
+       int   setgid(gid_t gid);
+
+DESCRIPTION
+       Read the process and owner ids. setuid and setgid change them
+       and are reserved for root, which is what lets login and su drop
+       privilege after authenticating.
+
+RETURN VALUE
+       The getters cannot fail. The setters return 0, or -1 with errno
+       set.
+
+ERRORS
+       EPERM   the caller is not root
+
+SEE ALSO
+       auth(2), id(1), su(1)

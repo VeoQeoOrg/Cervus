@@ -1,0 +1,34 @@
+NAME
+       image - decode and scale images
+
+SYNOPSIS
+       #include <image.h>
+
+       int  image_load(const char *path, image_t *out);
+       int  image_load_mem(const uint8_t *d, size_t n, const char *hint,
+                           image_t *out);
+       void image_free(image_t *img);
+       image_t image_scale(const image_t *src, int dw, int dh);
+
+       int  gif_decode(const uint8_t *d, size_t n, gif_anim_t *out);
+       void gif_free(gif_anim_t *a);
+
+DESCRIPTION
+       Decodes PNG, JPEG, BMP, SVG and GIF into an image_t: width,
+       height and a buffer of 32-bit pixels.
+
+       gif_decode returns every frame of an animation, already composed
+       against the preceding ones, together with the delay of each and
+       the loop count. Interlaced images and all the disposal methods
+       are handled, so a frame that only stores what changed is
+       composed correctly. Frames are held in memory, so a long
+       animation costs width by height by four bytes per frame.
+
+       image_scale returns a new image; free it with image_free unless
+       it aliases the source.
+
+RETURN VALUE
+       0 on success, negative when the data cannot be decoded.
+
+SEE ALSO
+       img(1), cfm(1), framebuffer(2)

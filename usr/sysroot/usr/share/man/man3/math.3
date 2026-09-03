@@ -1,0 +1,25 @@
+NAME
+       math - floating point functions
+
+SYNOPSIS
+       #include <math.h>
+
+       double sqrt(double x);
+       double pow(double x, double y);
+       double exp(double x);   double log(double x);
+       double sin(double x);   double cos(double x);
+       double tan(double x);   double atan2(double y, double x);
+       double floor(double x); double ceil(double x);
+       double fabs(double x);  double fmod(double x, double y);
+
+DESCRIPTION
+       The usual double-precision functions.
+
+       Userspace is compiled with SSE, so float and double work
+       normally. The kernel saves and restores the SSE state on every
+       context switch and starts each task with the control words at
+       their standard values, so arithmetic that would raise a masked
+       exception behaves as it does everywhere else instead of faulting.
+
+SEE ALSO
+       calc(1), image(3)

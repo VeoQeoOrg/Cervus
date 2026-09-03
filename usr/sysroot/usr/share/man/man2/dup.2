@@ -1,0 +1,27 @@
+NAME
+       dup, dup2 - duplicate a file descriptor
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int dup(int oldfd);
+       int dup2(int oldfd, int newfd);
+
+DESCRIPTION
+       Makes a second descriptor for the same open file. dup returns
+       the lowest free number; dup2 uses NEWFD, closing it first if it
+       was open.
+
+       Both descriptors share the file offset, so a seek through one is
+       seen by the other. This is how a shell wires redirection: dup2
+       the opened file onto 0, 1 or 2 between fork and execve.
+
+RETURN VALUE
+       The new descriptor, or -1 with errno set.
+
+ERRORS
+       EBADF   oldfd is not open, or newfd is out of range
+       EMFILE  the process has no free descriptors
+
+SEE ALSO
+       pipe(2), open(2), close(2)

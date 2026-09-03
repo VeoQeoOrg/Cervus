@@ -1,0 +1,30 @@
+NAME
+       clock_gettime, clock_settime, sleep, uptime - time
+
+SYNOPSIS
+       #include <time.h>
+       #include <unistd.h>
+
+       int clock_gettime(int clk, struct timespec *ts);
+       int clock_settime(int clk, const struct timespec *ts);
+       int usleep(useconds_t usec);
+       unsigned sleep(unsigned seconds);
+
+DESCRIPTION
+       CLOCK_REALTIME is wall clock time and can be set; the ntpdate
+       command uses that. CLOCK_MONOTONIC counts from boot and never
+       jumps, so it is the one to use for measuring intervals.
+
+       Time is served by a cascade that calibrates the local APIC timer
+       against the TSC and falls back to APIC ticks on machines with no
+       HPET, so these calls work on hardware where the HPET is absent.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       EINVAL   the clock id is not known
+       EPERM    setting the clock requires root
+
+SEE ALSO
+       uptime(1), date(1), ntpdate(1), poll(2)

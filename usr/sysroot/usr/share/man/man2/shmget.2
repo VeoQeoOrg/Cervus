@@ -1,0 +1,30 @@
+NAME
+       shmget, shmat, shmdt, shmctl - shared memory
+
+SYNOPSIS
+       #include <sys/shm.h>
+
+       int   shmget(key_t key, size_t size, int flag);
+       void *shmat(int id, const void *addr, int flag);
+       int   shmdt(const void *addr);
+       int   shmctl(int id, int cmd, struct shmid_ds *buf);
+
+DESCRIPTION
+       System V shared memory. shmget creates or looks up a segment by
+       key, shmat maps it into the address space, shmdt unmaps it, and
+       shmctl with IPC_RMID marks it for removal.
+
+       A segment stays alive while any process has it attached, and the
+       kernel detaches whatever a process still holds when it exits.
+
+RETURN VALUE
+       An id or an address on success, -1 with errno set. shmat returns
+       (void *)-1 on failure.
+
+ERRORS
+       ENOENT   no such segment and IPC_CREAT was not given
+       ENOMEM   not enough memory
+       EINVAL   bad id or size
+
+SEE ALSO
+       semget(2), mmap(2), shmtest(1)

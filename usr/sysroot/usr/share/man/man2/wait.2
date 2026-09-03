@@ -1,0 +1,39 @@
+NAME
+       wait, waitpid - wait for a child to change state
+
+SYNOPSIS
+       #include <sys/wait.h>
+
+       pid_t wait(int *status);
+       pid_t waitpid(pid_t pid, int *status, int options);
+
+DESCRIPTION
+       Blocks until a child exits and reports which one. PID may name a
+       single child, or -1 for any.
+
+       WNOHANG in OPTIONS makes the call return 0 at once when no child
+       has exited, which is the way to poll a child while doing
+       something else, such as drawing a progress bar for a long
+       operation running in a forked helper.
+
+       STATUS is inspected with WIFEXITED and WEXITSTATUS.
+
+RETURN VALUE
+       The pid of the child, 0 for WNOHANG with nothing ready, or -1
+       with errno set.
+
+ERRORS
+       ECHILD   the caller has no such child
+       EINTR    a signal arrived first
+
+EXAMPLE
+              pid_t p = fork();
+              if (p == 0) { work(); _exit(0); }
+              for (;;) {
+                      if (waitpid(p, &st, WNOHANG) == p) break;
+                      draw_progress();
+                      usleep(150000);
+              }
+
+SEE ALSO
+       fork(2), exit(2), execve(2)

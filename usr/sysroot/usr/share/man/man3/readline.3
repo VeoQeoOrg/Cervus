@@ -1,0 +1,36 @@
+NAME
+       readline - line editing with history and completion
+
+SYNOPSIS
+       #include <readline.h>
+
+       char *readline(const char *prompt);
+
+       void  readline_add_history(const char *line);
+       void  readline_set_history_file(const char *path);
+       void  readline_clear_history(void);
+       int   readline_history_count(void);
+       const char *readline_history_get(int n);
+
+       void  readline_set_completion(rl_complete_fn cb);
+       void  readline_set_suggest(rl_suggest_fn cb);
+       void  readline_set_input_color(const char *seq);
+
+DESCRIPTION
+       Reads one line with editing, history and completion. The
+       returned string is allocated and must be freed.
+
+       Completion and hints are supplied by the caller as callbacks, so
+       every program that reads lines shares one implementation of the
+       editing itself. The completion callback fills an
+       rl_completions_t with candidates and the offset of the word
+       being completed; the suggest callback offers an inline hint.
+
+       Line editing, history and Tab completion in the shell and in
+       calc both come from here.
+
+RETURN VALUE
+       The line without its newline, or NULL at end of input.
+
+SEE ALSO
+       getline(3), termios(3), csh(1)

@@ -1,0 +1,30 @@
+NAME
+       truncate, ftruncate, fsync, fdatasync, sync - size and durability
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int truncate(const char *path, off_t length);
+       int ftruncate(int fd, off_t length);
+       int fsync(int fd);
+       int fdatasync(int fd);
+       void sync(void);
+
+DESCRIPTION
+       truncate sets a file's size, extending it with zeroes or
+       discarding the tail.
+
+       fsync writes one file's data and metadata to the device;
+       fdatasync skips metadata that does not affect reading the data
+       back. sync flushes everything. Writes are buffered until then,
+       so anything that must survive a power cut needs one of these.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       EBADF    fd is not open for writing
+       EINVAL   the length is negative
+
+SEE ALSO
+       write(2), sync(1), open(2)

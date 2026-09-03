@@ -1,0 +1,27 @@
+NAME
+       chmod, chown - change permissions and ownership
+
+SYNOPSIS
+       #include <sys/stat.h>
+       #include <unistd.h>
+
+       int chmod(const char *path, mode_t mode);
+       int chown(const char *path, uid_t uid, gid_t gid);
+
+DESCRIPTION
+       chmod sets the permission bits, chown the owner and group.
+       Giving a file away requires root.
+
+       The execute bit is enforced: execve refuses a file without it,
+       so a fresh script has to be made executable before it will run,
+       whether or not it has a #! line.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ENOENT   the path does not exist
+       EPERM    the caller does not own the file, or is not root
+
+SEE ALSO
+       chmod(1), chown(1), execve(2), stat(2)

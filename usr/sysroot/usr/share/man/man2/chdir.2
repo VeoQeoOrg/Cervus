@@ -1,0 +1,27 @@
+NAME
+       chdir, getcwd - the working directory
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int   chdir(const char *path);
+       char *getcwd(char *buf, size_t size);
+
+DESCRIPTION
+       chdir changes the working directory of the calling process, and
+       getcwd reports it as an absolute path.
+
+       The directory is per-process and is inherited across fork and
+       execve, so a child starts where its parent was.
+
+RETURN VALUE
+       chdir returns 0 or -1; getcwd returns BUF or NULL, with errno
+       set on failure.
+
+ERRORS
+       ENOENT    the path does not exist
+       ENOTDIR   a component is not a directory
+       ERANGE    the buffer is too small
+
+SEE ALSO
+       pwd(1), csh(1)

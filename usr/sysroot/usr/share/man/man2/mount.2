@@ -1,0 +1,32 @@
+NAME
+       mount, umount, mount9 - attach and detach filesystems
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_disk_mount(const char *dev, const char *path);
+       int cervus_disk_umount(const char *path);
+       int cervus_mount9(const char *host, int port, const char *path);
+
+DESCRIPTION
+       Mounts a block device, detecting the filesystem from its
+       superblock. ext2, ext4, FAT32, ISO 9660 and UDF are recognised;
+       ext4 is read through its extent tree, and UDF is read and
+       written without the usual write-once restriction.
+
+       mount9 attaches a remote 9P server over the network instead of a
+       block device.
+
+       Unmounting flushes pending writes first, so a device removed
+       after umount returns is consistent.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+ERRORS
+       ENODEV     no such device
+       ENOTBLK    the device holds no filesystem this kernel knows
+       EBUSY      the mount point is in use
+
+SEE ALSO
+       mount(1), mount9(1), statvfs(2), disk(2)

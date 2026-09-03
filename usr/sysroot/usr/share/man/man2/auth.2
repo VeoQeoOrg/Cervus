@@ -1,0 +1,29 @@
+NAME
+       auth, sudo, passwd_set - authentication
+
+SYNOPSIS
+       int cervus_auth(const char *user, const char *password);
+       int cervus_sudo(void);
+       int cervus_passwd_set(const char *user, const char *password);
+
+DESCRIPTION
+       Authentication lives in the kernel rather than in a library, so
+       a program cannot decide for itself that a password was correct.
+
+       auth checks a password against the stored SHA-256 hash. sudo
+       asks whether the caller may act as root. passwd_set changes a
+       password, which the kernel allows for your own account, or for
+       any account when the caller is root.
+
+       Consequently there is no path to a root shell without a
+       password.
+
+RETURN VALUE
+       0 when the check succeeds, negative otherwise.
+
+ERRORS
+       EPERM    the password is wrong, or the caller may not do this
+       ENOENT   no such user
+
+SEE ALSO
+       su(1), sudo(1), passwd(1), login(1), getpid(2)

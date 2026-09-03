@@ -1,0 +1,27 @@
+NAME
+       openpty - open a pseudo-terminal pair
+
+SYNOPSIS
+       #include <pty.h>
+
+       int openpty(int *master, int *slave, char *name,
+                   const struct termios *tio, const struct winsize *ws);
+
+DESCRIPTION
+       Creates a terminal pair. What is written to the master appears
+       as input on the slave, and what a program writes to the slave
+       comes back on the master.
+
+       This is what lets sshd give a remote login a real terminal, and
+       what wterm uses to run a shell inside a framebuffer window: the
+       shell believes it is talking to a terminal, and line editing and
+       job control work normally.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ENOENT   no pseudo-terminal is free
+
+SEE ALSO
+       vt(2), sshd(1), wterm(1), termios(3)

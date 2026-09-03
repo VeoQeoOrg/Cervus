@@ -1,0 +1,31 @@
+NAME
+       string - string and memory functions
+
+SYNOPSIS
+       #include <string.h>
+
+       size_t strlen(const char *s);
+       char  *strcpy(char *d, const char *s);
+       char  *strncpy(char *d, const char *s, size_t n);
+       int    strcmp(const char *a, const char *b);
+       int    strncmp(const char *a, const char *b, size_t n);
+       int    strcasecmp(const char *a, const char *b);
+       char  *strchr(const char *s, int c);
+       char  *strrchr(const char *s, int c);
+       char  *strstr(const char *h, const char *n);
+       char  *strdup(const char *s);
+       char  *strtok(char *s, const char *sep);
+       void  *memcpy(void *d, const void *s, size_t n);
+       void  *memmove(void *d, const void *s, size_t n);
+       void  *memset(void *d, int c, size_t n);
+       int    memcmp(const void *a, const void *b, size_t n);
+
+DESCRIPTION
+       The usual C string and memory functions.
+
+       strncpy does not terminate the destination when the source fills
+       it, so terminate the last byte yourself. memcpy assumes the
+       regions do not overlap; use memmove when they might.
+
+SEE ALSO
+       printf(3), malloc(3), regex(3), fnmatch(3)

@@ -1,0 +1,25 @@
+NAME
+       semget, semop, semctl - semaphores
+
+SYNOPSIS
+       #include <sys/sem.h>
+
+       int semget(key_t key, int nsems, int flag);
+       int semop(int id, struct sembuf *ops, size_t nops);
+       int semctl(int id, int num, int cmd, ...);
+
+DESCRIPTION
+       System V semaphores, used to coordinate processes that share
+       memory. semop applies a list of operations atomically: either
+       all of them happen or the caller waits.
+
+RETURN VALUE
+       0 or an id on success, -1 with errno set.
+
+ERRORS
+       EAGAIN   IPC_NOWAIT was set and the operation would block
+       EINVAL   bad id or index
+       EINTR    a signal arrived while waiting
+
+SEE ALSO
+       shmget(2), futex(2), semtest(1)

@@ -1,0 +1,22 @@
+NAME
+       qsort, bsearch - sort and search an array
+
+SYNOPSIS
+       #include <stdlib.h>
+
+       void  qsort(void *base, size_t n, size_t size,
+                   int (*cmp)(const void *, const void *));
+       void *bsearch(const void *key, const void *base, size_t n,
+                     size_t size, int (*cmp)(const void *, const void *));
+
+DESCRIPTION
+       Sorts an array in place, and searches one that is already
+       sorted. CMP returns a negative number, zero or a positive number
+       as the first argument sorts before, equal to, or after the
+       second.
+
+RETURN VALUE
+       bsearch returns a pointer to a matching element, or NULL.
+
+SEE ALSO
+       string(3), sort(1)

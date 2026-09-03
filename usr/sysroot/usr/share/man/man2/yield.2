@@ -1,0 +1,22 @@
+NAME
+       yield - give up the processor
+
+SYNOPSIS
+       #include <sched.h>
+
+       int sched_yield(void);
+
+DESCRIPTION
+       Offers the rest of the current time slice to another runnable
+       task of the same priority. The scheduler picks the next task
+       from a priority bitmap, so the choice costs the same regardless
+       of how many tasks exist.
+
+       Yielding in a loop is a poor way to wait: use poll(2) with a
+       timeout, or sleep, so the task is not runnable while it waits.
+
+RETURN VALUE
+       0.
+
+SEE ALSO
+       poll(2), clock(2), futex(2)

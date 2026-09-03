@@ -1,0 +1,28 @@
+NAME
+       getdents, readdir - read directory entries
+
+SYNOPSIS
+       #include <dirent.h>
+
+       DIR           *opendir(const char *path);
+       struct dirent *readdir(DIR *d);
+       int            closedir(DIR *d);
+
+DESCRIPTION
+       Walks a directory. Each entry carries d_name and d_type, where
+       d_type distinguishes a directory from a regular file without a
+       separate stat, which matters when listing a large tree.
+
+       getdents is the underlying syscall and fills a caller-supplied
+       buffer with several entries at a time.
+
+RETURN VALUE
+       readdir returns an entry, or NULL at the end of the directory or
+       on error.
+
+ERRORS
+       ENOENT    the directory does not exist
+       ENOTDIR   the path is not a directory
+
+SEE ALSO
+       stat(2), ls(1), find(1)

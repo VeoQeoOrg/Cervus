@@ -1,0 +1,32 @@
+NAME
+       malloc, calloc, realloc, free - allocate memory
+
+SYNOPSIS
+       #include <stdlib.h>
+
+       void *malloc(size_t size);
+       void *calloc(size_t n, size_t size);
+       void *realloc(void *p, size_t size);
+       void  free(void *p);
+
+DESCRIPTION
+       The heap is a list of blocks carrying their own size, grown with
+       sbrk in 64 KB steps. malloc takes the first block large enough
+       and splits it; free marks a block available and merges it with
+       neighbours that are also free.
+
+       calloc zeroes what it returns. realloc keeps the contents up to
+       the smaller of the two sizes and may move the block, so the old
+       pointer must not be used afterwards.
+
+RETURN VALUE
+       A pointer, or NULL with errno set to ENOMEM. free returns
+       nothing and accepts NULL.
+
+NOTES
+       Large allocations are fine: the break has no small ceiling, and
+       decoding a long animated GIF into a dozen megabytes of frames
+       works.
+
+SEE ALSO
+       brk(2), mmap(2)

@@ -1,0 +1,21 @@
+NAME
+       time, localtime, mktime - broken-down time
+
+SYNOPSIS
+       #include <time.h>
+
+       time_t     time(time_t *t);
+       struct tm *gmtime(const time_t *t);
+       struct tm *localtime(const time_t *t);
+       time_t     mktime(struct tm *tm);
+
+DESCRIPTION
+       Converts between a count of seconds since the epoch and a
+       broken-down struct tm. There is no timezone database, so
+       localtime is UTC.
+
+RETURN VALUE
+       A pointer to a static struct, overwritten by the next call.
+
+SEE ALSO
+       clock(2), date(1), ntpdate(1)

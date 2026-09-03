@@ -1,0 +1,24 @@
+NAME
+       pci_list, usb_list - enumerate devices
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_pci_list(cervus_pci_device_t *out, int max);
+       int cervus_usb_list(cervus_usb_device_t *out, int max);
+
+DESCRIPTION
+       Reports the PCI devices the kernel found, each with its address,
+       class, vendor and device id, base address registers, interrupt
+       line and MSI and MSI-X capabilities; and the USB devices behind
+       the EHCI, UHCI and xHCI controllers.
+
+       Useful when a driver has not bound: comparing the list against
+       the kernel log shows whether the device was seen but rejected,
+       or never enumerated at all.
+
+RETURN VALUE
+       The number of devices written, or negative on failure.
+
+SEE ALSO
+       lspci(1), lsusb(1), dmesg(1)

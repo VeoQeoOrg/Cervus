@@ -1,0 +1,23 @@
+NAME
+       opendir, readdir, closedir - read a directory
+
+SYNOPSIS
+       #include <dirent.h>
+
+       DIR           *opendir(const char *path);
+       struct dirent *readdir(DIR *d);
+       int            closedir(DIR *d);
+
+DESCRIPTION
+       Iterates over a directory. Each entry carries d_name and d_type;
+       d_type says whether the entry is a directory without a separate
+       stat call, which is worth using when listing large trees.
+
+       The returned entry is overwritten by the next readdir, so copy
+       anything you need to keep.
+
+RETURN VALUE
+       readdir returns NULL at the end of the directory and on error.
+
+SEE ALSO
+       getdents(2), stat(2), fnmatch(3)

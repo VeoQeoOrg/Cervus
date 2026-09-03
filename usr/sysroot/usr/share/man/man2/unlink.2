@@ -1,0 +1,29 @@
+NAME
+       unlink, rmdir, mkdir, rename - change directory entries
+
+SYNOPSIS
+       #include <unistd.h>
+       #include <sys/stat.h>
+
+       int unlink(const char *path);
+       int rmdir(const char *path);
+       int mkdir(const char *path, mode_t mode);
+       int rename(const char *from, const char *to);
+
+DESCRIPTION
+       unlink removes a name; rmdir removes an empty directory; mkdir
+       creates one; rename moves a name, which within one filesystem
+       costs nothing because no data is copied.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ENOENT      the path does not exist
+       ENOTEMPTY   rmdir was given a directory that still has entries
+       EISDIR      unlink was given a directory
+       EXDEV       rename across filesystems; copy and remove instead
+       EACCES      permission denied
+
+SEE ALSO
+       open(2), stat(2), rm(1), mv(1)

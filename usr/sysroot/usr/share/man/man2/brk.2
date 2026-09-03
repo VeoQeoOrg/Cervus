@@ -1,0 +1,25 @@
+NAME
+       brk, sbrk - change the data segment size
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int   brk(void *addr);
+       void *sbrk(intptr_t increment);
+
+DESCRIPTION
+       Moves the top of the heap. Pages are mapped as the break grows
+       and unmapped as it shrinks.
+
+       These are the foundation malloc is built on; call malloc rather
+       than these unless you are writing an allocator.
+
+RETURN VALUE
+       sbrk returns the previous break, or (void *)-1 on failure. brk
+       returns the current break.
+
+ERRORS
+       ENOMEM   no memory, or the request is outside the allowed range
+
+SEE ALSO
+       mmap(2), malloc(3)

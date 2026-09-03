@@ -1,0 +1,32 @@
+NAME
+       stdio - buffered input and output
+
+SYNOPSIS
+       #include <stdio.h>
+
+       FILE  *fopen(const char *path, const char *mode);
+       int    fclose(FILE *f);
+       size_t fread(void *p, size_t sz, size_t n, FILE *f);
+       size_t fwrite(const void *p, size_t sz, size_t n, FILE *f);
+       int    fseek(FILE *f, long off, int whence);
+       long   ftell(FILE *f);
+       char  *fgets(char *s, int n, FILE *f);
+       int    fputs(const char *s, FILE *f);
+       int    fflush(FILE *f);
+
+DESCRIPTION
+       Buffered streams over file descriptors. stdin, stdout and stderr
+       are open at startup.
+
+       Output is buffered, so anything drawn to the terminal has to be
+       flushed before it appears. This matters when a program mixes
+       stdio with something unbuffered: a full-screen program that
+       writes its text through stdio and then paints the framebuffer
+       must flush between the two, or the picture lands under text that
+       has not been written yet.
+
+RETURN VALUE
+       As usual for C; NULL or a short count with errno set on failure.
+
+SEE ALSO
+       printf(3), getline(3), read(2), write(2)

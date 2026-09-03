@@ -1,0 +1,22 @@
+NAME
+       futex - fast userspace lock
+
+SYNOPSIS
+       int futex_wait(int *addr, int expected);
+       int futex_wake(int *addr, int count);
+
+DESCRIPTION
+       The kernel half of a userspace lock. futex_wait sleeps only if
+       the word at ADDR still equals EXPECTED, which closes the race
+       between testing the lock and going to sleep. futex_wake wakes up
+       to COUNT waiters.
+
+       The uncontended path stays entirely in userspace and costs no
+       syscall; the kernel is only involved when a thread actually has
+       to wait.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+SEE ALSO
+       semget(2), poll(2)

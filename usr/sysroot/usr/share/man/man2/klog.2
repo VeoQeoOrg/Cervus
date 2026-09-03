@@ -1,0 +1,16 @@
+NAME
+       klog - read the kernel log
+
+SYNOPSIS
+       int cervus_klog(char *buf, int size);
+
+DESCRIPTION
+       Copies the kernel ring buffer into BUF. Messages carry a level;
+       the runtime threshold decides which reach the serial port and
+       can be changed from the debug console.
+
+RETURN VALUE
+       The number of bytes copied, or negative on failure.
+
+SEE ALSO
+       dmesg(1), vt(2)

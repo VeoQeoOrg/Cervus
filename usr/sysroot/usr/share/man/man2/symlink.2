@@ -1,0 +1,27 @@
+NAME
+       symlink, readlink - symbolic links
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int     symlink(const char *target, const char *path);
+       ssize_t readlink(const char *path, char *buf, size_t size);
+
+DESCRIPTION
+       symlink creates PATH pointing at TARGET, which need not exist.
+       readlink reads the target back without following it, and does
+       not terminate the buffer.
+
+       Hard links are not implemented, so a symbolic link is the only
+       kind available.
+
+RETURN VALUE
+       symlink returns 0; readlink returns the byte count. Both return
+       -1 with errno set on failure.
+
+ERRORS
+       EEXIST    path already exists
+       EINVAL    the path is not a symbolic link
+
+SEE ALSO
+       ln(1), stat(2)

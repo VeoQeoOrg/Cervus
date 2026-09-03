@@ -1,0 +1,23 @@
+NAME
+       mouse_state, keymap_config - input devices
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_mouse_state(cervus_mouse_info_t *out);
+       int cervus_keymap_config(int op, const char *arg);
+
+DESCRIPTION
+       mouse_state reports the pointer position, the state of the
+       left, right and middle buttons, and the accumulated scroll since
+       the last call. PS/2 and USB mice feed the same state.
+
+       keymap_config selects the console layouts and the chord that
+       switches between them. The layout table is shared by PS/2 and
+       USB keyboards, so both behave the same.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+SEE ALSO
+       framebuffer(2), csh(1)

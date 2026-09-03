@@ -1,0 +1,27 @@
+NAME
+       pw_getpass, pw_lookup_name, pw_lookup_uid - account helpers
+
+SYNOPSIS
+       #include <pwutil.h>
+
+       int pw_getpass(const char *prompt, char *buf, int cap);
+       int pw_lookup_name(const char *name, uint32_t *uid, uint32_t *gid,
+                          char *home, int home_cap, char *shell, int shell_cap);
+       int pw_lookup_uid(uint32_t uid, char *name, int name_cap, ...);
+
+DESCRIPTION
+       pw_getpass reads a password with echo turned off and restores
+       the terminal afterwards, including when interrupted.
+
+       The lookup functions map between a user name and a numeric id
+       and report the home directory and login shell.
+
+       Checking a password is not done here: pass it to the kernel with
+       cervus_auth, which compares it against the stored hash. See
+       auth(2).
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+SEE ALSO
+       auth(2), su(1), passwd(1), login(1)

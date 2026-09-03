@@ -1,0 +1,30 @@
+NAME
+       setpgid, getpgid, setsid, getsid - process groups and sessions
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int   setpgid(pid_t pid, pid_t pgid);
+       pid_t getpgid(pid_t pid);
+       pid_t setsid(void);
+       pid_t getsid(pid_t pid);
+
+DESCRIPTION
+       Process groups decide who receives a terminal signal. Ctrl-C
+       sends SIGINT to the whole foreground group, so interrupting a
+       script kills the command it is running as well as the script,
+       rather than leaving one of them behind.
+
+       A shell puts each pipeline in its own group and makes that group
+       the foreground one; setsid starts a new session, which is what a
+       daemon does to detach from the terminal.
+
+RETURN VALUE
+       0 or a pid on success, -1 with errno set.
+
+ERRORS
+       ESRCH   no such process
+       EPERM   the process is in another session
+
+SEE ALSO
+       kill(2), csh(1), openpty(2)

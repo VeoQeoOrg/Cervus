@@ -1,0 +1,19 @@
+NAME
+       shutdown, reboot - stop the machine
+
+SYNOPSIS
+       int cervus_shutdown(void);
+       int cervus_reboot(void);
+
+DESCRIPTION
+       Flushes every filesystem and then powers off through ACPI, or
+       restarts. Both require root or a successful sudo check.
+
+RETURN VALUE
+       Does not return on success; negative on failure.
+
+ERRORS
+       EPERM   the caller is not permitted to do this
+
+SEE ALSO
+       shutdown(1), reboot(1), sync(2), auth(2)

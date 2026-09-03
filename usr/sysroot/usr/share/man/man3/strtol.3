@@ -1,0 +1,24 @@
+NAME
+       strtol, strtoul, strtod, atoi - convert a string to a number
+
+SYNOPSIS
+       #include <stdlib.h>
+
+       long          strtol(const char *s, char **end, int base);
+       unsigned long strtoul(const char *s, char **end, int base);
+       double        strtod(const char *s, char **end);
+       int           atoi(const char *s);
+
+DESCRIPTION
+       Parses a number from the front of S, skipping leading
+       whitespace and accepting a leading + or -. With base 0 a 0x
+       prefix means hexadecimal and a leading 0 means octal. END, when
+       not NULL, is set to the first unparsed character.
+
+       atoi is strtol with base 10 and no error reporting.
+
+RETURN VALUE
+       The value, or 0 when nothing could be parsed.
+
+SEE ALSO
+       printf(3), expr(1)

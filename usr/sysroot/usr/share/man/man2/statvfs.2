@@ -1,0 +1,21 @@
+NAME
+       statvfs, list_mounts - filesystem information
+
+SYNOPSIS
+       #include <sys/statvfs.h>
+
+       int statvfs(const char *path, struct statvfs *st);
+
+DESCRIPTION
+       Reports the block size, total, free and available blocks of the
+       filesystem holding PATH. list_mounts enumerates every mount with
+       its device, mount point and type.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ENOENT   the path does not exist
+
+SEE ALSO
+       df(1), mount(2), stat(2)

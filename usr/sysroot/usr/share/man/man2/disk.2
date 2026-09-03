@@ -1,0 +1,39 @@
+NAME
+       disk_info, disk_read_raw, disk_write_raw, disk_partition,
+       disk_format, disk_format_progress - block devices
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int  cervus_disk_info(int idx, cervus_disk_info_t *out);
+       long cervus_disk_read_raw(const char *dev, uint64_t lba,
+                                 void *buf, unsigned count);
+       long cervus_disk_write_raw(const char *dev, uint64_t lba,
+                                  const void *buf, unsigned count);
+       int  cervus_disk_partition(const char *dev, ...);
+       int  cervus_disk_format(const char *dev, const char *label,
+                               int ext4);
+       int  cervus_disk_mkfs_fat32(const char *dev, const char *label);
+       int  cervus_disk_list_parts(cervus_part_info_t *out, int max);
+       int  cervus_disk_format_progress(void);
+       int  cervus_disk_eject(const char *dev);
+
+DESCRIPTION
+       Enumerates disks, reads and writes raw sectors, writes partition
+       tables in MBR or GPT form, and creates filesystems.
+
+       Formatting is a long blocking call. disk_format_progress returns
+       how far the format that is currently running has got, as a
+       percentage, so a caller can fork the format into a child and
+       poll from the parent while drawing a progress bar.
+
+RETURN VALUE
+       0 or a count on success, negative on failure. format_progress
+       returns a percentage, or negative when no format is running.
+
+ERRORS
+       ENODEV   no such device
+       EIO      the transfer failed
+
+SEE ALSO
+       mount(2), lsblk(1), mkfs(1), fdisk(1)

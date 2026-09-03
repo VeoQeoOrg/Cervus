@@ -1,0 +1,30 @@
+NAME
+       fcntl - manipulate a file descriptor
+
+SYNOPSIS
+       #include <fcntl.h>
+
+       int fcntl(int fd, int cmd, ... );
+
+DESCRIPTION
+       Operates on the descriptor itself rather than on the file.
+
+COMMANDS
+       F_DUPFD   duplicate FD to the lowest number at or above the
+                 third argument
+       F_GETFD, F_SETFD   read or set the close-on-exec flag
+       F_GETFL, F_SETFL   read or set the status flags
+
+NOTES
+       Putting a terminal into non-blocking mode is done with the
+       TIOCSNONBLOCK ioctl, not with F_SETFL. See ioctl(2).
+
+RETURN VALUE
+       Depends on the command, -1 with errno set on failure.
+
+ERRORS
+       EBADF    fd is not open
+       EINVAL   the command is not supported
+
+SEE ALSO
+       ioctl(2), open(2), dup(2)

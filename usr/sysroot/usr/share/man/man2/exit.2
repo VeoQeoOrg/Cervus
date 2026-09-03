@@ -1,0 +1,27 @@
+NAME
+       exit, _exit, exit_group - terminate a process
+
+SYNOPSIS
+       #include <unistd.h>
+
+       void _exit(int status);
+       void exit(int status);
+
+DESCRIPTION
+       Ends the calling process with STATUS, of which the low eight
+       bits reach the parent through wait. exit runs the registered
+       atexit handlers and flushes stdio first; _exit does neither.
+
+       exit_group ends every task in the group, which is how a process
+       that has spawned helpers tears them all down at once.
+
+       On exit the kernel closes the file table, hands any children to
+       init, releases the terminal's non-blocking mode if this process
+       had set it, and stops the audio stream if this process had
+       opened it. Nothing else has to be cleaned up by hand.
+
+RETURN VALUE
+       Does not return.
+
+SEE ALSO
+       wait(2), fork(2), kill(2)
