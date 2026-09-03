@@ -1,0 +1,38 @@
+NAME
+       ioctl - device-specific control
+
+SYNOPSIS
+       #include <sys/ioctl.h>
+
+       int ioctl(int fd, unsigned long request, void *arg);
+
+DESCRIPTION
+       Performs a device-specific operation on FD.
+
+TERMINAL REQUESTS
+       TIOCGWINSZ (0x5413)
+              Read the window size into a struct winsize. Full-screen
+              programs use it to lay out the display, and the console
+              updates it when the font changes.
+
+       TIOCSNONBLOCK (0x5481)
+              Take an int; non-zero puts the terminal into non-blocking
+              mode for the calling process, so read returns EAGAIN
+              rather than waiting. Pass zero to restore blocking.
+
+              This is the mechanism to use for non-blocking terminal
+              input: the c_cc VMIN and VTIME fields of termios are
+              stored but not honoured, so setting VMIN to 0 does not
+              make read return early. poll(2) is the other option and
+              is easier when escape sequences must be decoded.
+
+RETURN VALUE
+       0 or a request-specific value on success, -1 with errno set.
+
+ERRORS
+       EBADF    fd is not open
+       ENOTTY   the request does not apply to this file
+       EFAULT   arg points outside the address space
+
+SEE ALSO
+       poll(2), read(2), termios(3)

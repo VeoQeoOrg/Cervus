@@ -1,0 +1,20 @@
+NAME
+       tee - copy standard input to files and standard output
+
+SYNOPSIS
+       tee [-ai] [file ...]
+
+DESCRIPTION
+       Reads standard input and writes it both to standard output and
+       to each FILE, so a pipeline can be tapped without interrupting
+       it.
+
+OPTIONS
+       -a     append to the files instead of truncating them
+       -i     accepted and ignored, for portability
+
+EXAMPLES
+       dmesg | tee /mnt/boot.log | grep hda
+
+SEE ALSO
+       cat(1)

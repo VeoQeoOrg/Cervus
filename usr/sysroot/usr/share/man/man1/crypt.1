@@ -1,0 +1,24 @@
+NAME
+       crypt - encrypt and decrypt a file
+
+SYNOPSIS
+       crypt -e|-d [-p passphrase] [-o out] <file>
+
+DESCRIPTION
+       Encrypts or decrypts a file with a passphrase using
+       ChaCha20-Poly1305, so tampering is detected rather than
+       producing garbage.
+
+OPTIONS
+       -e, --encrypt   encrypt
+       -d, --decrypt   decrypt
+       -p P            passphrase (otherwise you are prompted, which
+                       keeps it out of the history)
+       -o F            write to F
+
+EXAMPLES
+       crypt -e -o secret.enc notes.txt
+       crypt -d secret.enc -o notes.txt
+
+SEE ALSO
+       ssh-keygen(1)

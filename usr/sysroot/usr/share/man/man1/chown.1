@@ -1,0 +1,17 @@
+NAME
+       chown - change file owner and group
+
+SYNOPSIS
+       chown <user[:group]> <file>...
+
+DESCRIPTION
+       Changes the owner, and optionally the group, of each FILE. USER
+       and GROUP may be given by name or by numeric id. Only root may
+       give a file away.
+
+EXAMPLES
+       chown alice report.txt
+       chown alice:staff /mnt/projects
+
+SEE ALSO
+       chmod(1), id(1), useradd(1)

@@ -1,0 +1,19 @@
+NAME
+       mount - mount a filesystem, or list what is mounted
+
+SYNOPSIS
+       mount
+       mount device path
+
+DESCRIPTION
+       With no arguments, lists every mounted filesystem. With a device
+       and a path, mounts that device there. The filesystem type is
+       detected from the superblock; ext2, ext4, FAT32, ISO 9660 and
+       UDF are recognised.
+
+EXAMPLES
+       mount
+       mount /dev/sda1 /mnt
+
+SEE ALSO
+       umount(1), lsblk(1), mkfs(1), mount9(1), df(1)

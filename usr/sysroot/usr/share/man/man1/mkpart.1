@@ -1,0 +1,22 @@
+NAME
+       mkpart - create a partition table
+
+SYNOPSIS
+       mkpart [-f] <device> <type>:<size> [<type>:<size> ...]
+
+DESCRIPTION
+       Writes a fresh partition table on DEVICE with the partitions
+       given. Each argument is a type and a size, and a size of 0 or
+       the last entry takes the remaining space.
+
+       This destroys the existing table, so it asks for confirmation
+       unless -f is given.
+
+OPTIONS
+       -f     do not ask for confirmation
+
+EXAMPLES
+       mkpart /dev/sda fat32:512M ext4:0
+
+SEE ALSO
+       fdisk(1), mkfs(1), wipefs(1)

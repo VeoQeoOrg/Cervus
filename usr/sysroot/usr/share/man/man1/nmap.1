@@ -1,0 +1,21 @@
+NAME
+       nmap - scan TCP ports
+
+SYNOPSIS
+       nmap [-p 1-1024|22,80,443|-] [--timeout ms] <host>
+
+DESCRIPTION
+       Tries to open a TCP connection to each port of HOST and reports
+       which ones accept. Connections are made without blocking, so a
+       wide range finishes quickly.
+
+OPTIONS
+       -p SPEC        ports to scan: a range, a list, or - for all
+       --timeout MS   how long to wait for each connection
+
+EXAMPLES
+       nmap -p 1-1024 10.0.0.1
+       nmap -p 22,80,443 example.com
+
+SEE ALSO
+       nc(1), ping(1)

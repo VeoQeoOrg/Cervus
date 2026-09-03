@@ -1,0 +1,21 @@
+NAME
+       uniq - filter adjacent matching lines
+
+SYNOPSIS
+       uniq [-cdiu] [input [output]]
+
+DESCRIPTION
+       Collapses runs of identical adjacent lines. Only adjacent lines
+       are compared, so the input is usually sorted first.
+
+OPTIONS
+       -c     prefix each line with the number of occurrences
+       -d     print only lines that repeat
+       -i     ignore case while comparing
+       -u     print only lines that occur exactly once
+
+EXAMPLES
+       sort names.txt | uniq -c
+
+SEE ALSO
+       sort(1)

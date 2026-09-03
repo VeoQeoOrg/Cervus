@@ -1,0 +1,32 @@
+NAME
+       socket, bind, listen, accept, connect - BSD sockets
+
+SYNOPSIS
+       #include <sys/socket.h>
+
+       int socket(int domain, int type, int protocol);
+       int bind(int s, const struct sockaddr *a, socklen_t len);
+       int listen(int s, int backlog);
+       int accept(int s, struct sockaddr *a, socklen_t *len);
+       int connect(int s, const struct sockaddr *a, socklen_t len);
+
+DESCRIPTION
+       The usual socket calls. AF_INET, AF_INET6 and AF_UNIX are
+       supported, with SOCK_STREAM and SOCK_DGRAM.
+
+       A socket put into non-blocking mode makes connect return at once
+       and finish in the background, which is what lets nmap(1) scan a
+       wide range quickly.
+
+RETURN VALUE
+       socket and accept return a descriptor; the rest return 0. All
+       return -1 with errno set on failure.
+
+ERRORS
+       EAFNOSUPPORT   the domain is not supported
+       EADDRINUSE     the address is already bound
+       ECONNREFUSED   nothing is listening
+       EAGAIN         a non-blocking operation is still in progress
+
+SEE ALSO
+       sendto(2), poll(2), nc(1)

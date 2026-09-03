@@ -1,0 +1,19 @@
+NAME
+       mv - move or rename files
+
+SYNOPSIS
+       mv [-fiv] source ... target
+
+DESCRIPTION
+       Renames SOURCE to TARGET, or moves several SOURCEs into a
+       directory. Within one filesystem the move is a rename and costs
+       nothing; across filesystems the file is copied and the original
+       removed.
+
+OPTIONS
+       -f     never prompt
+       -i     prompt before overwriting an existing target
+       -v     print each file as it is moved
+
+SEE ALSO
+       cp(1), rm(1)

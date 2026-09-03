@@ -1,0 +1,21 @@
+NAME
+       useradd - create a user account
+
+SYNOPSIS
+       useradd [-u uid] [-s shell] [-G sudo] <name>
+
+DESCRIPTION
+       Creates an account, its home directory and its passwd entry. Set
+       a password afterwards with passwd.
+
+OPTIONS
+       -u N       use this numeric id
+       -s SHELL   login shell
+       -G sudo    also make the account a sudoer
+
+EXAMPLES
+       useradd -G sudo alice
+       passwd alice
+
+SEE ALSO
+       userdel(1), usermod(1), passwd(1), groups(1)

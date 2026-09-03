@@ -1,0 +1,27 @@
+NAME
+       ssh - secure shell client
+
+SYNOPSIS
+       ssh [-p port] user@host [command]
+
+DESCRIPTION
+       Opens an SSH-2 session. With a COMMAND it is run remotely and
+       the connection closes; without one an interactive shell starts.
+
+       Authentication is by public key when ~/.ssh/id_ed25519 exists
+       and the server accepts it, otherwise by password. The ciphers
+       offered are chacha20-poly1305 and AES-GCM.
+
+OPTIONS
+       -p N   connect to port N instead of 22
+
+FILES
+       ~/.ssh/id_ed25519       private key
+       ~/.ssh/id_ed25519.pub   public key
+
+EXAMPLES
+       ssh user@10.0.0.1
+       ssh -p 2222 user@host uptime
+
+SEE ALSO
+       sshd(1), ssh-keygen(1), scp via 9p(1)

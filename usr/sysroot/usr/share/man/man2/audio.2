@@ -1,0 +1,49 @@
+NAME
+       audio_open, audio_write, audio_close, audio_mixer - sound output
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int  cervus_audio_open(unsigned rate);
+       long cervus_audio_write(const void *pcm, unsigned long len);
+       int  cervus_audio_close(void);
+
+       int  cervus_audio_mixer_get(cervus_audio_mixer_t *m);
+       int  cervus_audio_set_volume(int pct);
+       int  cervus_audio_set_mute(int mute);
+       int  cervus_audio_set_output(int idx);
+
+DESCRIPTION
+       Plays audio through whichever driver claimed the card. The
+       sample format is fixed: signed 16-bit stereo, interleaved, at
+       the rate given to open. Converting from anything else is the
+       caller's job.
+
+       Writes block until the data has been queued, so a producer that
+       is faster than real time simply waits. Short writes are packed
+       into the device buffers rather than padded, so any length may be
+       written; close flushes whatever is left and waits for it to
+       drain.
+
+       The device is released automatically when the process that
+       opened it exits, so a program killed mid-playback does not leave
+       the card looping.
+
+MIXER
+       cervus_audio_mixer_get fills in the driver name, the volume in
+       percent, the mute flag and the list of outputs. Each output has
+       a name, a kind (speaker, headphone, line out, digital) and a
+       present flag driven by jack detection.
+
+       cervus_audio_set_output takes an index, or -1 for automatic,
+       which follows the jacks: headphone over line out over the
+       internal speaker.
+
+RETURN VALUE
+       0 or a byte count on success, negative on failure.
+
+ERRORS
+       ENODEV   no sound card, or no usable output on the codec
+
+SEE ALSO
+       play(1), mixer(1)

@@ -1,0 +1,25 @@
+NAME
+       tr - translate, squeeze or delete characters
+
+SYNOPSIS
+       tr [-d] [-s] set1 [set2]
+
+DESCRIPTION
+       Reads standard input, transforms it and writes standard output.
+       By default each character of SET1 is replaced by the character
+       at the same position in SET2.
+
+       Sets accept ranges such as a-z and the classes [:upper:]
+       [:lower:] [:digit:] [:space:] [:alpha:] [:alnum:].
+
+OPTIONS
+       -d     delete every character in SET1
+       -s     squeeze repeats of the characters in the last set
+
+EXAMPLES
+       tr a-z A-Z < notes.txt
+       tr -d '\r' < dos.txt > unix.txt
+       tr -s ' '
+
+SEE ALSO
+       sed(1), cut(1)

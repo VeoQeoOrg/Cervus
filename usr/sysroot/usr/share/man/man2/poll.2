@@ -1,0 +1,45 @@
+NAME
+       poll, select - wait for a descriptor to become ready
+
+SYNOPSIS
+       #include <poll.h>
+
+       int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+
+       #include <sys/select.h>
+
+       int select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds,
+                  struct timeval *timeout);
+
+DESCRIPTION
+       Waits until one of the descriptors is ready, or until the
+       timeout expires. For poll the timeout is in milliseconds; a
+       negative value waits forever and zero returns at once.
+
+       Each pollfd names a descriptor and the events wanted; the kernel
+       fills in revents with what actually happened.
+
+       POLLIN    data is available to read
+       POLLOUT   writing will not block
+       POLLERR   an error occurred
+       POLLHUP   the peer hung up
+       POLLNVAL  the descriptor is not open
+
+RETURN VALUE
+       The number of ready descriptors, 0 on timeout, or -1 with errno
+       set.
+
+ERRORS
+       EINVAL   nfds is out of range
+       EFAULT   fds points outside the address space
+       EINTR    a signal arrived first
+
+EXAMPLE
+       Waiting for a key while animating, without busy-waiting:
+
+              struct pollfd p = { 0, POLLIN, 0 };
+              if (poll(&p, 1, 40) == 0)
+                      next_frame();
+
+SEE ALSO
+       read(2), ioctl(2)

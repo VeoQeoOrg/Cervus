@@ -1,0 +1,19 @@
+NAME
+       init - the first process
+
+SYNOPSIS
+       init
+
+DESCRIPTION
+       Started by the kernel as pid 1. It mounts the root filesystem,
+       restores the saved console font and audio settings, spawns a
+       shell on each virtual console and then reaps orphans for the
+       rest of the session.
+
+       It is not meant to be run by hand.
+
+FILES
+       /etc/vconsole.conf, /etc/audio.conf, /etc/shell
+
+SEE ALSO
+       csh(1), setfont(1), mixer(1), shutdown(1)

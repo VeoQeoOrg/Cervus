@@ -1,0 +1,22 @@
+NAME
+       chmod - change file mode bits
+
+SYNOPSIS
+       chmod <mode> <file>...
+
+DESCRIPTION
+       Changes the permission bits of each FILE. MODE is either an
+       octal number or a symbolic expression.
+
+       Symbolic modes take the form [ugoa][+-=][rwx]. Omitting the who
+       part means all. The execute bit matters: execve refuses to run a
+       file that does not have it.
+
+EXAMPLES
+       chmod 644 notes.txt
+       chmod +x script.csh
+       chmod go-w /mnt/shared
+       chmod u=rwx,go=rx /bin/tool
+
+SEE ALSO
+       chown(1), stat(1)

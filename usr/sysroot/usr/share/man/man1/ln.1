@@ -1,0 +1,17 @@
+NAME
+       ln - make a symbolic link
+
+SYNOPSIS
+       ln -s target link_name
+       ln -sf target link_name
+
+DESCRIPTION
+       Creates LINK_NAME pointing at TARGET. Cervus filesystems do not
+       implement hard links, so -s is required.
+
+OPTIONS
+       -s     make a symbolic link (required)
+       -f     remove an existing LINK_NAME first
+
+SEE ALSO
+       readlink(2), symlink(2)

@@ -1,0 +1,36 @@
+NAME
+       cfm - file manager
+
+SYNOPSIS
+       cfm [directory]
+
+DESCRIPTION
+       A full-screen file manager: the listing on the left, a preview
+       on the right. Text files are previewed as text, directories as
+       their contents, and images are drawn on the framebuffer.
+       Animated GIFs play in the preview panel as soon as they are
+       selected, and full screen when opened.
+
+KEYS
+       arrows, PgUp, PgDn, Home, End   move around
+       Enter, right   open (directory, or view the file)
+       Backspace, left   go up
+       e        run the selected file
+       r        rename          d   delete
+       c        copy            x   cut          v   paste
+       n        make a directory
+       .        show hidden files
+       s        settings
+       q        quit
+
+SETTINGS
+       The settings menu covers the preview pane, confirmation before
+       deleting, hidden files, sort order (name, size or type), the
+       width of the preview pane and GIF animation. Save settings
+       writes them to ~/.cfmrc, which is read at startup.
+
+FILES
+       ~/.cfmrc
+
+SEE ALSO
+       neo(1), img(1), ls(1)

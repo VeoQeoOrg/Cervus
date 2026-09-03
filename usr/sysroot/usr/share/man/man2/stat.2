@@ -1,0 +1,26 @@
+NAME
+       stat, fstat - get file status
+
+SYNOPSIS
+       #include <sys/stat.h>
+
+       int stat(const char *path, struct stat *st);
+       int fstat(int fd, struct stat *st);
+
+DESCRIPTION
+       Fills ST with the size, type, mode, owner and timestamps of a
+       file, named by path or by an open descriptor.
+
+       The type is tested with S_ISREG, S_ISDIR, S_ISLNK, S_ISCHR and
+       S_ISBLK.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ENOENT   the path does not exist
+       EBADF    fd is not open
+       EFAULT   st points outside the address space
+
+SEE ALSO
+       open(2), chmod(2), stat(1)

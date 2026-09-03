@@ -1,0 +1,19 @@
+NAME
+       watch - run a command repeatedly
+
+SYNOPSIS
+       watch [-n seconds] command [args...]
+
+DESCRIPTION
+       Clears the screen and reruns COMMAND every two seconds, so a
+       changing value can be followed. Press Ctrl-C to stop.
+
+OPTIONS
+       -n S   wait S seconds between runs
+
+EXAMPLES
+       watch -n 1 ifconfig
+       watch lsblk
+
+SEE ALSO
+       top(1), sysmon(1)

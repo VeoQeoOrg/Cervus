@@ -1,0 +1,23 @@
+NAME
+       9p - 9P protocol client
+
+SYNOPSIS
+       9p -a <host> [-p port] { ls [path] | get <remote> [local] |
+          put <local> <remote> | cat <remote> }
+
+DESCRIPTION
+       Talks to a 9P file server for one-off transfers, without
+       mounting it.
+
+OPTIONS
+       -a H   server host
+       -p N   server port
+
+COMMANDS
+       ls [path]            list a directory
+       get remote [local]   download a file
+       put local remote     upload a file
+       cat remote           write a file to standard output
+
+SEE ALSO
+       mount9(1), ftp(1)

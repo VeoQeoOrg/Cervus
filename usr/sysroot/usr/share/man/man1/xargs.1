@@ -1,0 +1,21 @@
+NAME
+       xargs - build command lines from standard input
+
+SYNOPSIS
+       xargs [-n max] [-I repl] [command [args...]]
+
+DESCRIPTION
+       Reads whitespace-separated words from standard input and runs
+       COMMAND with them appended. Without COMMAND, echo is used.
+
+OPTIONS
+       -n N   pass at most N arguments per command line
+       -I R   run the command once per input line, replacing R in the
+              arguments with that line
+
+EXAMPLES
+       find /mnt -name '*.tmp' | xargs rm -f
+       ls *.png | xargs -I{} cp {} /mnt/pics/
+
+SEE ALSO
+       find(1), seq(1)

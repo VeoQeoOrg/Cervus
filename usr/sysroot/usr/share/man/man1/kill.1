@@ -1,0 +1,21 @@
+NAME
+       kill - send a signal to a process
+
+SYNOPSIS
+       kill [-l] [-s sig | -SIG] pid ...
+
+DESCRIPTION
+       Sends a signal to each PID. The default is TERM.
+
+OPTIONS
+       -l       list the known signal names
+       -s SIG   send SIG, given by name or number
+       -SIG     the same, written as -9 or -KILL
+
+EXAMPLES
+       kill 42
+       kill -9 42
+       kill -s INT 42
+
+SEE ALSO
+       killall(1), ps(1), signals in sigtest(1)

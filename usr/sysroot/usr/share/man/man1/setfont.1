@@ -1,0 +1,29 @@
+NAME
+       setfont - load a console font
+
+SYNOPSIS
+       setfont <font.psf|font.psfu>
+       setfont <font.ttf|font.otf> [px]
+       setfont -r
+       setfont --once <font> [px]
+
+DESCRIPTION
+       Loads a console font. PSF and PSFU bitmap fonts are used at
+       their own size; TrueType and OpenType fonts are rasterised with
+       antialiasing at the pixel size given, 18 by default.
+
+       Changing the font changes the character cell, so the console
+       reflows and every full-screen program in the foreground is told
+       about the new size.
+
+OPTIONS
+       -r, --reset      go back to the built-in font and forget the
+                        saved one
+       --once F [px]    load without saving as the default
+
+FILES
+       /etc/vconsole.conf   the saved font, applied at boot by init
+       /usr/share/consolefonts, /usr/share/fonts
+
+SEE ALSO
+       csh(1)

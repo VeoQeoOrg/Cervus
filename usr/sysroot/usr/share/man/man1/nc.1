@@ -1,0 +1,21 @@
+NAME
+       nc - read and write network connections
+
+SYNOPSIS
+       nc [-u] [host] <port>
+       nc [-u] -l <port>
+
+DESCRIPTION
+       Connects to a port, or listens on one, and shuttles data between
+       the socket and the terminal.
+
+OPTIONS
+       -u     use UDP instead of TCP
+       -l     listen rather than connect
+
+EXAMPLES
+       nc -l 9000
+       nc 10.0.0.1 9000
+
+SEE ALSO
+       nmap(1), httpd(1), ssh(1)

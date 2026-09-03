@@ -1,0 +1,26 @@
+NAME
+       lseek - reposition a file offset
+
+SYNOPSIS
+       #include <unistd.h>
+
+       off_t lseek(int fd, off_t offset, int whence);
+
+DESCRIPTION
+       Moves the file offset of FD.
+
+       SEEK_SET   offset from the start
+       SEEK_CUR   offset from the current position
+       SEEK_END   offset from the end
+
+RETURN VALUE
+       The new offset, or -1 with errno set.
+
+ERRORS
+       EBADF    fd is not open
+       EINVAL   whence is not one of the three, or the result would be
+                negative
+       ESPIPE   fd refers to a pipe or a terminal
+
+SEE ALSO
+       open(2), read(2), write(2), truncate(2)

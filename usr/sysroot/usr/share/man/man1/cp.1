@@ -1,0 +1,23 @@
+NAME
+       cp - copy files and directories
+
+SYNOPSIS
+       cp [-fiprRv] source ... target
+
+DESCRIPTION
+       Copies SOURCE to TARGET, or several SOURCEs into a directory.
+       Copying a directory requires -R.
+
+OPTIONS
+       -f     overwrite an existing target without asking
+       -i     ask before overwriting an existing target
+       -p     preserve attributes (accepted, currently has no effect)
+       -R, -r copy directories recursively
+       -v     print each file as it is copied
+
+EXAMPLES
+       cp notes.txt /mnt/backup/
+       cp -Rv /usr/share/media /mnt/media
+
+SEE ALSO
+       mv(1), rm(1), ln(1)

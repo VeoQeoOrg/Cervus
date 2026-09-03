@@ -1,0 +1,26 @@
+NAME
+       ip - show and manipulate addresses and routes
+
+SYNOPSIS
+       ip [ OBJECT ] [ COMMAND ]
+
+DESCRIPTION
+       A smaller version of the familiar tool.
+
+OBJECTS
+       ip link            list interfaces and their state
+       ip addr            list interfaces with their addresses
+       ip addr add A/N dev IF
+                          set an address and prefix on an interface
+       ip route           show the routing table
+       ip route add default via GW dev IF
+                          set the default gateway
+       ip route del default dev IF
+                          drop the default gateway
+
+EXAMPLES
+       ip addr add 10.0.0.5/24 dev eth0
+       ip route add default via 10.0.0.1 dev eth0
+
+SEE ALSO
+       ifconfig(1), ping(1)

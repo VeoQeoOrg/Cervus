@@ -1,0 +1,21 @@
+NAME
+       ifconfig - show or configure network interfaces
+
+SYNOPSIS
+       ifconfig
+       ifconfig <iface> <address> [netmask] [gateway] [dns]
+
+DESCRIPTION
+       With no arguments, lists every interface with its link state,
+       MTU, hardware address, addresses and packet counters, including
+       drops.
+
+       With arguments, assigns a static configuration to IFACE. This
+       replaces whatever DHCP set up.
+
+EXAMPLES
+       ifconfig
+       ifconfig eth0 192.168.1.50 255.255.255.0 192.168.1.1 8.8.8.8
+
+SEE ALSO
+       ip(1), ping(1), setdns(1), nslookup(1)

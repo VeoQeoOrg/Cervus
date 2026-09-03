@@ -1,0 +1,37 @@
+NAME
+       csh - the Cervus shell
+
+SYNOPSIS
+       csh
+       csh -c 'command'
+       csh script.csh
+
+DESCRIPTION
+       The interactive shell and the script interpreter. Line editing,
+       history and Tab completion come from the shared readline in
+       libcervus.
+
+FEATURES
+       Globbing with * ? and [...]; pipelines and redirection;
+       background jobs with & together with jobs and fg; ~ for the home
+       directory; $RANDOM; arithmetic with @; numeric comparison with
+       < and >; aliases; and scripts with a #! line once the file is
+       executable.
+
+       Single quotes are literal: $ is not expanded inside them, which
+       is what lets awk and sed programs be written normally.
+
+STARTUP
+       /etc/cshrc is read for every shell, then ~/.cshrc. PS1 accepts
+       the usual escapes: \u user, \h host, \w directory, \t time,
+       \? exit status.
+
+KEYBOARD
+       layout en [ru] [key alt+shift|ctrl+shift|capslock] sets the
+       console layouts and the key that switches them.
+
+FILES
+       /etc/cshrc, ~/.cshrc, /etc/shell
+
+SEE ALSO
+       sh(1), chsh(1), test(1), echo(1)

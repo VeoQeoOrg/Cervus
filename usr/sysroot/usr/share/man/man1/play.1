@@ -1,0 +1,26 @@
+NAME
+       play - play an audio file or a tone
+
+SYNOPSIS
+       play file.wav | file.mp3
+       play -t [freq] [secs]
+
+DESCRIPTION
+       Plays a RIFF/WAVE or MPEG audio file through whichever driver
+       claimed the sound card. Samples are converted to 16-bit stereo
+       for the device.
+
+       A file whose contents are not MPEG audio is reported with the
+       container that was actually found, so an .mp3 name on an MP4 or
+       Ogg file is named as such rather than blamed on the decoder.
+
+OPTIONS
+       -t, --tone [F] [S]   play a triangle tone of F Hz for S seconds
+                            (default 440 Hz for 2 s)
+
+EXAMPLES
+       play /usr/share/media/Maxx-Get-A-Way.mp3
+       play -t 440 2
+
+SEE ALSO
+       mixer(1)

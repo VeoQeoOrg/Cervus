@@ -1,0 +1,39 @@
+NAME
+       test, [ - evaluate a conditional expression
+
+SYNOPSIS
+       test expression
+       [ expression ]
+
+DESCRIPTION
+       Exits 0 if EXPRESSION is true and 1 if it is false. When invoked
+       as [ the last argument must be ].
+
+FILE TESTS
+       -e F   F exists
+       -f F   F is a regular file
+       -d F   F is a directory
+       -r F   F is readable
+       -x F   F is executable
+       -s F   F exists and is not empty
+
+STRING TESTS
+       -z S   S is empty
+       -n S   S is not empty
+       S = T  strings are equal
+       S != T strings differ
+
+NUMERIC TESTS
+       -eq -ne -lt -le -gt -ge
+
+COMBINING
+       -a     and
+       -o     or
+       !      negate
+
+EXAMPLES
+       test -f /etc/shell && echo present
+       [ "$n" -gt 10 ] && echo big
+
+SEE ALSO
+       expr(1), csh(1)

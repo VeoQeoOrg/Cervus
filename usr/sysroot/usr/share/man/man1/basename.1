@@ -1,0 +1,16 @@
+NAME
+       basename - strip directory and suffix from a path
+
+SYNOPSIS
+       basename string [suffix]
+
+DESCRIPTION
+       Prints STRING with any leading directory components removed. If
+       SUFFIX is given and the result ends with it, it is removed too.
+
+EXAMPLES
+       basename /usr/share/media/giphy.gif        -> giphy.gif
+       basename /usr/share/media/giphy.gif .gif   -> giphy
+
+SEE ALSO
+       dirname(1), realpath(1)

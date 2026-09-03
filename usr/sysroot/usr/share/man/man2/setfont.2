@@ -1,0 +1,24 @@
+NAME
+       setfont - load a console font
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_setfont(const void *glyphs, unsigned w, unsigned h,
+                          unsigned count, const void *unicode_map);
+       int cervus_setfont_reset(void);
+
+DESCRIPTION
+       Replaces the console font. The character cell may change size,
+       in which case the virtual consoles reflow: their contents are
+       preserved, the cursor is repositioned, and SIGWINCH goes to the
+       foreground subtree so full-screen programs redraw.
+
+       A Unicode map may be supplied, as PSF2 fonts carry, so that
+       UTF-8 output finds the right glyph.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+SEE ALSO
+       setfont(1), ioctl(2)

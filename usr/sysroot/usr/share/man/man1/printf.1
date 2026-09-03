@@ -1,0 +1,18 @@
+NAME
+       printf - format and print data
+
+SYNOPSIS
+       printf format [arguments...]
+
+DESCRIPTION
+       Writes ARGUMENTS under the control of FORMAT. The format is
+       reused from the beginning until every argument is consumed.
+
+       Conversions: %s %d %i %u %x %X %o %c and %%.
+       Escapes: \n \t \r \\ and \0NNN for an octal byte.
+
+EXAMPLES
+       printf '%s is %d years old\n' Cervus 1
+
+SEE ALSO
+       echo(1)

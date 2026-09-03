@@ -1,0 +1,21 @@
+NAME
+       hexdump - display file contents in hex and ASCII
+
+SYNOPSIS
+       hexdump [-C] [-n length] [-s skip] [file ...]
+
+DESCRIPTION
+       Prints each file as canonical hex plus ASCII: an offset, sixteen
+       bytes of hex, then the printable form.
+
+OPTIONS
+       -C       canonical output (the default)
+       -n N     stop after N bytes
+       -s OFF   start OFF bytes into the file
+       -v       do not compress repeated lines (accepted, no-op)
+
+EXAMPLES
+       hexdump -n 64 /usr/share/media/giphy.gif
+
+SEE ALSO
+       cat(1), dd(1)

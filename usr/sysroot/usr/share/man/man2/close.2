@@ -1,0 +1,21 @@
+NAME
+       close - close a file descriptor
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int close(int fd);
+
+DESCRIPTION
+       Releases FD. The underlying file is only let go once the last
+       descriptor referring to it is closed, which is what makes dup
+       and fork safe.
+
+RETURN VALUE
+       0 on success, -1 with errno set on failure.
+
+ERRORS
+       EBADF   fd is not an open descriptor
+
+SEE ALSO
+       open(2), dup(2), read(2), write(2)

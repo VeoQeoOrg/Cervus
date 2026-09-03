@@ -1,0 +1,26 @@
+NAME
+       mmap, munmap, mprotect - map memory
+
+SYNOPSIS
+       #include <sys/mman.h>
+
+       void *mmap(void *addr, size_t len, int prot, int flags,
+                  int fd, off_t off);
+       int   munmap(void *addr, size_t len);
+       int   mprotect(void *addr, size_t len, int prot);
+
+DESCRIPTION
+       Maps pages into the address space. PROT is a combination of
+       PROT_READ, PROT_WRITE, PROT_EXEC and PROT_NONE; FLAGS takes
+       MAP_PRIVATE, MAP_ANONYMOUS and MAP_FIXED.
+
+RETURN VALUE
+       mmap returns the mapping, or MAP_FAILED with errno set. The
+       others return 0 or -1.
+
+ERRORS
+       ENOMEM   not enough memory, or the range is unavailable
+       EINVAL   bad length, alignment or flags
+
+SEE ALSO
+       brk via malloc(3), shmget(2)

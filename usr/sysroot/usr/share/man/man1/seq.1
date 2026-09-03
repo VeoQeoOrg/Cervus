@@ -1,0 +1,20 @@
+NAME
+       seq - print a sequence of numbers
+
+SYNOPSIS
+       seq [-s sep] [-w] [start [step]] stop
+
+DESCRIPTION
+       Prints numbers from START to STOP, one per line. START defaults
+       to 1 and STEP to 1.
+
+OPTIONS
+       -s S   separate numbers with S instead of a newline
+       -w     pad with leading zeroes so every number is the same width
+
+EXAMPLES
+       seq 5
+       seq -s, 0 2 10
+
+SEE ALSO
+       xargs(1), csh(1)

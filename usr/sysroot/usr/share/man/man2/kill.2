@@ -1,0 +1,33 @@
+NAME
+       kill, sigaction, sigprocmask - signals
+
+SYNOPSIS
+       #include <signal.h>
+
+       int kill(pid_t pid, int sig);
+       int sigaction(int sig, const struct sigaction *act,
+                     struct sigaction *old);
+       int sigprocmask(int how, const sigset_t *set, sigset_t *old);
+
+DESCRIPTION
+       Cervus implements real signals. Delivery builds a frame on the
+       user stack and returns through the __sigtramp stub in libc,
+       which calls sigreturn.
+
+       A blocking terminal read is interrupted by a signal and fails
+       with EINTR rather than swallowing it.
+
+       Ctrl-C sends SIGINT to the whole foreground process group, so a
+       script dies together with the command it is running. A console
+       font change sends SIGWINCH to the foreground subtree.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       ESRCH    no such process
+       EINVAL   the signal number is not valid
+       EPERM    not permitted to signal that process
+
+SEE ALSO
+       kill(1), sigtest(1), poll(2)

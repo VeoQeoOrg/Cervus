@@ -1,0 +1,27 @@
+NAME
+       sendto, recvfrom - send and receive on a socket
+
+SYNOPSIS
+       #include <sys/socket.h>
+
+       ssize_t sendto(int s, const void *buf, size_t len, int flags,
+                      const struct sockaddr *to, socklen_t tolen);
+       ssize_t recvfrom(int s, void *buf, size_t len, int flags,
+                        struct sockaddr *from, socklen_t *fromlen);
+
+DESCRIPTION
+       Transfers data on a socket. On a connected stream socket the
+       address arguments may be null, which makes these equivalent to
+       send and recv.
+
+RETURN VALUE
+       The number of bytes transferred, 0 when the peer closed the
+       stream, or -1 with errno set.
+
+ERRORS
+       EAGAIN        the socket is non-blocking and would block
+       ECONNRESET    the peer reset the connection
+       ENOTCONN      the stream socket is not connected
+
+SEE ALSO
+       socket(2), poll(2)

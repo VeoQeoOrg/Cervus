@@ -1,0 +1,17 @@
+NAME
+       splinter - run a program under the speculative engine
+
+SYNOPSIS
+       splinter run <program> [args...]
+       splinter spec
+
+DESCRIPTION
+       Runs a program under the speculative execution engine, which
+       places work on a free core and keeps a shadow copy so a
+       transaction can be committed or rolled back when a conflict is
+       detected.
+
+       This is research plumbing, not a general launcher.
+
+SEE ALSO
+       ps(1), sysmon(1)

@@ -1,0 +1,21 @@
+NAME
+       cut - select fields or characters from each line
+
+SYNOPSIS
+       cut -f list [-d delim] [file...]
+       cut -c list [file...]
+
+DESCRIPTION
+       Prints the selected parts of every input line. LIST is a
+       comma-separated set of numbers and ranges, for example 1,3-5.
+
+OPTIONS
+       -f L   select fields
+       -c L   select characters
+       -d D   field delimiter (default is TAB)
+
+EXAMPLES
+       cut -d: -f1 /etc/passwd
+
+SEE ALSO
+       awk(1), tr(1), sed(1)

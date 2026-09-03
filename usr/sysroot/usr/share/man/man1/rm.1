@@ -1,0 +1,20 @@
+NAME
+       rm - remove files and directories
+
+SYNOPSIS
+       rm [-fiRrv] file ...
+
+DESCRIPTION
+       Unlinks each FILE. Directories are only removed with -R.
+
+OPTIONS
+       -f     ignore missing files and never prompt
+       -i     prompt before every removal
+       -R, -r remove directories and everything inside them
+       -v     print each file as it is removed
+
+EXIT STATUS
+       Non-zero if any operand could not be removed.
+
+SEE ALSO
+       rmdir(1), unlink(2)

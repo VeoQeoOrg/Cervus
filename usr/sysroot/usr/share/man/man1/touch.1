@@ -1,0 +1,18 @@
+NAME
+       touch - change file timestamps or create empty files
+
+SYNOPSIS
+       touch [-acm] file ...
+
+DESCRIPTION
+       Sets the timestamps of each FILE to the current time, creating
+       the file empty if it does not exist.
+
+OPTIONS
+       -a     change the access time only (accepted; Cervus keeps no
+              access time, so this has no effect)
+       -c     do not create files that do not exist
+       -m     change the modification time only
+
+SEE ALSO
+       stat(1)

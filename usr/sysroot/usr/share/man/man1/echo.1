@@ -1,0 +1,22 @@
+NAME
+       echo - print arguments
+
+SYNOPSIS
+       echo [-neE] [string ...]
+
+DESCRIPTION
+       Writes its arguments separated by single spaces, followed by a
+       newline.
+
+OPTIONS
+       -n     do not print the trailing newline
+       -e     interpret backslash escapes in the arguments
+       -E     do not interpret backslash escapes (default)
+       --help show a short help text
+
+NOTES
+       csh(1) delegates its builtin echo to this program, so scripts
+       and the shell behave the same way.
+
+SEE ALSO
+       printf(1), csh(1)

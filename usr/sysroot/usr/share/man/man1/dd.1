@@ -1,0 +1,26 @@
+NAME
+       dd - copy blocks between files and devices
+
+SYNOPSIS
+       dd [if=FILE] [of=FILE] [bs=N] [count=N] [skip=N] [seek=N]
+          [status=none]
+
+DESCRIPTION
+       Copies data block by block, which makes it the tool for reading
+       and writing raw devices.
+
+OPERANDS
+       if=F      read from F (default standard input)
+       of=F      write to F (default standard output)
+       bs=N      block size in bytes (default 512; K, M, G suffixes)
+       count=N   copy only N blocks
+       skip=N    skip N blocks of input first
+       seek=N    skip N blocks of output first
+       status=none  do not print the transfer summary
+
+EXAMPLES
+       dd if=/dev/sda of=/mnt/mbr.bin bs=512 count=1
+       dd if=/dev/zero of=disk.img bs=1M count=64
+
+SEE ALSO
+       hexdump(1), mkfs(1)

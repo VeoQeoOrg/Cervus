@@ -1,0 +1,36 @@
+NAME
+       sed - stream editor
+
+SYNOPSIS
+       sed [-n] [-e script] [script] [file...]
+
+DESCRIPTION
+       Applies an editing script to every line of the input and writes
+       the result to standard output.
+
+COMMANDS
+       s/re/repl/[gip]   substitute
+       p                 print the current line
+       d                 delete the current line
+       q                 quit
+
+ADDRESSES
+       N       line number N
+       $       last line
+       /re/    lines matching a regular expression
+       N,M     a range of lines
+
+REPLACEMENT
+       &       the whole match
+       \1..\9  the corresponding capture group
+
+OPTIONS
+       -n     do not print lines automatically; only p prints
+       -e S   add S to the script (repeatable)
+
+EXAMPLES
+       sed 's/foo/bar/g' in.txt
+       sed -n '10,20p' log.txt
+
+SEE ALSO
+       awk(1), grep(1), tr(1)

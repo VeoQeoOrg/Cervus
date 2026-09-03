@@ -1,0 +1,29 @@
+NAME
+       fb_info, fb_blit, fb_acquire, fb_release - framebuffer access
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int cervus_fb_info(cervus_fb_info_t *info);
+       int cervus_fb_blit(const void *px, int x, int y, int w, int h);
+       int cervus_fb_acquire(void);
+       int cervus_fb_release(void);
+
+DESCRIPTION
+       Draws to the screen from user space. fb_info reports the width,
+       height, pitch and bit depth.
+
+       Pixels handed to fb_blit are always 32-bit; the kernel converts
+       to the native depth, so 24-bit and 16-bit modes need no special
+       handling in the caller.
+
+       fb_acquire takes the screen for exclusive use, stopping the
+       console from drawing over it, and fb_release gives it back.
+       A program that only paints part of the screen, such as a preview
+       pane beside text, can blit without acquiring.
+
+RETURN VALUE
+       0 on success, negative on failure.
+
+SEE ALSO
+       img(1), cfm(1), fbdemo(1)

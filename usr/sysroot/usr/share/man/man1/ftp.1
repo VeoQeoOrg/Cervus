@@ -1,0 +1,24 @@
+NAME
+       ftp - file transfer client
+
+SYNOPSIS
+       ftp [-u user] [-p password] [-v] [host [port]]
+
+DESCRIPTION
+       Connects to an FTP server and offers an interactive prompt.
+
+OPTIONS
+       -u U   log in as U
+       -p P   use password P
+       -v     show the protocol dialogue
+
+COMMANDS
+       open host [port]     connect
+       cd dir               change the remote directory
+       ls                   list the remote directory
+       get remote [local]   download
+       put local [remote]   upload
+       quit                 disconnect and exit
+
+SEE ALSO
+       wget(1), 9p(1), ssh(1)

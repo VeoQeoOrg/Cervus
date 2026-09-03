@@ -1,0 +1,24 @@
+NAME
+       dmesg - print the kernel log
+
+SYNOPSIS
+       dmesg [-n lines]
+
+DESCRIPTION
+       Prints the kernel ring buffer: driver probes, mounts, faults and
+       everything else the kernel has logged since boot.
+
+OPTIONS
+       -n N   show only the last N lines
+
+EXAMPLES
+       dmesg | grep hda
+       dmesg -n 40
+
+NOTES
+       The log level threshold can be changed at runtime from the F2
+       debug monitor with the L key, which also controls how much
+       reaches the serial port.
+
+SEE ALSO
+       sysmon(1), lspci(1)

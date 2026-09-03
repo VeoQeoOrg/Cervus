@@ -1,0 +1,22 @@
+NAME
+       tar - list or extract a ustar archive
+
+SYNOPSIS
+       tar -t|-x [-v] -f archive.tar [-C dir]
+
+DESCRIPTION
+       Reads a ustar archive. Creating archives is not supported.
+
+OPTIONS
+       -t     list the contents
+       -x     extract
+       -v     name each member as it is processed
+       -f F   the archive to read
+       -C D   change to D before extracting
+
+EXAMPLES
+       tar -tvf initramfs.tar
+       tar -xf archive.tar -C /mnt
+
+SEE ALSO
+       dd(1)

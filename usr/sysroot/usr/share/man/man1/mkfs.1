@@ -1,0 +1,19 @@
+NAME
+       mkfs - create a filesystem
+
+SYNOPSIS
+       mkfs [-t fs] device [label]
+
+DESCRIPTION
+       Formats DEVICE. Without -t the type is chosen from the partition
+       entry. Supported types are ext2, ext4 and fat32.
+
+OPTIONS
+       -t T   filesystem type to create
+
+EXAMPLES
+       mkfs -t ext4 /dev/sda2 root
+       mkfs -t fat32 /dev/sda1 BOOT
+
+SEE ALSO
+       mkpart(1), mount(1), wipefs(1)

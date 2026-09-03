@@ -1,0 +1,21 @@
+NAME
+       mkdir - create directories
+
+SYNOPSIS
+       mkdir [-p] [-m mode] dir ...
+
+DESCRIPTION
+       Creates each DIRECTORY. Without -p it is an error if the
+       directory already exists or its parent does not.
+
+OPTIONS
+       -m M   set the mode of the new directory (octal, as in chmod)
+       -p     create missing parents, and stay silent if the directory
+              already exists
+       -v     verbose (accepted, currently has no effect)
+
+EXAMPLES
+       mkdir -p /mnt/data/2026/logs
+
+SEE ALSO
+       rmdir(1), chmod(1)

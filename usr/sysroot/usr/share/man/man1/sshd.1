@@ -1,0 +1,21 @@
+NAME
+       sshd - secure shell server
+
+SYNOPSIS
+       sshd [-p port] [-f hostkey] [-c]
+
+DESCRIPTION
+       Accepts SSH-2 connections and gives each one a shell on a
+       pseudo-terminal. Password and public key authentication are both
+       supported; keys are read from the account's authorized_keys.
+
+OPTIONS
+       -p N   listen on port N instead of 22
+       -f F   use F as the host key
+       -c     stay in the foreground
+
+FILES
+       ~/.ssh/authorized_keys
+
+SEE ALSO
+       ssh(1), ssh-keygen(1), passwd(1)

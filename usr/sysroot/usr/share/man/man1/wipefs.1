@@ -1,0 +1,16 @@
+NAME
+       wipefs - erase filesystem signatures
+
+SYNOPSIS
+       wipefs [-f] <device>
+
+DESCRIPTION
+       Clears the superblock signatures on DEVICE so it is no longer
+       recognised as a formatted volume. Asks for confirmation unless
+       -f is given.
+
+OPTIONS
+       -f     do not ask for confirmation
+
+SEE ALSO
+       mkfs(1), mkpart(1)

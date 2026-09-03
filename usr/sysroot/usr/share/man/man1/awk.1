@@ -1,0 +1,30 @@
+NAME
+       awk - pattern scanning and processing language
+
+SYNOPSIS
+       awk [-F sep] 'program' [file]
+
+DESCRIPTION
+       Splits each input line into fields and runs the program against
+       it. A program is a list of pattern { action } rules; a rule with
+       no pattern runs on every line, and a rule with no action prints
+       the line.
+
+       Fields are $1, $2 and so on, $0 is the whole line. NR holds the
+       current record number and NF the field count. length() is
+       available, and print and printf write output.
+
+OPTIONS
+       -F S   use S as the field separator instead of whitespace
+
+EXAMPLES
+       awk '{ print $1 }' access.log
+       awk -F: '$3 > 100 { print $1 }' /etc/passwd
+       awk 'END { print NR }' file
+
+NOTES
+       Quote the program in single quotes. csh(1) does not expand $ in
+       single quotes, so $1 reaches awk intact.
+
+SEE ALSO
+       sed(1), cut(1), grep(1)
