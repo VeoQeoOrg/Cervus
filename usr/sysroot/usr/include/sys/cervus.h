@@ -195,6 +195,7 @@ int      cervus_disk_info(int index, cervus_disk_info_t *out);
 int      cervus_disk_mount(const char *dev, const char *path);
 int      cervus_disk_umount(const char *path);
 int      cervus_disk_format(const char *dev, const char *label, int ext4);
+int      cervus_disk_format_progress(void);
 int      cervus_disk_mkfs_fat32(const char *dev, const char *label);
 int      cervus_disk_partition(const char *dev, const cervus_mbr_part_t *specs, uint64_t n);
 int      cervus_disk_read_raw(const char *dev, uint64_t lba, uint64_t count, void *buf);

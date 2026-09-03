@@ -1,5 +1,6 @@
 #include "../../include/fs/ext2.h"
 #include "../../include/fs/ext4.h"
+#include "../../include/drivers/disk/disk.h"
 #include "../../include/fs/jbd2.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/drivers/disk/blkdev.h"
@@ -1162,6 +1163,7 @@ static int ext2_group_has_super(uint32_t g) {
 
 int ext2_format(blkdev_t *dev, const char *label, int ext4) {
     if (!dev) return -EINVAL;
+    fmt_progress_begin();
     uint64_t disk_bytes = dev->size_bytes;
     if (disk_bytes < 64 * 1024) return -ENOSPC;
 
@@ -1292,6 +1294,7 @@ int ext2_format(blkdev_t *dev, const char *label, int ext4) {
         uint32_t pct = ((g + 1) * 100) / groups_count;
         if (pct != last_pct_ext2) {
             last_pct_ext2 = pct;
+            fmt_progress_set((int)pct);
         }
     }
     sb.s_free_blocks_count = total_blocks - used_total;

@@ -155,6 +155,8 @@
 #define SYS_KILL              602
 #define SYS_RT_SIGRETURN      603
 
+#define SYS_DISK_FORMAT_PROGRESS 604
+
 #define SYSCALL_TABLE_SIZE    640
 
 #define PROT_NONE    0x0

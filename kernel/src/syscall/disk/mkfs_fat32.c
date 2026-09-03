@@ -1,6 +1,7 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/drivers/disk/blkdev.h"
 #include "../../../include/fs/fat32.h"
+#include "../../../include/drivers/disk/disk.h"
 #include <string.h>
 
 int64_t sys_disk_mkfs_fat32(uint64_t devname_ptr, uint64_t label_ptr,
@@ -25,5 +26,7 @@ int64_t sys_disk_mkfs_fat32(uint64_t devname_ptr, uint64_t label_ptr,
     blkdev_t *dev = blkdev_get_by_name(name);
     if (!dev) return -ENODEV;
 
-    return fat32_format(dev, label);
+    int64_t r = fat32_format(dev, label);
+    fmt_progress_end();
+    return r;
 }

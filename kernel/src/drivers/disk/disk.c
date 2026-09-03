@@ -362,6 +362,17 @@ static const char *strip_dev_prefix(const char *name) {
     return name;
 }
 
+static volatile int g_fmt_pct = -1;
+
+void fmt_progress_begin(void) { g_fmt_pct = 0; }
+void fmt_progress_set(int pct) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    g_fmt_pct = pct;
+}
+void fmt_progress_end(void) { g_fmt_pct = -1; }
+int  fmt_progress_get(void) { return g_fmt_pct; }
+
 int disk_format(const char *devname, const char *label, int ext4) {
     const char *raw = strip_dev_prefix(devname);
     blkdev_t *dev = blkdev_get_by_name(raw);

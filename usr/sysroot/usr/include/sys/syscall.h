@@ -142,6 +142,7 @@
 #define SYS_RT_SIGPROCMASK  601
 #define SYS_KILL            602
 #define SYS_RT_SIGRETURN    603
+#define SYS_DISK_FORMAT_PROGRESS 604
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

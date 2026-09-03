@@ -86,6 +86,7 @@ extern int64_t sys_disk_read_raw     (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_disk_write_raw    (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_partition    (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_mkfs_fat32   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_disk_format_progress(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_list_parts   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_bios_install (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_unlink            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -359,6 +360,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_RT_SIGPROCMASK]    = _sys_rt_sigprocmask,
     [SYS_KILL]              = _sys_kill,
     [SYS_RT_SIGRETURN]      = _sys_rt_sigreturn,
+    [SYS_DISK_FORMAT_PROGRESS] = sys_disk_format_progress,
 };
 
 __attribute__((noreturn)) void sysret_bad_rip_panic(uint64_t bad_rip, uint64_t retval)

@@ -1,4 +1,5 @@
 #include "../../include/fs/fat32.h"
+#include "../../include/drivers/disk/disk.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/drivers/disk/blkdev.h"
 #include "../../include/io/serial.h"
@@ -1018,6 +1019,7 @@ void fat32_unmount(fat32_t *fs) {
 }
 
 int fat32_format(blkdev_t *dev, const char *label) {
+    fmt_progress_begin();
     if (!dev) return -EINVAL;
 
     uint32_t total_sectors = (uint32_t)dev->sector_count;
@@ -1141,6 +1143,7 @@ int fat32_format(blkdev_t *dev, const char *label) {
                 uint32_t done = fat_size - remaining;
                 uint32_t pct = (done * 100) / fat_size;
                 if (pct != last_pct) {
+                    fmt_progress_set((int)((f * 100 + pct) / num_fats));
                     const char glyphs[4] = { '|', '/', '-', '\\' };
                     serial_printf("\r\033[K       %c FAT#%u: %u%%",
                            glyphs[spinner & 3], f, pct);

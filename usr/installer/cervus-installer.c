@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <termios.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -758,6 +759,31 @@ static int g_substep_done = 0;
 static int g_substep_total = 0;
 static int g_steps_done = 0;
 static char g_progress_caption[96] = "";
+static uint64_t g_install_t0  = 0;
+static int      g_fmt_active  = 0;
+static int      g_fmt_pct     = 0;
+static uint64_t g_fmt_t0      = 0;
+static char     g_fmt_label[48] = "";
+
+static void fmt_duration(uint64_t ns, char *out, size_t cap) {
+    unsigned long long s = (unsigned long long)(ns / 1000000000ULL);
+    if (s >= 60) snprintf(out, cap, "%llum %02llus", s / 60, s % 60);
+    else         snprintf(out, cap, "%llus", s);
+}
+
+static void eta_text(uint64_t t0, int pct, char *out, size_t cap) {
+    out[0] = '\0';
+    if (pct <= 0 || pct >= 100 || t0 == 0) return;
+    uint64_t now = cervus_uptime_ns();
+    if (now <= t0) return;
+    uint64_t elapsed = now - t0;
+    if (elapsed < 1500000000ULL) return;
+    uint64_t total = (elapsed * 100ULL) / (uint64_t)pct;
+    if (total <= elapsed) return;
+    char d[32];
+    fmt_duration(total - elapsed, d, sizeof(d));
+    snprintf(out, cap, "~%s left", d);
+}
 
 static void draw_progress_bar(void);
 
@@ -769,6 +795,9 @@ static void install_screen_init(int total_steps) {
     g_step_rows_avail  = g_rows - g_step_content_row - 2;
     if (g_step_rows_avail < 4) g_step_rows_avail = 4;
     g_progress_caption[0] = '\0';
+    g_install_t0   = cervus_uptime_ns();
+    g_fmt_active   = 0;
+    g_fmt_pct      = 0;
     g_step_n       = 0;
     g_steps_done   = 0;
     g_step_total   = total_steps;
@@ -894,17 +923,55 @@ static void draw_progress_bar(void) {
     for (int i = bar_w; i < w - 1; i++) putchar(' ');
     redraw_vsplit_row(row);
 
+    char eta[32];
+    eta_text(g_install_t0, pct, eta, sizeof(eta));
+
     go_xy(row + 1, col);
     int cap_n = 0;
     int maxc = w - 1;
+    int eta_len = (int)strlen(eta);
+    int cap_room = maxc - (eta_len ? eta_len + 2 : 0);
+    if (cap_room < 0) cap_room = 0;
     if (g_progress_caption[0]) {
         fputs(C_GRAY, stdout);
-        for (const char *p = g_progress_caption; *p && cap_n < maxc; p++, cap_n++)
+        for (const char *p = g_progress_caption; *p && cap_n < cap_room; p++, cap_n++)
             putchar(*p);
         fputs(C_RESET, stdout);
     }
-    for (int i = cap_n; i < w - 1; i++) putchar(' ');
+    for (int i = cap_n; i < maxc - eta_len; i++) putchar(' ');
+    if (eta_len) { fputs(C_GRAY, stdout); fputs(eta, stdout); fputs(C_RESET, stdout); }
     redraw_vsplit_row(row + 1);
+
+    go_xy(row + 2, col);
+    if (g_fmt_active) {
+        int fw = bar_w;
+        int ff = (g_fmt_pct * fw) / 100;
+        if (ff > fw) ff = fw;
+        char flab[64], feta[32];
+        eta_text(g_fmt_t0, g_fmt_pct, feta, sizeof(feta));
+        int flen = snprintf(flab, sizeof(flab), " %s %d%%%s%s ",
+                            g_fmt_label, g_fmt_pct,
+                            feta[0] ? "  " : "", feta);
+        int fpos = (fw - flen) / 2;
+        if (fpos < 0) fpos = 0;
+        int fin = -1;
+        for (int i = 0; i < fw; i++) {
+            int nf = (i < ff) ? 1 : 0;
+            if (nf != fin) {
+                if (nf) fputs("\x1b[30;106m", stdout);
+                else    fputs("\x1b[37;100m", stdout);
+                fin = nf;
+            }
+            char ch = ' ';
+            if (i >= fpos && i < fpos + flen) ch = flab[i - fpos];
+            putchar(ch);
+        }
+        fputs(C_RESET, stdout);
+        for (int i = fw; i < w - 1; i++) putchar(' ');
+    } else {
+        for (int i = 0; i < w - 1; i++) putchar(' ');
+    }
+    redraw_vsplit_row(row + 2);
 
     hide_cursor();
     fflush(stdout);
@@ -1316,17 +1383,61 @@ static void apply_accounts(const account_cfg_t *a) {
     mkdir("/mnt/root/tmp", 01777);
 }
 
+static int format_with_progress(const char *ui_label, int is_fat32,
+                                const char *dev, const char *label, int ext4)
+{
+    snprintf(g_fmt_label, sizeof(g_fmt_label), "%s", ui_label);
+    g_fmt_pct    = 0;
+    g_fmt_t0     = cervus_uptime_ns();
+    g_fmt_active = 1;
+    draw_progress_bar();
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        int rc = is_fat32 ? cervus_disk_mkfs_fat32(dev, label)
+                          : cervus_disk_format(dev, label, ext4);
+        g_fmt_active = 0;
+        draw_progress_bar();
+        return rc;
+    }
+    if (pid == 0) {
+        int rc = is_fat32 ? cervus_disk_mkfs_fat32(dev, label)
+                          : cervus_disk_format(dev, label, ext4);
+        _exit(rc < 0 ? (int)((-rc) & 0x7F) : 0);
+    }
+
+    int status = 0;
+    for (;;) {
+        pid_t w = waitpid(pid, &status, WNOHANG);
+        if (w == pid) break;
+        if (w < 0) { status = 0; break; }
+        int p = cervus_disk_format_progress();
+        if (p >= 0 && p > g_fmt_pct) g_fmt_pct = p;
+        draw_progress_bar();
+        syscall1(SYS_SLEEP_NS, 150000000ULL);
+    }
+
+    g_fmt_pct = 100;
+    draw_progress_bar();
+    g_fmt_active = 0;
+    draw_progress_bar();
+
+    int code = (status >> 8) & 0x7F;
+    return code ? -code : 0;
+}
+
 static int do_install_common(const disk_entry_t *d, const char *part1, const char *part2,
                              const account_cfg_t *acc, bootloader_t bl, fstype_t fs) {
     int rc;
 
     step_begin("Formatting ESP (FAT32)");
-    rc = cervus_disk_mkfs_fat32(part1, "CERVUS-ESP");
+    rc = format_with_progress("ESP FAT32", 1, part1, "CERVUS-ESP", 0);
     if (rc < 0) { step_fail("ESP format", rc); read_key(); return 1; }
     step_ok("ESP formatted");
 
     step_begin(fs == FS_EXT4 ? "Formatting root (ext4)" : "Formatting root (ext2)");
-    rc = cervus_disk_format(part2, "cervus-root", fs == FS_EXT4);
+    rc = format_with_progress(fs == FS_EXT4 ? "root ext4" : "root ext2", 0,
+                              part2, "cervus-root", fs == FS_EXT4);
     if (rc < 0) { step_fail("root format", rc); read_key(); return 1; }
     step_ok("root formatted");
 

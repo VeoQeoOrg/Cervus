@@ -17,5 +17,7 @@ int64_t sys_disk_format(uint64_t devname_ptr, uint64_t label_ptr,
     } else {
         strncpy(label, devname, sizeof(label) - 1);
     }
-    return disk_format(devname, label, (int)a3);
+    int64_t r = disk_format(devname, label, (int)a3);
+    fmt_progress_end();
+    return r;
 }
