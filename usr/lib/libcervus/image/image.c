@@ -24,12 +24,15 @@ int image_load_mem(const uint8_t *d, size_t n, const char *hint, image_t *out) {
         return image_decode_jpeg(d, n, out);
     if (d[0] == 'B' && d[1] == 'M')
         return image_decode_bmp(d, n, out);
+    if (n >= 6 && memcmp(d, "GIF8", 4) == 0)
+        return image_decode_gif(d, n, out);
 
     if (hint) {
         if (has_ext(hint, ".svg")) return image_decode_svg(d, n, out);
         if (has_ext(hint, ".png")) return image_decode_png(d, n, out);
         if (has_ext(hint, ".jpg") || has_ext(hint, ".jpeg")) return image_decode_jpeg(d, n, out);
         if (has_ext(hint, ".bmp")) return image_decode_bmp(d, n, out);
+        if (has_ext(hint, ".gif")) return image_decode_gif(d, n, out);
     }
 
     for (size_t i = 0; i < n && i < 64; i++)

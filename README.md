@@ -131,7 +131,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
 | **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3, SSH (client + server), shared terminals — all from scratch |
 | **Crypto** | SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305, AES-128/256-GCM, X25519, Ed25519, RSA/ECDSA; RFC/NIST-verified |
-| **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8, PNG/JPEG/BMP/SVG image decoders |
+| **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8, PNG/JPEG/BMP/SVG/GIF image decoders |
 | **Audio** | AC'97 and Intel HDA drivers, WAV/MP3 playback (`play`) |
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
@@ -463,13 +463,19 @@ framebuffer and draw graphics directly.
 
 ### Images
 
-`libcervus` includes from-scratch decoders for **PNG**, **JPEG** (baseline), **BMP**
-and a minimal **SVG**, behind a single `image_load` API. The `img` utility decodes an
-image and blits it to the framebuffer:
+`libcervus` includes from-scratch decoders for **PNG**, **JPEG** (baseline), **BMP**,
+**GIF** and a minimal **SVG**, behind a single `image_load` API. The `img` utility
+decodes an image and blits it to the framebuffer:
 
 ```sh
 img photo.png
+img clip.gif        # animated GIFs play in a loop, any key exits
 ```
+
+The GIF decoder handles LZW, global and local palettes, transparency, interlaced
+images and animation, compositing frames with the disposal methods so optimised
+animations (partial frames) render correctly. `gif_decode` exposes every frame with
+its delay; `image_load` returns the first one.
 
 <p align="center">
   <img src="assets/screenshots/images.png" alt="Viewing a PNG with img" width="760px">
