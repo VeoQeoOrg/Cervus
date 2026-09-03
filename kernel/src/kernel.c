@@ -42,6 +42,7 @@
 #include "../include/drivers/usb/uhci.h"
 #include "../include/net/netdev.h"
 #include "../include/drivers/net/e1000.h"
+#include "../include/drivers/net/atl1c.h"
 #include "../include/drivers/net/rtl8139.h"
 #include "../include/drivers/net/rtl8169.h"
 #include "../include/drivers/net/virtio_net.h"
@@ -135,6 +136,7 @@ static void load_elf_module(void) {
     virtio_net_start_worker();
     rtl8139_start_worker();
     cinder_ne2000_start_worker();
+    atl1c_start_worker();
     net_start_worker();
     timer_start_recal_task();
 

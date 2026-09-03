@@ -12,6 +12,7 @@
 #include "../../include/drivers/net/rtl8169.h"
 #include "../../include/drivers/net/virtio_net.h"
 #include "../../include/drivers/net/ne2000.h"
+#include "../../include/drivers/net/atl1c.h"
 #include "../../include/sched/sched.h"
 #include "../../include/io/serial.h"
 #include <string.h>
@@ -166,4 +167,5 @@ void net_init(void) {
     rtl8169_init();
     virtio_net_init();
     cinder_ne2000_init();
+    atl1c_init();
 }
