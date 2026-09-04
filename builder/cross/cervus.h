@@ -1,6 +1,3 @@
-/* Cervus OS target for GCC (x86_64-cervus).
-   Static, non-PIE, no dynamic loader; links Cervus's crt0 + libcervus + libgcc. */
-
 #undef TARGET_CERVUS
 #define TARGET_CERVUS 1
 

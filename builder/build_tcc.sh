@@ -1,14 +1,4 @@
 #!/bin/sh
-# Downloads tcc-0.9.27, applies Cervus's patches (via tcc_patch.pl), builds
-# tcc.elf + libtcc1.a, and installs them into the sysroot.
-#
-# Ported from build.c's tcc_download()/tcc_extract_and_patch()/
-# tcc_build_and_install(). Unlike the old build_tcc(), this does NOT rebuild
-# libcervus -- by the time Ninja calls this script, usr/sysroot/usr/lib/
-# already has an up to date libcervus.a and crt0.o (order-only dependency in
-# build.ninja), so we just consume them.
-#
-# Usage: builder/build_tcc.sh   (run from repo root)
 
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -33,7 +23,6 @@ SYSROOT_LIB=$SYSROOT_DIR/usr/lib
 TCC_ELF=$TCC_DIR/tcc.elf
 LIBTCC1_A=$TCC_DIR/libtcc1.a
 
-# --- 1. download -------------------------------------------------------
 mkdir -p "$TCC_DIR"
 if [ ! -s "$TCC_DIR/$TCC_TARBALL" ]; then
     say "downloading $TCC_TARBALL"
@@ -46,13 +35,11 @@ if [ ! -s "$TCC_DIR/$TCC_TARBALL" ]; then
     fi
 fi
 
-# --- 2. extract ----------------------------------------------------------
 if [ ! -d "$SRC_DIR" ]; then
     say "extracting $TCC_TARBALL"
     tar -xjf "$TCC_DIR/$TCC_TARBALL" -C "$TCC_DIR"
 fi
 
-# --- 3. config.h (always rewritten; cheap + keeps it byte-identical) -----
 cat > "$SRC_DIR/config.h" <<EOF
 #ifndef _CONFIG_H
 #define _CONFIG_H
@@ -86,11 +73,9 @@ cat > "$SRC_DIR/config.h" <<EOF
 #endif
 EOF
 
-# --- 4. patches (idempotent) ----------------------------------------------
 say "applying Cervus patches"
 perl "$ROOT/builder/tcc_patch.pl" "$SRC_DIR"
 
-# --- 5. build tcc.elf ------------------------------------------------------
 CRT0=$SYSROOT_LIB/crt0.o
 [ -f "$CRT0" ] || die "$CRT0 missing (libcervus not built yet)"
 
@@ -119,7 +104,6 @@ else
     ok "tcc.elf up to date"
 fi
 
-# --- 6. build libtcc1.a ----------------------------------------------------
 if [ ! -f "$LIBTCC1_A" ]; then
     say "building libtcc1.a"
     l1_flags="-ffreestanding -nostdlib -fno-stack-protector \
@@ -143,7 +127,6 @@ else
     ok "libtcc1.a up to date"
 fi
 
-# --- 7. install into sysroot ------------------------------------------------
 say "installing to sysroot"
 mkdir -p "$SYSROOT_DIR/usr/bin" "$SYSROOT_DIR/usr/lib/tcc/include"
 cp "$TCC_ELF" "$SYSROOT_DIR/usr/bin/tcc"

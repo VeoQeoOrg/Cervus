@@ -41,9 +41,9 @@ typedef enum { FS_EXT2 = 0, FS_EXT4 = 1 } fstype_t;
 typedef enum { PR_BOOT = 0, PR_ROOT = 1, PR_SWAP = 2, PR_DATA = 3 } prole_t;
 typedef struct {
     prole_t  role;
-    int      fill;       /* take the rest of the disk */
+    int      fill;
     uint32_t size_mb;
-    fstype_t fs;         /* ext2/ext4 for ROOT and DATA */
+    fstype_t fs;
 } pentry_t;
 #define MAX_PEDIT 4
 

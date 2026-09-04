@@ -1,16 +1,4 @@
 #!/bin/sh
-# One-time / network / source-patching setup, split out of the main build so
-# Ninja can gate each piece behind a stamp file and never repeat it.
-#
-#   builder/bootstrap.sh deps     fetch freestnd-c-hdrs, cc-runtime, limine-protocol
-#   builder/bootstrap.sh limine   download + build the Limine bootloader
-#   builder/bootstrap.sh tcc      build the on-OS tcc compiler into the sysroot
-#   builder/bootstrap.sh cinder   install the cinder compiler into /usr/bin
-#
-# The tcc step downloads/patches/builds tcc via builder/build_tcc.sh
-# (patches applied by builder/tcc_patch.pl). It only *reads* libcervus.a/
-# crt0.o from the sysroot -- Ninja already built them via build.ninja's
-# order-only dependency, so there's nothing to snapshot/restore here.
 
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)

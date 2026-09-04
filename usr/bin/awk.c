@@ -83,9 +83,7 @@ static const char *field(int i)
     return "";
 }
 
-/* ---- expression evaluator over a token stream ---- */
-
-static const char *E;   /* current expr cursor */
+static const char *E;
 
 static void skip_ws(void) { while (*E == ' ' || *E == '\t') E++; }
 
@@ -330,8 +328,6 @@ static double eval_str(const char *expr, val_t *out)
     return to_num(out);
 }
 
-/* ---- statement execution ---- */
-
 static void do_printf(const char *args);
 
 static void exec_stmts(const char *stmts)
@@ -433,13 +429,11 @@ static void do_printf(const char *args)
     }
 }
 
-/* ---- rules ---- */
-
 typedef struct {
-    int   when;          /* 0 normal, 1 BEGIN, 2 END */
+    int   when;
     int   has_pattern;
     char  pattern[512];
-    int   pat_regex;     /* pattern is /substr/ */
+    int   pat_regex;
     char  regex[256];
     char  action[2048];
     int   has_action;

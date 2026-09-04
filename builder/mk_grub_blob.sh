@@ -1,12 +1,4 @@
 #!/bin/sh
-# Generate builder/grub-bios.img: a self-booting GRUB (i386-pc) boot blob
-# (boot.img in the MBR + core.img in the post-MBR embedding gap) that the
-# Cervus installer writes verbatim to a target disk. core.img has its modules
-# embedded and a prefix of (hd0,msdos1)/boot/grub, matching the installer's
-# layout (ESP = MBR partition 1, GRUB config + kernel under /boot there).
-#
-# Needs root for losetup/mount/grub-install; run once when the host GRUB
-# changes:  sudo builder/mk_grub_blob.sh   (or with passwordless sudo rules)
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
@@ -54,7 +46,6 @@ $SUDO /usr/bin/grub-install --target=i386-pc --boot-directory="$MNT/boot" \
 $SUDO /usr/bin/umount "$MNT"
 $SUDO /usr/bin/losetup -d "$LOOP"; LOOP=""
 
-# Extract MBR + core.img (up to the last non-empty gap sector before the partition)
 python3 - "$IMG" "$OUT" <<'PY'
 import sys
 d = open(sys.argv[1], 'rb').read(2048 * 512)

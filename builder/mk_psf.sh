@@ -1,9 +1,4 @@
 #!/bin/sh
-# Embed a .psf font as an ELF object, reproducing build.c's symbol names.
-# The kernel references _binary_<stem>_psf_{start,end,size}; objcopy derives
-# those from the *input filename*, so we stage a temp_<stem>.psf and rename.
-#
-#   mk_psf.sh <src.psf> <out.o>
 set -eu
 src=$1
 out=$2

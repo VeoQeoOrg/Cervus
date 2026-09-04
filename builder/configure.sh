@@ -1,18 +1,4 @@
 #!/bin/sh
-# Cervus build configurator.
-#
-# Ninja does not scan directories -- it needs a build.ninja listing every
-# source file and rule. This script is that "configure" step: it walks the
-# tree and emits build.ninja. Ninja then handles incremental rebuilds (via
-# gcc depfiles, so header edits are tracked properly) and parallelism
-# (`ninja -j N`).
-#
-# The heavy, cacheable work (kernel, libc, libcervus, userland programs) lives
-# entirely in Ninja. One-time / network / source-patching steps (fetching
-# deps, limine, building tcc) are delegated to builder/bootstrap.sh and gated
-# behind stamp files so they run at most once.
-#
-# Usage:  builder/configure.sh   (run from anywhere; cd's to repo root)
 
 set -eu
 
@@ -27,7 +13,6 @@ CRT0=$SYSLIB/crt0.o
 LIBCERVUS_A=$SYSLIB/libcervus.a
 LINKER_SCRIPT=kernel/linker-scripts/x86_64.lds
 
-# --- Flags: lifted verbatim from build.c so output stays byte-identical. -----
 KERNEL_BASE="-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding \
 -fno-stack-protector -fno-stack-check -fno-lto -fno-PIC \
 -ffunction-sections -fdata-sections \
@@ -38,7 +23,6 @@ KERNEL_SSE="$KERNEL_BASE -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
 KERNEL_CPP="-I kernel/src -I libc/include \
 -isystem limine-tools/freestnd-c-hdrs/include"
 
-# A file uses the SSE flag set if any of these appears in its path.
 SSE_FILES="sse.c fpu.c fabs.c pow.c pow10.c serial.c snprintf.c printf.c"
 
 LIBCERVUS_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector \
@@ -56,8 +40,6 @@ LIMINE_STAMP=$STAMPS/limine
 TCC_STAMP=$STAMPS/tcc
 CINDER_STAMP=$STAMPS/cinder
 
-# --- helpers ----------------------------------------------------------------
-# obj/<category>/<flattened-path>.o   (same scheme as build.c)
 obj_for() {  # $1=src  $2=category
     printf 'obj/%s/%s.o' "$2" "$(printf '%s' "$1" | tr './' '__')"
 }
@@ -69,8 +51,6 @@ is_sse() {  # $1=path ; returns 0 if it should build with SSE flags
     return 1
 }
 
-# --- linker script (deterministic; rewrite only when changed so ninja does
-#     not relink the kernel on every configure) --------------------------------
 mkdir -p "$(dirname "$LINKER_SCRIPT")"
 _lds_tmp=$(mktemp)
 cat > "$_lds_tmp" <<'LDS'
@@ -126,7 +106,6 @@ else
     rm -f "$_lds_tmp"
 fi
 
-# --- generate build.ninja ---------------------------------------------------
 N=build.ninja
 {
 cat <<EOF
@@ -219,7 +198,6 @@ build $CINDER_STAMP: bootstrap
 
 EOF
 
-# --- libcervus -> libcervus.a + crt0.o -------------------------------------
 LIB_OBJS=""
 for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     obj=$(obj_for "$src" libcervus)
@@ -234,7 +212,6 @@ printf 'build obj/libcervus/setjmp.o: asm_bare usr/lib/libcervus/setjmp.asm\n'
 printf 'build %s: asm_bare usr/lib/libcervus/crt0.asm\n' "$CRT0"
 printf 'build %s: ar%s obj/libcervus/setjmp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
 
-# --- userland programs -> *.elf --------------------------------------------
 PROG_DEPS="$CRT0 $LIBCERVUS_A"
 ALL_ELFS=""
 for dir in usr/apps usr/bin usr/installer; do
@@ -250,12 +227,8 @@ for dir in usr/apps usr/bin usr/installer; do
 done
 printf '\n'
 
-# --- tcc (built by the legacy patcher; needs libcervus + sysroot headers) ---
-# order-only on the libs: they must exist first, but the tcc bootstrap must not
-# re-run just because libcervus.a was rebuilt.
 printf 'build %s: bootstrap || %s\n  step = tcc\n\n' "$TCC_STAMP" "$PROG_DEPS"
 
-# --- kernel + libc -> bin/kernel -------------------------------------------
 KOBJS=""
 for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o -name '*.cnd' \) | sort) \
            $(find libc/src -name '*.c' | sort); do
@@ -277,14 +250,10 @@ for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o
 done
 printf 'build bin/kernel: link_kernel%s | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 
-# --- initramfs.tar ---------------------------------------------------------
-# Real content (kernel, init, all app ELFs) are EXPLICIT inputs so a change
-# repacks the image; toolchain stamps stay order-only (after the '|').
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
 printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s | %s %s %s\n\n' \
     "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$TCC_STAMP" "$LIMINE_STAMP"
 
-# --- ISO -------------------------------------------------------------------
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"
 printf 'build iso: phony %s/iso.stamp\n\n' "$BUILDDIR"
@@ -293,7 +262,6 @@ printf 'build %s/grubiso.stamp: grubiso bin/kernel initramfs.tar usr/apps/init.e
     "$BUILDDIR"
 printf 'build grubiso: phony %s/grubiso.stamp\n\n' "$BUILDDIR"
 
-# --- aliases + default -----------------------------------------------------
 printf 'build kernel: phony bin/kernel\n'
 printf 'build libcervus: phony %s\n' "$LIBCERVUS_A"
 printf 'build apps: phony%s\n' "$ALL_ELFS"

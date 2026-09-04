@@ -1,7 +1,4 @@
 #!/bin/sh
-# Build a bootable ISO with Limine. Ported from build.c:create_iso().
-# Produces demo_iso/Cervus.<version>.<timestamp>.iso and a
-# demo_iso/Cervus.latest.iso symlink.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
@@ -38,7 +35,6 @@ if [ -f initramfs.tar ]; then
     green "initramfs.tar -> boot/initramfs.tar"
 fi
 
-# --- limine.conf -----------------------------------------------------------
 {
     [ -f "$WALLPAPER" ] && printf 'wallpaper: %s\n' "$WALLPAPER_DST"
     printf 'timeout: 5\n\n'

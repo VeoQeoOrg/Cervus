@@ -1,18 +1,4 @@
 #!/bin/sh
-# Prepare disk image(s) and launch QEMU. Ported from build.c's
-# prepare_disks() / launch_qemu() / launch_installed() / build_data_iso().
-#
-# Flags (combine freely):
-#   --uefi            boot via UEFI/OVMF          (default: BIOS)
-#   --disk=MODE       ide | ahci | nvme | all | none   (default: ide)
-#   --live            no disk, boot ISO live      (same as --disk=none)
-#   --fresh           recreate empty disk image(s) before boot
-#   --installed       boot existing disk only, no ISO (simulate real HW)
-#   --net             attach an e1000 NIC with user-mode networking (internet via host NAT)
-#   --net=ne2k        attach a NE2000 (ne2k_pci) NIC instead of e1000
-#
-# The ISO is expected to already exist at demo_iso/Cervus.latest.iso
-# (nb builds it before calling this, except for --installed).
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
@@ -96,7 +82,6 @@ green() { printf '\033[92m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[93m%s\033[0m\n' "$*"; }
 red()   { printf '\033[91m%s\033[0m\n' "$*" >&2; }
 
-# --- OVMF discovery (UEFI) --------------------------------------------------
 find_ovmf() {
     for p in \
         /usr/share/edk2/x64/OVMF.4m.fd \
@@ -129,7 +114,6 @@ mk_disk() {  # $1=file
     fi
 }
 
-# --- sample data CD for --disk=all (ISO9660/ATAPI test) --------------------
 build_data_iso() {
     [ -f cervus_data.iso ] && return 0
     root=data_iso_root
@@ -144,7 +128,6 @@ build_data_iso() {
 
 green "Serial log -> $ROOT/$RUNLOG"
 
-# --- installed: boot the disk directly, no ISO -----------------------------
 if $INSTALLED; then
     [ -f cervus_disk.img ] || { red "cervus_disk.img not found. Run './nb run' first."; exit 1; }
     green "Booting installed disk (no ISO)..."
@@ -160,7 +143,6 @@ fi
 
 [ -e "$ISO" ] || { red "no ISO at $ISO"; exit 1; }
 
-# --- prepare disks + launch per mode ---------------------------------------
 case "$DISK" in
 none)
     green "Starting QEMU (live, no disk)..."

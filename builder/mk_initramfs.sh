@@ -45,7 +45,6 @@ cat > "$RFS/etc/motd" <<EOF
 
 EOF
 
-# init -> /bin/init (required)
 if [ -f "$INIT_ELF" ]; then
     cp "$INIT_ELF" "$RFS/bin/init"
     green "init.elf -> /bin/init"
@@ -53,7 +52,6 @@ else
     red "init.elf not found - boot will drop to nothing!"
 fi
 
-# /bin programs
 for elf in usr/bin/*.elf; do
     [ -e "$elf" ] || continue
     cp "$elf" "$RFS/bin/$(basename "$elf" .elf)"
@@ -61,7 +59,6 @@ done
 [ -e "$RFS/bin/test" ] && cp "$RFS/bin/test" "$RFS/bin/["
 green "copied /bin programs"
 
-# /apps programs (excluding init)
 for elf in usr/apps/*.elf; do
     [ -e "$elf" ] || continue
     name=$(basename "$elf" .elf)
@@ -70,13 +67,11 @@ for elf in usr/apps/*.elf; do
 done
 green "copied /apps programs"
 
-# installer
 if [ -f "$INSTALLER_ELF" ]; then
     cp "$INSTALLER_ELF" "$RFS/bin/cervus-installer"
     green "cervus-installer -> /bin/cervus-installer"
 fi
 
-# sysroot (tcc, libs, headers) -> /usr
 if [ -d "$SYSROOT/usr" ]; then
     mkdir -p "$RFS/usr"
     cp -r "$SYSROOT"/usr/. "$RFS/usr/"
@@ -85,14 +80,12 @@ else
     red "$SYSROOT/usr not found - skipping sysroot"
 fi
 
-# trusted CA bundle -> /etc/ssl/certs (for TLS certificate validation)
 if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
     mkdir -p "$RFS/etc/ssl/certs"
     cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"
     green "CA bundle installed into /etc/ssl/certs"
 fi
 
-# /etc/skel - copied into each new user's home by the installer / useradd
 cat > "$RFS/etc/skel/welcome.txt" <<EOF
 Welcome to Cervus!
 
@@ -107,7 +100,6 @@ Source: https://github.com/VeoQeo/Cervus
 EOF
 chmod 0644 "$RFS/etc/skel/welcome.txt"
 
-# boot files
 mkdir -p "$RFS/boot"
 copy_boot() {  # $1=src $2=dst $3=required
     if [ -f "$1" ]; then

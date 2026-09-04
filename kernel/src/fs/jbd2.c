@@ -201,7 +201,6 @@ int jbd2_recover(ext2_t *fs) {
     return 1;
 }
 
-/* ---- write-side journaling (synchronous, ordered-data) ---- */
 
 typedef struct { uint32_t block; uint8_t *data; } txblk_t;
 struct jbd2_txn {
