@@ -1,0 +1,82 @@
+NAME
+       curses - terminal windows, attributes and keys
+
+SYNOPSIS
+       #include <curses.h>
+
+       WINDOW *initscr(void);
+       int     endwin(void);
+
+       WINDOW *newwin(int h, int w, int y, int x);
+       int     delwin(WINDOW *w);
+
+       int wrefresh(WINDOW *w);
+       int wnoutrefresh(WINDOW *w);
+       int doupdate(void);
+
+       int mvwaddstr(WINDOW *w, int y, int x, const char *s);
+       int mvwprintw(WINDOW *w, int y, int x, const char *fmt, ...);
+       int wattrset(WINDOW *w, attr_t a);
+       int box(WINDOW *w, chtype v, chtype h);
+
+       int start_color(void);
+       int init_pair(short pair, short fg, short bg);
+
+       int keypad(WINDOW *w, bool_t on);
+       int wgetch(WINDOW *w);
+
+DESCRIPTION
+       A curses implementation for Cervus, following the familiar
+       interface closely enough that ordinary curses code compiles.
+
+       initscr measures the terminal, switches to the alternate screen
+       and puts the terminal in raw mode without echo; endwin puts all
+       of that back. Call endwin before exiting, including from an
+       error path, or the terminal is left unusable.
+
+       Drawing goes into windows, not to the terminal. wrefresh copies
+       a window into the virtual screen and then updates the terminal.
+       When several windows change together, call wnoutrefresh on each
+       and doupdate once, so the screen is written a single time.
+
+       The update compares the virtual screen against what the terminal
+       already shows and emits only the cells that differ, together
+       with the cursor moves and attribute changes they need. Redrawing
+       a full screen where little changed costs almost nothing, which
+       matters on a console that renders every glyph itself.
+
+ATTRIBUTES AND COLOR
+       A_NORMAL, A_BOLD, A_DIM, A_UNDERLINE, A_REVERSE and A_BLINK
+       combine with a colour pair. start_color enables colour and
+       init_pair defines a pair from a foreground and a background out
+       of COLOR_BLACK through COLOR_WHITE; COLOR_PAIR(n) turns the pair
+       into an attribute, and PAIR_NUMBER extracts it again.
+
+       Attributes set with wattrset apply to everything drawn
+       afterwards in that window.
+
+INPUT
+       With keypad turned on, wgetch decodes escape sequences and
+       returns KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME,
+       KEY_END, KEY_PPAGE, KEY_NPAGE, KEY_DC, KEY_IC, KEY_BACKSPACE,
+       KEY_ENTER, and the function keys as KEY_F(n).
+
+       By default wgetch waits. nodelay makes it return ERR at once
+       when nothing is ready, and wtimeout or halfdelay wait for a
+       bounded time, which is how a program animates or refreshes on a
+       timer while staying responsive.
+
+       A read interrupted by a signal is reported as KEY_RESIZE, so a
+       program that redraws on that key also repaints when the console
+       hands the screen back after a switch.
+
+NOTES
+       Enter arrives as a newline and Backspace as a backspace rather
+       than delete; wgetch normalises both to KEY_ENTER and
+       KEY_BACKSPACE when keypad is on, so compare against those.
+
+       There is no terminfo database. The escape sequences are the ones
+       the Cervus console implements.
+
+SEE ALSO
+       termios(3), tui(3), poll(2), hexed(1)
