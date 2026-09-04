@@ -49,6 +49,11 @@ void vt_cursor(int vt, int on);
 void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 void vt_font_changed(void);
 
+int  vt_fb_owner(void);
+void vt_fb_acquire(int vt);
+void vt_fb_release(int vt);
+int  vt_fb_may_draw(int vt);
+
 void tty_vt_init(void);
 void tty_vt_input(int vt, char c);
 

@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/ioctl.h>
+#include <signal.h>
+#include <errno.h>
 #include <image.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
@@ -16,6 +18,9 @@ static const char USAGE[] =
     "Animated GIFs play in a loop.\n";
 
 static int sw, sh, ox, oy, dw, dh;
+static volatile int g_redraw;
+
+static void on_winch(int sig) { (void)sig; g_redraw = 1; }
 
 static void fit(int iw, int ih) {
     dw = iw; dh = ih;
@@ -137,12 +142,23 @@ int main(int argc, char **argv) {
         ioctl(0, TIOCSNONBLOCK, &nb);
         gif_free(&anim);
     } else {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = on_winch;
+        sigaction(SIGWINCH, &sa, NULL);
+
         fit(still.w, still.h);
         memset(screen, 0, (size_t)sw * sh * 4);
         render(&still, screen);
-        cervus_fb_blit(screen, 0, 0, sw, sh);
-        char c;
-        read(0, &c, 1);
+        for (;;) {
+            cervus_fb_blit(screen, 0, 0, sw, sh);
+            g_redraw = 0;
+            char c;
+            ssize_t n = read(0, &c, 1);
+            if (n == 1) break;
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0 && !g_redraw) break;
+        }
         image_free(&still);
     }
 

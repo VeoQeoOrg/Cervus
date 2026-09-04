@@ -1,5 +1,6 @@
 #include <tui.h>
 #include <unistd.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <termios.h>
@@ -59,9 +60,16 @@ void tui_move(int row, int col) {
 static unsigned char g_ib[256];
 static int g_iblen = 0, g_ibpos = 0;
 
+static int g_intr = 0;
+
 static int ib_fill(void) {
     ssize_t n = read(0, g_ib, sizeof g_ib);
-    if (n <= 0) { g_iblen = 0; g_ibpos = 0; return 0; }
+    if (n <= 0) {
+        g_iblen = 0;
+        g_ibpos = 0;
+        if (n < 0 && errno == EINTR) g_intr = 1;
+        return 0;
+    }
     g_iblen = (int)n;
     g_ibpos = 0;
     return (int)n;
@@ -80,8 +88,9 @@ static int ib_more(void) {
 }
 
 int tui_read_key(void) {
+    g_intr = 0;
     int c = ib_getc();
-    if (c < 0) return -1;
+    if (c < 0) return g_intr ? TK_RESIZE : -1;
     if (c != 0x1B) {
         if (c == '\n' || c == '\r') return TK_ENTER;
         if (c == 8 || c == 127)     return TK_BACKSP;

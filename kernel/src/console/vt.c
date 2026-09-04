@@ -74,6 +74,25 @@ static int ensure_grid(int n) {
     return 1;
 }
 
+static int g_fb_owner_vt = -1;
+
+int vt_fb_owner(void) { return g_fb_owner_vt; }
+
+void vt_fb_acquire(int vt) {
+    g_fb_owner_vt = vt;
+    console_set_offscreen(vt == g_active);
+}
+
+void vt_fb_release(int vt) {
+    if (g_fb_owner_vt != vt) return;
+    g_fb_owner_vt = -1;
+    console_set_offscreen(0);
+}
+
+int vt_fb_may_draw(int vt) {
+    return vt == g_active;
+}
+
 void vt_switch(int n) {
     if (!g_inited) return;
     if (n < 0 || n >= VT_COUNT) return;
@@ -106,9 +125,21 @@ void vt_switch(int n) {
 
     console_load_state(&g_vts[n].state);
     g_active = n;
-    console_redraw_grid();
-    fb_flush(global_framebuffer);
+
+    int owns = (g_fb_owner_vt == n);
+    console_set_offscreen(owns);
+    if (!owns) {
+        console_redraw_grid();
+        fb_flush(global_framebuffer);
+    }
     spinlock_release_irqrestore(&g_lock, f);
+
+    if (owns) {
+        extern struct task *task_find_foreground(void);
+        extern void signal_send_subtree(struct task *root, int sig);
+        struct task *fg = task_find_foreground();
+        if (fg) signal_send_subtree(fg, 28);
+    }
 }
 
 void vt_write(int n, const char *buf, size_t len) {
@@ -146,7 +177,7 @@ void vt_write(int n, const char *buf, size_t len) {
 
     console_set_offscreen(1);
     for (size_t i = 0; i < len; i++) putchar((int)(unsigned char)buf[i]);
-    console_set_offscreen(0);
+    console_set_offscreen(g_fb_owner_vt == g_active);
 
     console_save_state(&g_vts[n].state);
     console_set_grid(g_vts[g_active].grid, g_cols, g_rows);

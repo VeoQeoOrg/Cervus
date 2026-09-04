@@ -6,6 +6,14 @@
 
 extern fb_info_t *global_framebuffer;
 extern void console_set_offscreen(int on);
+extern int  vt_fb_may_draw(int vt);
+extern void vt_fb_acquire(int vt);
+extern void vt_fb_release(int vt);
+
+static int caller_vt(void) {
+    task_t *t = syscall_cur_task();
+    return t ? t->ctty : 0;
+}
 
 int64_t sys_fb_info(uint64_t info_ptr)
 {
@@ -36,6 +44,8 @@ int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64
     if (y + h > fb->height) h = fb->height - y;
 
     if (!syscall_uptr_validate((void *)buf_ptr, w * h * 4)) return -EFAULT;
+
+    if (!vt_fb_may_draw(caller_vt())) return (int64_t)(w * h * 4);
 
     extern uint32_t *fb_get_backbuffer(void);
     extern uint32_t  fb_backbuffer_pitch(void);
@@ -92,15 +102,16 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
 
 int64_t sys_fb_acquire(void)
 {
-    console_set_offscreen(1);
+    vt_fb_acquire(caller_vt());
     return 0;
 }
 
 int64_t sys_fb_release(void)
 {
     extern void console_force_full_redraw(void);
-    console_set_offscreen(0);
-    console_force_full_redraw();
+    int vt = caller_vt();
+    vt_fb_release(vt);
+    if (vt_fb_may_draw(vt)) console_force_full_redraw();
     return 0;
 }
 
