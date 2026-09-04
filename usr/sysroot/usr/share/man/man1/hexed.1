@@ -1,0 +1,48 @@
+NAME
+       hexed - hex viewer and editor
+
+SYNOPSIS
+       hexed [-w] <file>
+
+DESCRIPTION
+       Shows a file as offsets, hex bytes and printable text, and edits
+       it in place. It reads only the part of the file on screen, so it
+       opens a whole disk as readily as a small file.
+
+       Editing is buffered: changes are held until saved and shown
+       highlighted, so what has been touched is visible before it is
+       written. Writing needs -w; without it the file is opened read
+       only and edits are refused.
+
+OPTIONS
+       -w     open for writing (default is read only)
+
+KEYS
+       arrows          move one byte or one line
+       PgUp, PgDn      move a screen
+       Home, End       start and end of the file
+       Tab             switch between the hex and the text pane
+       0-9 a-f         type a byte in the hex pane
+       any character   type a byte in the text pane
+       g               go to an offset; a leading + or - moves relative
+       /               search
+       n               repeat the last search
+       u               undo the last change
+       s               write the changes
+       q               quit, asking first if anything is unsaved
+
+SEARCHING
+       A pattern is either hex bytes, with or without spaces, or text
+       in double quotes. The search wraps around the end of the file
+       and matches against pending edits as well as what is on disk.
+
+EXAMPLES
+       hexed /usr/share/media/giphy.gif
+       hexed -w disk.img
+       hexed /dev/sda
+
+              Then / and 55aa to find a boot signature, or g and 1fe to
+              jump straight to it.
+
+SEE ALSO
+       hexdump(1), dd(1), fdisk(1), curses(3)
