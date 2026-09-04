@@ -1,0 +1,41 @@
+NAME
+       path_join, resolve_path, cervus_confirm - shared helpers
+
+SYNOPSIS
+       #include <cervus_util.h>
+
+       void path_join(const char *base, const char *name, char *out);
+       void path_norm(char *path);
+       void resolve_path(const char *cwd, const char *path, char *out);
+
+       int  cervus_check_help_version(int argc, char **argv,
+                                      const char *usage, const char *ver);
+       int  cervus_confirm(const char *what, const char *target);
+       const char *cervus_path_danger(const char *path);
+
+       int  util_readline(int fd, char *buf, int maxlen);
+       void util_write_stdout(const char *s);
+       void util_write_stderr(const char *s);
+
+DESCRIPTION
+       Helpers shared by the command-line tools, defined inline in the
+       header.
+
+       path_join concatenates a directory and a name; path_norm folds
+       away . and .. in place; resolve_path turns a relative path into
+       an absolute one against a working directory.
+
+       cervus_check_help_version handles --help and --version the same
+       way in every tool.
+
+       cervus_path_danger names the reason a path is dangerous to
+       remove or overwrite, such as a root directory or a mount point,
+       and cervus_confirm asks before going ahead. Destructive tools
+       use the pair so the prompt is worded the same everywhere.
+
+RETURN VALUE
+       cervus_confirm returns non-zero when the user agreed;
+       cervus_path_danger returns NULL when the path is ordinary.
+
+SEE ALSO
+       rm(1), wipefs(1), mkfs(1)

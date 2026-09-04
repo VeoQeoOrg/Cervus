@@ -1,0 +1,25 @@
+NAME
+       readlink - read the target of a symbolic link
+
+SYNOPSIS
+       #include <unistd.h>
+
+       ssize_t readlink(const char *path, char *buf, size_t size);
+
+DESCRIPTION
+       Places the target of the symbolic link at PATH into BUF without
+       following it. The result is not terminated, so terminate it at
+       the returned length yourself.
+
+       A return equal to SIZE means the target may have been truncated;
+       retry with a larger buffer.
+
+RETURN VALUE
+       The number of bytes placed in BUF, or -1 with errno set.
+
+ERRORS
+       EINVAL   the path is not a symbolic link
+       ENOENT   the path does not exist
+
+SEE ALSO
+       symlink(2), stat(2), ln(1)

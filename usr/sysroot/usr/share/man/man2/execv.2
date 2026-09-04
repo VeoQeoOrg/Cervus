@@ -1,0 +1,30 @@
+NAME
+       execv, execvp - run a program
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int execv(const char *path, char *const argv[]);
+       int execvp(const char *file, char *const argv[]);
+
+DESCRIPTION
+       Replaces the current program image. execv takes a path; execvp
+       searches PATH when FILE contains no slash.
+
+       Both pass the caller's environment on, so HOME and PATH survive
+       into the new program. execve(2) is the underlying call and takes
+       the environment explicitly.
+
+       The file must have the execute bit; a script is run through the
+       interpreter named on its #! line.
+
+RETURN VALUE
+       Does not return on success; -1 with errno set on failure.
+
+ERRORS
+       ENOENT   the file was not found
+       EACCES   the file is not executable
+       ENOEXEC  the file is not a program this kernel can load
+
+SEE ALSO
+       execve(2), fork(2), wait(2), chmod(1)

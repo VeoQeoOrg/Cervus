@@ -5,11 +5,13 @@ SYNOPSIS
        #include <unistd.h>
 
        int   chdir(const char *path);
+       int   fchdir(int fd);
        char *getcwd(char *buf, size_t size);
 
 DESCRIPTION
        chdir changes the working directory of the calling process, and
-       getcwd reports it as an absolute path.
+       getcwd reports it as an absolute path. fchdir does the same
+       given a descriptor for a directory.
 
        The directory is per-process and is inherited across fork and
        execve, so a child starts where its parent was.

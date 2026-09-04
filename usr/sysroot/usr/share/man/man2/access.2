@@ -1,0 +1,27 @@
+NAME
+       access, creat - test access, create a file
+
+SYNOPSIS
+       #include <unistd.h>
+       #include <fcntl.h>
+
+       int access(const char *path, int mode);
+       int creat(const char *path, mode_t mode);
+
+DESCRIPTION
+       access checks PATH against F_OK, R_OK, W_OK and X_OK for the
+       calling user. Deciding with access and then opening leaves a gap
+       in which the answer can change, so where it matters, open the
+       file and handle the failure instead.
+
+       creat is open with O_CREAT|O_WRONLY|O_TRUNC.
+
+RETURN VALUE
+       0 or a descriptor, -1 with errno set.
+
+ERRORS
+       ENOENT   the path does not exist
+       EACCES   the requested access is denied
+
+SEE ALSO
+       open(2), stat(2), chmod(2)

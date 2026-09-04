@@ -1,0 +1,24 @@
+NAME
+       cap_get, cap_drop - capabilities
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       uint64_t cervus_cap_get(void);
+       int      cervus_cap_drop(uint64_t mask);
+
+DESCRIPTION
+       Each task carries a capability mask that gates the privileged
+       syscalls: raw device access, I/O ports, rebooting and the like.
+
+       cap_drop clears bits and can never set them, so a program may
+       give up what it does not need and cannot take it back. Dropping
+       before handling untrusted input limits what a bug can reach.
+
+       Capabilities are inherited across fork and execve.
+
+RETURN VALUE
+       The mask, or 0 on success and negative on failure.
+
+SEE ALSO
+       auth(2), ioport(2), getpid(2)

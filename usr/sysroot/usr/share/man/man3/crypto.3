@@ -15,6 +15,33 @@ SYNOPSIS
        int  chacha20_poly1305_decrypt(...);
        void aes_gcm_encrypt(...);
        int  aes_gcm_decrypt(...);
+       void aes_128_gcm_encrypt(...);  int aes_128_gcm_decrypt(...);
+       void aes_256_gcm_encrypt(...);  int aes_256_gcm_decrypt(...);
+       void chacha20(const uint8_t key[32], const uint8_t nonce[12],
+                     uint32_t counter, const uint8_t *in, uint8_t *out, size_t n);
+       void poly1305_init(poly1305_ctx *c, const uint8_t key[32]);
+       void poly1305_update(poly1305_ctx *c, const uint8_t *m, size_t n);
+       void poly1305_final(poly1305_ctx *c, uint8_t mac[16]);
+
+       void sha256_init(sha256_ctx *c);
+       void sha256_update(sha256_ctx *c, const void *d, size_t n);
+       void sha256_final(sha256_ctx *c, uint8_t out[32]);
+       void sha512_init(sha512_ctx *c);
+       void sha512_update(sha512_ctx *c, const void *d, size_t n);
+       void sha512_final(sha512_ctx *c, uint8_t out[64]);
+       void sha384_init(sha512_ctx *c);
+       void poly1305(const uint8_t key[32], const uint8_t *m, size_t n,
+                     uint8_t tag[16]);
+       void sha384(const void *d, size_t n, uint8_t out[48]);
+
+       void x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]);
+       void x25519_base(uint8_t out[32], const uint8_t scalar[32]);
+       void ed25519_keypair(uint8_t pub[32], uint8_t priv[64]);
+       void ed25519_sign(...);   int ed25519_verify(...);
+       int  ecdsa_p256_verify(...);   int ecdsa_p384_verify(...);
+       int  rsa_pkcs1v15_verify(...); int rsa_pss_sha256_verify(...);
+
+       void crypto_random(void *buf, size_t n);
 
 DESCRIPTION
        The cipher suite behind TLS, SSH and crypt(1): SHA-256 and
@@ -25,6 +52,14 @@ DESCRIPTION
        The AEAD decrypt functions verify the tag and return failure
        without producing plaintext, so tampering is detected rather
        than passed on.
+
+       The hashes come in both one-shot and streaming form; the
+       streaming triple is the one to use for data that does not fit in
+       memory at once.
+
+       crypto_random is the source for keys, nonces and anything else
+       that has to be unpredictable. rand(3) is not, and must never be
+       used for these.
 
        Every primitive is checked against the RFC and NIST test
        vectors.

@@ -4,13 +4,28 @@ NAME
 SYNOPSIS
        #include <tls.h>
 
+SYNOPSIS
+       #include <tls.h>
+
+       tls_t *tls_client_new(int fd, const char *host);
+       int    tls_handshake(tls_t *t);
+       int    tls_read(tls_t *t, void *buf, size_t n);
+       int    tls_write(tls_t *t, const void *buf, size_t n);
+       void   tls_set_insecure(tls_t *t, int on);
+       const char *tls_error(tls_t *t);
+       void   tls_free(tls_t *t);
+
 DESCRIPTION
        A TLS 1.3 client over an established socket. The suites offered
        are ChaCha20-Poly1305 and AES-128-GCM.
 
+       tls_client_new wraps a connected socket and records the host
+       name the certificate must match; tls_handshake completes the
+       exchange and tls_error explains a failure.
+
        The server certificate chain is verified against the bundle in
        /etc/ssl/certs, including the name and the validity dates, so a
-       mismatch fails the handshake. Both wget and curl accept a flag
+       mismatch fails the handshake. tls_set_insecure turns that off. Both wget and curl accept a flag
        to skip that, which is only for a host you already trust.
 
 RETURN VALUE

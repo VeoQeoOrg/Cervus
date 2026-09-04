@@ -1,0 +1,41 @@
+NAME
+       mp3dec_init, mp3dec_decode_frame - MPEG audio decoding
+
+SYNOPSIS
+       #define MINIMP3_IMPLEMENTATION
+       #define MINIMP3_NO_SIMD
+       #include <minimp3.h>
+
+       void mp3dec_init(mp3dec_t *dec);
+       int  mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *buf, int n,
+                                short *pcm, mp3dec_frame_info_t *info);
+
+DESCRIPTION
+       Decodes one MPEG audio frame at a time. The decoder finds the
+       next frame itself, so ID3 tags and other padding are skipped
+       without help.
+
+       The return value is the number of samples per channel, and
+       info.frame_bytes says how far to advance; a zero there means no
+       frame could be found and the loop should stop. info also carries
+       the sample rate, the channel count and the bitrate.
+
+       Define MINIMP3_NO_SIMD before including it: without that the
+       header reaches for immintrin.h, which is not available here. No
+       math library is needed.
+
+EXAMPLE
+              mp3dec_init(&dec);
+              while (pos < len) {
+                      int s = mp3dec_decode_frame(&dec, buf + pos,
+                                                  len - pos, pcm, &info);
+                      if (info.frame_bytes == 0) break;
+                      pos += info.frame_bytes;
+                      if (s > 0) play(pcm, s, info.channels);
+              }
+
+       mp3dec_f32_to_s16() converts a float buffer to the 16-bit
+       samples the audio device expects.
+
+SEE ALSO
+       play(1), audio(2)

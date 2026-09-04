@@ -11,7 +11,8 @@ OPTIONS
        -s     print nothing, only set the exit status
 
 EXIT STATUS
-       0 if standard input is a terminal, 1 otherwise.
+       0 if standard input is a terminal, 1 otherwise. The underlying
+       test is isatty, see stdio(3), on descriptor 0.
 
 SEE ALSO
        csh(1)

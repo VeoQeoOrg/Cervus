@@ -8,6 +8,16 @@ SYNOPSIS
        unsigned long strtoul(const char *s, char **end, int base);
        double        strtod(const char *s, char **end);
        int           atoi(const char *s);
+       long          atol(const char *s);
+       long long     atoll(const char *s);
+       double        atof(const char *s);
+       long long     strtoll(const char *s, char **end, int base);
+       unsigned long long strtoull(const char *s, char **end, int base);
+       float         strtof(const char *s, char **end);
+       long double   strtold(const char *s, char **end);
+       int           abs(int x);
+       long          labs(long x);
+       long long     llabs(long long x);
 
 DESCRIPTION
        Parses a number from the front of S, skipping leading

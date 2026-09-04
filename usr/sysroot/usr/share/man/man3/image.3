@@ -13,6 +13,12 @@ SYNOPSIS
        int  gif_decode(const uint8_t *d, size_t n, gif_anim_t *out);
        void gif_free(gif_anim_t *a);
 
+       int  image_decode_png(const uint8_t *d, size_t n, image_t *out);
+       int  image_decode_jpeg(const uint8_t *d, size_t n, image_t *out);
+       int  image_decode_bmp(const uint8_t *d, size_t n, image_t *out);
+       int  image_decode_svg(const uint8_t *d, size_t n, image_t *out);
+       int  image_decode_gif(const uint8_t *d, size_t n, image_t *out);
+
 DESCRIPTION
        Decodes PNG, JPEG, BMP, SVG and GIF into an image_t: width,
        height and a buffer of 32-bit pixels.
@@ -26,6 +32,10 @@ DESCRIPTION
 
        image_scale returns a new image; free it with image_free unless
        it aliases the source.
+
+       The per-format decoders can be called directly when the format
+       is already known; image_load picks one by sniffing the data and
+       falls back to the file name.
 
 RETURN VALUE
        0 on success, negative when the data cannot be decoded.

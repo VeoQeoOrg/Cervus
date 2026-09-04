@@ -11,9 +11,24 @@ SYNOPSIS
        double tan(double x);   double atan2(double y, double x);
        double floor(double x); double ceil(double x);
        double fabs(double x);  double fmod(double x, double y);
+       double round(double x); double ldexp(double x, int e);
+       double log2(double x);  double pow10(int e);
+       long   lrint(double x);
+
+       float  sqrtf(float x);  float  fabsf(float x);
+       float  sinf(float x);   float  cosf(float x);
+       float  floorf(float x); float  ceilf(float x);
+       long   lrintf(float x);
+
+       int    isnan(double x); int    isinf(double x);
 
 DESCRIPTION
-       The usual double-precision functions.
+       The usual double-precision functions, with single-precision
+       variants where the smaller type is enough.
+
+       isnan and isinf are the way to test a result: a NaN compares
+       unequal to everything including itself, so x != x is true but
+       reads as a mistake.
 
        Userspace is compiled with SSE, so float and double work
        normally. The kernel saves and restores the SSE state on every

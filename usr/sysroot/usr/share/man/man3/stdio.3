@@ -14,9 +14,30 @@ SYNOPSIS
        int    fputs(const char *s, FILE *f);
        int    fflush(FILE *f);
 
+       int    fgetc(FILE *f);        int  fputc(int c, FILE *f);
+       int    getchar(void);         int  putchar(int c);
+       int    puts(const char *s);   int  ungetc(int c, FILE *f);
+       int    feof(FILE *f);         int  ferror(FILE *f);
+       void   clearerr(FILE *f);     void rewind(FILE *f);
+       int    fileno(FILE *f);       FILE *fdopen(int fd, const char *mode);
+
+       #include <unistd.h>
+       int    isatty(int fd);
+
 DESCRIPTION
        Buffered streams over file descriptors. stdin, stdout and stderr
        are open at startup.
+
+       isatty reports whether a descriptor is a terminal, which is how a
+       program decides between an interactive display and plain output
+       for a pipe.
+
+       fileno gives the descriptor behind a stream and fdopen wraps a
+       descriptor in one, which is how a program mixes stdio with a
+       call that only takes descriptors, such as poll.
+
+       feof and ferror distinguish the end of the input from a failure
+       after a short read; clearerr resets both.
 
        Output is buffered, so anything drawn to the terminal has to be
        flushed before it appears. This matters when a program mixes

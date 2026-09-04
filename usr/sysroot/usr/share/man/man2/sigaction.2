@@ -1,0 +1,38 @@
+NAME
+       sigaction, sigprocmask, sigreturn - install and mask handlers
+
+SYNOPSIS
+       #include <signal.h>
+
+       int sigaction(int sig, const struct sigaction *act,
+                     struct sigaction *old);
+       int sigprocmask(int how, const sigset_t *set, sigset_t *old);
+
+DESCRIPTION
+       sigaction installs a disposition for SIG: a handler, SIG_DFL or
+       SIG_IGN, together with the mask to apply while the handler runs
+       and the flags.
+
+       sigprocmask blocks and unblocks signals, with HOW one of
+       SIG_BLOCK, SIG_UNBLOCK or SIG_SETMASK. A signal raised while
+       blocked stays pending until it is unblocked.
+
+       Delivery builds a frame on the user stack and returns through
+       the trampoline in libc, which calls sigreturn to restore the
+       interrupted context. Ordinary C works inside a handler; keep it
+       short and touch only volatile sig_atomic_t state.
+
+       A blocking terminal read is interrupted rather than swallowing
+       the signal, and fails with EINTR. Full-screen programs use that
+       to repaint: the library reports an interrupted read as a resize
+       rather than as end of input.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+ERRORS
+       EINVAL   the signal number is not valid, or cannot be caught
+       EFAULT   act or old points outside the address space
+
+SEE ALSO
+       kill(2), signal(3), setpgid(2), sigtest(1)

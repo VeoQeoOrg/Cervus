@@ -12,6 +12,7 @@ SYNOPSIS
        void tui_hide_cursor(void);
        void tui_show_cursor(void);
        void tui_puts(const char *s);
+       void tui_home(void);
        int  tui_read_key(void);
 
 DESCRIPTION
@@ -32,10 +33,15 @@ DESCRIPTION
        All output goes through stdio, so mixing tui calls with printf
        keeps its order.
 
+       A read interrupted by a signal is reported as TK_RESIZE rather
+       than as end of input, so a program that redraws on TK_RESIZE
+       also repaints when the console tells it the geometry changed or
+       when it gets the screen back after a console switch.
+
 NOTES
        tui_read_key blocks. To animate while waiting, wait with poll(2)
        on descriptor 0 for the frame time and call tui_read_key only
        once poll reports input.
 
 SEE ALSO
-       termios(3), poll(2), cfm(1), neo(1)
+       curses(3), termios(3), poll(2), cfm(1), neo(1)

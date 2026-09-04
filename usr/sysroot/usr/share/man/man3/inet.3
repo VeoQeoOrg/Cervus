@@ -1,0 +1,33 @@
+NAME
+       inet_addr, inet_ntoa, inet_pton, inet_ntop, htons - addresses
+
+SYNOPSIS
+       #include <arpa/inet.h>
+
+       in_addr_t inet_addr(const char *s);
+       char     *inet_ntoa(struct in_addr a);
+       int       inet_pton(int af, const char *s, void *dst);
+       const char *inet_ntop(int af, const void *src, char *dst, socklen_t n);
+       uint32_t  inet_resolve(const char *host);
+
+       uint16_t htons(uint16_t v);   uint16_t ntohs(uint16_t v);
+       uint32_t htonl(uint32_t v);   uint32_t ntohl(uint32_t v);
+
+DESCRIPTION
+       Converts between text and binary addresses, for IPv4 and, with
+       inet_pton and inet_ntop, for IPv6 as well.
+
+       inet_resolve takes either a dotted address or a host name and
+       returns the address, going to DNS when it has to, which is what
+       ping, wget and the rest use to accept both forms.
+
+       The byte-order functions convert between host and network order
+       and are needed for every port number and address written into a
+       sockaddr.
+
+RETURN VALUE
+       inet_addr returns INADDR_NONE on a malformed address, so it
+       cannot report 255.255.255.255; prefer inet_pton in new code.
+
+SEE ALSO
+       socket(2), nslookup(1), ping(1)

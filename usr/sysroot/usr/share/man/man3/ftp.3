@@ -1,0 +1,35 @@
+NAME
+       ftp_connect, ftp_login, ftp_retr, ftp_stor - FTP client
+
+SYNOPSIS
+       #include <ftp.h>
+
+       int ftp_connect(const char *host, int port);
+       int ftp_login(int s, const char *user, const char *pass);
+       int ftp_cwd(int s, const char *dir);
+       int ftp_pwd(int s, char *out, int cap);
+       int ftp_list(int s, const char *path);
+       int ftp_retr(int s, const char *remote, const char *local);
+       int ftp_stor(int s, const char *local, const char *remote);
+       int ftp_type(int s, int binary);
+       int ftp_pasv_open(int s);
+       int ftp_cmd(int s, const char *cmd, char *reply, int cap);
+       int ftp_quit(int s);
+       int ftp_fetch(const char *url, const char *local);
+
+DESCRIPTION
+       The client behind ftp(1). Transfers use passive mode:
+       ftp_pasv_open asks the server for a port and opens the data
+       connection, so no inbound connection has to be accepted.
+
+       ftp_cmd sends an arbitrary command and returns the reply, which
+       is the escape hatch for anything the wrappers do not cover.
+
+       ftp_fetch does the whole thing in one call: connect, log in
+       anonymously, download and disconnect.
+
+RETURN VALUE
+       0 or a descriptor on success, negative on failure.
+
+SEE ALSO
+       ftp(1), socket(2), 9p(1)

@@ -3,6 +3,7 @@ NAME
 
 SYNOPSIS
        int cervus_klog(char *buf, int size);
+       int cervus_dbg_print(const char *msg);
 
 DESCRIPTION
        Copies the kernel ring buffer into BUF. Messages carry a level;
@@ -11,6 +12,10 @@ DESCRIPTION
 
 RETURN VALUE
        The number of bytes copied, or negative on failure.
+
+       dbg_print writes one line straight into the kernel log, which is
+       how a program leaves a trace that survives even when its own
+       output is lost.
 
 SEE ALSO
        dmesg(1), vt(2)

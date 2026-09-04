@@ -1,0 +1,23 @@
+NAME
+       gunzip, zlib_inflate, raw_inflate - DEFLATE decompression
+
+SYNOPSIS
+       #include <inflate.h>
+
+       int gunzip(const uint8_t *in, size_t n, uint8_t **out, size_t *outn);
+       int zlib_inflate(const uint8_t *in, size_t n, uint8_t **out, size_t *outn);
+       int raw_inflate(const uint8_t *in, size_t n, uint8_t **out, size_t *outn);
+
+DESCRIPTION
+       Decompresses a DEFLATE stream: gunzip expects a gzip container,
+       zlib_inflate a zlib one, and raw_inflate the bare stream.
+
+       The output buffer is allocated by the call and must be freed.
+       This is what lets PNG images and compressed HTTP responses be
+       read.
+
+RETURN VALUE
+       0 on success, negative on malformed input.
+
+SEE ALSO
+       image(3), http(3)

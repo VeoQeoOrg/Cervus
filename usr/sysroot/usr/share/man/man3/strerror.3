@@ -1,0 +1,21 @@
+NAME
+       strerror, strsignal, perror - describe an error
+
+SYNOPSIS
+       #include <string.h>
+       #include <stdio.h>
+
+       char *strerror(int errnum);
+       char *strsignal(int sig);
+       void  perror(const char *s);
+
+DESCRIPTION
+       strerror returns the text for an errno value and strsignal the
+       name of a signal. perror writes S, a colon and the text of the
+       current errno to standard error.
+
+RETURN VALUE
+       A pointer to a static string that the next call may overwrite.
+
+SEE ALSO
+       errno(3), err(3)

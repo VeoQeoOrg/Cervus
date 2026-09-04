@@ -1,0 +1,26 @@
+NAME
+       err, errx, warn, warnx - print an error and exit
+
+SYNOPSIS
+       #include <err.h>
+
+       void err(int status, const char *fmt, ...);
+       void errx(int status, const char *fmt, ...);
+       void warn(const char *fmt, ...);
+       void warnx(const char *fmt, ...);
+       void verr(int, const char *, va_list);
+       void verrx(int, const char *, va_list);
+       void vwarn(const char *, va_list);
+       void vwarnx(const char *, va_list);
+
+DESCRIPTION
+       Writes the program name, the formatted message and, for the
+       forms without x, the text of errno, then a newline. err and errx
+       exit with STATUS; warn and warnx return.
+
+EXAMPLES
+       if (!f) err(1, "cannot open %s", path);
+       if (argc < 2) errx(1, "usage: tool <file>");
+
+SEE ALSO
+       errno(3), strerror(3), printf(3)

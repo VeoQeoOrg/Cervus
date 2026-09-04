@@ -1,0 +1,24 @@
+NAME
+       netif_get, netif_set - network interface configuration
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int netif_get(int idx, cervus_netif_t *out);
+       int netif_set(int idx, uint32_t ip, uint32_t mask,
+                     uint32_t gw, uint32_t dns);
+
+DESCRIPTION
+       netif_get reports one interface: name, link state, MTU, hardware
+       address, addresses and the packet, byte and drop counters.
+       Walking the index until it fails enumerates them.
+
+       netif_set assigns a static configuration; a zero for the gateway
+       or DNS leaves that setting alone. This replaces whatever DHCP
+       configured.
+
+RETURN VALUE
+       0 on success, negative when there is no such interface.
+
+SEE ALSO
+       ifconfig(1), ip(1), socket(2)

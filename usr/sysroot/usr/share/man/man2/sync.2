@@ -1,0 +1,26 @@
+NAME
+       sync, fsync, fdatasync - flush buffers to disk
+
+SYNOPSIS
+       #include <unistd.h>
+
+       void sync(void);
+       int  cervus_sync(void);
+       int  fsync(int fd);
+       int  fdatasync(int fd);
+
+DESCRIPTION
+       Writes buffered data out to the device. sync flushes every
+       filesystem; fsync flushes one file's data and metadata, and
+       fdatasync skips metadata that does not affect reading the data
+       back.
+
+       Writes are buffered until then, so anything that must survive a
+       power cut needs one of these. Unmounting and the shutdown path
+       already flush.
+
+RETURN VALUE
+       0 on success, -1 with errno set.
+
+SEE ALSO
+       truncate(2), write(2), mount(2), sync(1)

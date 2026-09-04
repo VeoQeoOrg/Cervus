@@ -5,6 +5,9 @@ SYNOPSIS
        #include <time.h>
        #include <unistd.h>
 
+       int      cervus_clock_gettime(int clk, cervus_timespec_t *ts);
+       int      cervus_nanosleep(uint64_t ns);
+       uint64_t cervus_uptime_ns(void);
        int clock_gettime(int clk, struct timespec *ts);
        int clock_settime(int clk, const struct timespec *ts);
        int usleep(useconds_t usec);

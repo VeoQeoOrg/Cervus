@@ -1,0 +1,35 @@
+NAME
+       scanf, sscanf, fscanf - formatted input
+
+SYNOPSIS
+       #include <stdio.h>
+
+       int scanf(const char *fmt, ...);
+       int sscanf(const char *s, const char *fmt, ...);
+       int fscanf(FILE *f, const char *fmt, ...);
+
+DESCRIPTION
+       Reads input under the control of FMT and stores the results
+       through the pointer arguments.
+
+       Conversions: %d %i %u %x %o for integers, %f and %lf for
+       floating point, %s for a whitespace-delimited word, %c for a
+       single character, and %% for a literal per cent. A width may be
+       given, and * suppresses assignment.
+
+       Whitespace in the format matches any run of whitespace; any
+       other character must match exactly.
+
+RETURN VALUE
+       The number of items assigned, which may be fewer than requested,
+       or EOF when input ended before the first conversion.
+
+NOTES
+       %s has no bound unless a width is given, so always write %31s
+       rather than %s into a 32-byte buffer.
+
+       vsscanf(const char *s, const char *fmt, va_list ap) takes an
+       already-started argument list.
+
+SEE ALSO
+       printf(3), strtol(3), getline(3)

@@ -1,0 +1,19 @@
+NAME
+       rand, srand - pseudo-random numbers
+
+SYNOPSIS
+       #include <stdlib.h>
+
+       int  rand(void);
+       void srand(unsigned seed);
+
+DESCRIPTION
+       Returns a pseudo-random number between 0 and RAND_MAX. The
+       sequence is the same on every run unless srand is called with a
+       varying seed.
+
+       This generator is for shuffling and sampling. Anything that has
+       to be unpredictable must use crypto_random, see crypto(3).
+
+SEE ALSO
+       crypto(3), csh(1)

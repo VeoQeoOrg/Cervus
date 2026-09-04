@@ -8,11 +8,29 @@ SYNOPSIS
        struct tm *gmtime(const time_t *t);
        struct tm *localtime(const time_t *t);
        time_t     mktime(struct tm *tm);
+       char      *asctime(const struct tm *tm);
+       char      *ctime(const time_t *t);
+       size_t     strftime(char *s, size_t n, const char *fmt,
+                           const struct tm *tm);
+       double     difftime(time_t a, time_t b);
+
+       #include <sys/time.h>
+
+       int gettimeofday(struct timeval *tv, void *tz);
+       int settimeofday(const struct timeval *tv, const void *tz);
+       int nanosleep(const struct timespec *req, struct timespec *rem);
 
 DESCRIPTION
        Converts between a count of seconds since the epoch and a
        broken-down struct tm. There is no timezone database, so
        localtime is UTC.
+
+       strftime formats a struct tm; asctime and ctime produce the
+       fixed 26-character form.
+
+       settimeofday needs root and is what ntpdate uses. nanosleep
+       waits with nanosecond resolution and, when interrupted, reports
+       the remaining time through REM.
 
 RETURN VALUE
        A pointer to a static struct, overwritten by the next call.

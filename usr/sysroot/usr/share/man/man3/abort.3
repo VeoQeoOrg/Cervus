@@ -1,0 +1,24 @@
+NAME
+       abort, atexit, exit - ending a program
+
+SYNOPSIS
+       #include <stdlib.h>
+
+       void abort(void);
+       int  atexit(void (*fn)(void));
+       void exit(int status);
+
+DESCRIPTION
+       exit runs the functions registered with atexit in reverse order,
+       flushes stdio and ends the process. abort ends it immediately by
+       raising SIGABRT, without running the handlers.
+
+       atexit is the place to put a terminal restore, so a program that
+       exits along an unusual path does not leave the console in raw
+       mode.
+
+RETURN VALUE
+       atexit returns 0 on success. The others do not return.
+
+SEE ALSO
+       exit(2), kill(2), termios(3)

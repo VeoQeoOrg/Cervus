@@ -1,0 +1,26 @@
+NAME
+       ioport_read, ioport_write - access an I/O port
+
+SYNOPSIS
+       #include <sys/cervus.h>
+
+       int      cervus_ioport_write(uint16_t port, uint8_t width, uint32_t val);
+       uint32_t cervus_ioport_read(uint16_t port, uint8_t width);
+
+DESCRIPTION
+       Reads and writes an x86 I/O port from user space, with a width
+       of 1, 2 or 4 bytes. Reserved for driver bring-up and hardware
+       poking from a program instead of from the kernel.
+
+       There is no arbitration: writing to a port a driver owns will
+       confuse it. Requires the capability, so an ordinary user cannot
+       reach the hardware this way.
+
+RETURN VALUE
+       The value read, or negative on failure.
+
+ERRORS
+       EPERM   the caller lacks the capability
+
+SEE ALSO
+       pci_list(2), cap(2), lspci(1)

@@ -17,6 +17,8 @@ SYNOPSIS
        int  cervus_disk_list_parts(cervus_part_info_t *out, int max);
        int  cervus_disk_format_progress(void);
        int  cervus_disk_eject(const char *dev);
+       int  cervus_disk_partition_gpt(const char *dev, ...);
+       int  cervus_disk_bios_install(const char *dev);
 
 DESCRIPTION
        Enumerates disks, reads and writes raw sectors, writes partition
@@ -34,6 +36,10 @@ RETURN VALUE
 ERRORS
        ENODEV   no such device
        EIO      the transfer failed
+
+       disk_partition writes an MBR table and disk_partition_gpt a GPT
+       one; disk_bios_install writes the boot code the installer needs
+       to make a disk bootable.
 
 SEE ALSO
        mount(2), lsblk(1), mkfs(1), fdisk(1)

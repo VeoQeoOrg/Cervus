@@ -7,6 +7,8 @@ SYNOPSIS
        DIR           *opendir(const char *path);
        struct dirent *readdir(DIR *d);
        int            closedir(DIR *d);
+       void           rewinddir(DIR *d);
+       int            dirfd(DIR *d);
 
 DESCRIPTION
        Iterates over a directory. Each entry carries d_name and d_type;

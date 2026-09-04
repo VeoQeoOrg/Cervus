@@ -1,0 +1,28 @@
+NAME
+       popen, pclose, system - run a command
+
+SYNOPSIS
+       #include <stdio.h>
+       #include <stdlib.h>
+
+       FILE *popen(const char *cmd, const char *mode);
+       int   pclose(FILE *f);
+       int   system(const char *cmd);
+
+DESCRIPTION
+       popen runs CMD through the shell with a pipe attached: mode "r"
+       reads what the command writes, mode "w" feeds it input. pclose
+       waits for the command and returns its exit status.
+
+       system runs CMD and waits, with input and output inherited.
+
+       CMD goes to the shell, so anything interpolated into it is
+       interpreted. Build the string from values you control, or use
+       fork and execve directly.
+
+RETURN VALUE
+       popen returns a stream or NULL; pclose and system return the
+       command's exit status, or -1.
+
+SEE ALSO
+       fork(2), execve(2), pipe(2), stdio(3), csh(1)

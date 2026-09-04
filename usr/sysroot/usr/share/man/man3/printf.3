@@ -31,4 +31,17 @@ RETURN VALUE
        had n been large enough). Negative on error.
 
 SEE ALSO
-       fputs(3), write(2)
+       stdio(3), write(2)
+
+VARIANTS
+       int sprintf(char *s, const char *fmt, ...);
+       int vprintf(const char *fmt, va_list ap);
+       int vfprintf(FILE *f, const char *fmt, va_list ap);
+       int vsprintf(char *s, const char *fmt, va_list ap);
+       int vsnprintf(char *s, size_t n, const char *fmt, va_list ap);
+
+       The v forms take an already-started va_list, which is how a
+       wrapper passes its own arguments through.
+
+       sprintf and vsprintf have no bound and will run past the end of
+       a buffer; use snprintf and vsnprintf instead.

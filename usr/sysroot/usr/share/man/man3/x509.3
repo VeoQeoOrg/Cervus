@@ -1,0 +1,30 @@
+NAME
+       x509_parse, x509_verify_chain, x509_check_host - certificates
+
+SYNOPSIS
+       #include <x509.h>
+
+       int x509_parse(const uint8_t *der, size_t n, x509_cert_t *out);
+       int x509_store_load_pem(const char *path, x509_store_t *store);
+       int x509_verify_chain(const x509_cert_t *chain, int n,
+                             const x509_store_t *store);
+       int x509_check_host(const x509_cert_t *c, const char *host);
+       int x509_verify_sig(...);
+
+DESCRIPTION
+       Parses DER certificates and verifies a chain against a trust
+       store loaded from PEM, checking the signatures, the validity
+       dates and the basic constraints.
+
+       x509_check_host matches the host name against the subject
+       alternative names, including wildcards, and falls back to the
+       common name. A chain that verifies for the wrong host is still
+       the wrong certificate, so both checks are needed.
+
+       The trust store shipped with the system is /etc/ssl/certs.
+
+RETURN VALUE
+       0 when the check passes, negative otherwise.
+
+SEE ALSO
+       tls(3), crypto(3), wget(1)

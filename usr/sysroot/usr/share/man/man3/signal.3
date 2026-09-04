@@ -1,0 +1,35 @@
+NAME
+       signal, raise, sigemptyset, sigaddset - signal helpers
+
+SYNOPSIS
+       #include <signal.h>
+
+       void (*signal(int sig, void (*fn)(int)))(int);
+       int raise(int sig);
+
+       int sigemptyset(sigset_t *set);
+       int sigfillset(sigset_t *set);
+       int sigaddset(sigset_t *set, int sig);
+       int sigdelset(sigset_t *set, int sig);
+       int sigismember(const sigset_t *set, int sig);
+       int sigaltstack(const stack_t *ss, stack_t *old);
+
+DESCRIPTION
+       signal is the simple way to install a handler; sigaction(2) is
+       the one to use when the mask or the flags matter. raise sends a
+       signal to the caller.
+
+       The set functions build the masks passed to sigprocmask and
+       stored in a sigaction.
+
+       A handler runs on a frame the kernel builds on the user stack
+       and returns through the trampoline in libc, so ordinary C code
+       works inside one. Keep it short and touch only volatile
+       sig_atomic_t state.
+
+RETURN VALUE
+       signal returns the previous handler or SIG_ERR; the rest return
+       0 or -1 with errno set.
+
+SEE ALSO
+       kill(2), sigtest(1)

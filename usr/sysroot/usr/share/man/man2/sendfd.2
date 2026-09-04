@@ -2,6 +2,8 @@ NAME
        sendfd, recvfd - pass a descriptor between processes
 
 SYNOPSIS
+       int sendfd(int sock, int fd);
+       int recvfd(int sock);
        int cervus_sendfd(int sock, int fd);
        int cervus_recvfd(int sock);
 

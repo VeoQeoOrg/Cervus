@@ -1,0 +1,28 @@
+NAME
+       http_fetch, http_request - HTTP client
+
+SYNOPSIS
+       #include <http.h>
+
+       int http_fetch(const char *url, ...);
+       int http_request(...);
+       int http_jar_set(...);
+       int http_jar_header(...);
+
+DESCRIPTION
+       Performs an HTTP or HTTPS request and returns the status, the
+       headers and the body. HTTPS goes through the TLS client, so the
+       certificate chain is verified unless verification is turned off.
+
+       Redirects are followed up to a caller-supplied limit, and a
+       small cookie jar carries Set-Cookie values into later requests
+       on the same host.
+
+       This is the code behind wget and curl.
+
+RETURN VALUE
+       The HTTP status on success, negative on a transport or TLS
+       failure.
+
+SEE ALSO
+       tls(3), x509(3), wget(1), curl(1)

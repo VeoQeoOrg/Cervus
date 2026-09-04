@@ -8,6 +8,7 @@ SYNOPSIS
        int cervus_fb_blit(const void *px, int x, int y, int w, int h);
        int cervus_fb_acquire(void);
        int cervus_fb_release(void);
+       int cervus_fb_map(uint64_t *out_addr);
 
 DESCRIPTION
        Draws to the screen from user space. fb_info reports the width,
@@ -16,6 +17,10 @@ DESCRIPTION
        Pixels handed to fb_blit are always 32-bit; the kernel converts
        to the native depth, so 24-bit and 16-bit modes need no special
        handling in the caller.
+
+       fb_map maps the framebuffer straight into the address space and
+       returns its address, for a program that would rather write
+       pixels itself than hand them over a syscall.
 
        fb_acquire takes the screen for exclusive use, stopping the
        console from drawing over it, and fb_release gives it back.

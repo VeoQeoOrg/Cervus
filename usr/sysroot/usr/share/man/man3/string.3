@@ -20,12 +20,43 @@ SYNOPSIS
        void  *memset(void *d, int c, size_t n);
        int    memcmp(const void *a, const void *b, size_t n);
 
+       char  *strcat(char *d, const char *s);
+       char  *strncat(char *d, const char *s, size_t n);
+       size_t strspn(const char *s, const char *set);
+       size_t strcspn(const char *s, const char *set);
+       char  *strpbrk(const char *s, const char *set);
+       char  *strsep(char **sp, const char *sep);
+       char  *strtok_r(char *s, const char *sep, char **save);
+       char  *strndup(const char *s, size_t n);
+       size_t strnlen(const char *s, size_t n);
+       size_t strlcpy(char *d, const char *s, size_t n);
+       size_t strlcat(char *d, const char *s, size_t n);
+       int    strncasecmp(const char *a, const char *b, size_t n);
+       void  *memchr(const void *s, int c, size_t n);
+       void  *memrchr(const void *s, int c, size_t n);
+       void  *memmem(const void *h, size_t hn, const void *n, size_t nn);
+       void  *mempcpy(void *d, const void *s, size_t n);
+
 DESCRIPTION
        The usual C string and memory functions.
 
        strncpy does not terminate the destination when the source fills
        it, so terminate the last byte yourself. memcpy assumes the
        regions do not overlap; use memmove when they might.
+
+       strlcpy and strlcat always terminate and return the length they
+       wanted to write, so a result at or above the buffer size means
+       the copy was truncated. They are the easy way to avoid the
+       strncpy trap.
+
+       strtok keeps its state in a static, so it cannot be used from
+       two places at once; strtok_r takes that state as an argument.
+       strsep is simpler still and, unlike strtok, reports empty
+       fields.
+
+       memmem searches for a byte sequence inside another, which is how
+       binary formats are scanned without treating the data as a
+       string.
 
 SEE ALSO
        printf(3), malloc(3), regex(3), fnmatch(3)

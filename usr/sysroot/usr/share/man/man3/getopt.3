@@ -1,0 +1,33 @@
+NAME
+       getopt - parse command line options
+
+SYNOPSIS
+       #include <unistd.h>
+
+       int getopt(int argc, char *const argv[], const char *optstring);
+
+       extern char *optarg;
+       extern int   optind, opterr, optopt;
+
+DESCRIPTION
+       Returns each option letter from ARGV in turn. A letter followed
+       by a colon in OPTSTRING takes an argument, which is left in
+       optarg. When the options run out getopt returns -1 and optind is
+       the index of the first operand.
+
+       An unknown option yields '?' in optopt; setting opterr to 0
+       suppresses the message getopt would print itself.
+
+RETURN VALUE
+       The option letter, '?' for an unknown one, or -1 at the end.
+
+EXAMPLE
+              int c;
+              while ((c = getopt(argc, argv, "vn:")) != -1) {
+                      if (c == 'v') verbose = 1;
+                      else if (c == 'n') count = atoi(optarg);
+                      else return usage();
+              }
+
+SEE ALSO
+       csh(1)

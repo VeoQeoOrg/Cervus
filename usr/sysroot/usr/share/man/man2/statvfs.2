@@ -4,6 +4,8 @@ NAME
 SYNOPSIS
        #include <sys/statvfs.h>
 
+       int cervus_statvfs(const char *path, struct statvfs *st);
+       int cervus_list_mounts(cervus_mount_t *out, int max);
        int statvfs(const char *path, struct statvfs *st);
 
 DESCRIPTION

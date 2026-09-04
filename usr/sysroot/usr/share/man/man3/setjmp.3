@@ -1,0 +1,20 @@
+NAME
+       setjmp, longjmp - non-local jump
+
+SYNOPSIS
+       #include <setjmp.h>
+
+       int  setjmp(jmp_buf env);
+       void longjmp(jmp_buf env, int val);
+
+DESCRIPTION
+       setjmp saves the machine state and returns 0. A later longjmp
+       makes it appear to return again, this time with VAL, or 1 when
+       VAL is 0.
+
+       The function that called setjmp must not have returned yet.
+       Local variables that are not volatile may hold stale values
+       after the jump.
+
+SEE ALSO
+       signal(3), abort(3)
