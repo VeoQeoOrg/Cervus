@@ -14,6 +14,7 @@
 #include <cervus_util.h>
 
 #define NEO_VERSION "0.1"
+#define NEO_MAX_COLS 4096
 #define NEO_TABSTOP 4
 #define NEO_QUIT_CONFIRM 1
 
@@ -1043,12 +1044,30 @@ static void editor_open(const char *filename)
     close(fd);
     buf[total] = '\0';
 
+    size_t probe = total < 8192 ? total : 8192;
+    for (size_t k = 0; k < probe; k++) {
+        if (buf[k] != '\0') continue;
+        free(buf);
+        E.disk_size = -1;
+        free(E.filename);
+        E.filename = NULL;
+        E.syntax = -1;
+        set_status("%s is not text - try 'hexed %s' to look at the bytes",
+                   filename, filename);
+        return;
+    }
+
     size_t i = 0;
     while (i < total) {
         size_t start = i;
         while (i < total && buf[i] != '\n' && buf[i] != '\r') i++;
-        int len = (int)(i - start);
-        row_insert_at(E.numrows, buf + start, len);
+        size_t len = i - start;
+        while (len > NEO_MAX_COLS) {
+            row_insert_at(E.numrows, buf + start, NEO_MAX_COLS);
+            start += NEO_MAX_COLS;
+            len -= NEO_MAX_COLS;
+        }
+        row_insert_at(E.numrows, buf + start, (int)len);
         if (i < total && buf[i] == '\r') i++;
         if (i < total && buf[i] == '\n') i++;
     }

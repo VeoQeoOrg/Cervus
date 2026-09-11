@@ -66,20 +66,38 @@ static int doc_append_line(doc_t *d, const char *s, size_t n)
     return 0;
 }
 
+#define LESS_MAX_COLS 4096
+
+static int g_binary = 0;
+
 static int load_fd(int fd)
 {
     char buf[8192];
     char *line = (char *)malloc(LESS_LINE_INIT);
     size_t lcap = LESS_LINE_INIT;
     size_t llen = 0;
+    int checked = 0;
     if (!line) return -1;
 
     while (1) {
         ssize_t n = read(fd, buf, sizeof(buf));
         if (n <= 0) break;
+        if (!checked) {
+            checked = 1;
+            for (ssize_t i = 0; i < n; i++)
+                if (buf[i] == '\0') { g_binary = 1; break; }
+        }
         for (ssize_t i = 0; i < n; i++) {
             char c = buf[i];
             if (c == '\r') continue;
+            if (g_binary) {
+                unsigned char u = (unsigned char)c;
+                if (c != '\n' && (u < 0x20 || u == 0x7F)) c = '.';
+            }
+            if (llen >= LESS_MAX_COLS && c != '\n') {
+                if (doc_append_line(&g_doc, line, llen) < 0) { free(line); return -1; }
+                llen = 0;
+            }
             if (c == '\n') {
                 if (doc_append_line(&g_doc, line, llen) < 0) { free(line); return -1; }
                 llen = 0;
@@ -204,13 +222,13 @@ static void draw_status(void)
     if (g_status_visible) {
         snprintf(msg, sizeof(msg), " %s ", g_status_msg);
     } else if ((int)g_doc.count > g_term_rows - 1) {
-        snprintf(msg, sizeof(msg), " %s   lines %d-%d/%zu   %d%%   (h for help, q to quit) ",
-                 g_filename, g_top + 1,
+        snprintf(msg, sizeof(msg), " %s%s   lines %d-%d/%zu   %d%%   (h for help, q to quit) ",
+                 g_filename, g_binary ? " [binary]" : "", g_top + 1,
                  bottom > (int)g_doc.count ? (int)g_doc.count : bottom,
                  g_doc.count, pct);
     } else {
-        snprintf(msg, sizeof(msg), " %s   (END)   (h for help, q to quit) ",
-                 g_filename);
+        snprintf(msg, sizeof(msg), " %s%s   (END)   (h for help, q to quit) ",
+                 g_filename, g_binary ? " [binary]" : "");
     }
     fputs(msg, stdout);
     int written = (int)strlen(msg);
