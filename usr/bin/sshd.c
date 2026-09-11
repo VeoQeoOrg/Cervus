@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -93,8 +94,17 @@ static int kex_namelist(const uint8_t *p, size_t len, int idx, const uint8_t **o
 static int tok_is(const uint8_t *tok, size_t n, const char *lit) { return strlen(lit)==n && !memcmp(tok,lit,n); }
 
 static int io_write_full(int fd, const uint8_t *b, size_t n) {
-    size_t off=0; int spin=0;
-    while (off<n) { long r=send(fd,b+off,n-off,0); if(r>0){off+=r;spin=0;} else { if(++spin>200000) return -1; usleep(200);} }
+    size_t off = 0; int spin = 0;
+    while (off < n) {
+        errno = 0;
+        long r = send(fd, b + off, n - off, 0);
+        if (r > 0) { off += (size_t)r; spin = 0; continue; }
+        if (r == 0) return -1;
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != 0) return -1;
+        if (++spin > 200000) return -1;
+        usleep(200);
+    }
     return 0;
 }
 
@@ -139,10 +149,19 @@ static int ssh_send(ssh_t *s, const uint8_t *payload, size_t plen) {
 static int rx_pull(ssh_t *s, int blocking) {
     if (s->head>0) { memmove(s->rx,s->rx+s->head,s->tail-s->head); s->tail-=s->head; s->head=0; }
     if (s->tail>=RXSZ) return -1;
-    long n=recv(s->fd,s->rx+s->tail,RXSZ-s->tail,0);
-    if (n>0){ s->tail+=n; return (int)n; }
-    if (n==0) return -1;
-    return blocking?-1:0;
+    for (;;) {
+        errno = 0;
+        long n = recv(s->fd, s->rx + s->tail, RXSZ - s->tail, 0);
+        if (n > 0) { s->tail += (size_t)n; return (int)n; }
+        if (n == 0) return -1;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (!blocking) return 0;
+            usleep(2000);
+            continue;
+        }
+        return blocking ? -1 : 0;
+    }
 }
 
 static int ssh_recv(ssh_t *s, int blocking) {

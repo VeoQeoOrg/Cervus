@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -130,9 +131,14 @@ static int negotiate_cipher(ssh_t *s, const uint8_t *kexinit, size_t len) {
 static int io_write_full(int fd, const uint8_t *b, size_t n) {
     size_t off = 0; int spin = 0;
     while (off < n) {
+        errno = 0;
         long r = send(fd, b + off, n - off, 0);
-        if (r > 0) { off += (size_t)r; spin = 0; }
-        else { if (++spin > 200000) return -1; usleep(200); }
+        if (r > 0) { off += (size_t)r; spin = 0; continue; }
+        if (r == 0) return -1;
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != 0) return -1;
+        if (++spin > 200000) return -1;
+        usleep(200);
     }
     return 0;
 }
@@ -183,10 +189,19 @@ static int ssh_send(ssh_t *s, const uint8_t *payload, size_t plen) {
 static int rx_pull(ssh_t *s, int blocking) {
     if (s->head > 0) { memmove(s->rx, s->rx + s->head, s->tail - s->head); s->tail -= s->head; s->head = 0; }
     if (s->tail >= RXSZ) return -1;
-    long n = recv(s->fd, s->rx + s->tail, RXSZ - s->tail, 0);
-    if (n > 0) { s->tail += (size_t)n; return (int)n; }
-    if (n == 0) return -1;
-    return blocking ? -1 : 0;
+    for (;;) {
+        errno = 0;
+        long n = recv(s->fd, s->rx + s->tail, RXSZ - s->tail, 0);
+        if (n > 0) { s->tail += (size_t)n; return (int)n; }
+        if (n == 0) return -1;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (!blocking) return 0;
+            usleep(2000);
+            continue;
+        }
+        return blocking ? -1 : 0;
+    }
 }
 
 static int ssh_recv(ssh_t *s, int blocking) {
@@ -264,9 +279,18 @@ static int version_exchange(ssh_t *s, char *server_ver, size_t vcap) {
         size_t li = 0;
         for (;;) {
             if (s->head >= s->tail) {
-                if (rx_pull(s, 1) < 0)
-                    return fail(s, "the server closed the connection before saying "
-                                   "which SSH version it speaks");
+                if (rx_pull(s, 1) < 0) {
+                    if (li > 0) {
+                        server_ver[li] = 0;
+                        snprintf(s->err, sizeof s->err,
+                                 "the server sent only '%s' and then stopped", server_ver);
+                        return -1;
+                    }
+                    snprintf(s->err, sizeof s->err,
+                             "no answer from the server (%s); it never said which SSH "
+                             "version it speaks", errno ? strerror(errno) : "connection closed");
+                    return -1;
+                }
             }
             uint8_t ch = s->rx[s->head++];
             if (ch == '\n') break;
