@@ -1,0 +1,49 @@
+NAME
+       ar - pack and unpack archives
+
+SYNOPSIS
+       ar c <archive> <file>...
+       ar x <archive> [directory]
+       ar t <archive>
+
+DESCRIPTION
+       Reads and writes the archive formats other systems use, so a
+       file packed here opens elsewhere and the other way round.
+
+       The format follows the archive's name:
+
+         .zip              a zip archive
+         .tar              a tar archive, uncompressed
+         .tar.gz, .tgz     a tar archive, gzip-compressed
+         .gz               one file, gzip-compressed
+
+       On extracting, the name is not trusted: the contents are looked
+       at, so an archive named wrongly still opens.
+
+COMMANDS
+       c      Create. A directory given here is packed with everything
+              inside it, however deep.
+
+       x      Extract. With a directory after the archive, everything
+              lands under it; without one, into the current directory.
+              Directories inside the archive are created as needed.
+
+       t      List what is inside, with sizes, without writing
+              anything.
+
+COMPRESSION
+       Each file is compressed on its own in a zip, and the whole
+       archive at once in a .tar.gz. A file that does not get smaller
+       is stored as it is rather than made bigger.
+
+       Reading handles both stored and deflated entries. Zip archives
+       using other methods are named and skipped rather than silently
+       mangled.
+
+EXAMPLE
+         ar c project.zip src doc readme.txt
+         ar t project.zip
+         ar x project.zip /tmp/unpacked
+
+SEE ALSO
+       tar(1), inflate(3)
