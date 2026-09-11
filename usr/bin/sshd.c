@@ -28,7 +28,8 @@ void crypto_random(void *b, size_t n){ FILE*f=fopen("/dev/urandom","rb"); if(f){
 #define RXSZ 40000
 #define MAXPKT 20000
 #define SBUF 17000
-#define HOSTKEY_PATH "/etc/ssh_host_ed25519.key"
+#define HOSTKEY_PATH  "/etc/ssh_host_ed25519.key"
+#define HOSTKEY_DISK  "/mnt/etc/ssh_host_ed25519.key"
 
 enum {
     MSG_DISCONNECT=1, MSG_IGNORE=2, MSG_DEBUG=4,
@@ -634,17 +635,34 @@ static int handle_client(int fd, const uint8_t *hostpriv, const uint8_t *hostpub
     return 0;
 }
 
-static int load_host_key(uint8_t priv[64], uint8_t pub[32]) {
+static int load_host_key(uint8_t priv[64], uint8_t pub[32], int *persistent) {
     uint8_t seed[32];
-    int fd=open(HOSTKEY_PATH,O_RDONLY);
-    if (fd>=0) {
-        int r=read(fd,seed,32); close(fd);
-        if (r==32) { ed25519_keypair(pub,priv,seed); return 0; }
+    const char *paths[2] = { HOSTKEY_DISK, HOSTKEY_PATH };
+
+    for (int i = 0; i < 2; i++) {
+        int fd = open(paths[i], O_RDONLY);
+        if (fd < 0) continue;
+        int r = read(fd, seed, 32);
+        close(fd);
+        if (r == 32) {
+            ed25519_keypair(pub, priv, seed);
+            *persistent = (i == 0);
+            return 0;
+        }
     }
-    crypto_random(seed,32);
-    ed25519_keypair(pub,priv,seed);
-    fd=open(HOSTKEY_PATH,O_WRONLY|O_CREAT|O_TRUNC,0600);
-    if (fd>=0) { write(fd,seed,32); close(fd); }
+
+    crypto_random(seed, 32);
+    ed25519_keypair(pub, priv, seed);
+
+    *persistent = 0;
+    for (int i = 0; i < 2; i++) {
+        int fd = open(paths[i], O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) continue;
+        write(fd, seed, 32);
+        close(fd);
+        if (i == 0) *persistent = 1;
+        break;
+    }
     return 0;
 }
 
@@ -656,7 +674,8 @@ int main(int argc, char **argv) {
     }
 
     uint8_t hostpriv[64], hostpub[32];
-    load_host_key(hostpriv,hostpub);
+    int hostkey_persistent = 0;
+    load_host_key(hostpriv,hostpub,&hostkey_persistent);
     uint8_t fp[32]; sha256(hostpub,32,fp);
     printf("sshd: host key ssh-ed25519 SHA256:");
     for (int i=0;i<32;i++) printf("%02x",fp[i]);
@@ -669,6 +688,18 @@ int main(int argc, char **argv) {
     if (bind(ls,(struct sockaddr*)&a,sizeof a)<0) { printf("sshd: bind :%d failed\n",port); return 1; }
     if (listen(ls,4)<0) { printf("sshd: listen failed\n"); return 1; }
     printf("sshd: listening on port %d\n", port);
+
+    if (syscall2(SYS_AUTH, 0, 0) != 1) {
+        printf("\x1b[93msshd: root has no password, so no one can log in\x1b[0m\n");
+        printf("      run 'passwd' in another terminal and connect again\n");
+    }
+    if (!hostkey_persistent) {
+        printf("\x1b[93msshd: this host key lives in memory and is new each boot\x1b[0m\n");
+        printf("      clients will report it as changed; on a live system that is\n");
+        printf("      expected. Clear the old one with:\n");
+        printf("        ssh-keygen -R <this machine's address>\n");
+    }
+    fflush(stdout);
     (void)foreground;
 
     for (;;) {

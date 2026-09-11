@@ -19,6 +19,10 @@ int64_t sys_vt_clear_shell(uint64_t n) {
 }
 
 int64_t sys_vt_switch(uint64_t n) {
+    if ((int)n == VT_MONITOR_INDEX) {
+        task_t *t = syscall_cur_task();
+        monitor_set_return_vt(t ? t->ctty : 0);
+    }
     vt_switch((int)n);
     return 0;
 }

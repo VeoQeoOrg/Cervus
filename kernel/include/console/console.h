@@ -62,6 +62,7 @@ void monitor_activate(void);
 void monitor_input(char c);
 void monitor_tick(void);
 void console_boot_logging_off(void);
+void monitor_set_return_vt(int vt);
 
 typedef struct {
     uint32_t palette[16];

@@ -3,7 +3,13 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-QEMUFLAGS="-m 8G -smp 8 -cpu qemu64,+fsgsbase -display gtk,grab-on-hover=on"
+if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+    ACCEL="-enable-kvm -cpu host,+fsgsbase"
+else
+    ACCEL="-cpu qemu64,+fsgsbase"
+    printf '\033[93m[qemu] /dev/kvm not usable, falling back to emulation (much slower)\033[0m\n'
+fi
+QEMUFLAGS="-m 8G -smp 8 $ACCEL -display gtk,grab-on-hover=on"
 ISO="demo_iso/Cervus.latest.iso"
 RUNLOG="cervus-dev.log"
 SERIAL="-chardev stdio,id=cervlog,logfile=$RUNLOG,signal=off -serial chardev:cervlog"

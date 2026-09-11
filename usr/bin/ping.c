@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <signal.h>
+#include <string.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,6 +17,28 @@ static uint16_t icmp_csum(const uint8_t *d, int len) {
     if (len & 1) sum += (uint32_t)(d[len - 1] << 8);
     while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
     return (uint16_t)~sum;
+}
+
+static volatile int g_stop = 0;
+static int g_sent = 0, g_recvd = 0;
+static char g_host[128];
+static uint64_t g_rtt_min = ~0ull, g_rtt_max = 0, g_rtt_sum = 0;
+
+static void on_interrupt(int sig) { (void)sig; g_stop = 1; }
+
+static void print_stats(void) {
+    printf("\n--- %s ping statistics ---\n", g_host);
+    int lost = g_sent - g_recvd;
+    int pct = g_sent ? (lost * 100) / g_sent : 0;
+    printf("%d packets transmitted, %d received, %d%% packet loss\n",
+           g_sent, g_recvd, pct);
+    if (g_recvd > 0 && g_rtt_max > 0) {
+        uint64_t avg = g_rtt_sum / (uint64_t)g_recvd;
+        printf("rtt min/avg/max = %llu.%03llu/%llu.%03llu/%llu.%03llu ms\n",
+               g_rtt_min / 1000, g_rtt_min % 1000,
+               avg / 1000, avg % 1000,
+               g_rtt_max / 1000, g_rtt_max % 1000);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -41,8 +65,16 @@ int main(int argc, char **argv) {
     to.sin_family = AF_INET;
     to.sin_addr.s_addr = dst;
 
-    int sent = 0, recvd = 0;
-    for (int seq = 1; count < 0 || seq <= count; seq++) {
+    g_sent = 0; g_recvd = 0;
+    snprintf(g_host, sizeof g_host, "%s", host);
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = on_interrupt;
+        sigaction(SIGINT, &sa, NULL);
+    }
+
+    for (int seq = 1; (count < 0 || seq <= count) && !g_stop; seq++) {
         uint8_t msg[40];
         memset(msg, 0, sizeof(msg));
         msg[0] = 8;
@@ -54,7 +86,7 @@ int main(int argc, char **argv) {
 
         uint64_t t0 = cervus_uptime_ns();
         sendto(fd, msg, sizeof(msg), 0, (struct sockaddr *)&to, sizeof(to));
-        sent++;
+        g_sent++;
 
         int got = 0;
         for (int t = 0; t < 200; t++) {
@@ -70,17 +102,21 @@ int main(int argc, char **argv) {
                 struct in_addr fa; fa.s_addr = from.sin_addr.s_addr;
                 printf("%ld bytes from %s: icmp_seq=%d time=%u.%03u ms\n",
                        n, inet_ntoa(fa), rseq, ms, us);
-                got = 1; recvd++;
+                got = 1; g_recvd++;
+                uint64_t rtt_us = rtt / 1000ull;
+                if (rtt_us < g_rtt_min) g_rtt_min = rtt_us;
+                if (rtt_us > g_rtt_max) g_rtt_max = rtt_us;
+                g_rtt_sum += rtt_us;
                 break;
             }
+            if (g_stop) break;
             usleep(5000);
         }
         if (!got) printf("request timeout for icmp_seq=%d\n", seq);
-        if (count < 0 || seq < count) sleep(1);
+        if (!g_stop && (count < 0 || seq < count)) sleep(1);
     }
 
-    printf("--- %s ping statistics ---\n%d packets transmitted, %d received\n",
-           host, sent, recvd);
+    print_stats();
     close(fd);
-    return recvd ? 0 : 1;
+    return g_recvd ? 0 : 1;
 }

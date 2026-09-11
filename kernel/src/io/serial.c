@@ -646,5 +646,12 @@ void serial_printf_lvl(log_level_t level, const char* format, ...) {
     if (n < 0) return;
     size_t len = (size_t)n;
     if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+
+    int kl = KLOG_LVL_INFO;
+    if      (level == LOG_LEVEL_ERR)   kl = KLOG_LVL_ERR;
+    else if (level == LOG_LEVEL_WARN)  kl = KLOG_LVL_WARN;
+    else if (level == LOG_LEVEL_DEBUG) kl = KLOG_LVL_DBG;
+    klog_set_pending_level(kl);
     serial_log_emit(buf, len);
+    klog_set_pending_level(KLOG_LVL_INFO);
 }

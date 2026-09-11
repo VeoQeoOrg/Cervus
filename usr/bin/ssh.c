@@ -263,7 +263,11 @@ static int version_exchange(ssh_t *s, char *server_ver, size_t vcap) {
     for (;;) {
         size_t li = 0;
         for (;;) {
-            if (s->head >= s->tail) { if (rx_pull(s, 1) < 0) return fail(s, "no server version"); }
+            if (s->head >= s->tail) {
+                if (rx_pull(s, 1) < 0)
+                    return fail(s, "the server closed the connection before saying "
+                                   "which SSH version it speaks");
+            }
             uint8_t ch = s->rx[s->head++];
             if (ch == '\n') break;
             if (ch != '\r' && li < vcap - 1) server_ver[li++] = (char)ch;
@@ -625,7 +629,13 @@ int main(int argc, char **argv) {
     if (fd < 0) { printf("ssh: socket failed\n"); return 1; }
     struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)port); sa.sin_addr.s_addr = ip;
-    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { printf("ssh: connect failed\n"); close(fd); return 1; }
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        printf("ssh: cannot reach %s port %d\n", host, port);
+        printf("      a refusal means nothing is listening there; a long wait\n");
+        printf("      means the packets are not getting through at all\n");
+        close(fd);
+        return 1;
+    }
 
     char pass[128]; pass[0] = 0;
     int have_key = 0;

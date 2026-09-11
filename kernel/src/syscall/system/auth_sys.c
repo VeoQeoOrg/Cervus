@@ -14,6 +14,11 @@ static void auth_fail_delay(void) {
 
 int64_t sys_auth(uint64_t uid, uint64_t pass_ptr)
 {
+    if (pass_ptr == 0) {
+        if (uid > 65535) return -EINVAL;
+        return auth_has_any_password((uint32_t)uid) ? 1 : 0;
+    }
+
     task_t *t = syscall_cur_task();
     if (!t) return -ESRCH;
     if (uid > 65535) return -EINVAL;

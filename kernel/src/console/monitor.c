@@ -22,6 +22,28 @@ static uint32_t mon_pal(int idx) {
 enum { MON_LIVE, MON_PAUSED, MON_SEARCH };
 
 static int      g_mode = MON_LIVE;
+static int      g_filter = -1;
+static uint64_t g_pause_mark = 0;
+static int      g_return_vt = -1;
+
+void monitor_set_return_vt(int vt) { g_return_vt = vt; }
+
+static uint32_t mon_level_fg(int lvl) {
+    uint32_t pal[16];
+    console_get_theme(pal, NULL, NULL);
+    switch (lvl) {
+        case KLOG_LVL_ERR:  return pal[9];
+        case KLOG_LVL_WARN: return pal[11];
+        case KLOG_LVL_OK:   return pal[10];
+        case KLOG_LVL_DBG:  return pal[8];
+        default:            return console_theme_fg();
+    }
+}
+
+static int mon_passes(uint64_t ln) {
+    if (g_filter < 0) return 1;
+    return klog_line_level(ln) == g_filter;
+}
 static uint64_t g_top;
 static uint64_t g_cursor;
 static char     g_query[96];
@@ -67,11 +89,12 @@ static uint32_t mon_line_rows(const char *s) {
     return (len + cols - 1) / cols;
 }
 
-static void mon_draw_hl(uint32_t row, const char *s, uint32_t off, int is_cursor) {
+static void mon_draw_hl_lvl(uint32_t row, const char *s, uint32_t off, int is_cursor,
+                            int lvl) {
     if (!global_framebuffer) return;
     uint32_t cw = fb_font_width(), chh = fb_font_height();
     uint32_t y = row * chh;
-    uint32_t base_fg = is_cursor ? MON_CUR_FG : MON_FG;
+    uint32_t base_fg = is_cursor ? MON_CUR_FG : mon_level_fg(lvl);
     uint32_t base_bg = is_cursor ? MON_CUR_BG : MON_BG;
     fb_fill_rect(global_framebuffer, 0, y, global_framebuffer->width, chh, base_bg);
     uint32_t cols = mon_cols();
@@ -95,16 +118,25 @@ static void mon_draw_hl(uint32_t row, const char *s, uint32_t off, int is_cursor
     }
 }
 
-static uint32_t mon_draw_wrapped(uint32_t row, uint32_t limit, const char *s,
-                                 int is_cursor) {
+static void mon_draw_hl(uint32_t row, const char *s, uint32_t off, int is_cursor) {
+    mon_draw_hl_lvl(row, s, off, is_cursor, KLOG_LVL_INFO);
+}
+
+static uint32_t mon_draw_wrapped_lvl(uint32_t row, uint32_t limit, const char *s,
+                                     int is_cursor, int lvl) {
     uint32_t cols = mon_cols();
     uint32_t need = mon_line_rows(s);
     uint32_t drawn = 0;
     for (uint32_t k = 0; k < need && row + drawn < limit; k++) {
-        mon_draw_hl(row + drawn, s, k * cols, is_cursor);
+        mon_draw_hl_lvl(row + drawn, s, k * cols, is_cursor, lvl);
         drawn++;
     }
     return drawn;
+}
+
+static uint32_t mon_draw_wrapped(uint32_t row, uint32_t limit, const char *s,
+                                 int is_cursor) {
+    return mon_draw_wrapped_lvl(row, limit, s, is_cursor, KLOG_LVL_INFO);
 }
 
 static void mon_format(uint64_t ln, char *out, size_t cap) {
@@ -127,14 +159,24 @@ static void mon_build_status(char *out, size_t n) {
         out[p] = 0;
         return;
     }
-    static const char *const LVL[] = { "OFF", "ERR", "WARN", "INFO", "DEBUG" };
-    const char *lvl = LVL[klog_get_level()];
-    const char *pre = (g_mode == MON_LIVE)
-        ? "  [debug monitor] LIVE   space/PgDn:page  arrows:scroll  /:find  n:next  L:level="
-        : "  [debug monitor] PAUSED   arrows:scroll  /:find  n:next  G:live  L:level=";
+    static const char *const FLT[] = { "all", "info", "warn", "err", "ok", "debug" };
+    const char *flt = (g_filter < 0) ? FLT[0] : FLT[1 + g_filter];
+
+    char buf[240];
+    if (g_mode == MON_LIVE) {
+        snprintf(buf, sizeof buf,
+                 "  [debug monitor] LIVE   arrows/PgUp scroll  /:find  n:next"
+                 "  1-5:show %s  0:all  q:quit", flt);
+    } else {
+        uint64_t behind = klog_total() > g_pause_mark
+                        ? klog_total() - g_pause_mark : 0;
+        snprintf(buf, sizeof buf,
+                 "  [debug monitor] HELD (+%llu new, still logging)   G/End:live"
+                 "  /:find  n:next  1-5:show %s  0:all  q:quit",
+                 (unsigned long long)behind, flt);
+    }
     size_t p = 0;
-    for (const char *q = pre; *q && p < n - 1; q++) out[p++] = *q;
-    for (const char *q = lvl; *q && p < n - 1; q++) out[p++] = *q;
+    for (const char *q = buf; *q && p < n - 1; q++) out[p++] = *q;
     out[p] = 0;
 }
 
@@ -173,11 +215,22 @@ static void mon_render(int show_status) {
     char display[KLOG_LINE_MAX + 16];
     uint32_t r = 0;
     for (uint64_t ln = g_top; ln <= total && r < content; ln++) {
+        if (!mon_passes(ln)) continue;
         mon_format(ln, display, sizeof display);
-        uint32_t used = mon_draw_wrapped(r, content, display,
-                                         paused && ln == g_cursor);
+        uint32_t used = mon_draw_wrapped_lvl(r, content, display,
+                                             paused && ln == g_cursor,
+                                             klog_line_level(ln));
         if (used == 0) break;
         r += used;
+    }
+    if (r == 0 && g_filter >= 0) {
+        static const char *const FN[] = { "info", "warning", "error", "ok", "debug" };
+        char msg[96];
+        snprintf(msg, sizeof msg,
+                 "  nothing logged at level '%s' yet - press 0 to show everything",
+                 FN[g_filter]);
+        mon_draw_hl(0, msg, 0, 0);
+        r = 1;
     }
     while (r < content) mon_draw_hl(r++, "", 0, 0);
     if (show_status) {
@@ -318,6 +371,7 @@ static void mon_line(int dir) {
 static void mon_pause_here(void) {
     if (g_mode == MON_LIVE) {
         g_cursor = klog_total();
+        g_pause_mark = g_cursor;
         g_mode = MON_PAUSED;
     }
 }
@@ -350,6 +404,15 @@ static void mon_key(char c) {
         case 'G':           g_mode = MON_LIVE; mon_render(1); break;
         case '/':           mon_pause_here(); g_mode = MON_SEARCH; g_qlen = 0; g_query[0] = 0; mon_render(1); break;
         case 'n':           mon_pause_here(); mon_do_search(g_cursor + 1); mon_render(1); break;
+        case 'q': case 'Q': case 27:
+            if (g_return_vt >= 0) { int v = g_return_vt; g_return_vt = -1; vt_switch(v); }
+            break;
+        case '0': g_filter = -1;            mon_render(1); break;
+        case '1': g_filter = KLOG_LVL_INFO; mon_render(1); break;
+        case '2': g_filter = KLOG_LVL_WARN; mon_render(1); break;
+        case '3': g_filter = KLOG_LVL_ERR;  mon_render(1); break;
+        case '4': g_filter = KLOG_LVL_OK;   mon_render(1); break;
+        case '5': g_filter = KLOG_LVL_DBG;  mon_render(1); break;
         case 'L': case 'l': {
             log_level_t lv = klog_get_level();
             lv = (lv >= LOG_LEVEL_DEBUG) ? LOG_LEVEL_ERR : (log_level_t)(lv + 1);

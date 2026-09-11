@@ -865,8 +865,8 @@ int main(int argc, char **argv) {
         int k = read_key_animated();
         switch (k) {
         case TK_RESIZE: break;
-        case TK_UP:    if (g_sel > 0) g_sel--; break;
-        case TK_DOWN:  if (g_sel < g_n - 1) g_sel++; break;
+        case TK_UP:    if (g_n) g_sel = (g_sel > 0) ? g_sel - 1 : g_n - 1; break;
+        case TK_DOWN:  if (g_n) g_sel = (g_sel < g_n - 1) ? g_sel + 1 : 0; break;
         case TK_PGUP:  g_sel -= (g_rows - 3); if (g_sel < 0) g_sel = 0; break;
         case TK_PGDN:  g_sel += (g_rows - 3); if (g_sel > g_n - 1) g_sel = g_n - 1; break;
         case TK_HOME:  g_sel = 0; break;
