@@ -191,19 +191,22 @@ static void mon_render(int show_status) {
     if (paused) {
         if (g_cursor > total) g_cursor = total;
         if (g_cursor < first) g_cursor = first;
+        if (g_top < first) g_top = first;
         if (g_cursor < g_top) g_top = g_cursor;
+
         uint32_t used = 0;
-        for (uint64_t ln = g_top; ln <= g_cursor; ln++) used += mon_rows_for(ln);
+        for (uint64_t ln = g_top; ln <= g_cursor; ln++)
+            if (mon_passes(ln)) used += mon_rows_for(ln);
         while (used > content && g_top < g_cursor) {
-            used -= mon_rows_for(g_top);
+            if (mon_passes(g_top)) used -= mon_rows_for(g_top);
             g_top++;
         }
-        if (g_top < first) g_top = first;
+        while (g_top < g_cursor && !mon_passes(g_top)) g_top++;
     } else {
         uint64_t ln = total;
         uint32_t used = 0;
         for (;;) {
-            uint32_t need = mon_rows_for(ln);
+            uint32_t need = mon_passes(ln) ? mon_rows_for(ln) : 0;
             if (used + need > content && used > 0) { ln++; break; }
             used += need;
             if (ln <= first) break;
@@ -350,22 +353,51 @@ static void mon_do_search(uint64_t from) {
     }
 }
 
-static void mon_page(int dir) {
-    uint32_t content = mon_rows() - 1;
+static uint64_t mon_next_shown(uint64_t from, int dir) {
     uint64_t total = klog_total(), first = klog_first();
     if (dir > 0) {
-        g_cursor += content;
-        if (g_cursor > total) g_cursor = total;
-    } else {
-        if (g_cursor > first + content) g_cursor -= content;
-        else g_cursor = first;
+        for (uint64_t ln = from + 1; ln <= total; ln++)
+            if (mon_passes(ln)) return ln;
+        return from;
     }
+    for (uint64_t ln = from; ln > first; ln--)
+        if (mon_passes(ln - 1)) return ln - 1;
+    return from;
 }
 
 static void mon_line(int dir) {
     uint64_t total = klog_total(), first = klog_first();
-    if (dir > 0) { if (g_cursor < total) g_cursor++; }
-    else         { if (g_cursor > first) g_cursor--; }
+    if (!mon_passes(g_cursor)) {
+        uint64_t near = mon_next_shown(g_cursor, dir);
+        if (near == g_cursor) near = mon_next_shown(g_cursor, -dir);
+        if (near != g_cursor) { g_cursor = near; return; }
+    }
+    uint64_t next = mon_next_shown(g_cursor, dir);
+    if (next != g_cursor) { g_cursor = next; return; }
+    if (g_filter < 0) {
+        if (dir > 0) { if (g_cursor < total) g_cursor++; }
+        else         { if (g_cursor > first) g_cursor--; }
+    }
+}
+
+static void mon_page(int dir) {
+    uint32_t content = mon_rows() - 1;
+    for (uint32_t i = 0; i < content; i++) {
+        uint64_t before = g_cursor;
+        mon_line(dir);
+        if (g_cursor == before) break;
+    }
+}
+
+static void mon_set_filter(int f) {
+    g_filter = f;
+    if (g_mode != MON_LIVE && !mon_passes(g_cursor)) {
+        uint64_t near = mon_next_shown(g_cursor, -1);
+        if (near == g_cursor) near = mon_next_shown(g_cursor, +1);
+        g_cursor = near;
+        g_top = near;
+    }
+    mon_render(1);
 }
 
 static void mon_pause_here(void) {
@@ -407,12 +439,12 @@ static void mon_key(char c) {
         case 'q': case 'Q': case 27:
             if (g_return_vt >= 0) { int v = g_return_vt; g_return_vt = -1; vt_switch(v); }
             break;
-        case '0': g_filter = -1;            mon_render(1); break;
-        case '1': g_filter = KLOG_LVL_INFO; mon_render(1); break;
-        case '2': g_filter = KLOG_LVL_WARN; mon_render(1); break;
-        case '3': g_filter = KLOG_LVL_ERR;  mon_render(1); break;
-        case '4': g_filter = KLOG_LVL_OK;   mon_render(1); break;
-        case '5': g_filter = KLOG_LVL_DBG;  mon_render(1); break;
+        case '0': mon_set_filter(-1);            break;
+        case '1': mon_set_filter(KLOG_LVL_INFO); break;
+        case '2': mon_set_filter(KLOG_LVL_WARN); break;
+        case '3': mon_set_filter(KLOG_LVL_ERR);  break;
+        case '4': mon_set_filter(KLOG_LVL_OK);   break;
+        case '5': mon_set_filter(KLOG_LVL_DBG);  break;
         case 'L': case 'l': {
             log_level_t lv = klog_get_level();
             lv = (lv >= LOG_LEVEL_DEBUG) ? LOG_LEVEL_ERR : (log_level_t)(lv + 1);
