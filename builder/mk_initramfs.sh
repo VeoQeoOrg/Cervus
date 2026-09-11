@@ -81,6 +81,15 @@ else
     red "$SYSROOT/usr not found - skipping sysroot"
 fi
 
+for d in "$SYSROOT"/etc/*/; do
+    [ -d "$d" ] || continue
+    case "$d" in *ssl/) continue ;; esac
+    name=$(basename "$d")
+    mkdir -p "$RFS/etc/$name"
+    cp -r "$d". "$RFS/etc/$name/"
+    green "sysroot etc/$name installed"
+done
+
 if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
     mkdir -p "$RFS/etc/ssl/certs"
     cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"

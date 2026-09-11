@@ -52,10 +52,14 @@ enum {
     HL_ESCAPE, HL_TAG, HL_ATTR
 };
 
-enum { LANG_NONE = 0, LANG_C, LANG_JS, LANG_CSS, LANG_HTML, LANG_ASM, LANG_COUNT };
+enum { LANG_NONE = 0, LANG_C, LANG_JS, LANG_CSS, LANG_HTML, LANG_ASM,
+       LANG_PY, LANG_SH, LANG_RUST, LANG_GO, LANG_LUA, LANG_SQL,
+       LANG_MD, LANG_CONF, LANG_USER, LANG_COUNT };
 
 static const char *LANG_NAMES[LANG_COUNT] = {
-    "Plain", "C", "JavaScript", "CSS", "HTML", "Assembly"
+    "Plain", "C", "JavaScript", "CSS", "HTML", "Assembly",
+    "Python", "Shell", "Rust", "Go", "Lua", "SQL",
+    "Markdown", "Config", "Custom"
 };
 
 typedef struct {
@@ -283,6 +287,64 @@ static const char *ASM_KEYWORDS[] = {
     "section", "global", "extern", "db", "dw", "dd", "dq", "resb", "equ", NULL
 };
 
+static const char *PY_KEYWORDS[] = {
+    "def", "class", "return", "if", "elif", "else", "for", "while", "break",
+    "continue", "pass", "import", "from", "as", "try", "except", "finally",
+    "raise", "with", "yield", "lambda", "global", "nonlocal", "assert",
+    "del", "in", "is", "not", "and", "or", "await", "async",
+    "int|", "str|", "float|", "bool|", "list|", "dict|", "set|", "tuple|",
+    "bytes|", "None|", "True|", "False|", "self|", "object|", NULL
+};
+
+static const char *SH_KEYWORDS[] = {
+    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+    "case", "esac", "in", "function", "return", "break", "continue", "exit",
+    "local", "export", "readonly", "shift", "set", "unset", "trap", "source",
+    "echo|", "printf|", "cd|", "test|", "read|", "eval|", "exec|",
+    "foreach|", "end|", "setenv|", "alias|", NULL
+};
+
+static const char *RUST_KEYWORDS[] = {
+    "fn", "let", "mut", "const", "static", "if", "else", "match", "loop",
+    "while", "for", "in", "break", "continue", "return", "struct", "enum",
+    "impl", "trait", "pub", "use", "mod", "crate", "self", "super", "where",
+    "unsafe", "async", "await", "move", "ref", "dyn", "as",
+    "i8|", "i16|", "i32|", "i64|", "u8|", "u16|", "u32|", "u64|", "usize|",
+    "isize|", "f32|", "f64|", "bool|", "char|", "str|", "String|", "Vec|",
+    "Option|", "Result|", "Box|", NULL
+};
+
+static const char *GO_KEYWORDS[] = {
+    "func", "var", "const", "type", "struct", "interface", "map", "chan",
+    "package", "import", "if", "else", "for", "range", "switch", "case",
+    "default", "select", "go", "defer", "return", "break", "continue",
+    "fallthrough", "goto",
+    "int|", "int8|", "int16|", "int32|", "int64|", "uint|", "byte|", "rune|",
+    "float32|", "float64|", "string|", "bool|", "error|", "nil|", "true|",
+    "false|", NULL
+};
+
+static const char *LUA_KEYWORDS[] = {
+    "function", "local", "end", "if", "then", "else", "elseif", "for", "while",
+    "repeat", "until", "do", "return", "break", "goto", "in",
+    "nil|", "true|", "false|", "and|", "or|", "not|", "self|", NULL
+};
+
+static const char *SQL_KEYWORDS[] = {
+    "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
+    "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX", "VIEW", "JOIN",
+    "LEFT", "RIGHT", "INNER", "OUTER", "ON", "GROUP", "ORDER", "BY", "HAVING",
+    "LIMIT", "OFFSET", "UNION", "DISTINCT", "AS", "AND", "OR", "NOT", "NULL",
+    "select", "from", "where", "insert", "into", "values", "update", "set",
+    "delete", "create", "table", "drop", "join", "on", "order", "by",
+    "INT|", "INTEGER|", "TEXT|", "VARCHAR|", "REAL|", "BLOB|", "PRIMARY|",
+    "KEY|", "FOREIGN|", "REFERENCES|", "UNIQUE|", "DEFAULT|", NULL
+};
+
+static const char *CONF_KEYWORDS[] = {
+    "true|", "false|", "yes|", "no|", "on|", "off|", "none|", "auto|", NULL
+};
+
 typedef struct {
     const char **kw;
     const char  *linec;
@@ -292,19 +354,118 @@ typedef struct {
     int          bt;
 } syntax_def;
 
-static const syntax_def SYNTAX_DEFS[LANG_COUNT] = {
-    { NULL,         NULL, NULL,   NULL,  0, 0 },
-    { C_KEYWORDS,   "//", "/*",   "*/",  1, 0 },
-    { JS_KEYWORDS,  "//", "/*",   "*/",  1, 1 },
-    { CSS_KEYWORDS, NULL, "/*",   "*/",  1, 0 },
-    { NULL,         NULL, NULL,   NULL,  0, 0 },
-    { ASM_KEYWORDS, ";",  NULL,   NULL,  1, 0 },
+static syntax_def SYNTAX_DEFS[LANG_COUNT] = {
+    { NULL,          NULL, NULL,   NULL,  0, 0 },
+    { C_KEYWORDS,    "//", "/*",   "*/",  1, 0 },
+    { JS_KEYWORDS,   "//", "/*",   "*/",  1, 1 },
+    { CSS_KEYWORDS,  NULL, "/*",   "*/",  1, 0 },
+    { NULL,          NULL, NULL,   NULL,  0, 0 },
+    { ASM_KEYWORDS,  ";",  NULL,   NULL,  1, 0 },
+    { PY_KEYWORDS,   "#",  NULL,   NULL,  1, 0 },
+    { SH_KEYWORDS,   "#",  NULL,   NULL,  1, 1 },
+    { RUST_KEYWORDS, "//", "/*",   "*/",  1, 0 },
+    { GO_KEYWORDS,   "//", "/*",   "*/",  1, 1 },
+    { LUA_KEYWORDS,  "--", "--[[", "]]",  1, 0 },
+    { SQL_KEYWORDS,  "--", "/*",   "*/",  1, 0 },
+    { NULL,          NULL, NULL,   NULL,  0, 0 },
+    { CONF_KEYWORDS, "#",  NULL,   NULL,  1, 0 },
+    { NULL,          NULL, NULL,   NULL,  0, 0 },
 };
+
+#define SYN_DIR      "/etc/neo"
+#define SYN_MAX_KW   256
+
+static char  *g_user_kw[SYN_MAX_KW + 1];
+static char   g_user_pool[8192];
+static char   g_user_linec[8], g_user_b0[8], g_user_b1[8];
+static char   g_user_name[24];
+
+static char *syn_trim(char *s) {
+    while (*s == ' ' || *s == '\t') s++;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
+    return s;
+}
+
+static void syn_add_words(const char *list, int is_type, size_t *pool_used, int *nkw) {
+    const char *p = list;
+    while (*p && *nkw < SYN_MAX_KW) {
+        while (*p == ' ' || *p == ',') p++;
+        if (!*p) break;
+        size_t start = *pool_used;
+        while (*p && *p != ' ' && *p != ',' && *pool_used + 2 < sizeof g_user_pool)
+            g_user_pool[(*pool_used)++] = *p++;
+        if (is_type && *pool_used + 1 < sizeof g_user_pool)
+            g_user_pool[(*pool_used)++] = '|';
+        g_user_pool[(*pool_used)++] = 0;
+        if (*pool_used > start + 1) g_user_kw[(*nkw)++] = &g_user_pool[start];
+    }
+}
+
+static int load_user_syntax(const char *ext) {
+    if (!ext || !*ext) return 0;
+
+    char path[160];
+    snprintf(path, sizeof path, "%s/%s.syn", SYN_DIR, ext + 1);
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(path, sizeof path, "/mnt%s/%s.syn", SYN_DIR, ext + 1);
+        f = fopen(path, "r");
+    }
+    if (!f) return 0;
+
+    size_t pool_used = 0;
+    int nkw = 0;
+    g_user_linec[0] = g_user_b0[0] = g_user_b1[0] = 0;
+    snprintf(g_user_name, sizeof g_user_name, "%s", ext + 1);
+    int sq = 1, bt = 0;
+
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        char *t = syn_trim(line);
+        if (!*t || *t == '#') continue;
+        char *eq = strchr(t, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *key = syn_trim(t);
+        char *val = syn_trim(eq + 1);
+
+        if      (!strcmp(key, "name"))     snprintf(g_user_name, sizeof g_user_name, "%s", val);
+        else if (!strcmp(key, "comment"))  snprintf(g_user_linec, sizeof g_user_linec, "%s", val);
+        else if (!strcmp(key, "block"))    {
+            char *sp = strchr(val, ' ');
+            if (sp) {
+                *sp = 0;
+                snprintf(g_user_b0, sizeof g_user_b0, "%s", val);
+                snprintf(g_user_b1, sizeof g_user_b1, "%s", syn_trim(sp + 1));
+            }
+        }
+        else if (!strcmp(key, "keywords")) syn_add_words(val, 0, &pool_used, &nkw);
+        else if (!strcmp(key, "types"))    syn_add_words(val, 1, &pool_used, &nkw);
+        else if (!strcmp(key, "strings"))  sq = strcmp(val, "double") != 0;
+        else if (!strcmp(key, "backtick")) bt = (val[0] == '1' || val[0] == 'y');
+    }
+    fclose(f);
+
+    if (nkw == 0 && !g_user_linec[0] && !g_user_b0[0]) return 0;
+
+    g_user_kw[nkw] = NULL;
+    SYNTAX_DEFS[LANG_USER].kw      = (const char **)g_user_kw;
+    SYNTAX_DEFS[LANG_USER].linec   = g_user_linec[0] ? g_user_linec : NULL;
+    SYNTAX_DEFS[LANG_USER].blockc0 = g_user_b0[0] ? g_user_b0 : NULL;
+    SYNTAX_DEFS[LANG_USER].blockc1 = g_user_b1[0] ? g_user_b1 : NULL;
+    SYNTAX_DEFS[LANG_USER].sq      = sq;
+    SYNTAX_DEFS[LANG_USER].bt      = bt;
+    LANG_NAMES[LANG_USER] = g_user_name;
+    return 1;
+}
 
 static int lang_from_ext(const char *filename) {
     const char *dot = NULL;
     for (const char *p = filename; *p; p++) if (*p == '.') dot = p;
     if (!dot) return LANG_NONE;
+    if (load_user_syntax(dot)) return LANG_USER;
     if (!strcmp(dot, ".c") || !strcmp(dot, ".h") || !strcmp(dot, ".cpp") ||
         !strcmp(dot, ".cc") || !strcmp(dot, ".hpp") || !strcmp(dot, ".cxx")) return LANG_C;
     if (!strcmp(dot, ".js") || !strcmp(dot, ".ts") || !strcmp(dot, ".jsx") ||
@@ -314,6 +475,17 @@ static int lang_from_ext(const char *filename) {
         !strcmp(dot, ".svg")) return LANG_HTML;
     if (!strcmp(dot, ".s") || !strcmp(dot, ".S") || !strcmp(dot, ".asm") ||
         !strcmp(dot, ".nasm")) return LANG_ASM;
+    if (!strcmp(dot, ".py") || !strcmp(dot, ".pyw")) return LANG_PY;
+    if (!strcmp(dot, ".sh") || !strcmp(dot, ".bash") || !strcmp(dot, ".csh") ||
+        !strcmp(dot, ".zsh") || !strcmp(dot, ".ksh")) return LANG_SH;
+    if (!strcmp(dot, ".rs")) return LANG_RUST;
+    if (!strcmp(dot, ".go")) return LANG_GO;
+    if (!strcmp(dot, ".lua")) return LANG_LUA;
+    if (!strcmp(dot, ".sql")) return LANG_SQL;
+    if (!strcmp(dot, ".md") || !strcmp(dot, ".markdown")) return LANG_MD;
+    if (!strcmp(dot, ".conf") || !strcmp(dot, ".cfg") || !strcmp(dot, ".ini") ||
+        !strcmp(dot, ".toml") || !strcmp(dot, ".yml") || !strcmp(dot, ".yaml") ||
+        !strcmp(dot, ".theme") || !strcmp(dot, ".rc")) return LANG_CONF;
     return LANG_NONE;
 }
 

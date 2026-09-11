@@ -29,3 +29,31 @@ FILES
 
 SEE ALSO
        cfm(1), less(1)
+
+SYNTAX COLOURING
+       C, JavaScript, CSS, HTML, assembly, Python, shell, Rust, Go,
+       Lua, SQL, Markdown and configuration files are recognised by
+       extension.
+
+       To colour anything else, or to override one of those, write
+       /etc/neo/<extension>.syn - a file called ml.syn colours every
+       file ending .ml. One setting per line, name = value; blank lines
+       and lines beginning # are ignored.
+
+         name       what to call it in the status bar
+         comment    what starts a comment running to end of line
+         block      what opens and closes a block comment, two words
+         keywords   words to colour as keywords; repeat to add more
+         types      words to colour as type names, second colour
+         strings    single if ' quotes as well as ", double if only "
+         backtick   1 if backticks quote a string
+
+       For example:
+
+         name = Pascal
+         comment = //
+         block = (* *)
+         keywords = begin end if then else while do procedure function
+         types = integer real char boolean string
+
+       /etc/neo/csh.syn ships as a working example.

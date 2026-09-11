@@ -1,0 +1,9 @@
+name = csh
+comment = #
+strings = single
+
+keywords = if then else endif foreach end while break continue exit
+keywords = set setenv unsetenv unset alias unalias source cd reload
+keywords = jobs fg bg history color cursor theme
+
+types = argv status HOME PATH PS1 USER SHELL RANDOM
