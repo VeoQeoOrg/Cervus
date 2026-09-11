@@ -1,0 +1,24 @@
+name = Assembly
+ext = asm s nasm
+comment = ;
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = mov movq movl movw movb lea push pop call ret jmp
+words keyword c678dd = je jne jz jnz jg jge jl jle ja jb add sub mul
+words keyword c678dd = imul div idiv inc dec and or xor not neg shl shr
+words keyword c678dd = sar sal cmp test int syscall sysret nop hlt cli
+words keyword c678dd = sti iret iretq leave cpuid rdmsr wrmsr in out
+words keyword c678dd = loop enter .text .data .bss .global .globl
+words keyword c678dd = .section .byte .word .long .quad .ascii .asciz
+words keyword c678dd = .align .equ .extern section global extern db dw
+words keyword c678dd = dd dq resb equ
+words type e5c07b = rax rbx rcx rdx rsi rdi rbp rsp r8 r9 r10 r11 r12
+words type e5c07b = r13 r14 r15 eax ebx ecx edx esi edi ebp esp ax bx cx
+words type e5c07b = dx al bl cl dl rip

@@ -1,0 +1,15 @@
+name = HTML
+ext = html htm xml svg
+mode = html
+block = <!-- -->
+strings = double
+backtick = no
+
+color comment = 6a737d
+color string  = 98c379
+color number  = d19a66
+color escape  = 61afef
+color default = c8ccd4
+
+color tag  = e06c75
+color attr = d19a66

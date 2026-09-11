@@ -1,0 +1,18 @@
+name = CSS
+ext = css scss
+block = /* */
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = @media @import @keyframes @font-face @supports
+words keyword c678dd = @charset important inherit initial unset none
+words keyword c678dd = auto block inline flex grid absolute relative
+words keyword c678dd = fixed static hidden visible bold italic solid
+words keyword c678dd = dashed dotted center left right top bottom middle
+words type e5c07b = px em rem vh vw pt deg

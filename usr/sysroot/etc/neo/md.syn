@@ -1,0 +1,13 @@
+name = Markdown
+ext = md markdown
+comment = >
+strings = backtick-only
+backtick = yes
+
+color comment = 6a737d
+color string  = 98c379
+color number  = d19a66
+color default = c8ccd4
+
+words heading c678dd = # ## ### #### ##### ######
+chars emphasis e5c07b = * _ `

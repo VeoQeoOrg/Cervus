@@ -1,0 +1,16 @@
+name = Lua
+ext = lua
+comment = --
+block = --[[ ]]
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = function local end if then else elseif for while
+words keyword c678dd = repeat until do return break goto in
+words type e5c07b = nil true false and or not self

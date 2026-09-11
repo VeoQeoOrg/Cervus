@@ -1,0 +1,18 @@
+name = Python
+ext = py pyw
+comment = #
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = def class return if elif else for while break
+words keyword c678dd = continue pass import from as try except finally
+words keyword c678dd = raise with yield lambda global nonlocal assert
+words keyword c678dd = del in is not and or await async
+words type e5c07b = int str float bool list dict set tuple bytes None
+words type e5c07b = True False self object

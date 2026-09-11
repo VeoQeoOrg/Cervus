@@ -1,0 +1,17 @@
+name = Shell
+ext = sh bash zsh
+comment = #
+strings = single
+backtick = yes
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = if then else elif fi for while until do done case
+words keyword c678dd = esac in function return break continue exit local
+words keyword c678dd = export readonly shift set unset trap source
+words type e5c07b = echo printf cd test read eval exec foreach end
+words type e5c07b = setenv alias

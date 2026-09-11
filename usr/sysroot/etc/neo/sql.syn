@@ -1,0 +1,21 @@
+name = SQL
+ext = sql
+comment = --
+block = /* */
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = SELECT FROM WHERE INSERT INTO VALUES UPDATE SET
+words keyword c678dd = DELETE CREATE TABLE DROP ALTER INDEX VIEW JOIN
+words keyword c678dd = LEFT RIGHT INNER OUTER ON GROUP ORDER BY HAVING
+words keyword c678dd = LIMIT OFFSET UNION DISTINCT AS AND OR NOT NULL
+words keyword c678dd = select from where insert into values update set
+words keyword c678dd = delete create table drop join on order by
+words type e5c07b = INT INTEGER TEXT VARCHAR REAL BLOB PRIMARY KEY
+words type e5c07b = FOREIGN REFERENCES UNIQUE DEFAULT

@@ -1,0 +1,20 @@
+name = JavaScript
+ext = js mjs jsx
+comment = //
+block = /* */
+strings = single
+backtick = yes
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = function return if else for while do switch case
+words keyword c678dd = break continue new delete typeof instanceof in of
+words keyword c678dd = class extends super import export from as default
+words keyword c678dd = try catch finally throw async await yield static
+words keyword c678dd = get set void
+words type e5c07b = var let const this true false null undefined NaN
+words type e5c07b = Infinity

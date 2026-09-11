@@ -1,0 +1,19 @@
+name = Rust
+ext = rs
+comment = //
+block = /* */
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = fn let mut const static if else match loop while
+words keyword c678dd = for in break continue return struct enum impl
+words keyword c678dd = trait pub use mod crate self super where unsafe
+words keyword c678dd = async await move ref dyn as
+words type e5c07b = i8 i16 i32 i64 u8 u16 u32 u64 usize isize f32 f64
+words type e5c07b = bool char str String Vec Option Result Box

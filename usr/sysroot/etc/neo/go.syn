@@ -1,0 +1,19 @@
+name = Go
+ext = go
+comment = //
+block = /* */
+strings = single
+backtick = yes
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = func var const type struct interface map chan
+words keyword c678dd = package import if else for range switch case
+words keyword c678dd = default select go defer return break continue
+words keyword c678dd = fallthrough goto
+words type e5c07b = int int8 int16 int32 int64 uint byte rune float32
+words type e5c07b = float64 string bool error nil true false

@@ -1,9 +1,18 @@
-name = csh
+name = Cervus shell
+ext = csh cshrc
 comment = #
 strings = single
+backtick = yes
 
-keywords = if then else endif foreach end while break continue exit
-keywords = set setenv unsetenv unset alias unalias source cd reload
-keywords = jobs fg bg history color cursor theme
+color comment = 6a737d
+color string  = 98c379
+color number  = d19a66
+color escape  = 61afef
+color default = c8ccd4
 
-types = argv status HOME PATH PS1 USER SHELL RANDOM
+words keyword c678dd = if then else endif foreach end while break
+words keyword c678dd = continue exit set setenv unsetenv unset alias
+words keyword c678dd = unalias source cd reload jobs fg bg history
+words type e5c07b = argv status HOME PATH PS1 USER SHELL RANDOM
+words builtin 56b6c4 = echo printf test ls cat grep sed awk cut sort
+words builtin 56b6c4 = head tail wc tr find xargs chmod mkdir rm cp mv

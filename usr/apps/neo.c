@@ -47,19 +47,55 @@ typedef struct {
 } neo_row_t;
 
 enum {
-    HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_KEYWORD1,
-    HL_KEYWORD2, HL_STRING, HL_NUMBER, HL_PREPROC,
-    HL_ESCAPE, HL_TAG, HL_ATTR
+    HL_NORMAL = 0, HL_COMMENT, HL_MLCOMMENT, HL_STRING,
+    HL_NUMBER, HL_ESCAPE, HL_TAG, HL_ATTR, HL_GROUP0
 };
 
-enum { LANG_NONE = 0, LANG_C, LANG_JS, LANG_CSS, LANG_HTML, LANG_ASM,
-       LANG_PY, LANG_SH, LANG_RUST, LANG_GO, LANG_LUA, LANG_SQL,
-       LANG_MD, LANG_CONF, LANG_USER, LANG_COUNT };
+#define SYN_DIR         "/etc/neo"
+#define SYN_MAX_LANGS   24
+#define SYN_MAX_GROUPS  8
+#define SYN_MAX_EXT     8
+#define SYN_WORDS_MAX   400
+#define SYN_POOL_MAX    6144
 
-static const char *LANG_NAMES[LANG_COUNT] = {
-    "Plain", "C", "JavaScript", "CSS", "HTML", "Assembly",
-    "Python", "Shell", "Rust", "Go", "Lua", "SQL",
-    "Markdown", "Config", "Custom"
+typedef struct {
+    char     name[16];
+    uint32_t color;
+    int      first;
+    int      count;
+    int      chars;
+} syn_group_t;
+
+typedef struct {
+    char     name[24];
+    char     file[64];
+    char     exts[SYN_MAX_EXT][10];
+    int      nexts;
+    char     linec[8], b0[8], b1[8];
+    int      sq, bt, html;
+    uint32_t c_comment, c_string, c_number, c_escape, c_default, c_tag, c_attr;
+    syn_group_t g[SYN_MAX_GROUPS];
+    int      ng;
+    char    *words[SYN_WORDS_MAX];
+    int      nwords;
+    char     pool[SYN_POOL_MAX];
+    int      pool_used;
+} syn_lang_t;
+
+static syn_lang_t g_langs[SYN_MAX_LANGS];
+static int        g_nlangs;
+
+static const uint32_t SYN_DEF_COMMENT = 0x6A737D;
+static const uint32_t SYN_DEF_STRING  = 0x98C379;
+static const uint32_t SYN_DEF_NUMBER  = 0xD19A66;
+static const uint32_t SYN_DEF_ESCAPE  = 0x61AFEF;
+static const uint32_t SYN_DEF_TEXT    = 0xC8CCD4;
+static const uint32_t SYN_DEF_TAG     = 0xE06C75;
+static const uint32_t SYN_DEF_ATTR    = 0xD19A66;
+
+static const uint32_t SYN_PALETTE[12] = {
+    0xC678DD, 0xE5C07B, 0x56B6C4, 0x61AFEF, 0xE06C75, 0x98C379,
+    0xD19A66, 0xABB2BF, 0xBE5046, 0x7F848E, 0xD4D4D4, 0xFFFFFF
 };
 
 typedef struct {
@@ -91,6 +127,7 @@ typedef struct {
     int        autoindent;
     int        trim_on_save;
     int        hl_current_line;
+    int        autocomplete;
     int        show_tabs;
     int        backup_on_save;
     int        scroll_margin;
@@ -244,253 +281,244 @@ static int row_rx_to_cx(neo_row_t *row, int rx)
     return cx;
 }
 
-static const char *C_KEYWORDS[] = {
-    "switch", "if", "while", "for", "break", "continue", "return", "else",
-    "struct", "union", "typedef", "static", "enum", "case", "default", "do",
-    "goto", "sizeof", "const", "extern", "volatile", "inline", "register",
-    "#include", "#define", "#ifdef", "#ifndef", "#endif", "#if", "#else",
-    "#elif", "#pragma", "#undef",
-    "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
-    "void|", "short|", "auto|", "bool|", "size_t|", "ssize_t|", "uintptr_t|",
-    "uint8_t|", "uint16_t|", "uint32_t|", "uint64_t|",
-    "int8_t|", "int16_t|", "int32_t|", "int64_t|", NULL
-};
-
-static const char *JS_KEYWORDS[] = {
-    "function", "return", "if", "else", "for", "while", "do", "switch", "case",
-    "break", "continue", "new", "delete", "typeof", "instanceof", "in", "of",
-    "class", "extends", "super", "import", "export", "from", "as", "default",
-    "try", "catch", "finally", "throw", "async", "await", "yield", "static",
-    "get", "set", "void",
-    "var|", "let|", "const|", "this|", "true|", "false|", "null|", "undefined|",
-    "NaN|", "Infinity|", NULL
-};
-
-static const char *CSS_KEYWORDS[] = {
-    "@media", "@import", "@keyframes", "@font-face", "@supports", "@charset",
-    "important", "inherit", "initial", "unset", "none", "auto", "block",
-    "inline", "flex", "grid", "absolute", "relative", "fixed", "static",
-    "hidden", "visible", "bold", "italic", "solid", "dashed", "dotted",
-    "center", "left", "right", "top", "bottom", "middle",
-    "px|", "em|", "rem|", "vh|", "vw|", "pt|", "deg|", NULL
-};
-
-static const char *ASM_KEYWORDS[] = {
-    "mov", "movq", "movl", "movw", "movb", "lea", "push", "pop", "call", "ret",
-    "jmp", "je", "jne", "jz", "jnz", "jg", "jge", "jl", "jle", "ja", "jb",
-    "add", "sub", "mul", "imul", "div", "idiv", "inc", "dec", "and", "or",
-    "xor", "not", "neg", "shl", "shr", "sar", "sal", "cmp", "test", "int",
-    "syscall", "sysret", "nop", "hlt", "cli", "sti", "iret", "iretq", "leave",
-    "cpuid", "rdmsr", "wrmsr", "in", "out", "loop", "enter",
-    "rax|", "rbx|", "rcx|", "rdx|", "rsi|", "rdi|", "rbp|", "rsp|",
-    "r8|", "r9|", "r10|", "r11|", "r12|", "r13|", "r14|", "r15|",
-    "eax|", "ebx|", "ecx|", "edx|", "esi|", "edi|", "ebp|", "esp|",
-    "ax|", "bx|", "cx|", "dx|", "al|", "bl|", "cl|", "dl|", "rip|",
-    ".text", ".data", ".bss", ".global", ".globl", ".section", ".byte",
-    ".word", ".long", ".quad", ".ascii", ".asciz", ".align", ".equ", ".extern",
-    "section", "global", "extern", "db", "dw", "dd", "dq", "resb", "equ", NULL
-};
-
-static const char *PY_KEYWORDS[] = {
-    "def", "class", "return", "if", "elif", "else", "for", "while", "break",
-    "continue", "pass", "import", "from", "as", "try", "except", "finally",
-    "raise", "with", "yield", "lambda", "global", "nonlocal", "assert",
-    "del", "in", "is", "not", "and", "or", "await", "async",
-    "int|", "str|", "float|", "bool|", "list|", "dict|", "set|", "tuple|",
-    "bytes|", "None|", "True|", "False|", "self|", "object|", NULL
-};
-
-static const char *SH_KEYWORDS[] = {
-    "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
-    "case", "esac", "in", "function", "return", "break", "continue", "exit",
-    "local", "export", "readonly", "shift", "set", "unset", "trap", "source",
-    "echo|", "printf|", "cd|", "test|", "read|", "eval|", "exec|",
-    "foreach|", "end|", "setenv|", "alias|", NULL
-};
-
-static const char *RUST_KEYWORDS[] = {
-    "fn", "let", "mut", "const", "static", "if", "else", "match", "loop",
-    "while", "for", "in", "break", "continue", "return", "struct", "enum",
-    "impl", "trait", "pub", "use", "mod", "crate", "self", "super", "where",
-    "unsafe", "async", "await", "move", "ref", "dyn", "as",
-    "i8|", "i16|", "i32|", "i64|", "u8|", "u16|", "u32|", "u64|", "usize|",
-    "isize|", "f32|", "f64|", "bool|", "char|", "str|", "String|", "Vec|",
-    "Option|", "Result|", "Box|", NULL
-};
-
-static const char *GO_KEYWORDS[] = {
-    "func", "var", "const", "type", "struct", "interface", "map", "chan",
-    "package", "import", "if", "else", "for", "range", "switch", "case",
-    "default", "select", "go", "defer", "return", "break", "continue",
-    "fallthrough", "goto",
-    "int|", "int8|", "int16|", "int32|", "int64|", "uint|", "byte|", "rune|",
-    "float32|", "float64|", "string|", "bool|", "error|", "nil|", "true|",
-    "false|", NULL
-};
-
-static const char *LUA_KEYWORDS[] = {
-    "function", "local", "end", "if", "then", "else", "elseif", "for", "while",
-    "repeat", "until", "do", "return", "break", "goto", "in",
-    "nil|", "true|", "false|", "and|", "or|", "not|", "self|", NULL
-};
-
-static const char *SQL_KEYWORDS[] = {
-    "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET",
-    "DELETE", "CREATE", "TABLE", "DROP", "ALTER", "INDEX", "VIEW", "JOIN",
-    "LEFT", "RIGHT", "INNER", "OUTER", "ON", "GROUP", "ORDER", "BY", "HAVING",
-    "LIMIT", "OFFSET", "UNION", "DISTINCT", "AS", "AND", "OR", "NOT", "NULL",
-    "select", "from", "where", "insert", "into", "values", "update", "set",
-    "delete", "create", "table", "drop", "join", "on", "order", "by",
-    "INT|", "INTEGER|", "TEXT|", "VARCHAR|", "REAL|", "BLOB|", "PRIMARY|",
-    "KEY|", "FOREIGN|", "REFERENCES|", "UNIQUE|", "DEFAULT|", NULL
-};
-
-static const char *CONF_KEYWORDS[] = {
-    "true|", "false|", "yes|", "no|", "on|", "off|", "none|", "auto|", NULL
-};
-
-typedef struct {
-    const char **kw;
-    const char  *linec;
-    const char  *blockc0;
-    const char  *blockc1;
-    int          sq;
-    int          bt;
-} syntax_def;
-
-static syntax_def SYNTAX_DEFS[LANG_COUNT] = {
-    { NULL,          NULL, NULL,   NULL,  0, 0 },
-    { C_KEYWORDS,    "//", "/*",   "*/",  1, 0 },
-    { JS_KEYWORDS,   "//", "/*",   "*/",  1, 1 },
-    { CSS_KEYWORDS,  NULL, "/*",   "*/",  1, 0 },
-    { NULL,          NULL, NULL,   NULL,  0, 0 },
-    { ASM_KEYWORDS,  ";",  NULL,   NULL,  1, 0 },
-    { PY_KEYWORDS,   "#",  NULL,   NULL,  1, 0 },
-    { SH_KEYWORDS,   "#",  NULL,   NULL,  1, 1 },
-    { RUST_KEYWORDS, "//", "/*",   "*/",  1, 0 },
-    { GO_KEYWORDS,   "//", "/*",   "*/",  1, 1 },
-    { LUA_KEYWORDS,  "--", "--[[", "]]",  1, 0 },
-    { SQL_KEYWORDS,  "--", "/*",   "*/",  1, 0 },
-    { NULL,          NULL, NULL,   NULL,  0, 0 },
-    { CONF_KEYWORDS, "#",  NULL,   NULL,  1, 0 },
-    { NULL,          NULL, NULL,   NULL,  0, 0 },
-};
-
-#define SYN_DIR      "/etc/neo"
-#define SYN_MAX_KW   256
-
-static char  *g_user_kw[SYN_MAX_KW + 1];
-static char   g_user_pool[8192];
-static char   g_user_linec[8], g_user_b0[8], g_user_b1[8];
-static char   g_user_name[24];
 
 static char *syn_trim(char *s) {
     while (*s == ' ' || *s == '\t') s++;
     char *e = s + strlen(s);
-    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0;
     return s;
 }
 
-static void syn_add_words(const char *list, int is_type, size_t *pool_used, int *nkw) {
-    const char *p = list;
-    while (*p && *nkw < SYN_MAX_KW) {
-        while (*p == ' ' || *p == ',') p++;
-        if (!*p) break;
-        size_t start = *pool_used;
-        while (*p && *p != ' ' && *p != ',' && *pool_used + 2 < sizeof g_user_pool)
-            g_user_pool[(*pool_used)++] = *p++;
-        if (is_type && *pool_used + 1 < sizeof g_user_pool)
-            g_user_pool[(*pool_used)++] = '|';
-        g_user_pool[(*pool_used)++] = 0;
-        if (*pool_used > start + 1) g_user_kw[(*nkw)++] = &g_user_pool[start];
+static uint32_t syn_colour(const char *text, uint32_t fallback) {
+    while (*text == ' ' || *text == '#') text++;
+    if (!*text) return fallback;
+    uint32_t v = 0;
+    int digits = 0;
+    for (const char *p = text; *p; p++) {
+        int d;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if ((*p | 32) >= 'a' && (*p | 32) <= 'f') d = (*p | 32) - 'a' + 10;
+        else break;
+        v = (v << 4) | (uint32_t)d;
+        digits++;
+    }
+    if (digits == 6) return v;
+    if (digits == 3)
+        return ((v & 0xF00) * 0x1100) | ((v & 0x0F0) * 0x110) | ((v & 0x00F) * 0x11);
+    return fallback;
+}
+
+static const char *syn_add_word(syn_lang_t *L, const char *w, size_t len) {
+    if (L->nwords >= SYN_WORDS_MAX) return NULL;
+    if (L->pool_used + (int)len + 1 > SYN_POOL_MAX) return NULL;
+    char *dst = &L->pool[L->pool_used];
+    memcpy(dst, w, len);
+    dst[len] = 0;
+    L->pool_used += (int)len + 1;
+    L->words[L->nwords++] = dst;
+    return dst;
+}
+
+static void syn_add_group(syn_lang_t *L, const char *decl, const char *list, int chars) {
+    char gname[16] = "words";
+    uint32_t col = SYN_PALETTE[L->ng % 12];
+
+    char buf[80];
+    snprintf(buf, sizeof buf, "%s", decl);
+    char *p = syn_trim(buf);
+    char *sp = strchr(p, ' ');
+    if (sp) {
+        *sp = 0;
+        snprintf(gname, sizeof gname, "%s", p);
+        col = syn_colour(syn_trim(sp + 1), col);
+    } else if (*p) {
+        snprintf(gname, sizeof gname, "%s", p);
+    }
+
+    syn_group_t *g = NULL;
+    for (int i = 0; i < L->ng; i++)
+        if (!strcmp(L->g[i].name, gname)) { g = &L->g[i]; break; }
+
+    if (!g) {
+        if (L->ng >= SYN_MAX_GROUPS) return;
+        g = &L->g[L->ng++];
+        memset(g, 0, sizeof *g);
+        snprintf(g->name, sizeof g->name, "%s", gname);
+        g->color = col;
+        g->chars = chars;
+        g->first = L->nwords;
+        g->count = 0;
+    } else {
+        g->color = col;
+        if (g->first + g->count != L->nwords) return;
+    }
+
+    const char *q = list;
+    while (*q) {
+        while (*q == ' ' || *q == ',' || *q == '\t') q++;
+        if (!*q) break;
+        const char *s = q;
+        while (*q && *q != ' ' && *q != ',' && *q != '\t') q++;
+        if (syn_add_word(L, s, (size_t)(q - s))) g->count++;
     }
 }
 
-static int load_user_syntax(const char *ext) {
-    if (!ext || !*ext) return 0;
-
-    char path[160];
-    snprintf(path, sizeof path, "%s/%s.syn", SYN_DIR, ext + 1);
+static int syn_parse_file(const char *path, const char *fname, syn_lang_t *L) {
     FILE *f = fopen(path, "r");
-    if (!f) {
-        snprintf(path, sizeof path, "/mnt%s/%s.syn", SYN_DIR, ext + 1);
-        f = fopen(path, "r");
-    }
     if (!f) return 0;
 
-    size_t pool_used = 0;
-    int nkw = 0;
-    g_user_linec[0] = g_user_b0[0] = g_user_b1[0] = 0;
-    snprintf(g_user_name, sizeof g_user_name, "%s", ext + 1);
-    int sq = 1, bt = 0;
+    memset(L, 0, sizeof *L);
+    L->c_comment = SYN_DEF_COMMENT;
+    L->c_string  = SYN_DEF_STRING;
+    L->c_number  = SYN_DEF_NUMBER;
+    L->c_escape  = SYN_DEF_ESCAPE;
+    L->c_default = SYN_DEF_TEXT;
+    L->c_tag     = SYN_DEF_TAG;
+    L->c_attr    = SYN_DEF_ATTR;
+    L->sq = 1;
+    snprintf(L->file, sizeof L->file, "%s", fname);
 
-    char line[1024];
+    const char *dot = strrchr(fname, '.');
+    size_t baselen = dot ? (size_t)(dot - fname) : strlen(fname);
+    if (baselen >= sizeof L->name) baselen = sizeof L->name - 1;
+    memcpy(L->name, fname, baselen);
+    L->name[baselen] = 0;
+    if (L->nexts < SYN_MAX_EXT) {
+        snprintf(L->exts[L->nexts], sizeof L->exts[0], "%.9s", L->name);
+        L->nexts++;
+    }
+
+    char line[512];
     while (fgets(line, sizeof line, f)) {
-        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
-        char *t = syn_trim(line);
-        if (!*t || *t == '#') continue;
-        char *eq = strchr(t, '=');
+        char *s = syn_trim(line);
+        if (!*s || *s == '#') continue;
+        char *eq = strchr(s, '=');
         if (!eq) continue;
         *eq = 0;
-        char *key = syn_trim(t);
+        char *key = syn_trim(s);
         char *val = syn_trim(eq + 1);
 
-        if      (!strcmp(key, "name"))     snprintf(g_user_name, sizeof g_user_name, "%s", val);
-        else if (!strcmp(key, "comment"))  snprintf(g_user_linec, sizeof g_user_linec, "%s", val);
-        else if (!strcmp(key, "block"))    {
+        if (!strcmp(key, "name")) {
+            snprintf(L->name, sizeof L->name, "%s", val);
+        } else if (!strcmp(key, "ext")) {
+            L->nexts = 0;
+            char *q = val;
+            while (*q && L->nexts < SYN_MAX_EXT) {
+                while (*q == ' ' || *q == ',' || *q == '.') q++;
+                if (!*q) break;
+                char *b = q;
+                while (*q && *q != ' ' && *q != ',') q++;
+                size_t n = (size_t)(q - b);
+                if (n >= sizeof L->exts[0]) n = sizeof L->exts[0] - 1;
+                memcpy(L->exts[L->nexts], b, n);
+                L->exts[L->nexts][n] = 0;
+                L->nexts++;
+            }
+        } else if (!strcmp(key, "comment")) {
+            snprintf(L->linec, sizeof L->linec, "%s", val);
+        } else if (!strcmp(key, "block")) {
             char *sp = strchr(val, ' ');
             if (sp) {
                 *sp = 0;
-                snprintf(g_user_b0, sizeof g_user_b0, "%s", val);
-                snprintf(g_user_b1, sizeof g_user_b1, "%s", syn_trim(sp + 1));
+                snprintf(L->b0, sizeof L->b0, "%s", val);
+                snprintf(L->b1, sizeof L->b1, "%s", syn_trim(sp + 1));
             }
+        } else if (!strcmp(key, "strings")) {
+            L->sq = (val[0] == 's');
+        } else if (!strcmp(key, "backtick")) {
+            L->bt = (val[0] == 'y' || val[0] == '1' || val[0] == 't');
+        } else if (!strcmp(key, "mode")) {
+            L->html = !strcmp(val, "html");
+        } else if (!strncmp(key, "color", 5)) {
+            char *role = syn_trim(key + 5);
+            uint32_t c = syn_colour(val, SYN_DEF_TEXT);
+            if      (!strcmp(role, "comment")) L->c_comment = c;
+            else if (!strcmp(role, "string"))  L->c_string  = c;
+            else if (!strcmp(role, "number"))  L->c_number  = c;
+            else if (!strcmp(role, "escape"))  L->c_escape  = c;
+            else if (!strcmp(role, "default")) L->c_default = c;
+            else if (!strcmp(role, "tag"))     L->c_tag     = c;
+            else if (!strcmp(role, "attr"))    L->c_attr    = c;
+        } else if (!strncmp(key, "words", 5)) {
+            syn_add_group(L, key + 5, val, 0);
+        } else if (!strncmp(key, "chars", 5)) {
+            syn_add_group(L, key + 5, val, 1);
+        } else if (!strcmp(key, "keywords")) {
+            syn_add_group(L, " keyword c678dd", val, 0);
+        } else if (!strcmp(key, "types")) {
+            syn_add_group(L, " type e5c07b", val, 0);
         }
-        else if (!strcmp(key, "keywords")) syn_add_words(val, 0, &pool_used, &nkw);
-        else if (!strcmp(key, "types"))    syn_add_words(val, 1, &pool_used, &nkw);
-        else if (!strcmp(key, "strings"))  sq = strcmp(val, "double") != 0;
-        else if (!strcmp(key, "backtick")) bt = (val[0] == '1' || val[0] == 'y');
     }
     fclose(f);
-
-    if (nkw == 0 && !g_user_linec[0] && !g_user_b0[0]) return 0;
-
-    g_user_kw[nkw] = NULL;
-    SYNTAX_DEFS[LANG_USER].kw      = (const char **)g_user_kw;
-    SYNTAX_DEFS[LANG_USER].linec   = g_user_linec[0] ? g_user_linec : NULL;
-    SYNTAX_DEFS[LANG_USER].blockc0 = g_user_b0[0] ? g_user_b0 : NULL;
-    SYNTAX_DEFS[LANG_USER].blockc1 = g_user_b1[0] ? g_user_b1 : NULL;
-    SYNTAX_DEFS[LANG_USER].sq      = sq;
-    SYNTAX_DEFS[LANG_USER].bt      = bt;
-    LANG_NAMES[LANG_USER] = g_user_name;
     return 1;
+}
+
+static int syn_have(const char *fname) {
+    for (int i = 0; i < g_nlangs; i++)
+        if (!strcmp(g_langs[i].file, fname)) return 1;
+    return 0;
+}
+
+static void syn_scan_dir(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) && g_nlangs < SYN_MAX_LANGS) {
+        const char *dot = strrchr(e->d_name, '.');
+        if (!dot || strcmp(dot, ".syn")) continue;
+        if (syn_have(e->d_name)) continue;
+        char path[320];
+        snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+        if (syn_parse_file(path, e->d_name, &g_langs[g_nlangs])) g_nlangs++;
+    }
+    closedir(d);
+}
+
+static void syn_load_all(void) {
+    g_nlangs = 0;
+    syn_scan_dir("/mnt" SYN_DIR);
+    syn_scan_dir(SYN_DIR);
+}
+
+static const char *lang_name(int idx) {
+    if (idx < 0 || idx >= g_nlangs) return "Plain";
+    return g_langs[idx].name;
 }
 
 static int lang_from_ext(const char *filename) {
     const char *dot = NULL;
     for (const char *p = filename; *p; p++) if (*p == '.') dot = p;
-    if (!dot) return LANG_NONE;
-    if (load_user_syntax(dot)) return LANG_USER;
-    if (!strcmp(dot, ".c") || !strcmp(dot, ".h") || !strcmp(dot, ".cpp") ||
-        !strcmp(dot, ".cc") || !strcmp(dot, ".hpp") || !strcmp(dot, ".cxx")) return LANG_C;
-    if (!strcmp(dot, ".js") || !strcmp(dot, ".ts") || !strcmp(dot, ".jsx") ||
-        !strcmp(dot, ".json") || !strcmp(dot, ".mjs")) return LANG_JS;
-    if (!strcmp(dot, ".css")) return LANG_CSS;
-    if (!strcmp(dot, ".html") || !strcmp(dot, ".htm") || !strcmp(dot, ".xml") ||
-        !strcmp(dot, ".svg")) return LANG_HTML;
-    if (!strcmp(dot, ".s") || !strcmp(dot, ".S") || !strcmp(dot, ".asm") ||
-        !strcmp(dot, ".nasm")) return LANG_ASM;
-    if (!strcmp(dot, ".py") || !strcmp(dot, ".pyw")) return LANG_PY;
-    if (!strcmp(dot, ".sh") || !strcmp(dot, ".bash") || !strcmp(dot, ".csh") ||
-        !strcmp(dot, ".zsh") || !strcmp(dot, ".ksh")) return LANG_SH;
-    if (!strcmp(dot, ".rs")) return LANG_RUST;
-    if (!strcmp(dot, ".go")) return LANG_GO;
-    if (!strcmp(dot, ".lua")) return LANG_LUA;
-    if (!strcmp(dot, ".sql")) return LANG_SQL;
-    if (!strcmp(dot, ".md") || !strcmp(dot, ".markdown")) return LANG_MD;
-    if (!strcmp(dot, ".conf") || !strcmp(dot, ".cfg") || !strcmp(dot, ".ini") ||
-        !strcmp(dot, ".toml") || !strcmp(dot, ".yml") || !strcmp(dot, ".yaml") ||
-        !strcmp(dot, ".theme") || !strcmp(dot, ".rc")) return LANG_CONF;
-    return LANG_NONE;
+    if (!dot || !dot[1]) return -1;
+    for (int i = 0; i < g_nlangs; i++)
+        for (int k = 0; k < g_langs[i].nexts; k++)
+            if (!strcasecmp(g_langs[i].exts[k], dot + 1)) return i;
+    return -1;
+}
+
+static uint32_t hl_colour_of(int hl) {
+    const syn_lang_t *L = (E.syntax >= 0 && E.syntax < g_nlangs) ? &g_langs[E.syntax] : NULL;
+    if (!L) return SYN_DEF_TEXT;
+    switch (hl) {
+        case HL_COMMENT:
+        case HL_MLCOMMENT: return L->c_comment;
+        case HL_STRING:    return L->c_string;
+        case HL_NUMBER:    return L->c_number;
+        case HL_ESCAPE:    return L->c_escape;
+        case HL_TAG:       return L->c_tag;
+        case HL_ATTR:      return L->c_attr;
+        default: break;
+    }
+    int gi = hl - HL_GROUP0;
+    if (gi >= 0 && gi < L->ng) return L->g[gi].color;
+    return L->c_default;
+}
+
+static const char *hl_sgr(int hl) {
+    static char buf[32];
+    uint32_t c = hl_colour_of(hl);
+    snprintf(buf, sizeof buf, "\x1b[38;2;%u;%u;%um",
+             (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+    return buf;
 }
 
 static int hl_is_space(int c) {
@@ -501,48 +529,32 @@ static int hl_is_sep(int c) {
     return c == '\0' || hl_is_space(c) ||
            strchr(",.()+-/*=~%<>[]{};:&|!?^", c) != NULL;
 }
-static const char *hl_sgr(int hl) {
-    switch (hl) {
-        case HL_COMMENT:
-        case HL_MLCOMMENT: return "\x1b[38;2;106;115;125m";
-        case HL_KEYWORD1:  return "\x1b[38;2;198;120;221m";
-        case HL_KEYWORD2:  return "\x1b[38;2;229;192;123m";
-        case HL_STRING:    return "\x1b[38;2;152;195;121m";
-        case HL_NUMBER:    return "\x1b[38;2;209;154;102m";
-        case HL_PREPROC:   return "\x1b[38;2;86;182;194m";
-        case HL_ESCAPE:    return "\x1b[38;2;97;175;239m";
-        case HL_TAG:       return "\x1b[38;2;224;108;117m";
-        case HL_ATTR:      return "\x1b[38;2;209;154;102m";
-        default:           return "\x1b[38;2;200;204;212m";
-    }
-}
-
-static void hl_generic(neo_row_t *row, int at, const syntax_def *def)
+static void hl_generic(neo_row_t *row, int at, const syn_lang_t *L)
 {
     char *s = row->render;
     int i = 0, prev_sep = 1, in_string = 0;
     int in_comment = (at > 0 && E.row[at - 1].hl_open_comment == 1);
-    int lclen = def->linec ? (int)strlen(def->linec) : 0;
-    int b0len = def->blockc0 ? (int)strlen(def->blockc0) : 0;
-    int b1len = def->blockc1 ? (int)strlen(def->blockc1) : 0;
+    int lclen = L->linec[0] ? (int)strlen(L->linec) : 0;
+    int b0len = L->b0[0] ? (int)strlen(L->b0) : 0;
+    int b1len = L->b1[0] ? (int)strlen(L->b1) : 0;
 
     while (i < row->rsize) {
         char c = s[i];
 
         if (!in_string && !in_comment && lclen &&
-            i + lclen <= row->rsize && strncmp(&s[i], def->linec, lclen) == 0) {
+            i + lclen <= row->rsize && strncmp(&s[i], L->linec, lclen) == 0) {
             memset(&row->hl[i], HL_COMMENT, row->rsize - i);
             break;
         }
         if (!in_string && b0len) {
             if (in_comment) {
                 row->hl[i] = HL_MLCOMMENT;
-                if (b1len && i + b1len <= row->rsize && strncmp(&s[i], def->blockc1, b1len) == 0) {
+                if (b1len && i + b1len <= row->rsize && strncmp(&s[i], L->b1, b1len) == 0) {
                     memset(&row->hl[i], HL_MLCOMMENT, b1len);
                     i += b1len; in_comment = 0; prev_sep = 1; continue;
                 }
                 i++; continue;
-            } else if (i + b0len <= row->rsize && strncmp(&s[i], def->blockc0, b0len) == 0) {
+            } else if (i + b0len <= row->rsize && strncmp(&s[i], L->b0, b0len) == 0) {
                 memset(&row->hl[i], HL_MLCOMMENT, b0len);
                 i += b0len; in_comment = 1; continue;
             }
@@ -554,7 +566,7 @@ static void hl_generic(neo_row_t *row, int at, const syntax_def *def)
             }
             if (c == in_string) in_string = 0;
             i++; prev_sep = 1; continue;
-        } else if (c == '"' || (def->sq && c == '\'') || (def->bt && c == '`')) {
+        } else if (c == '"' || (L->sq && c == '\'') || (L->bt && c == '`')) {
             in_string = c; row->hl[i] = HL_STRING; i++; continue;
         }
         if (hl_is_digit((unsigned char)c) && prev_sep) {
@@ -568,22 +580,26 @@ static void hl_generic(neo_row_t *row, int at, const syntax_def *def)
             }
             prev_sep = 0; continue;
         }
-        if (prev_sep && def->kw) {
-            int j;
-            for (j = 0; def->kw[j]; j++) {
-                int klen = (int)strlen(def->kw[j]);
-                int kw2 = def->kw[j][klen - 1] == '|';
-                if (kw2) klen--;
-                int pp = (def->kw[j][0] == '#' || def->kw[j][0] == '.' || def->kw[j][0] == '@');
-                if (i + klen <= row->rsize &&
-                    strncmp(&s[i], def->kw[j], klen) == 0 &&
-                    hl_is_sep(i + klen < row->rsize ? s[i + klen] : '\0')) {
-                    memset(&row->hl[i], pp ? HL_PREPROC : (kw2 ? HL_KEYWORD2 : HL_KEYWORD1), klen);
-                    i += klen; break;
-                }
+
+        int matched = 0;
+        for (int gi = 0; gi < L->ng && !matched; gi++) {
+            const syn_group_t *g = &L->g[gi];
+            if (!g->chars && !prev_sep) continue;
+            for (int w = 0; w < g->count; w++) {
+                const char *word = L->words[g->first + w];
+                int klen = (int)strlen(word);
+                if (klen == 0 || i + klen > row->rsize) continue;
+                if (strncmp(&s[i], word, (size_t)klen) != 0) continue;
+                if (!g->chars &&
+                    !hl_is_sep(i + klen < row->rsize ? s[i + klen] : '\0')) continue;
+                memset(&row->hl[i], HL_GROUP0 + gi, (size_t)klen);
+                i += klen;
+                matched = 1;
+                break;
             }
-            if (def->kw[j] != NULL) { prev_sep = 0; continue; }
         }
+        if (matched) { prev_sep = 0; continue; }
+
         prev_sep = hl_is_sep((unsigned char)c);
         i++;
     }
@@ -619,7 +635,7 @@ static void hl_html(neo_row_t *row, int at)
             if (c == '&') {
                 int j = i + 1;
                 while (j < row->rsize && s[j] != ';' && s[j] != ' ' && j - i < 12) j++;
-                if (j < row->rsize && s[j] == ';') { memset(&row->hl[i], HL_PREPROC, j - i + 1); i = j + 1; continue; }
+                if (j < row->rsize && s[j] == ';') { memset(&row->hl[i], HL_ESCAPE, j - i + 1); i = j + 1; continue; }
             }
             i++; continue;
         }
@@ -651,12 +667,12 @@ static void editor_update_syntax(int at)
 
     int old_open = row->hl_open_comment;
 
-    if (E.syntax == LANG_NONE) {
+    if (E.syntax < 0 || E.syntax >= g_nlangs) {
         row->hl_open_comment = 0;
-    } else if (E.syntax == LANG_HTML) {
+    } else if (g_langs[E.syntax].html) {
         hl_html(row, at);
     } else {
-        hl_generic(row, at, &SYNTAX_DEFS[E.syntax]);
+        hl_generic(row, at, &g_langs[E.syntax]);
     }
 
     if (row->hl_open_comment != old_open && at + 1 < E.numrows)
@@ -835,8 +851,11 @@ static int editor_autopair(int ch)
     return 0;
 }
 
+static void comp_forget_libs(void);
+
 static void editor_insert_newline(void)
 {
+    comp_forget_libs();
     if (E.cx == 0) {
         row_insert_at(E.cy, "", 0);
         E.cy++;
@@ -1275,7 +1294,7 @@ static void draw_status(abuf_t *ab)
         E.filename ? E.filename : "[No Name]",
         E.dirty ? " [modified]" : "");
     int rlen = snprintf(rstatus, sizeof(rstatus), "%s | Ln %d, Col %d / %d lines ",
-        LANG_NAMES[E.syntax], E.cy + 1, E.cx + 1, E.numrows);
+        lang_name(E.syntax), E.cy + 1, E.cx + 1, E.numrows);
 
     int limit = E.screencols - 1;
     if (limit < 1) limit = 1;
@@ -1309,6 +1328,10 @@ static void draw_message(abuf_t *ab)
     }
 }
 
+static void comp_draw(abuf_t *ab);
+static void comp_close(void);
+static void comp_refresh(void);
+
 static void refresh_screen(void)
 {
     get_window_size();
@@ -1319,6 +1342,7 @@ static void refresh_screen(void)
     draw_rows(&ab);
     draw_status(&ab);
     draw_message(&ab);
+    comp_draw(&ab);
 
     int cursor_row = (E.cy - E.rowoff) + 1;
     int cursor_col = (E.rx - E.coloff) + 1 + E.lineno_width;
@@ -1521,16 +1545,75 @@ static void editor_find(void)
     }
 }
 
+static int menu_pick(const char *title, const char *const *items, int n, int start)
+{
+    int sel = (start >= 0 && start < n) ? start : 0;
+    int top = 0;
+
+    for (;;) {
+        int rows = E.screenrows > 4 ? E.screenrows - 4 : 4;
+        if (rows > n) rows = n;
+        if (sel < top) top = sel;
+        if (sel >= top + rows) top = sel - rows + 1;
+
+        abuf_t ab = { NULL, 0, 0 };
+        ab_append(&ab, "\x1b[H\x1b[2J", 7);
+
+        char hdr[160];
+        int hn = snprintf(hdr, sizeof hdr,
+                          "\x1b[7m %s \x1b[0m   \x1b[90mmove   Enter choose   Esc cancel\x1b[0m\r\n\r\n",
+                          title);
+        ab_append(&ab, hdr, hn);
+
+        for (int i = top; i < top + rows; i++) {
+            char line[200];
+            int ln = snprintf(line, sizeof line, "%s  %-28s\x1b[0m\r\n",
+                              i == sel ? "\x1b[7m" : "  ", items[i]);
+            ab_append(&ab, line, ln);
+        }
+        if (n > rows) {
+            char more[64];
+            int mn = snprintf(more, sizeof more, "\r\n  \x1b[90m%d of %d\x1b[0m\r\n", sel + 1, n);
+            ab_append(&ab, more, mn);
+        }
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int c = read_key();
+        if (c == KEY_ESC || c == 'q') return -2;
+        if (c == '\r' || c == '\n') return sel;
+        if (c == KEY_ARROW_UP)   sel = (sel + n - 1) % n;
+        if (c == KEY_ARROW_DOWN) sel = (sel + 1) % n;
+        if (c == KEY_PAGE_UP)    { sel -= rows; if (sel < 0) sel = 0; }
+        if (c == KEY_PAGE_DOWN)  { sel += rows; if (sel >= n) sel = n - 1; }
+        if (c == KEY_HOME)       sel = 0;
+        if (c == KEY_END)        sel = n - 1;
+    }
+}
+
 static void editor_choose_language(void)
 {
-    set_status("Syntax  0)Plain 1)C 2)JS 3)CSS 4)HTML 5)ASM   [current: %s]",
-               LANG_NAMES[E.syntax]);
-    refresh_screen();
-    int c = read_key();
-    if (c >= '0' && c <= '0' + (LANG_COUNT - 1)) {
-        E.syntax = c - '0';
+    const char *items[SYN_MAX_LANGS + 1];
+    char labels[SYN_MAX_LANGS + 1][64];
+
+    snprintf(labels[0], sizeof labels[0], "Plain  \x1b[90m(no colouring)\x1b[0m");
+    items[0] = labels[0];
+    for (int i = 0; i < g_nlangs; i++) {
+        char exts[40] = "";
+        for (int k = 0; k < g_langs[i].nexts && k < 4; k++) {
+            strncat(exts, k ? " ." : ".", sizeof exts - strlen(exts) - 1);
+            strncat(exts, g_langs[i].exts[k], sizeof exts - strlen(exts) - 1);
+        }
+        snprintf(labels[i + 1], sizeof labels[i + 1], "%-14s \x1b[90m%s\x1b[0m",
+                 g_langs[i].name, exts);
+        items[i + 1] = labels[i + 1];
+    }
+
+    int pick = menu_pick("language for colouring", items, g_nlangs + 1, E.syntax + 1);
+    if (pick >= -1) {
+        E.syntax = pick - 1;
         for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
-        set_status("Syntax: %s", LANG_NAMES[E.syntax]);
+        set_status("Syntax: %s", lang_name(E.syntax));
     } else {
         set_status("");
     }
@@ -1824,6 +1907,7 @@ static void neo_config_load(void) {
         else if (!strcmp(line, "showtabs"))     E.show_tabs = v ? 1 : 0;
         else if (!strcmp(line, "backup"))       E.backup_on_save = v ? 1 : 0;
         else if (!strcmp(line, "scrollmargin")) E.scroll_margin = (v >= 0 && v <= 20) ? v : 0;
+        else if (!strcmp(line, "autocomplete")) E.autocomplete = v ? 1 : 0;
     }
     fclose(f);
 }
@@ -1844,228 +1928,632 @@ static int neo_config_save(void) {
     fprintf(f, "showtabs=%d\n",     E.show_tabs);
     fprintf(f, "backup=%d\n",       E.backup_on_save);
     fprintf(f, "scrollmargin=%d\n", E.scroll_margin);
+    fprintf(f, "autocomplete=%d\n", E.autocomplete);
     fclose(f);
     return 0;
 }
 
 static char g_syn_ext[16];
 
-static void syn_current_ext(char *out, size_t cap) {
-    out[0] = 0;
-    const char *dot = NULL;
-    if (E.filename)
-        for (const char *p = E.filename; *p; p++) if (*p == '.') dot = p;
-    if (dot && dot[1]) snprintf(out, cap, "%s", dot + 1);
-}
-
-static int syn_prompt_value(const char *label, char *buf, size_t cap)
+static int prompt_box(const char *title, const char *hint, char *buf, size_t cap)
 {
-    size_t n = strlen(buf);
+    int len = (int)strlen(buf);
+    int cur = len;
+    int view = 0;
+    const int W = 60;
+    const int inner = W - 2;
+
     for (;;) {
-        char line[256];
-        int k = snprintf(line, sizeof line,
-                         "\x1b[%d;1H\x1b[K\x1b[7m %s \x1b[0m %s_",
-                         E.screenrows + 2, label, buf);
-        write(1, line, k);
+        if (cur < view) view = cur;
+        if (cur > view + inner - 1) view = cur - inner + 1;
+        if (view < 0) view = 0;
 
-        int c = read_key();
-        if (c == '\r' || c == '\n') break;
-        if (c == KEY_ESC) return -1;
-        if (c == 127 || c == 8) { if (n > 0) buf[--n] = 0; continue; }
-        if (c >= 32 && c < 127 && n + 1 < cap) { buf[n++] = (char)c; buf[n] = 0; }
-    }
-    return 0;
-}
+        int row = E.screenrows / 2 - 2;
+        int col = (E.screencols - W) / 2;
+        if (row < 1) row = 1;
+        if (col < 1) col = 1;
 
-static void syn_dir_for_write(char *out, size_t cap)
-{
-    struct stat st;
-    if (stat("/mnt/etc", &st) == 0 && S_ISDIR(st.st_mode))
-        snprintf(out, cap, "/mnt%s", SYN_DIR);
-    else
-        snprintf(out, cap, "%s", SYN_DIR);
-}
+        abuf_t ab = { NULL, 0, 0 };
+        char t[400];
+        int n;
 
-static int syn_write_file(const char *ext, char fields[8][256])
-{
-    char dir[160];
-    syn_dir_for_write(dir, sizeof dir);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s\x1b[0m",
+                     row, col, W - 1, W - 1, title);
+        ab_append(&ab, t, n);
 
-    struct stat st;
-    if (stat(dir, &st) != 0) mkdir(dir, 0755);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[107m\x1b[30m %-*.*s\x1b[0m",
+                     row + 1, col, inner, inner, buf + view);
+        ab_append(&ab, t, n);
 
-    char path[224];
-    snprintf(path, sizeof path, "%s/%s.syn", dir, ext);
-    FILE *f = fopen(path, "w");
-    if (!f) return -1;
+        char tail[80];
+        if (len > view + inner)
+            snprintf(tail, sizeof tail, " %d more to the right", len - view - inner);
+        else if (view > 0)
+            snprintf(tail, sizeof tail, " %d hidden to the left", view);
+        else
+            snprintf(tail, sizeof tail, " %s", hint ? hint : "Enter accept   Esc cancel");
 
-    if (fields[0][0]) fprintf(f, "name = %s\n", fields[0]);
-    if (fields[1][0]) fprintf(f, "comment = %s\n", fields[1]);
-    if (fields[2][0] && fields[3][0])
-        fprintf(f, "block = %s %s\n", fields[2], fields[3]);
-    fprintf(f, "strings = %s\n", fields[4][0] == 'd' ? "double" : "single");
-    fprintf(f, "backtick = %s\n", fields[5][0] == 'y' ? "1" : "0");
-    if (fields[6][0]) fprintf(f, "keywords = %s\n", fields[6]);
-    if (fields[7][0]) fprintf(f, "types = %s\n", fields[7]);
-    fclose(f);
-    return 0;
-}
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m%-*.*s\x1b[0m",
+                     row + 2, col, W, W, tail);
+        ab_append(&ab, t, n);
 
-static void syn_load_into(const char *ext, char fields[8][256])
-{
-    for (int i = 0; i < 8; i++) fields[i][0] = 0;
-    snprintf(fields[4], 256, "single");
-    snprintf(fields[5], 256, "no");
-
-    char path[192];
-    snprintf(path, sizeof path, "%s/%s.syn", SYN_DIR, ext);
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        snprintf(path, sizeof path, "/mnt%s/%s.syn", SYN_DIR, ext);
-        f = fopen(path, "r");
-    }
-    if (!f) { snprintf(fields[0], 256, "%s", ext); return; }
-
-    char line[1024];
-    while (fgets(line, sizeof line, f)) {
-        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
-        char *t = syn_trim(line);
-        if (!*t || *t == '#') continue;
-        char *eq = strchr(t, '='); if (!eq) continue;
-        *eq = 0;
-        char *key = syn_trim(t), *val = syn_trim(eq + 1);
-
-        if      (!strcmp(key, "name"))     snprintf(fields[0], 256, "%s", val);
-        else if (!strcmp(key, "comment"))  snprintf(fields[1], 256, "%s", val);
-        else if (!strcmp(key, "block")) {
-            char *sp = strchr(val, ' ');
-            if (sp) { *sp = 0; snprintf(fields[2], 256, "%s", val);
-                      snprintf(fields[3], 256, "%s", syn_trim(sp + 1)); }
-        }
-        else if (!strcmp(key, "strings"))  snprintf(fields[4], 256, "%s", val);
-        else if (!strcmp(key, "backtick")) snprintf(fields[5], 256, "%s",
-                                                    (val[0]=='1'||val[0]=='y') ? "yes" : "no");
-        else if (!strcmp(key, "keywords")) {
-            size_t have = strlen(fields[6]);
-            snprintf(fields[6] + have, 256 - have, "%s%s", have ? " " : "", val);
-        }
-        else if (!strcmp(key, "types")) {
-            size_t have = strlen(fields[7]);
-            snprintf(fields[7] + have, 256 - have, "%s%s", have ? " " : "", val);
-        }
-    }
-    fclose(f);
-}
-
-static void editor_syntax_editor(void)
-{
-    syn_current_ext(g_syn_ext, sizeof g_syn_ext);
-    if (!g_syn_ext[0]) {
-        set_status("open a file with an extension first - the rules are named after it");
-        return;
-    }
-
-    static char fields[8][256];
-    syn_load_into(g_syn_ext, fields);
-
-    static const char *LBL[8] = {
-        "Language name", "Line comment", "Block opens", "Block closes",
-        "Strings", "Backtick strings", "Keywords", "Type names",
-    };
-    static const char *HINT[8] = {
-        "shown in the status bar",
-        "what starts a comment to end of line, such as # or //",
-        "what opens a block comment, such as /*",
-        "what closes it, such as */",
-        "single if ' quotes too, double if only \"",
-        "yes if ` quotes a string",
-        "words coloured as keywords, separated by spaces",
-        "words coloured as type names, in the second colour",
-    };
-
-    int sel = 0;
-    const int N = 8;
-    for (;;) {
-        abuf_t ab = {0};
-        ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
-
-        char hdr[200];
-        int n = snprintf(hdr, sizeof hdr,
-            "\x1b[44m\x1b[97m syntax rules for .%s \x1b[0m"
-            "  \x18\x19 move   Enter edit   ^S save   Esc close\r\n\r\n",
-            g_syn_ext);
-        ab_append(&ab, hdr, n);
-
-        for (int i = 0; i < N; i++) {
-            char line[400];
-            char shown[60];
-            snprintf(shown, sizeof shown, "%.55s%s", fields[i],
-                     strlen(fields[i]) > 55 ? "..." : "");
-            int k = snprintf(line, sizeof line, "%s  %-18s %-58s\x1b[0m\r\n",
-                             i == sel ? "\x1b[7m" : "  ", LBL[i], shown);
-            ab_append(&ab, line, k);
-        }
-
-        char wdir[160];
-        syn_dir_for_write(wdir, sizeof wdir);
-
-        char foot[280];
-        n = snprintf(foot, sizeof foot,
-                     "\r\n  \x1b[90m%s\x1b[0m\r\n\r\n"
-                     "  \x1b[90msaved to %s/%s.syn, and used by every .%s file\x1b[0m\r\n",
-                     HINT[sel], wdir, g_syn_ext, g_syn_ext);
-        ab_append(&ab, foot, n);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH", row + 1, col + 1 + (cur - view));
+        ab_append(&ab, t, n);
 
         write(1, ab.b, ab.len);
         ab_free(&ab);
 
         int c = read_key();
-        if (c == KEY_ESC || c == 'q') break;
-        else if (c == KEY_ARROW_UP)   sel = (sel + N - 1) % N;
-        else if (c == KEY_ARROW_DOWN) sel = (sel + 1) % N;
-        else if (c == 19) {
-            if (syn_write_file(g_syn_ext, fields) == 0) {
-                E.syntax = lang_from_ext(E.filename ? E.filename : "");
-                for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
-                set_status("syntax rules saved and applied");
-                break;
+        if (c == KEY_ESC) return 0;
+        if (c == '\r' || c == '\n') return 1;
+        if (c == KEY_ARROW_LEFT)  { if (cur > 0) cur--; continue; }
+        if (c == KEY_ARROW_RIGHT) { if (cur < len) cur++; continue; }
+        if (c == KEY_HOME) { cur = 0; continue; }
+        if (c == KEY_END)  { cur = len; continue; }
+        if (c == KEY_BACKSPACE || c == KEY_CTRL('h') || c == 127) {
+            if (cur > 0) {
+                memmove(buf + cur - 1, buf + cur, (size_t)(len - cur + 1));
+                cur--;
+                len--;
             }
-            set_status("cannot write the rules file");
-            break;
+            continue;
         }
-        else if (c == '\r' || c == '\n') {
-            if (sel == 4) {
-                snprintf(fields[4], 256, "%s",
-                         fields[4][0] == 'd' ? "single" : "double");
-            } else if (sel == 5) {
-                snprintf(fields[5], 256, "%s",
-                         fields[5][0] == 'y' ? "no" : "yes");
-            } else {
-                syn_prompt_value(LBL[sel], fields[sel], 256);
+        if (c == KEY_DEL) {
+            if (cur < len) {
+                memmove(buf + cur, buf + cur + 1, (size_t)(len - cur));
+                len--;
             }
+            continue;
+        }
+        if (c == KEY_CTRL('u')) { buf[0] = 0; len = 0; cur = 0; view = 0; continue; }
+        if (c == KEY_CTRL('k')) { buf[cur] = 0; len = cur; continue; }
+        if (c >= 32 && c < 256 && (size_t)len + 1 < cap) {
+            memmove(buf + cur + 1, buf + cur, (size_t)(len - cur + 1));
+            buf[cur] = (char)c;
+            cur++;
+            len++;
         }
     }
-    write(1, "\x1b[2J\x1b[H", 7);
+}
+
+static int colour_box(const char *what, uint32_t *colour)
+{
+    int chan = 0;
+    uint32_t c = *colour;
+    const int W = 54;
+
+    for (;;) {
+        int r = (int)((c >> 16) & 0xFF), g = (int)((c >> 8) & 0xFF), b = (int)(c & 0xFF);
+        int row = E.screenrows / 2 - 5;
+        int col = (E.screencols - W) / 2;
+        if (row < 1) row = 1;
+        if (col < 1) col = 1;
+
+        abuf_t ab = { NULL, 0, 0 };
+        char t[400];
+        int n;
+
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s\x1b[0m",
+                     row, col, W - 1, W - 1, what);
+        ab_append(&ab, t, n);
+
+        static const char *const names[3] = { "red", "green", "blue" };
+        int vals[3] = { r, g, b };
+        for (int i = 0; i < 3; i++) {
+            int bars = vals[i] * 26 / 255;
+            char bar[32];
+            for (int k = 0; k < 26; k++) bar[k] = (k < bars) ? '#' : '.';
+            bar[26] = 0;
+            char body[100];
+            snprintf(body, sizeof body, "%s %-6s %s %3d",
+                     i == chan ? ">" : " ", names[i], bar, vals[i]);
+            n = snprintf(t, sizeof t, "\x1b[%d;%dH%s%-*.*s\x1b[0m",
+                         row + 1 + i, col, i == chan ? "\x1b[7m" : "\x1b[100m",
+                         W, W, body);
+            ab_append(&ab, t, n);
+        }
+
+        char sample[120];
+        snprintf(sample, sizeof sample, " the quick brown fox   #%06x", c & 0xFFFFFF);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[38;2;%d;%d;%dm%-*.*s\x1b[0m",
+                     row + 4, col, r, g, b, W, W, sample);
+        ab_append(&ab, t, n);
+
+        static const char *const HINTS[3] = {
+            " up/down pick a channel, left/right change it",
+            " h  type the colour as hex, like c678dd",
+            " Enter keep it     Esc leave it alone"
+        };
+        for (int i = 0; i < 3; i++) {
+            n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m%-*.*s\x1b[0m",
+                         row + 5 + i, col, W, W, HINTS[i]);
+            ab_append(&ab, t, n);
+        }
+
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int k = read_key();
+        if (k == KEY_ESC) return 0;
+        if (k == '\r' || k == '\n') { *colour = c & 0xFFFFFF; return 1; }
+        if (k == KEY_ARROW_UP)   chan = (chan + 2) % 3;
+        if (k == KEY_ARROW_DOWN) chan = (chan + 1) % 3;
+        if (k == 'h' || k == 'H') {
+            char hex[16];
+            snprintf(hex, sizeof hex, "%06x", c & 0xFFFFFF);
+            if (prompt_box("colour as hex, like c678dd", "Enter accept   Esc cancel",
+                           hex, sizeof hex))
+                c = syn_colour(hex, c);
+            continue;
+        }
+        if (k == KEY_ARROW_LEFT || k == KEY_ARROW_RIGHT) {
+            int d = (k == KEY_ARROW_RIGHT) ? 8 : -8;
+            int v[3] = { r, g, b };
+            v[chan] += d;
+            if (v[chan] < 0) v[chan] = 0;
+            if (v[chan] > 255) v[chan] = 255;
+            c = ((uint32_t)v[0] << 16) | ((uint32_t)v[1] << 8) | (uint32_t)v[2];
+        }
+    }
+}
+
+static int syn_group_words(const syn_lang_t *L, int gi, char *out, size_t cap)
+{
+    out[0] = 0;
+    size_t used = 0;
+    const syn_group_t *g = &L->g[gi];
+    for (int i = 0; i < g->count; i++) {
+        const char *w = L->words[g->first + i];
+        size_t n = strlen(w);
+        if (used + n + 2 >= cap) break;
+        if (used) out[used++] = ' ';
+        memcpy(out + used, w, n);
+        used += n;
+        out[used] = 0;
+    }
+    return (int)used;
+}
+
+static void syn_set_group_words(syn_lang_t *L, int gi, const char *list)
+{
+    char keep_names[SYN_MAX_GROUPS][16];
+    uint32_t keep_col[SYN_MAX_GROUPS];
+    int keep_chars[SYN_MAX_GROUPS];
+    char keep_words[SYN_MAX_GROUPS][1024];
+    int ng = L->ng;
+
+    for (int i = 0; i < ng; i++) {
+        snprintf(keep_names[i], sizeof keep_names[i], "%s", L->g[i].name);
+        keep_col[i]   = L->g[i].color;
+        keep_chars[i] = L->g[i].chars;
+        if (i == gi) snprintf(keep_words[i], sizeof keep_words[i], "%s", list);
+        else         syn_group_words(L, i, keep_words[i], sizeof keep_words[i]);
+    }
+
+    L->ng = 0;
+    L->nwords = 0;
+    L->pool_used = 0;
+    for (int i = 0; i < ng; i++) {
+        char decl[64];
+        snprintf(decl, sizeof decl, " %s %06x", keep_names[i], keep_col[i] & 0xFFFFFF);
+        syn_add_group(L, decl, keep_words[i], keep_chars[i]);
+    }
+}
+
+static int syn_save_lang(const syn_lang_t *L, const char *fname)
+{
+    struct stat st;
+    char dir[160];
+    if (stat("/mnt/etc", &st) == 0 && S_ISDIR(st.st_mode))
+        snprintf(dir, sizeof dir, "/mnt%s", SYN_DIR);
+    else
+        snprintf(dir, sizeof dir, "%s", SYN_DIR);
+    if (stat(dir, &st) != 0) mkdir(dir, 0755);
+
+    char path[240];
+    snprintf(path, sizeof path, "%s/%s", dir, fname);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+
+    fprintf(f, "name = %s\n", L->name);
+    if (L->nexts) {
+        fprintf(f, "ext =");
+        for (int i = 0; i < L->nexts; i++) fprintf(f, " %s", L->exts[i]);
+        fprintf(f, "\n");
+    }
+    if (L->linec[0]) fprintf(f, "comment = %s\n", L->linec);
+    if (L->b0[0] && L->b1[0]) fprintf(f, "block = %s %s\n", L->b0, L->b1);
+    fprintf(f, "strings = %s\n", L->sq ? "single" : "double");
+    fprintf(f, "backtick = %s\n", L->bt ? "yes" : "no");
+    if (L->html) fprintf(f, "mode = html\n");
+    fprintf(f, "\n");
+    fprintf(f, "color comment = %06x\n", L->c_comment & 0xFFFFFF);
+    fprintf(f, "color string  = %06x\n", L->c_string  & 0xFFFFFF);
+    fprintf(f, "color number  = %06x\n", L->c_number  & 0xFFFFFF);
+    fprintf(f, "color escape  = %06x\n", L->c_escape  & 0xFFFFFF);
+    fprintf(f, "color default = %06x\n", L->c_default & 0xFFFFFF);
+    fprintf(f, "\n");
+
+    for (int gi = 0; gi < L->ng; gi++) {
+        const syn_group_t *g = &L->g[gi];
+        if (!g->count) continue;
+        int col = 0;
+        fprintf(f, "%s %s %06x =", g->chars ? "chars" : "words", g->name, g->color & 0xFFFFFF);
+        for (int i = 0; i < g->count; i++) {
+            const char *w = L->words[g->first + i];
+            if (col > 48) {
+                fprintf(f, "\n%s %s %06x =", g->chars ? "chars" : "words",
+                        g->name, g->color & 0xFFFFFF);
+                col = 0;
+            }
+            fprintf(f, " %s", w);
+            col += (int)strlen(w) + 1;
+        }
+        fprintf(f, "\n");
+    }
+    fclose(f);
+    return 0;
+}
+
+static void syn_blank_lang(syn_lang_t *L)
+{
+    memset(L, 0, sizeof *L);
+    L->c_comment = SYN_DEF_COMMENT;
+    L->c_string  = SYN_DEF_STRING;
+    L->c_number  = SYN_DEF_NUMBER;
+    L->c_escape  = SYN_DEF_ESCAPE;
+    L->c_default = SYN_DEF_TEXT;
+    L->c_tag     = SYN_DEF_TAG;
+    L->c_attr    = SYN_DEF_ATTR;
+    L->sq = 1;
+    L->name[0] = 0;
+}
+
+static void editor_syntax_editor(void)
+{
+    static syn_lang_t work;
+    int from = -1;
+
+    if (E.syntax >= 0 && E.syntax < g_nlangs) {
+        work = g_langs[E.syntax];
+        from = E.syntax;
+    } else if (g_nlangs > 0) {
+        const char *items[SYN_MAX_LANGS + 1];
+        char labels[SYN_MAX_LANGS + 1][64];
+        snprintf(labels[0], sizeof labels[0], "start a new one");
+        items[0] = labels[0];
+        for (int i = 0; i < g_nlangs; i++) {
+            snprintf(labels[i + 1], sizeof labels[i + 1], "edit %s \x1b[90m(%s)\x1b[0m",
+                     g_langs[i].name, g_langs[i].file);
+            items[i + 1] = labels[i + 1];
+        }
+        int pick = menu_pick("syntax rules", items, g_nlangs + 1, 0);
+        if (pick == -2) return;
+        if (pick == 0) syn_blank_lang(&work);
+        else { work = g_langs[pick - 1]; from = pick - 1; }
+    } else {
+        syn_blank_lang(&work);
+    }
+
+    int sel = 0;
+    int dirty = 0;
+
+    for (;;) {
+        enum { F_NAME = 0, F_EXT, F_LINEC, F_B0, F_B1, F_STR, F_BT,
+               F_C_COMMENT, F_C_STRING, F_C_NUMBER, F_C_ESCAPE, F_C_TEXT, F_FIXED };
+        int nfields = F_FIXED + work.ng + 1;
+        if (sel >= nfields) sel = nfields - 1;
+        if (sel < 0) sel = 0;
+
+        abuf_t ab = { NULL, 0, 0 };
+        ab_append(&ab, "\x1b[H\x1b[2J", 7);
+
+        char t[400];
+        int n = snprintf(t, sizeof t,
+            "\x1b[7m syntax editor: %s \x1b[0m  \x1b[90mmove  Enter change  "
+            "^S save  ^G add group  Esc leave\x1b[0m\r\n\r\n",
+            work.name[0] ? work.name : "a new language");
+        ab_append(&ab, t, n);
+
+        char exts[64] = "";
+        for (int i = 0; i < work.nexts; i++) {
+            if (i) strncat(exts, " ", sizeof exts - strlen(exts) - 1);
+            strncat(exts, work.exts[i], sizeof exts - strlen(exts) - 1);
+        }
+
+        const char *labels[F_FIXED] = {
+            "Language name", "File extensions", "Line comment", "Block opens",
+            "Block closes", "Quoted strings", "Backtick strings",
+            "Colour: comment", "Colour: string", "Colour: number",
+            "Colour: escape", "Colour: plain text"
+        };
+        char values[F_FIXED][80];
+        snprintf(values[F_NAME],  80, "%s", work.name[0] ? work.name : "-");
+        snprintf(values[F_EXT],   80, "%s", exts[0] ? exts : "-");
+        snprintf(values[F_LINEC], 80, "%s", work.linec[0] ? work.linec : "-");
+        snprintf(values[F_B0],    80, "%s", work.b0[0] ? work.b0 : "-");
+        snprintf(values[F_B1],    80, "%s", work.b1[0] ? work.b1 : "-");
+        snprintf(values[F_STR],   80, "%s", work.sq ? "single and double" : "double only");
+        snprintf(values[F_BT],    80, "%s", work.bt ? "yes" : "no");
+
+        uint32_t cols[5] = { work.c_comment, work.c_string, work.c_number,
+                             work.c_escape, work.c_default };
+        for (int i = 0; i < 5; i++)
+            snprintf(values[F_C_COMMENT + i], 80,
+                     "\x1b[38;2;%u;%u;%um######\x1b[39m  %06x",
+                     (cols[i] >> 16) & 0xFF, (cols[i] >> 8) & 0xFF, cols[i] & 0xFF,
+                     cols[i] & 0xFFFFFF);
+
+        for (int i = 0; i < F_FIXED; i++) {
+            n = snprintf(t, sizeof t, "%s  %-20s %-46s\x1b[0m\r\n",
+                         i == sel ? "\x1b[7m" : "  ", labels[i], values[i]);
+            ab_append(&ab, t, n);
+            if (i == F_BT || i == F_C_TEXT) ab_append(&ab, "\r\n", 2);
+        }
+
+        for (int gi = 0; gi < work.ng; gi++) {
+            char words[200];
+            syn_group_words(&work, gi, words, sizeof words);
+            uint32_t c = work.g[gi].color;
+            char shown[52];
+            snprintf(shown, sizeof shown, "%.44s%s", words, strlen(words) > 44 ? "..." : "");
+            n = snprintf(t, sizeof t,
+                         "%s  \x1b[38;2;%u;%u;%um%-10s\x1b[39m %-3d %-40s\x1b[0m\r\n",
+                         (sel == F_FIXED + gi) ? "\x1b[7m" : "  ",
+                         (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF,
+                         work.g[gi].name, work.g[gi].count, shown);
+            ab_append(&ab, t, n);
+        }
+
+        n = snprintf(t, sizeof t, "%s  %-20s\x1b[0m\r\n",
+                     (sel == nfields - 1) ? "\x1b[7m" : "  ", "+ add a group");
+        ab_append(&ab, t, n);
+
+        const char *hint;
+        if (sel < F_FIXED) {
+            static const char *const H[F_FIXED] = {
+                "what this language is called, shown in the status bar",
+                "which file endings use it, separated by spaces",
+                "what starts a comment running to the end of the line",
+                "what opens a block comment, such as /*",
+                "what closes it again, such as */",
+                "whether ' quotes a string as well as \"",
+                "whether ` quotes a string, as in shell and JavaScript",
+                "colour for comments",
+                "colour for quoted text",
+                "colour for numbers",
+                "colour for backslash escapes inside strings",
+                "colour for everything with no rule of its own"
+            };
+            hint = H[sel];
+        } else if (sel < nfields - 1) {
+            hint = "Enter edit the words   c colour   r rename   d delete";
+        } else {
+            hint = "Enter to add a group of words, or of loose characters";
+        }
+        n = snprintf(t, sizeof t, "\r\n  \x1b[90m%s\x1b[0m\r\n", hint);
+        ab_append(&ab, t, n);
+        if (dirty) ab_append(&ab, "\r\n  \x1b[93munsaved changes\x1b[0m\r\n", 30);
+
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int c = read_key();
+
+        if (c == KEY_ESC) break;
+        if (c == KEY_ARROW_UP)   { sel = (sel + nfields - 1) % nfields; continue; }
+        if (c == KEY_ARROW_DOWN) { sel = (sel + 1) % nfields; continue; }
+
+        if (c == KEY_CTRL('g')) {
+            char name[16] = "";
+            if (!prompt_box("name for the new group", "a word like keyword, type or macro",
+                            name, sizeof name) || !name[0]) continue;
+            char words[512] = "";
+            if (!prompt_box("words in the group, separated by spaces",
+                            "leave empty and fill it in later", words, sizeof words))
+                continue;
+            char decl[48];
+            snprintf(decl, sizeof decl, " %s %06x", name,
+                     SYN_PALETTE[work.ng % 12] & 0xFFFFFF);
+            syn_add_group(&work, decl, words, 0);
+            dirty = 1;
+            continue;
+        }
+
+        if (c == KEY_CTRL('s')) {
+            char fname[64];
+            snprintf(fname, sizeof fname, "%s",
+                     work.file[0] ? work.file :
+                     (work.nexts ? work.exts[0] : "mylang"));
+            if (!strstr(fname, ".syn")) strncat(fname, ".syn", sizeof fname - strlen(fname) - 1);
+            if (!prompt_box("save the rules as", "a file name in /etc/neo, such as pas.syn",
+                            fname, sizeof fname) || !fname[0])
+                continue;
+            snprintf(work.file, sizeof work.file, "%s", fname);
+            if (syn_save_lang(&work, fname) == 0) {
+                int keep = E.syntax;
+                syn_load_all();
+                if (from >= 0 && keep == from) {
+                    E.syntax = lang_from_ext(E.filename ? E.filename : "");
+                    if (E.syntax < 0) {
+                        for (int i = 0; i < g_nlangs; i++)
+                            if (!strcmp(g_langs[i].file, fname)) { E.syntax = i; break; }
+                    }
+                } else {
+                    for (int i = 0; i < g_nlangs; i++)
+                        if (!strcmp(g_langs[i].file, fname)) { E.syntax = i; break; }
+                }
+                for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
+                dirty = 0;
+                set_status("rules saved as %s and applied", fname);
+                break;
+            }
+            set_status("cannot write %s", fname);
+            break;
+        }
+
+        if (sel >= F_FIXED && sel < nfields - 1) {
+            int gi = sel - F_FIXED;
+            if (c == 'c' || c == 'C') {
+                if (colour_box(work.g[gi].name, &work.g[gi].color)) dirty = 1;
+                continue;
+            }
+            if (c == 'd' || c == 'D') {
+                char words[1024];
+                char names[SYN_MAX_GROUPS][16];
+                uint32_t colv[SYN_MAX_GROUPS];
+                int chars[SYN_MAX_GROUPS];
+                char lists[SYN_MAX_GROUPS][1024];
+                int ng = work.ng, k = 0;
+                for (int i = 0; i < ng; i++) {
+                    if (i == gi) continue;
+                    snprintf(names[k], sizeof names[k], "%s", work.g[i].name);
+                    colv[k]  = work.g[i].color;
+                    chars[k] = work.g[i].chars;
+                    syn_group_words(&work, i, lists[k], sizeof lists[k]);
+                    k++;
+                }
+                (void)words;
+                work.ng = 0; work.nwords = 0; work.pool_used = 0;
+                for (int i = 0; i < k; i++) {
+                    char decl[48];
+                    snprintf(decl, sizeof decl, " %s %06x", names[i], colv[i] & 0xFFFFFF);
+                    syn_add_group(&work, decl, lists[i], chars[i]);
+                }
+                dirty = 1;
+                continue;
+            }
+            if (c == 'r' || c == 'R') {
+                char name[16];
+                snprintf(name, sizeof name, "%s", work.g[gi].name);
+                if (prompt_box("name for this group", NULL, name, sizeof name) && name[0]) {
+                    snprintf(work.g[gi].name, sizeof work.g[gi].name, "%s", name);
+                    dirty = 1;
+                }
+                continue;
+            }
+            if (c == '\r' || c == '\n') {
+                char words[1024];
+                syn_group_words(&work, gi, words, sizeof words);
+                if (prompt_box("words in this group, separated by spaces",
+                               "Ctrl-U clears the line", words, sizeof words)) {
+                    syn_set_group_words(&work, gi, words);
+                    dirty = 1;
+                }
+                continue;
+            }
+            continue;
+        }
+
+        if (sel == nfields - 1 && (c == '\r' || c == '\n')) {
+            char name[16] = "";
+            if (!prompt_box("name for the new group", "a word like keyword, type or macro",
+                            name, sizeof name) || !name[0]) continue;
+            char words[512] = "";
+            prompt_box("words in the group, separated by spaces",
+                       "leave empty and fill it in later", words, sizeof words);
+            char decl[48];
+            snprintf(decl, sizeof decl, " %s %06x", name, SYN_PALETTE[work.ng % 12] & 0xFFFFFF);
+            syn_add_group(&work, decl, words, 0);
+            dirty = 1;
+            continue;
+        }
+
+        if (c != '\r' && c != '\n') continue;
+
+        switch (sel) {
+            case F_NAME: {
+                char v[24];
+                snprintf(v, sizeof v, "%s", work.name);
+                if (prompt_box("language name", NULL, v, sizeof v)) {
+                    snprintf(work.name, sizeof work.name, "%s", v);
+                    dirty = 1;
+                }
+                break;
+            }
+            case F_EXT: {
+                char v[64] = "";
+                for (int i = 0; i < work.nexts; i++) {
+                    if (i) strncat(v, " ", sizeof v - strlen(v) - 1);
+                    strncat(v, work.exts[i], sizeof v - strlen(v) - 1);
+                }
+                if (prompt_box("file endings, separated by spaces",
+                               "for example: pas pp inc", v, sizeof v)) {
+                    work.nexts = 0;
+                    char *q = v;
+                    while (*q && work.nexts < SYN_MAX_EXT) {
+                        while (*q == ' ' || *q == '.' || *q == ',') q++;
+                        if (!*q) break;
+                        char *b = q;
+                        while (*q && *q != ' ' && *q != ',') q++;
+                        size_t ln = (size_t)(q - b);
+                        if (ln >= sizeof work.exts[0]) ln = sizeof work.exts[0] - 1;
+                        memcpy(work.exts[work.nexts], b, ln);
+                        work.exts[work.nexts][ln] = 0;
+                        work.nexts++;
+                    }
+                    dirty = 1;
+                }
+                break;
+            }
+            case F_LINEC: {
+                char v[8];
+                snprintf(v, sizeof v, "%s", work.linec);
+                if (prompt_box("what starts a line comment", "such as // or # or ;",
+                               v, sizeof v)) {
+                    snprintf(work.linec, sizeof work.linec, "%s", v);
+                    dirty = 1;
+                }
+                break;
+            }
+            case F_B0: {
+                char v[8];
+                snprintf(v, sizeof v, "%s", work.b0);
+                if (prompt_box("what opens a block comment", "such as /* or (*", v, sizeof v)) {
+                    snprintf(work.b0, sizeof work.b0, "%s", v);
+                    dirty = 1;
+                }
+                break;
+            }
+            case F_B1: {
+                char v[8];
+                snprintf(v, sizeof v, "%s", work.b1);
+                if (prompt_box("what closes a block comment", "such as */ or *)", v, sizeof v)) {
+                    snprintf(work.b1, sizeof work.b1, "%s", v);
+                    dirty = 1;
+                }
+                break;
+            }
+            case F_STR: work.sq = !work.sq; dirty = 1; break;
+            case F_BT:  work.bt = !work.bt; dirty = 1; break;
+            case F_C_COMMENT: if (colour_box("comments", &work.c_comment)) dirty = 1; break;
+            case F_C_STRING:  if (colour_box("strings", &work.c_string))   dirty = 1; break;
+            case F_C_NUMBER:  if (colour_box("numbers", &work.c_number))   dirty = 1; break;
+            case F_C_ESCAPE:  if (colour_box("escapes", &work.c_escape))   dirty = 1; break;
+            case F_C_TEXT:    if (colour_box("plain text", &work.c_default)) dirty = 1; break;
+            default: break;
+        }
+    }
 }
 
 static void editor_settings(void)
 {
     int sel = 0;
-    const int NITEMS = 14;
-    const char *names[14] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width",
+    const int NITEMS = 15;
+    const char *names[15] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width",
                               "Quit confirm", "Expand tabs", "Auto indent",
                               "Trim on save", "Highlight line", "Show tabs",
-                              "Backup on save", "Scroll margin",
+                              "Backup on save", "Scroll margin", "Autocomplete",
                               "Edit syntax rules", "Save settings" };
     for (;;) {
         static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n";
         abuf_t ab = {0};
         ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
         ab_append(&ab, hdr, (int)(sizeof hdr - 1));
-        char vals[14][40];
+        char vals[15][40];
         snprintf(vals[0], sizeof vals[0], "%s", E.autopairs ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", E.show_lineno ? "ON" : "OFF");
-        snprintf(vals[2], sizeof vals[2], "%s", LANG_NAMES[E.syntax]);
+        snprintf(vals[2], sizeof vals[2], "%s", lang_name(E.syntax));
         snprintf(vals[3], sizeof vals[3], "%d", E.tabstop);
         snprintf(vals[4], sizeof vals[4], "%s", E.quit_confirm ? "ON" : "OFF");
         snprintf(vals[5], sizeof vals[5], "%s", E.expandtab ? "ON" : "OFF");
@@ -2075,8 +2563,9 @@ static void editor_settings(void)
         snprintf(vals[9],  sizeof vals[9],  "%s", E.show_tabs ? "ON" : "OFF");
         snprintf(vals[10], sizeof vals[10], "%s", E.backup_on_save ? "ON" : "OFF");
         snprintf(vals[11], sizeof vals[11], "%d", E.scroll_margin);
-        snprintf(vals[12], sizeof vals[12], "%s", "<Enter>");
+        snprintf(vals[12], sizeof vals[12], "%s", E.autocomplete ? "ON" : "OFF");
         snprintf(vals[13], sizeof vals[13], "%s", "<Enter>");
+        snprintf(vals[14], sizeof vals[14], "%s", "<Enter>");
         for (int i = 0; i < NITEMS; i++) {
             char line[128];
             int n = snprintf(line, sizeof line, "%s  %-16s %-12s\x1b[0m\r\n",
@@ -2095,7 +2584,7 @@ static void editor_settings(void)
             switch (sel) {
                 case 0: E.autopairs = !E.autopairs; break;
                 case 1: E.show_lineno = !E.show_lineno; recompute_lineno_width(); break;
-                case 2: E.syntax = (E.syntax + LANG_COUNT + dir) % LANG_COUNT;
+                case 2: E.syntax = ((E.syntax + 1 + g_nlangs + 1 + dir) % (g_nlangs + 1)) - 1;
                         for (int i = 0; i < E.numrows; i++) editor_update_syntax(i); break;
                 case 3: E.tabstop += dir; if (E.tabstop < 1) E.tabstop = 1; if (E.tabstop > 16) E.tabstop = 16;
                         for (int i = 0; i < E.numrows; i++) row_update(&E.row[i]); break;
@@ -2110,8 +2599,10 @@ static void editor_settings(void)
                 case 11: E.scroll_margin += dir;
                          if (E.scroll_margin < 0) E.scroll_margin = 0;
                          if (E.scroll_margin > 20) E.scroll_margin = 20; break;
-                case 12: editor_syntax_editor(); return;
-                case 13:
+                case 12: E.autocomplete = !E.autocomplete;
+                         if (!E.autocomplete) comp_close(); break;
+                case 13: editor_syntax_editor(); return;
+                case 14:
                     if (neo_config_save() == 0) set_status("settings saved to ~/.neorc");
                     else                        set_status("cannot write ~/.neorc");
                     break;
@@ -2122,9 +2613,264 @@ static void editor_settings(void)
     set_status("");
 }
 
+#define COMP_MAX      240
+#define COMP_TEXT     40
+#define COMP_VISIBLE  8
+
+typedef struct {
+    char text[COMP_TEXT];
+    char kind[10];
+} comp_item_t;
+
+static comp_item_t g_comp[COMP_MAX];
+static int  g_ncomp, g_comp_sel, g_comp_open;
+static char g_comp_prefix[COMP_TEXT];
+
+static comp_item_t g_lib[COMP_MAX];
+static int  g_nlib;
+static int  g_lib_scanned;
+
+static int comp_word_char(int c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+static void comp_add(comp_item_t *list, int *n, const char *word, const char *kind) {
+    if (*n >= COMP_MAX) return;
+    size_t len = strlen(word);
+    if (len < 2 || len >= COMP_TEXT) return;
+    for (int i = 0; i < *n; i++)
+        if (!strcmp(list[i].text, word)) return;
+    snprintf(list[*n].text, COMP_TEXT, "%s", word);
+    snprintf(list[*n].kind, sizeof list[0].kind, "%s", kind);
+    (*n)++;
+}
+
+static void comp_scan_header(const char *name) {
+    static const char *const DIRS[] = { "/usr/include", "/mnt/usr/include", "." };
+    for (size_t d = 0; d < sizeof DIRS / sizeof DIRS[0]; d++) {
+        char path[256];
+        snprintf(path, sizeof path, "%s/%s", DIRS[d], name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+
+        char line[400];
+        while (fgets(line, sizeof line, f) && g_nlib < COMP_MAX) {
+            char *paren = strchr(line, '(');
+            if (!paren) {
+                char *def = strstr(line, "#define ");
+                if (def) {
+                    char *p = def + 8;
+                    while (*p == ' ') p++;
+                    char word[COMP_TEXT];
+                    int k = 0;
+                    while (comp_word_char((unsigned char)*p) && k < COMP_TEXT - 1) word[k++] = *p++;
+                    word[k] = 0;
+                    if (k) comp_add(g_lib, &g_nlib, word, "define");
+                }
+                continue;
+            }
+            if (strstr(line, "typedef")) continue;
+            char *e = paren;
+            while (e > line && (e[-1] == ' ' || e[-1] == '\t')) e--;
+            char *b = e;
+            while (b > line && comp_word_char((unsigned char)b[-1])) b--;
+            if (b == e) continue;
+            if (b > line && (b[-1] == '#' || b[-1] == '.')) continue;
+
+            char word[COMP_TEXT];
+            size_t n = (size_t)(e - b);
+            if (n >= COMP_TEXT) continue;
+            memcpy(word, b, n);
+            word[n] = 0;
+            if (!strcmp(word, "if") || !strcmp(word, "for") || !strcmp(word, "while") ||
+                !strcmp(word, "switch") || !strcmp(word, "return") || !strcmp(word, "sizeof"))
+                continue;
+            comp_add(g_lib, &g_nlib, word, "lib");
+        }
+        fclose(f);
+        return;
+    }
+}
+
+static void comp_scan_includes(void) {
+    g_nlib = 0;
+    g_lib_scanned = 1;
+    for (int i = 0; i < E.numrows && i < 400; i++) {
+        const char *s = E.row[i].chars;
+        if (!s) continue;
+        const char *inc = strstr(s, "#include");
+        if (!inc) continue;
+        const char *open = strpbrk(inc, "<\"");
+        if (!open) continue;
+        char close = (*open == '<') ? '>' : '"';
+        const char *end = strchr(open + 1, close);
+        if (!end || end - open < 2) continue;
+        char name[80];
+        size_t n = (size_t)(end - open - 1);
+        if (n >= sizeof name) continue;
+        memcpy(name, open + 1, n);
+        name[n] = 0;
+        comp_scan_header(name);
+        if (g_nlib >= COMP_MAX) break;
+    }
+}
+
+static void comp_collect(const char *prefix) {
+    size_t plen = strlen(prefix);
+    g_ncomp = 0;
+    if (plen < 1) return;
+
+    if (E.syntax >= 0 && E.syntax < g_nlangs) {
+        const syn_lang_t *L = &g_langs[E.syntax];
+        for (int gi = 0; gi < L->ng; gi++) {
+            if (L->g[gi].chars) continue;
+            for (int w = 0; w < L->g[gi].count; w++) {
+                const char *word = L->words[L->g[gi].first + w];
+                if (!strncmp(word, prefix, plen) && strcmp(word, prefix))
+                    comp_add(g_comp, &g_ncomp, word, L->g[gi].name);
+            }
+        }
+    }
+
+    if (!g_lib_scanned) comp_scan_includes();
+    for (int i = 0; i < g_nlib; i++)
+        if (!strncmp(g_lib[i].text, prefix, plen) && strcmp(g_lib[i].text, prefix))
+            comp_add(g_comp, &g_ncomp, g_lib[i].text, g_lib[i].kind);
+
+    for (int r = 0; r < E.numrows && g_ncomp < COMP_MAX; r++) {
+        const char *s = E.row[r].chars;
+        int len = E.row[r].size;
+        for (int i = 0; i < len; ) {
+            if (!comp_word_char((unsigned char)s[i]) || (i && comp_word_char((unsigned char)s[i-1]))) {
+                i++;
+                continue;
+            }
+            int j = i;
+            while (j < len && comp_word_char((unsigned char)s[j])) j++;
+            size_t n = (size_t)(j - i);
+            if (n >= plen && n < COMP_TEXT && !strncmp(&s[i], prefix, plen)) {
+                char word[COMP_TEXT];
+                memcpy(word, &s[i], n);
+                word[n] = 0;
+                if (strcmp(word, prefix) != 0)
+                    comp_add(g_comp, &g_ncomp, word, (r == E.cy) ? "here" : "file");
+            }
+            i = j;
+        }
+    }
+}
+
+static int comp_prefix_at_cursor(char *out, size_t cap) {
+    out[0] = 0;
+    if (E.cy >= E.numrows) return 0;
+    const neo_row_t *row = &E.row[E.cy];
+    int i = E.cx;
+    if (i > row->size) i = row->size;
+    int b = i;
+    while (b > 0 && comp_word_char((unsigned char)row->chars[b - 1])) b--;
+    size_t n = (size_t)(i - b);
+    if (n == 0 || n >= cap) return 0;
+    memcpy(out, &row->chars[b], n);
+    out[n] = 0;
+    return (int)n;
+}
+
+static void comp_forget_libs(void) { g_lib_scanned = 0; }
+
+static void comp_close(void) {
+    g_comp_open = 0;
+    g_ncomp = 0;
+    g_comp_sel = 0;
+}
+
+static void comp_refresh(void) {
+    if (!E.autocomplete) { comp_close(); return; }
+    if (!comp_prefix_at_cursor(g_comp_prefix, sizeof g_comp_prefix)) { comp_close(); return; }
+    if (strlen(g_comp_prefix) < 2) { comp_close(); return; }
+    comp_collect(g_comp_prefix);
+    if (g_ncomp == 0) { comp_close(); return; }
+    if (g_comp_sel >= g_ncomp) g_comp_sel = 0;
+    g_comp_open = 1;
+}
+
+static void comp_accept(void) {
+    if (!g_comp_open || g_comp_sel >= g_ncomp) return;
+    const char *word = g_comp[g_comp_sel].text;
+    size_t plen = strlen(g_comp_prefix);
+    for (const char *p = word + plen; *p; p++) editor_insert_char((unsigned char)*p);
+    comp_close();
+}
+
+static void comp_draw(abuf_t *ab) {
+    if (!g_comp_open || g_ncomp == 0) return;
+
+    int rows = g_ncomp < COMP_VISIBLE ? g_ncomp : COMP_VISIBLE;
+    int top = 0;
+    if (g_comp_sel >= rows) top = g_comp_sel - rows + 1;
+
+    int width = 16;
+    for (int i = top; i < top + rows; i++) {
+        int w = (int)strlen(g_comp[i].text) + (int)strlen(g_comp[i].kind) + 5;
+        if (w > width) width = w;
+    }
+    if (width > 46) width = 46;
+
+    int scr_row = E.cy - E.rowoff + 2;
+    int scr_col = E.rx - E.coloff + 1 + (E.show_lineno ? E.lineno_width : 0)
+                  - (int)strlen(g_comp_prefix);
+    if (scr_col < 1) scr_col = 1;
+    if (scr_col + width > E.screencols) scr_col = E.screencols - width;
+    if (scr_col < 1) scr_col = 1;
+    if (scr_row + rows > E.screenrows) scr_row = E.cy - E.rowoff + 1 - rows;
+    if (scr_row < 1) scr_row = 1;
+
+    for (int i = 0; i < rows; i++) {
+        const comp_item_t *it = &g_comp[top + i];
+        char line[160];
+        int pad = width - (int)strlen(it->text) - (int)strlen(it->kind) - 3;
+        if (pad < 1) pad = 1;
+        int n = snprintf(line, sizeof line,
+                         "\x1b[%d;%dH%s %-*.*s%*s%-8.8s \x1b[0m",
+                         scr_row + i, scr_col,
+                         (top + i == g_comp_sel) ? "\x1b[7m" : "\x1b[100m",
+                         (int)strlen(it->text), (int)strlen(it->text), it->text,
+                         pad, "", it->kind);
+        ab_append(ab, line, n);
+        ab_append(ab, "\x1b[0m", 4);
+    }
+    if (g_ncomp > rows) {
+        char more[64];
+        int n = snprintf(more, sizeof more, "\x1b[%d;%dH\x1b[90m %d/%d \x1b[0m",
+                         scr_row + rows, scr_col, g_comp_sel + 1, g_ncomp);
+        ab_append(ab, more, n);
+    }
+}
+
 static int process_key(void)
 {
     int c = read_key();
+
+    if (g_comp_open) {
+        switch (c) {
+            case KEY_ARROW_UP:
+                g_comp_sel = (g_comp_sel + g_ncomp - 1) % g_ncomp;
+                return 1;
+            case KEY_ARROW_DOWN:
+                g_comp_sel = (g_comp_sel + 1) % g_ncomp;
+                return 1;
+            case '\t':
+            case '\r':
+            case '\n':
+                comp_accept();
+                return 1;
+            case KEY_ESC:
+                comp_close();
+                return 1;
+            default:
+                break;
+        }
+    }
 
     switch (c) {
         case '\r':
@@ -2209,6 +2955,7 @@ static int process_key(void)
         case KEY_BACKSPACE:
         case KEY_CTRL('h'):
             editor_delete_char();
+            if (g_comp_open) comp_refresh();
             break;
 
         case KEY_DEL:
@@ -2247,7 +2994,10 @@ static int process_key(void)
             editor_tree();
             break;
 
+        case KEY_CTRL('r'):
         case 0:
+            comp_forget_libs();
+            comp_refresh();
             break;
 
         default:
@@ -2261,6 +3011,7 @@ static int process_key(void)
             }
             else if (c >= 32 && c < 1000) {
                 if (!editor_autopair(c)) editor_insert_char(c);
+                comp_refresh();
             }
             break;
     }
@@ -2290,6 +3041,8 @@ static void init_editor(void)
     E.expandtab = 0;
     E.autoindent = 1;
     E.trim_on_save = 0;
+    E.syntax = -1;
+    E.autocomplete = 1;
     neo_config_load();
     get_window_size();
     recompute_lineno_width();
@@ -2336,6 +3089,7 @@ int main(int argc, char **argv)
         if (tty_fd != 0) { dup2(tty_fd, 0); close(tty_fd); }
     }
 
+    syn_load_all();
     init_editor();
     enable_raw_mode();
 

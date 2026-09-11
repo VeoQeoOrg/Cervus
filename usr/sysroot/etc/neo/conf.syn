@@ -1,0 +1,13 @@
+name = Config
+ext = conf cfg ini toml rc
+comment = #
+strings = single
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words type e5c07b = true false yes no on off none auto

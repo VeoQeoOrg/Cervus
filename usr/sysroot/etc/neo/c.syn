@@ -1,0 +1,22 @@
+name = C
+ext = c h
+comment = //
+block = /* */
+strings = double
+backtick = no
+
+color comment = 6a737d
+color string = 98c379
+color number = d19a66
+color escape = 61afef
+color default = c8ccd4
+
+words keyword c678dd = switch if while for break continue return else
+words keyword c678dd = struct union typedef static enum case default do
+words keyword c678dd = goto sizeof const extern volatile inline register
+words keyword c678dd = #include #define #ifdef #ifndef #endif #if #else
+words keyword c678dd = #elif #pragma #undef
+words type e5c07b = int long double float char unsigned signed void
+words type e5c07b = short auto bool size_t ssize_t uintptr_t uint8_t
+words type e5c07b = uint16_t uint32_t uint64_t int8_t int16_t int32_t
+words type e5c07b = int64_t
