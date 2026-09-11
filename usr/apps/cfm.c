@@ -748,25 +748,29 @@ static void open_with(void) {
         if (r0 < 1) r0 = 1;
         if (c0 < 1) c0 = 1;
 
+        int inner = boxw - 2;
+
         tui_move(r0, c0);
-        printf("\x1b[44m\x1b[97m %-*.*s\x1b[0m", boxw - 1, boxw - 1, "open with");
+        printf("\x1b[44m\x1b[97m %-*.*s \x1b[0m", inner, inner, "open with");
         tui_move(r0 + 1, c0);
-        printf("\x1b[100m %-*.*s\x1b[0m", boxw - 1, boxw - 1, e->name);
+        printf("\x1b[100m\x1b[97m %-*.*s \x1b[0m", inner, inner, e->name);
 
         for (int i = 0; i < n; i++) {
             tui_move(r0 + 2 + i, c0);
-            if (i == sel) printf("\x1b[7m %-*.*s\x1b[0m", boxw - 1, boxw - 1, OPENERS[idx[i]].label);
-            else          printf("\x1b[47m\x1b[30m %-*.*s\x1b[0m", boxw - 1, boxw - 1, OPENERS[idx[i]].label);
+            if (i == sel) printf("\x1b[7m %-*.*s \x1b[0m", inner, inner, OPENERS[idx[i]].label);
+            else          printf("\x1b[47m\x1b[30m %-*.*s \x1b[0m", inner, inner, OPENERS[idx[i]].label);
         }
         tui_move(r0 + 2 + n, c0);
-        printf("\x1b[47m\x1b[30m %-*.*s\x1b[0m", boxw - 1, boxw - 1, " Enter open   Esc cancel");
+        printf("\x1b[47m\x1b[30m %-*.*s \x1b[0m", inner, inner, "Enter open   Esc cancel");
+        printf("\x1b[?25l");
         fflush(stdout);
 
         int k = tui_read_key();
         if (k == TK_UP)        sel = sel > 0 ? sel - 1 : n - 1;
         else if (k == TK_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
-        else if (k == TK_ESC)  { draw(); return; }
+        else if (k == TK_ESC)  { printf("\x1b[?25h"); draw(); return; }
         else if (k == TK_ENTER) {
+            printf("\x1b[?25h");
             run_with(OPENERS[idx[sel]].prog, full, e->name);
             return;
         }

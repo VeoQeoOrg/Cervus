@@ -1557,7 +1557,7 @@ static int menu_pick(const char *title, const char *const *items, int n, int sta
         if (sel >= top + rows) top = sel - rows + 1;
 
         abuf_t ab = { NULL, 0, 0 };
-        ab_append(&ab, "\x1b[H\x1b[2J", 7);
+        ab_append(&ab, "\x1b[?25l\x1b[H\x1b[2J", 13);
 
         char hdr[160];
         int hn = snprintf(hdr, sizeof hdr,
@@ -1942,6 +1942,7 @@ static int prompt_box(const char *title, const char *hint, char *buf, size_t cap
     int view = 0;
     const int W = 60;
     const int inner = W - 2;
+    int restore_cursor = 1;
 
     for (;;) {
         if (cur < view) view = cur;
@@ -1957,13 +1958,26 @@ static int prompt_box(const char *title, const char *hint, char *buf, size_t cap
         char t[400];
         int n;
 
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s\x1b[0m",
-                     row, col, W - 1, W - 1, title);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s \x1b[0m",
+                     row, col, inner, inner, title);
         ab_append(&ab, t, n);
 
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[107m\x1b[30m %-*.*s\x1b[0m",
-                     row + 1, col, inner, inner, buf + view);
-        ab_append(&ab, t, n);
+        {
+            char shown[256];
+            snprintf(shown, sizeof shown, "%-*.*s", inner, inner, buf + view);
+            int at = cur - view;
+            if (at < 0) at = 0;
+            if (at > inner - 1) at = inner - 1;
+
+            n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[107m\x1b[30m ", row + 1, col);
+            ab_append(&ab, t, n);
+            ab_append(&ab, shown, at);
+            ab_append(&ab, "\x1b[7m", 4);
+            ab_append(&ab, shown + at, 1);
+            ab_append(&ab, "\x1b[27m", 5);
+            ab_append(&ab, shown + at + 1, inner - at - 1);
+            ab_append(&ab, " \x1b[0m", 6);
+        }
 
         char tail[80];
         if (len > view + inner)
@@ -1973,17 +1987,17 @@ static int prompt_box(const char *title, const char *hint, char *buf, size_t cap
         else
             snprintf(tail, sizeof tail, " %s", hint ? hint : "Enter accept   Esc cancel");
 
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m%-*.*s\x1b[0m",
-                     row + 2, col, W, W, tail);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m %-*.*s \x1b[0m",
+                     row + 2, col, inner, inner, tail);
         ab_append(&ab, t, n);
 
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH", row + 1, col + 1 + (cur - view));
-        ab_append(&ab, t, n);
+        ab_append(&ab, "\x1b[?25l", 6);
 
         write(1, ab.b, ab.len);
         ab_free(&ab);
 
         int c = read_key();
+        (void)restore_cursor;
         if (c == KEY_ESC) return 0;
         if (c == '\r' || c == '\n') return 1;
         if (c == KEY_ARROW_LEFT)  { if (cur > 0) cur--; continue; }
@@ -2033,8 +2047,8 @@ static int colour_box(const char *what, uint32_t *colour)
         char t[400];
         int n;
 
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s\x1b[0m",
-                     row, col, W - 1, W - 1, what);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[7m %-*.*s \x1b[0m",
+                     row, col, W - 2, W - 2, what);
         ab_append(&ab, t, n);
 
         static const char *const names[3] = { "red", "green", "blue" };
@@ -2047,16 +2061,16 @@ static int colour_box(const char *what, uint32_t *colour)
             char body[100];
             snprintf(body, sizeof body, "%s %-6s %s %3d",
                      i == chan ? ">" : " ", names[i], bar, vals[i]);
-            n = snprintf(t, sizeof t, "\x1b[%d;%dH%s%-*.*s\x1b[0m",
+            n = snprintf(t, sizeof t, "\x1b[%d;%dH%s %-*.*s \x1b[0m",
                          row + 1 + i, col, i == chan ? "\x1b[7m" : "\x1b[100m",
-                         W, W, body);
+                         W - 2, W - 2, body);
             ab_append(&ab, t, n);
         }
 
         char sample[120];
         snprintf(sample, sizeof sample, " the quick brown fox   #%06x", c & 0xFFFFFF);
-        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[38;2;%d;%d;%dm%-*.*s\x1b[0m",
-                     row + 4, col, r, g, b, W, W, sample);
+        n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[38;2;%d;%d;%dm %-*.*s \x1b[0m",
+                     row + 4, col, r, g, b, W - 2, W - 2, sample);
         ab_append(&ab, t, n);
 
         static const char *const HINTS[3] = {
@@ -2065,8 +2079,8 @@ static int colour_box(const char *what, uint32_t *colour)
             " Enter keep it     Esc leave it alone"
         };
         for (int i = 0; i < 3; i++) {
-            n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m%-*.*s\x1b[0m",
-                         row + 5 + i, col, W, W, HINTS[i]);
+            n = snprintf(t, sizeof t, "\x1b[%d;%dH\x1b[100m\x1b[97m %-*.*s \x1b[0m",
+                         row + 5 + i, col, W - 2, W - 2, HINTS[i]);
             ab_append(&ab, t, n);
         }
 
@@ -2246,7 +2260,7 @@ static void editor_syntax_editor(void)
         if (sel < 0) sel = 0;
 
         abuf_t ab = { NULL, 0, 0 };
-        ab_append(&ab, "\x1b[H\x1b[2J", 7);
+        ab_append(&ab, "\x1b[?25l\x1b[H\x1b[2J", 13);
 
         char t[400];
         int n = snprintf(t, sizeof t,
