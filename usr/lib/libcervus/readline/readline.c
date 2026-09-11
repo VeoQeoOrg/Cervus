@@ -461,6 +461,29 @@ static void do_completion(char *buf, int *len, int *pos, int maxlen) {
     }
 }
 
+static void sync_line(const char *buf, int len, int pos) {
+    if (g_no_cursor) return;
+
+    struct cursor_pos cp;
+    if (ioctl(1, TIOCGCURSOR, &cp) < 0) return;
+
+    int abs = g_prompt_len + vis_cols(pos);
+    int want_row = g_start_row + (g_cols > 0 ? abs / g_cols : 0);
+    int want_col = (g_cols > 0) ? abs % g_cols : abs;
+
+    if ((int)cp.row == want_row && (int)cp.col == want_col) return;
+
+    if ((int)cp.col != 0) write(1, "\r\n", 2);
+    g_start_row = term_get_cursor_row();
+    if (g_start_row < 0) g_start_row = 0;
+
+    if (g_prompt_str && g_prompt_str[0]) write(1, g_prompt_str, strlen(g_prompt_str));
+    if (g_input_color[0]) write(1, g_input_color, strlen(g_input_color));
+    if (len > 0) write(1, buf, (size_t)len);
+    vt_eol();
+    cursor_to(pos);
+}
+
 static int readline_edit(char *buf, int maxlen) {
     g_rl_buf = buf;
     g_cur_len = 0;
@@ -498,6 +521,7 @@ static int readline_edit(char *buf, int maxlen) {
             continue;
         }
         g_eof_streak = 0;
+        sync_line(buf, len, pos);
 
         if (c == '\x1b') {
             char s[4];
