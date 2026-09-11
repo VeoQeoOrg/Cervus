@@ -315,8 +315,8 @@ static void draw(void) {
 
     tui_move(g_rows, 1);
     printf("\x1b[46m\x1b[30m"
-           " \x18\x19 nav  Enter open  e run  y copy path  r rename  d del  "
-           "c/x/v  n mkdir  s settings  . hidden  q quit \x1b[0m\x1b[K");
+           " \x18\x19 nav  Enter open  o open with  e run  y copy path  "
+           "r rename  d del  c/x/v  n mkdir  s settings  q quit \x1b[0m\x1b[K");
 
     if (prev_img) {
         char full[PMAX]; path_join(g_cwd, sel->name, full);
@@ -663,6 +663,110 @@ static void do_open(void) {
     }
 }
 
+typedef struct { const char *label; const char *prog; const char *exts; } opener_t;
+
+static const opener_t OPENERS[] = {
+    { "play  - audio",            "/bin/play",  ".mp3 .wav" },
+    { "img   - picture or GIF",   "/bin/img",   ".png .jpg .jpeg .bmp .gif .svg" },
+    { "neo   - edit as text",     "/apps/neo",  "" },
+    { "less  - read as text",     "/bin/less",  "" },
+    { "hexed - bytes",            "/bin/hexed", "" },
+    { "cat   - dump to screen",   "/bin/cat",   "" },
+    { "tar   - list an archive",  "/bin/tar",   ".tar" },
+    { "run it",                   NULL,         "" },
+};
+#define N_OPENERS ((int)(sizeof OPENERS / sizeof OPENERS[0]))
+
+static int opener_suits(const opener_t *o, const char *name) {
+    if (!o->exts[0]) return 1;
+    const char *p = o->exts;
+    while (*p) {
+        char ext[12];
+        int k = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ' && k < (int)sizeof ext - 1) ext[k++] = *p++;
+        ext[k] = 0;
+        if (k && has_ext_ci(name, ext)) return 1;
+    }
+    return 0;
+}
+
+static void run_with(const char *prog, const char *full, const char *shown) {
+    tui_end();
+    printf("\r\n\x1b[36m[cfm] %s %s\x1b[0m\r\n\r\n",
+           prog ? prog : "running", full);
+    fflush(stdout);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        if (prog) {
+            char *argv[3] = { (char *)prog, (char *)full, NULL };
+            execvp(prog, argv);
+        } else {
+            char *argv[2] = { (char *)full, NULL };
+            execvp(full, argv);
+        }
+        printf("cfm: cannot run %s\r\n", prog ? prog : full);
+        _exit(127);
+    }
+    int status = 0;
+    if (pid > 0) waitpid(pid, &status, 0);
+
+    printf("\r\n\x1b[90m[cfm] %s finished (%d) -- press Enter\x1b[0m", shown, status);
+    fflush(stdout);
+    char tmp[16];
+    read(0, tmp, sizeof(tmp));
+
+    tui_begin();
+    load_dir();
+    set_status("");
+}
+
+static void open_with(void) {
+    if (g_n == 0) return;
+    entry_t *e = &g_ent[g_sel];
+    if (e->is_dir) { do_open(); return; }
+
+    char full[PMAX];
+    path_join(g_cwd, e->name, full);
+
+    int idx[N_OPENERS], n = 0, suited = 0;
+    for (int i = 0; i < N_OPENERS; i++)
+        if (opener_suits(&OPENERS[i], e->name)) { idx[n++] = i; suited++; }
+    if (!suited) for (int i = 0; i < N_OPENERS; i++) idx[n++] = i;
+
+    int sel = 0;
+    for (;;) {
+        int boxw = 40, boxh = n + 4;
+        int r0 = (g_rows - boxh) / 2, c0 = (g_cols - boxw) / 2;
+        if (r0 < 1) r0 = 1;
+        if (c0 < 1) c0 = 1;
+
+        tui_move(r0, c0);
+        printf("\x1b[44m\x1b[97m %-*.*s\x1b[0m", boxw - 1, boxw - 1, "open with");
+        tui_move(r0 + 1, c0);
+        printf("\x1b[100m %-*.*s\x1b[0m", boxw - 1, boxw - 1, e->name);
+
+        for (int i = 0; i < n; i++) {
+            tui_move(r0 + 2 + i, c0);
+            if (i == sel) printf("\x1b[7m %-*.*s\x1b[0m", boxw - 1, boxw - 1, OPENERS[idx[i]].label);
+            else          printf("\x1b[47m\x1b[30m %-*.*s\x1b[0m", boxw - 1, boxw - 1, OPENERS[idx[i]].label);
+        }
+        tui_move(r0 + 2 + n, c0);
+        printf("\x1b[47m\x1b[30m %-*.*s\x1b[0m", boxw - 1, boxw - 1, " Enter open   Esc cancel");
+        fflush(stdout);
+
+        int k = tui_read_key();
+        if (k == TK_UP)        sel = sel > 0 ? sel - 1 : n - 1;
+        else if (k == TK_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
+        else if (k == TK_ESC)  { draw(); return; }
+        else if (k == TK_ENTER) {
+            run_with(OPENERS[idx[sel]].prog, full, e->name);
+            return;
+        }
+    }
+}
+
 static void run_program(void) {
     if (g_n == 0) return;
     entry_t *e = &g_ent[g_sel];
@@ -906,6 +1010,7 @@ int main(int argc, char **argv) {
             }
             break;
         case 'e': run_program(); break;
+        case 'o': open_with(); break;
         case 's': do_settings(); break;
         case 'r': do_rename(); break;
         case 'd': do_delete(); break;
