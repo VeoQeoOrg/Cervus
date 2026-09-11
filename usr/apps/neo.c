@@ -1199,13 +1199,14 @@ static void draw_rows(abuf_t *ab)
         if (cur_line) ab_append(ab, "\x1b[48;5;236m", 11);
 
         if (E.show_lineno) {
-            char lnbuf[16];
+            char lnbuf[24];
             int ln;
+            const char *num_fg = cur_line ? "\x1b[97m" : "\x1b[90m";
             if (filerow < E.numrows)
-                ln = snprintf(lnbuf, sizeof(lnbuf), "\x1b[90m%*d \x1b[m",
-                              E.lineno_width - 1, filerow + 1);
+                ln = snprintf(lnbuf, sizeof(lnbuf), "%s%*d \x1b[39m",
+                              num_fg, E.lineno_width - 1, filerow + 1);
             else
-                ln = snprintf(lnbuf, sizeof(lnbuf), "\x1b[90m%*s \x1b[m",
+                ln = snprintf(lnbuf, sizeof(lnbuf), "\x1b[90m%*s \x1b[39m",
                               E.lineno_width - 1, "~");
             ab_append(ab, lnbuf, ln);
         }
@@ -2294,8 +2295,36 @@ static void init_editor(void)
     recompute_lineno_width();
 }
 
+static const char NEO_USAGE[] =
+    "Usage: neo [file]\n"
+    "A full-screen text editor.\n"
+    "\n"
+    "  -h, --help     this text\n"
+    "  -v, --version  which build this is\n"
+    "\n"
+    "Keys:\n"
+    "  Ctrl-S save            Ctrl-Q exit (Esc also)\n"
+    "  Ctrl-F search          Ctrl-G go to a line\n"
+    "  Ctrl-X cut line        Ctrl-C copy line       Ctrl-V paste\n"
+    "  Ctrl-D duplicate line  Ctrl-N line numbers\n"
+    "  Ctrl-B start of file   Ctrl-E end of file\n"
+    "  Ctrl-L language        Ctrl-T file tree       Ctrl-P settings\n"
+    "\n"
+    "Colouring follows the file name. Rules live in /etc/neo/<ext>.syn\n"
+    "and the settings hold an editor for writing them. See neo(1).\n";
+
 int main(int argc, char **argv)
 {
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            fputs(NEO_USAGE, stdout);
+            return 0;
+        }
+        if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+            printf("neo %s\n", NEO_VERSION);
+            return 0;
+        }
+    }
 
     if (!isatty(0)) {
         close(0);
@@ -2312,6 +2341,7 @@ int main(int argc, char **argv)
 
     const char *file_to_open = NULL;
     for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1]) continue;
         file_to_open = argv[i];
         break;
     }

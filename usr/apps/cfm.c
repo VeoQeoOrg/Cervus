@@ -969,7 +969,29 @@ static void do_settings(void) {
     set_status("");
 }
 
+static const char CFM_USAGE[] =
+    "Usage: cfm [directory]\n"
+    "A full-screen file manager: listing on the left, preview on the right.\n"
+    "\n"
+    "  -h, --help  this text\n"
+    "\n"
+    "Keys:\n"
+    "  arrows, PgUp, PgDn, Home, End   move (wraps at both ends)\n"
+    "  Enter, right  open        Backspace, left  go up\n"
+    "  e run          o open with another program   y copy path\n"
+    "  r rename       d delete    n new directory\n"
+    "  c copy         x cut       v paste            g refresh\n"
+    "  . hidden files s settings  q quit\n"
+    "\n"
+    "Settings are kept in ~/.cfmrc. See cfm(1).\n";
+
 int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            fputs(CFM_USAGE, stdout);
+            return 0;
+        }
+    }
     if (argc > 1) {
         strncpy(g_cwd, argv[1], sizeof(g_cwd) - 1);
         g_cwd[sizeof(g_cwd) - 1] = 0;
