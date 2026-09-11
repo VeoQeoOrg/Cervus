@@ -37,15 +37,208 @@ static int __f_signbit(double v)
     return (int)((x.u >> 63) & 1ULL);
 }
 
-static double __f_pow10(int n)
+#define __BN_WORDS 96
+#define __BN_BASE   1000000000ULL
+
+typedef struct { uint32_t w[__BN_WORDS]; int n; } __bn;
+
+static void __bn_set(__bn *b, uint64_t v)
 {
-    double r = 1.0;
-    if (n >= 0) { while (n--) r *= 10.0; }
-    else        { while (n++) r /= 10.0; }
-    return r;
+    b->n = 0;
+    while (v && b->n < __BN_WORDS) {
+        b->w[b->n++] = (uint32_t)(v % __BN_BASE);
+        v /= __BN_BASE;
+    }
+    if (!b->n) { b->w[0] = 0; b->n = 1; }
 }
 
-static void __f_to_str(double v, int prec, int upper, char *out)
+static void __bn_mul(__bn *b, uint32_t k)
+{
+    uint64_t carry = 0;
+    for (int i = 0; i < b->n; i++) {
+        uint64_t cur = (uint64_t)b->w[i] * k + carry;
+        b->w[i] = (uint32_t)(cur % __BN_BASE);
+        carry = cur / __BN_BASE;
+    }
+    while (carry && b->n < __BN_WORDS) {
+        b->w[b->n++] = (uint32_t)(carry % __BN_BASE);
+        carry /= __BN_BASE;
+    }
+}
+
+static int __bn_to_digits(const __bn *b, char *out)
+{
+    int n = 0;
+    uint32_t hi = b->w[b->n - 1];
+    char tmp[12];
+    int t = 0;
+    if (!hi) tmp[t++] = '0';
+    while (hi) { tmp[t++] = (char)('0' + hi % 10); hi /= 10; }
+    while (t) out[n++] = tmp[--t];
+
+    for (int i = b->n - 2; i >= 0; i--) {
+        uint32_t w = b->w[i];
+        for (int d = 8; d >= 0; d--) {
+            out[n + d] = (char)('0' + w % 10);
+            w /= 10;
+        }
+        n += 9;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+static int __f_digits(double av, char *digits, int *pndig)
+{
+    union { double d; uint64_t u; } x;
+    x.d = av;
+
+    uint64_t frac = x.u & 0xfffffffffffffULL;
+    int      be   = (int)((x.u >> 52) & 0x7ffULL);
+
+    uint64_t m;
+    int e2;
+    if (be == 0) { m = frac;                    e2 = -1074; }
+    else         { m = frac | (1ULL << 52);     e2 = be - 1075; }
+
+    __bn b;
+    __bn_set(&b, m);
+
+    int shift10 = 0;
+    if (e2 > 0) {
+        int q = e2;
+        while (q >= 29) { __bn_mul(&b, 1u << 29); q -= 29; }
+        if (q) __bn_mul(&b, 1u << q);
+    } else if (e2 < 0) {
+        int q = -e2;
+        shift10 = -q;
+        while (q >= 13) { __bn_mul(&b, 1220703125u); q -= 13; }
+        while (q--) __bn_mul(&b, 5u);
+    }
+
+    int len = __bn_to_digits(&b, digits);
+
+    int lead = 0;
+    while (lead < len - 1 && digits[lead] == '0') lead++;
+    if (lead) {
+        for (int i = 0; i + lead <= len; i++) digits[i] = digits[i + lead];
+        len -= lead;
+    }
+
+    *pndig = len;
+    return len - 1 + shift10;
+}
+
+static void __f_round(char *digits, int *pn, int keep, int *pexp)
+{
+    int n = *pn;
+    if (keep >= n) return;
+
+    if (keep < 0) {
+        digits[0] = '0';
+        digits[1] = '\0';
+        *pn = 1;
+        *pexp = 0;
+        return;
+    }
+
+    int up;
+    if (digits[keep] > '5') {
+        up = 1;
+    } else if (digits[keep] < '5') {
+        up = 0;
+    } else {
+        up = 0;
+        for (int i = keep + 1; i < n; i++)
+            if (digits[i] != '0') { up = 1; break; }
+        if (!up) up = ((keep > 0 ? digits[keep - 1] : '0') - '0') & 1;
+    }
+
+    if (keep == 0) {
+        digits[0] = up ? '1' : '0';
+        digits[1] = '\0';
+        *pn = 1;
+        if (up) (*pexp)++;
+        else    *pexp = 0;
+        return;
+    }
+
+    if (up) {
+        int i = keep - 1;
+        for (; i >= 0; i--) {
+            if (digits[i] != '9') { digits[i]++; break; }
+            digits[i] = '0';
+        }
+        if (i < 0) {
+            for (int k = keep - 1; k > 0; k--) digits[k] = digits[k - 1];
+            digits[0] = '1';
+            (*pexp)++;
+        }
+    }
+    digits[keep] = '\0';
+    *pn = keep;
+}
+
+static int __f_emit_fixed(char *out, int o, const char *digits, int ndig,
+                          int exp10, int prec, int trim)
+{
+    int intlen = exp10 + 1;
+
+    if (intlen <= 0) {
+        out[o++] = '0';
+    } else {
+        for (int i = 0; i < intlen; i++)
+            out[o++] = (i < ndig) ? digits[i] : '0';
+    }
+
+    if (prec <= 0) { out[o] = '\0'; return o; }
+
+    int start = o;
+    out[o++] = '.';
+    for (int i = 0; i < prec; i++) {
+        int idx = intlen + i;
+        out[o++] = (idx >= 0 && idx < ndig) ? digits[idx] : '0';
+    }
+
+    if (trim) {
+        while (o > start + 1 && out[o - 1] == '0') o--;
+        if (o == start + 1) o = start;
+    }
+    out[o] = '\0';
+    return o;
+}
+
+static int __f_emit_sci(char *out, int o, const char *digits, int ndig,
+                        int exp10, int prec, int upper, int trim)
+{
+    out[o++] = digits[0];
+
+    if (prec > 0) {
+        int start = o;
+        out[o++] = '.';
+        for (int i = 1; i <= prec; i++)
+            out[o++] = (i < ndig) ? digits[i] : '0';
+        if (trim) {
+            while (o > start + 1 && out[o - 1] == '0') o--;
+            if (o == start + 1) o = start;
+        }
+    }
+
+    out[o++] = upper ? 'E' : 'e';
+    out[o++] = exp10 < 0 ? '-' : '+';
+
+    int ae = exp10 < 0 ? -exp10 : exp10;
+    char eb[8];
+    int n = 0;
+    do { eb[n++] = (char)('0' + ae % 10); ae /= 10; } while (ae);
+    while (n < 2) eb[n++] = '0';
+    while (n > 0) out[o++] = eb[--n];
+
+    out[o] = '\0';
+    return o;
+}
+
+static void __f_to_str(double v, int prec, int upper, char conv, char *out)
 {
     int cls = __f_classify(v);
     int neg = __f_signbit(v);
@@ -62,37 +255,45 @@ static void __f_to_str(double v, int prec, int upper, char *out)
         out[i] = 0;
         return;
     }
+
     if (prec < 0) prec = 6;
-    if (prec > 17) prec = 17;
+    if (prec > 300) prec = 300;
 
     double av = neg ? -v : v;
-    double scale = __f_pow10(prec);
-    double rounded = av * scale + 0.5;
-    uint64_t big;
-    if (rounded > 1.8446744073709551e19) big = 0xffffffffffffffffULL;
-    else big = (uint64_t)rounded;
-
-    uint64_t divp = 1;
-    for (int i = 0; i < prec; i++) divp *= 10ULL;
-    uint64_t ip = divp ? big / divp : big;
-    uint64_t fp = divp ? big % divp : 0;
-
-    char ibuf[32];
-    __u64_to_str(ip, ibuf, 10, 0);
-
     int o = 0;
     if (neg) out[o++] = '-';
-    int k = 0; while (ibuf[k]) out[o++] = ibuf[k++];
 
-    if (prec > 0) {
-        out[o++] = '.';
-        char fbuf[32];
-        __u64_to_str(fp, fbuf, 10, 0);
-        int flen = 0; while (fbuf[flen]) flen++;
-        for (int i = flen; i < prec; i++) out[o++] = '0';
-        int m = 0; while (fbuf[m]) out[o++] = fbuf[m++];
+    char digits[900];
+    int ndig;
+    int exp10;
+
+    if (av == 0.0) {
+        digits[0] = '0';
+        digits[1] = '\0';
+        ndig = 1;
+        exp10 = 0;
+    } else {
+        exp10 = __f_digits(av, digits, &ndig);
     }
-    out[o] = 0;
+
+    if (conv == 'e') {
+        if (av != 0.0) __f_round(digits, &ndig, prec + 1, &exp10);
+        __f_emit_sci(out, o, digits, ndig, exp10, prec, upper, 0);
+        return;
+    }
+
+    if (conv == 'g') {
+        int p = prec < 1 ? 1 : prec;
+        if (av != 0.0) __f_round(digits, &ndig, p, &exp10);
+        if (exp10 < -4 || exp10 >= p)
+            __f_emit_sci(out, o, digits, ndig, exp10, p - 1, upper, 1);
+        else
+            __f_emit_fixed(out, o, digits, ndig, exp10, p - 1 - exp10, 1);
+        return;
+    }
+
+    if (av != 0.0) __f_round(digits, &ndig, exp10 + prec + 1, &exp10);
+    __f_emit_fixed(out, o, digits, ndig, exp10, prec, 0);
 }
 
 int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
@@ -215,11 +416,13 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
             case 'f': case 'F': case 'g': case 'G': case 'e': case 'E': {
                 double v = va_arg(ap, double);
                 int upper = (*fmt == 'F' || *fmt == 'G' || *fmt == 'E');
+                char conv = (*fmt == 'g' || *fmt == 'G') ? 'g'
+                          : (*fmt == 'e' || *fmt == 'E') ? 'e' : 'f';
                 int eff_prec = prec;
-                if ((*fmt == 'g' || *fmt == 'G') && eff_prec < 0) eff_prec = 6;
-                if ((*fmt == 'g' || *fmt == 'G') && eff_prec == 0) eff_prec = 1;
-                char fbuf[64];
-                __f_to_str(v, eff_prec, upper, fbuf);
+                if (conv == 'g' && eff_prec < 0) eff_prec = 6;
+                if (conv == 'g' && eff_prec == 0) eff_prec = 1;
+                char fbuf[700];
+                __f_to_str(v, eff_prec, upper, conv, fbuf);
                 int numlen = (int)strlen(fbuf);
                 int pad = width > numlen ? width - numlen : 0;
                 if (!left_align && !pad_zero) for (int i = 0; i < pad; i++) __PUT(" ", 1);
