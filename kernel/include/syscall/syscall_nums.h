@@ -56,6 +56,9 @@
 #define SYS_EPOLL_CREATE     86
 #define SYS_EPOLL_CTL        87
 #define SYS_EPOLL_WAIT       88
+#define SYS_MEMFD_CREATE     89
+#define SYS_SENDMSG          90
+#define SYS_RECVMSG          91
 
 #define SYS_UNLINK      100
 #define SYS_RMDIR       101

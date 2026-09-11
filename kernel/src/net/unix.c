@@ -68,6 +68,10 @@ vnode_t *unix_new_vnode(int type) {
     return unix_make(type, NULL);
 }
 
+int unix_is_socket(const vnode_t *vn) {
+    return vn && vn->ops == &unix_vnode_ops;
+}
+
 int unix_make_pair(vnode_t **a_out, vnode_t **b_out) {
     unix_sock_t *sa = NULL, *sb = NULL;
     vnode_t *va = unix_make(SOCK_STREAM, &sa);

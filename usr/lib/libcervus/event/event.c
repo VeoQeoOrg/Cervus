@@ -3,6 +3,7 @@
 #include <sys/epoll.h>
 #include <sys/syscall.h>
 #include <sys/socket.h>
+#include <sys/mman_shared.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -93,4 +94,26 @@ int socketpair(int domain, int type, int protocol, int fds[2])
     (void)protocol;
     return ret_or_errno((long)syscall3(SYS_SOCKETPAIR, (uint64_t)domain,
                                        (uint64_t)type, (uint64_t)(uintptr_t)fds));
+}
+
+int memfd_create(const char *name, unsigned int flags)
+{
+    return ret_or_errno((long)syscall3(SYS_MEMFD_CREATE,
+                                       (uint64_t)(uintptr_t)name, flags, 0));
+}
+
+long sendmsg(int fd, const struct msghdr *msg, int flags)
+{
+    long r = (long)syscall3(SYS_SENDMSG, (uint64_t)fd,
+                            (uint64_t)(uintptr_t)msg, (uint64_t)flags);
+    if (r < 0) { errno = (int)-r; return -1; }
+    return r;
+}
+
+long recvmsg(int fd, struct msghdr *msg, int flags)
+{
+    long r = (long)syscall3(SYS_RECVMSG, (uint64_t)fd,
+                            (uint64_t)(uintptr_t)msg, (uint64_t)flags);
+    if (r < 0) { errno = (int)-r; return -1; }
+    return r;
 }

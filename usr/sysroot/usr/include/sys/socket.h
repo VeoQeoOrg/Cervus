@@ -41,4 +41,38 @@ int     recvfd  (int sockfd);
 
 int socketpair(int domain, int type, int protocol, int fds[2]);
 
+#define SCM_RIGHTS 1
+#define SOL_SOCKET 1
+
+struct iovec {
+    void  *iov_base;
+    size_t iov_len;
+};
+
+struct msghdr {
+    void         *msg_name;
+    unsigned int  msg_namelen;
+    struct iovec *msg_iov;
+    size_t        msg_iovlen;
+    void         *msg_control;
+    size_t        msg_controllen;
+    int           msg_flags;
+};
+
+struct cmsghdr {
+    size_t cmsg_len;
+    int    cmsg_level;
+    int    cmsg_type;
+};
+
+#define CMSG_ALIGN(n)   (((n) + 7u) & ~7u)
+#define CMSG_SPACE(n)   (CMSG_ALIGN(sizeof(struct cmsghdr)) + CMSG_ALIGN(n))
+#define CMSG_LEN(n)     (CMSG_ALIGN(sizeof(struct cmsghdr)) + (n))
+#define CMSG_FIRSTHDR(m) ((m)->msg_controllen >= sizeof(struct cmsghdr) \
+                          ? (struct cmsghdr *)(m)->msg_control : (struct cmsghdr *)0)
+#define CMSG_DATA(c)    ((unsigned char *)((struct cmsghdr *)(c) + 1))
+
+long sendmsg(int fd, const struct msghdr *msg, int flags);
+long recvmsg(int fd, struct msghdr *msg, int flags);
+
 #endif

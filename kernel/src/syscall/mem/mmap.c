@@ -2,14 +2,25 @@
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
 #include "../../../include/io/serial.h"
+#include "../../../include/fs/vfs.h"
+
+extern int memfd_is(const vnode_t *n);
+extern int memfd_page_phys(vnode_t *n, size_t index, uintptr_t *out);
 
 int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, uint64_t fd, uint64_t offset)
 {
-    (void)offset;
     task_t *t = syscall_cur_task();
     if (!t || !t->is_userspace) return (int64_t)MAP_FAILED;
-    if (!(flags & MAP_ANONYMOUS)) return (int64_t)MAP_FAILED;
-    if (fd != (uint64_t)-1 && fd != 0) return (int64_t)MAP_FAILED;
+
+    vnode_t *backing = NULL;
+    if (!(flags & MAP_ANONYMOUS)) {
+        if (!t->fd_table) return (int64_t)MAP_FAILED;
+        vfs_file_t *file = fd_get(t->fd_table, (int)fd);
+        if (!file || !file->vnode || !memfd_is(file->vnode)) return (int64_t)MAP_FAILED;
+        backing = file->vnode;
+    } else if (fd != (uint64_t)-1 && fd != 0) {
+        return (int64_t)MAP_FAILED;
+    }
     if (!length) return (int64_t)MAP_FAILED;
     if (length > (1ULL << 40)) return (int64_t)MAP_FAILED;
 
@@ -38,13 +49,22 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     if (!(prot & PROT_EXEC)) vf |= VMM_NOEXEC;
 
     for (size_t i = 0; i < pages; i++) {
-        void *ph = pmm_alloc_zero(1);
-        if (!ph) {
-            for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
-            return (int64_t)MAP_FAILED;
+        uintptr_t phys;
+        if (backing) {
+            size_t index = (size_t)((offset >> 12) + i);
+            if (memfd_page_phys(backing, index, &phys) < 0) {
+                for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
+                return (int64_t)MAP_FAILED;
+            }
+        } else {
+            void *ph = pmm_alloc_zero(1);
+            if (!ph) {
+                for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
+                return (int64_t)MAP_FAILED;
+            }
+            phys = pmm_virt_to_phys(ph);
         }
-        if (!vmm_map_page(t->pagemap, addr + i * 0x1000, pmm_virt_to_phys(ph), vf)) {
-            pmm_free(ph, 1);
+        if (!vmm_map_page(t->pagemap, addr + i * 0x1000, phys, vf)) {
             for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
             return (int64_t)MAP_FAILED;
         }
