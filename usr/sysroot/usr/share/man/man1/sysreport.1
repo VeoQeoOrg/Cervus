@@ -1,0 +1,25 @@
+NAME
+       sysreport - collect what is needed to diagnose this machine
+
+SYNOPSIS
+       sysreport [file]
+
+DESCRIPTION
+       Runs the commands someone debugging this system would ask for
+       and writes all of it to one file, /root/sysreport.txt unless
+       another path is given.
+
+       It collects the kernel build and uptime, the processor and
+       memory, the PCI and USB devices, which drivers took hold, the
+       disks and what is mounted, the network interfaces, and the lines
+       of the kernel log that mention a driver, an error or a warning.
+
+       Nothing leaves the machine. It is a file to read or to pass on.
+
+EXAMPLES
+       sysreport
+       sysreport /mnt/report.txt
+       less /root/sysreport.txt
+
+SEE ALSO
+       drv(1), dmesg(1), lspci(1), dbgmon(1)

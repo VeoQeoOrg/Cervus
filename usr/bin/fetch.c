@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
+#include <sys/netcfg.h>
 
 static const char *logo[] = {
     "    L          ",
@@ -104,6 +105,119 @@ static void print_shell(void)
     fputs(get_shell(), stdout);
 }
 
+static void print_kernel(void)
+{
+    fputs(C_RESET "kernel: ", stdout);
+    char buf[128];
+    int fd = open("/proc/version", O_RDONLY, 0);
+    if (fd >= 0) {
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = 0;
+            char *nl = strchr(buf, '\n');
+            if (nl) *nl = 0;
+            fputs(buf, stdout);
+            return;
+        }
+    }
+    fputs("Cervus", stdout);
+}
+
+static void print_cpus(void)
+{
+    fputs(C_RESET "cores: ", stdout);
+    char buf[512];
+    int fd = open("/proc/cpuinfo", O_RDONLY, 0);
+    int total = 0, online = 0;
+    if (fd >= 0) {
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = 0;
+            char *p = strstr(buf, "cpus:");
+            if (p) total = atoi(p + 5);
+            p = strstr(buf, "online:");
+            if (p) online = atoi(p + 7);
+        }
+    }
+    if (total > 0) {
+        if (online && online != total) printf("%d of %d online", online, total);
+        else                           printf("%d", total);
+    } else {
+        fputs("?", stdout);
+    }
+}
+
+static void print_host(void)
+{
+    fputs(C_RESET "host: ", stdout);
+    char buf[80];
+    int fd = open("/etc/hostname", O_RDONLY, 0);
+    if (fd < 0) fd = open("/mnt/etc/hostname", O_RDONLY, 0);
+    if (fd >= 0) {
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n > 0) {
+            buf[n] = 0;
+            char *nl = strchr(buf, '\n'); if (nl) *nl = 0;
+            if (buf[0]) { fputs(buf, stdout); return; }
+        }
+    }
+    fputs("cervus", stdout);
+}
+
+static void print_net(void)
+{
+    fputs(C_RESET "net: ", stdout);
+    net_ifcfg_t c;
+    int shown = 0;
+    for (int i = 0; i < 8; i++) {
+        if (netif_get(i, &c) != 0) break;
+        if (!c.ip) continue;
+        if (shown++) fputs(", ", stdout);
+        printf("%s %u.%u.%u.%u", c.name,
+               (c.ip >> 24) & 0xFF, (c.ip >> 16) & 0xFF,
+               (c.ip >> 8) & 0xFF, c.ip & 0xFF);
+    }
+    if (!shown) fputs("no address", stdout);
+}
+
+static void print_disks(void)
+{
+    fputs(C_RESET "disks: ", stdout);
+    cervus_disk_info_t d;
+    int shown = 0;
+    for (int i = 0; i < 8; i++) {
+        if (cervus_disk_info(i, &d) != 0) break;
+        if (!d.name[0]) continue;
+        if (shown++) fputs(", ", stdout);
+        unsigned long gb = (unsigned long)(d.size_bytes / (1024ull * 1024ull * 1024ull));
+        if (gb) printf("%s %luG", d.name, gb);
+        else    printf("%s %luM", d.name,
+                       (unsigned long)(d.size_bytes / (1024ull * 1024ull)));
+        if (shown >= 3) break;
+    }
+    if (!shown) fputs("none", stdout);
+}
+
+static void print_term(void)
+{
+    fputs(C_RESET "display: ", stdout);
+    cervus_fb_info_t fb;
+    if (cervus_fb_info(&fb) == 0) printf("%ux%u %u bpp", fb.width, fb.height, fb.bpp);
+    else fputs("text", stdout);
+}
+
+static void print_palette(void)
+{
+    fputs(C_RESET, stdout);
+    for (int c = 0; c < 8; c++) printf("\x1b[4%dm   \x1b[0m", c);
+    putchar('\n');
+    for (int i = 0; i < 17; i++) putchar(' ');
+    for (int c = 0; c < 8; c++) printf("\x1b[10%dm   \x1b[0m", c);
+}
+
 int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
@@ -111,14 +225,28 @@ int main(int argc, char **argv)
     for (int i = 0; logo[i]; i++) {
         printf(" %s  ", logo[i]);
         switch (i) {
-            case 1: fputs("os: Cervus OS", stdout);     break;
-            case 2: print_uptime();                     break;
-            case 3: print_cpu();                        break;
-            case 4: print_shell();                      break;
-            case 5: print_mem();                        break;
+            case 0: print_host();                       break;
+            case 1: fputs("os: Cervus OS v0.0.2", stdout); break;
+            case 2: print_kernel();                     break;
+            case 3: print_uptime();                     break;
+            case 4: print_cpu();                        break;
+            case 5: print_cpus();                       break;
+            case 6: print_mem();                        break;
         }
         putchar('\n');
     }
-    putchar('\n');
+    for (int pass = 0; pass < 4; pass++) {
+        for (int i = 0; i < 17; i++) putchar(' ');
+        switch (pass) {
+            case 0: print_shell();   break;
+            case 1: print_term();    break;
+            case 2: print_net();     break;
+            case 3: print_disks();   break;
+        }
+        putchar('\n');
+    }
+    for (int i = 0; i < 17; i++) putchar(' ');
+    print_palette();
+    fputs(C_RESET "\n\n", stdout);
     return 0;
 }

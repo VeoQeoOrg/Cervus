@@ -1,0 +1,27 @@
+NAME
+       dbgmon - the kernel debug monitor
+
+SYNOPSIS
+       dbgmon
+
+DESCRIPTION
+       Opens the console that shows the kernel log as it is written,
+       coloured by severity: errors red, warnings yellow, successful
+       steps green, debug grey. Ctrl-Alt-F2 reaches the same screen.
+
+KEYS
+       arrows, PgUp, PgDn   move through the log
+       G, End               follow the newest line again
+       /                    search; n repeats
+       1 2 3 4 5            show only info, warnings, errors, ok, debug
+       0                    show everything
+       L                    change what the kernel records, which is
+                            not the same as what is shown
+       q, Esc               return
+
+NOTES
+       Scrolling never stops the log being collected. While you are
+       reading, the status line counts the lines that have arrived.
+
+SEE ALSO
+       dmesg(1), drv(1), sysreport(1)

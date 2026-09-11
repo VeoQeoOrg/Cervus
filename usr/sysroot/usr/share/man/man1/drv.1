@@ -1,0 +1,37 @@
+NAME
+       drv - device drivers: what loaded, what did not
+
+SYNOPSIS
+       drv
+       drv start <name>
+       drv stop <name>
+       drv autostart <name> on|off
+
+DESCRIPTION
+       Lists every driver built into the kernel with what became of it.
+
+STATES
+       running   it claimed at least one device here
+       idle      built in, but nothing on this machine matches it; this
+                 is the normal state for most drivers
+       failed    it matched a device and could not bring it up - the
+                 one worth looking into
+       stopped   shut down, or not probed at boot
+
+       The device column shows the vendor and device id it claimed, and
+       uptime counts from when it started.
+
+COMMANDS
+       start       probe the hardware again. Useful after a driver has
+                   been stopped, or to retry one that failed.
+       stop        shut it down. Only drivers that know how can do
+                   this; the rest say so and stay until the next boot.
+       autostart   whether the driver is tried when a matching device
+                   is found. Off means the device is left alone.
+
+NOTES
+       When a driver says failed, dmesg or dbgmon carries the reason:
+       drivers log what they could not do.
+
+SEE ALSO
+       lspci(1), lsusb(1), dmesg(1), dbgmon(1), sysreport(1)
