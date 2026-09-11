@@ -90,4 +90,16 @@ int  ecdsa_p384_verify(const uint8_t *pub, size_t publen,
 
 void crypto_random(void *buf, size_t len);
 
+typedef struct {
+    uint32_t h[5];
+    uint64_t len;
+    uint8_t  buf[64];
+    size_t   fill;
+} sha1_ctx;
+
+void sha1_init(sha1_ctx *c);
+void sha1_update(sha1_ctx *c, const void *data, size_t n);
+void sha1_final(sha1_ctx *c, uint8_t out[20]);
+void sha1(const void *data, size_t n, uint8_t out[20]);
+
 #endif
