@@ -698,8 +698,9 @@ static void tcp_accept_syn6(tcp_tcb_t *lst, const uint8_t *src6, const uint8_t *
 }
 
 void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, size_t len) {
-    (void)dev; (void)dst_ip;
+    (void)dst_ip;
     if (len < 20) return;
+    if (dev && (seg[13] & TH_SYN) && !(seg[13] & TH_ACK)) dev->rx_tcp_syn++;
     uint16_t sport = rd16be(seg + 0);
     uint16_t dport = rd16be(seg + 2);
     uint32_t seq   = rd32be(seg + 4);

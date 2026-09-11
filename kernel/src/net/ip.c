@@ -116,6 +116,7 @@ void ip_rx(netdev_t *dev, const uint8_t *p, size_t len) {
 
     int is_lb = (dst >> 24) == 127;
     if (!is_lb && dev->ip && dst != dev->ip && dst != 0xFFFFFFFFu) {
+        dev->rx_not_for_us++;
         LOG_D("[ip] %s dropping proto=%u for %u.%u.%u.%u, we are %u.%u.%u.%u\n",
               dev->name, proto,
               (dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff,

@@ -96,9 +96,11 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
 
     switch (ethertype) {
         case ETH_P_ARP:
+            dev->rx_arp++;
             arp_rx(dev, p + 14, len - 14);
             break;
         case ETH_P_IP:
+            dev->rx_ip++;
             ip_rx(dev, p + 14, len - 14);
             break;
         case ETH_P_IPV6: {
@@ -107,6 +109,7 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
             break;
         }
         default:
+            dev->rx_other++;
             break;
     }
 }
@@ -149,6 +152,8 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     out->rx_packets = d->rx_packets; out->tx_packets = d->tx_packets;
     out->rx_bytes = d->rx_bytes; out->tx_bytes = d->tx_bytes;
     out->rx_dropped = d->rx_dropped; out->tx_dropped = d->tx_dropped;
+    out->rx_arp = d->rx_arp; out->rx_ip = d->rx_ip; out->rx_other = d->rx_other;
+    out->rx_not_for_us = d->rx_not_for_us; out->rx_tcp_syn = d->rx_tcp_syn;
     out->link_up = d->link_up;
     out->mtu = (int32_t)d->mtu;
     memcpy(out->ip6_ll, d->ip6_ll, 16);

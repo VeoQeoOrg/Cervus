@@ -52,6 +52,10 @@ static void show(void) {
         if (c.rx_dropped || c.tx_dropped)
             printf("\tRX dropped %u   TX dropped %u\n",
                    (unsigned)c.rx_dropped, (unsigned)c.tx_dropped);
+        printf("\tof what arrived: %u ARP, %u IP, %u other; %u IP not for us\n",
+               (unsigned)c.rx_arp, (unsigned)c.rx_ip,
+               (unsigned)c.rx_other, (unsigned)c.rx_not_for_us);
+        printf("\tconnection attempts reaching TCP: %u\n", (unsigned)c.rx_tcp_syn);
     }
     if (!found) printf("ifconfig: no network interfaces\n");
 }
