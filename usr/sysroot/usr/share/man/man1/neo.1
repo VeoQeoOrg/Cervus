@@ -25,6 +25,7 @@ KEYS
        Ctrl-L   pick the language for colouring
        Ctrl-T   file tree
        Ctrl-P   settings
+       Ctrl-R   offer completions for the word being typed
        arrows, PgUp, PgDn, Home, End   move around
 
 SETTINGS
@@ -43,6 +44,7 @@ SETTINGS
          Show tabs        draw tabs as > and dots, to see them
          Backup on save   copy the old file to <name>.bak first
          Scroll margin    lines kept above and below the cursor, 0 to 20
+         Autocomplete     offer words as you type, see COMPLETION
          Edit syntax rules  the colouring editor, see below
          Save settings    write them to ~/.neorc
 
@@ -55,39 +57,99 @@ FILES
 SEE ALSO
        cfm(1), less(1)
 
-SYNTAX COLOURING
-       C, JavaScript, CSS, HTML, assembly, Python, shell, Rust, Go,
-       Lua, SQL, Markdown and configuration files are recognised by
-       extension.
+COMPLETION
+       After two characters of a word, a list appears under the cursor
+       with what that word could become. Up and down move through it,
+       Enter or Tab takes the one that is highlighted, Esc dismisses
+       it. Ctrl-R asks for the list without waiting, and re-reads the
+       headers first.
 
-       To colour anything else, or to override one of those, write
-       /etc/neo/<extension>.syn - a file called ml.syn colours every
-       file ending .ml. One setting per line, name = value; blank lines
-       and lines beginning # are ignored.
+       The list is not every word in the file. It is, in order:
+
+         the words of the current language, from its .syn file, each
+         labelled with the group it came from
+
+         the functions and macros of every header the file includes -
+         a file with #include <string.h> offers strlen and strcmp,
+         marked 'lib'
+
+         words already in this file, marked 'file', or 'here' when
+         they come from the line being edited
+
+       Headers are looked for in /usr/include, then /mnt/usr/include,
+       then the current directory. Autocomplete in the settings turns
+       the whole thing off.
+
+SYNTAX COLOURING
+       Every language the editor knows is a file in /etc/neo, read at
+       startup. A .syn file put there is a language neo understands
+       from the next time it runs; nothing is compiled in. Ctrl-L
+       lists them, with the file endings each one claims.
+
+       One setting per line, name = value; blank lines and lines
+       beginning # are ignored.
 
          name       what to call it in the status bar
+         ext        the file endings it claims, separated by spaces
          comment    what starts a comment running to end of line
          block      what opens and closes a block comment, two words
-         keywords   words to colour as keywords; repeat to add more
-         types      words to colour as type names, second colour
          strings    single if ' quotes as well as ", double if only "
-         backtick   1 if backticks quote a string
+         backtick   yes if backticks quote a string
+         mode       html for tag-and-attribute colouring instead
 
-       For example:
+       Colours are six hex digits, as on a web page:
+
+         color comment = 6a737d
+         color string  = 98c379
+         color number  = d19a66
+         color escape  = 61afef
+         color default = c8ccd4
+
+       Words are put in named groups, and the group carries its own
+       colour. The name is yours to choose - it is what the completion
+       list shows next to the word:
+
+         words keyword c678dd = begin end if then else while do
+         words type e5c07b = integer real char boolean string
+         words builtin 56b6c4 = writeln readln length
+
+       A group may be repeated over several lines; the words add up.
+       'chars' instead of 'words' matches anywhere rather than only on
+       whole words, which is how to colour operators:
+
+         chars operator 61afef = + - * / := <> <= >=
+
+       For example, a complete Pascal file:
 
          name = Pascal
+         ext = pas pp inc
          comment = //
          block = (* *)
-         keywords = begin end if then else while do procedure function
-         types = integer real char boolean string
+         strings = single
 
-       /etc/neo/csh.syn ships as a working example.
+         color comment = 6a737d
+         color string  = 98c379
 
-       Writing the file by hand is optional: Edit syntax rules in the
-       settings is a form for the same thing. It opens on the extension
-       of the file being edited, fills in whatever rules already exist,
-       and each line explains itself as you move onto it. Enter edits a
-       field, Ctrl-S writes the file and recolours the text at once.
-       Esc leaves without writing. When a Cervus system is mounted at
-       /mnt the file is written to /mnt/etc/neo so it survives a reboot;
-       otherwise it goes to /etc/neo, which a live session forgets.
+         words keyword c678dd = begin end if then else while do
+         words type e5c07b = integer real char boolean string
+
+       /etc/neo/c.syn and the others that ship are worked examples.
+
+THE SYNTAX EDITOR
+       Writing the file by hand is optional. Edit syntax rules in the
+       settings opens a form for the same thing, and it does not need
+       a file open: on a bare neo it offers the languages already there
+       to edit, or a new one to start.
+
+       Moving highlights a line and the text below says what it does.
+       Enter changes the highlighted setting. On a colour it opens a
+       dialog with a slider per channel and a sample of the result, or
+       h to type the value as hex. On a group, Enter edits its words,
+       c its colour, r its name and d removes it; Ctrl-G or the last
+       line adds one.
+
+       Ctrl-S asks for a file name and writes the rules, then applies
+       them to the open file without leaving the editor. When a Cervus
+       system is mounted at /mnt the file goes to /mnt/etc/neo so it
+       survives a reboot; otherwise it goes to /etc/neo, which a live
+       session forgets.
