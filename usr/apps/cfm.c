@@ -315,8 +315,8 @@ static void draw(void) {
 
     tui_move(g_rows, 1);
     printf("\x1b[46m\x1b[30m"
-           " \x18\x19 nav  Enter open  e run  r rename  d del  c/x/v  "
-           "n mkdir  s settings  . hidden  q quit \x1b[0m\x1b[K");
+           " \x18\x19 nav  Enter open  e run  y copy path  r rename  d del  "
+           "c/x/v  n mkdir  s settings  . hidden  q quit \x1b[0m\x1b[K");
 
     if (prev_img) {
         char full[PMAX]; path_join(g_cwd, sel->name, full);
@@ -880,6 +880,31 @@ int main(int argc, char **argv) {
             g_sel = 0; load_dir(); set_status("");
             break;
         }
+        case 'y':
+            if (g_n) {
+                char full[PMAX];
+                path_join(g_cwd, g_ent[g_sel].name, full);
+                int fd = open("/tmp/.clip", O_RDONLY, 0);
+                if (fd >= 0) close(fd);
+                mkdir("/tmp/.clip", 0700);
+                for (int k = 8; k >= 0; k--) {
+                    char a[40], b[40];
+                    snprintf(a, sizeof a, "/tmp/.clip/%d", k);
+                    snprintf(b, sizeof b, "/tmp/.clip/%d", k + 1);
+                    unlink(b);
+                    rename(a, b);
+                }
+                int cf = open("/tmp/.clip/0", O_WRONLY | O_CREAT | O_TRUNC, 0600);
+                if (cf >= 0) {
+                    write(cf, full, strlen(full));
+                    write(cf, "\n", 1);
+                    close(cf);
+                    set_status("path copied - paste it in any terminal");
+                } else {
+                    set_status("could not reach the clipboard");
+                }
+            }
+            break;
         case 'e': run_program(); break;
         case 's': do_settings(); break;
         case 'r': do_rename(); break;

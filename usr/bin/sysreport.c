@@ -13,7 +13,13 @@ static const char USAGE[] =
 "sysreport - gather everything needed to diagnose this machine\n"
 "\n"
 "Usage\n"
-"  sysreport [file]\n"
+"  sysreport [file]        write it to a file (default /root/sysreport.txt)\n"
+"  sysreport -             write it to standard output\n"
+"\n"
+"To get the report off this machine in one command, ask for it over ssh\n"
+"from the other end:\n"
+"\n"
+"  ssh root@<this machine> sysreport - > report.txt\n"
 "\n"
 "Runs the commands someone debugging this system would ask for and\n"
 "writes the lot to one file, /root/sysreport.txt unless another path is\n"
@@ -131,10 +137,17 @@ int main(int argc, char **argv) {
     }
 
     const char *out = (argc > 1) ? argv[1] : "/root/sysreport.txt";
-    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        fprintf(stderr, "sysreport: cannot write %s\n", out);
-        return 1;
+    int to_stdout = (argc > 1 && !strcmp(argv[1], "-"));
+
+    int fd;
+    if (to_stdout) {
+        fd = 1;
+    } else {
+        fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            fprintf(stderr, "sysreport: cannot write %s\n", out);
+            return 1;
+        }
     }
 
     {
@@ -153,23 +166,24 @@ int main(int argc, char **argv) {
     }
 
     for (int i = 0; i < NSTEPS; i++) {
-        printf("  %-16s", STEPS[i].title);
-        fflush(stdout);
+        if (!to_stdout) { printf("  %-16s", STEPS[i].title); fflush(stdout); }
         banner(fd, STEPS[i].title);
         run_into(fd, &STEPS[i]);
-        printf("\x1b[32mok\x1b[0m\n");
+        if (!to_stdout) printf("\x1b[32mok\x1b[0m\n");
     }
 
-    printf("  %-16s", "kernel log");
-    fflush(stdout);
+    if (!to_stdout) { printf("  %-16s", "kernel log"); fflush(stdout); }
     dmesg_filtered(fd);
-    printf("\x1b[32mok\x1b[0m\n");
+    if (!to_stdout) printf("\x1b[32mok\x1b[0m\n");
+
+    if (to_stdout) return 0;
 
     close(fd);
 
     struct stat sb;
     unsigned long bytes = (stat(out, &sb) == 0) ? (unsigned long)sb.st_size : 0;
     printf("\nwritten to %s (%lu bytes)\n", out, bytes);
-    printf("read it with 'less %s', or copy it off with scp\n", out);
+    printf("to get it onto another machine, run this from there:\n");
+    printf("  ssh root@<this machine> sysreport - > report.txt\n");
     return 0;
 }

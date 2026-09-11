@@ -1,0 +1,45 @@
+NAME
+       copy, paste - a clipboard shared by every terminal
+
+SYNOPSIS
+       copy
+       copy file ...
+       copy -l
+       copy -c
+
+       paste [n]
+       paste -l
+       paste -i
+
+DESCRIPTION
+       Text copied in one terminal can be pasted in any other. Without
+       this there is no way to move text between the twelve consoles,
+       since there is no pointer to select with.
+
+       copy takes what is typed until Ctrl-D, or the contents of the
+       files named, or whatever is piped into it. paste writes it to
+       standard output, so it goes wherever it is sent: to the screen,
+       into a file, or through another command.
+
+       The last ten things copied are kept. paste 1 is the one before
+       last, paste -l lists them with a preview of each, and paste -i
+       shows the same list to choose from.
+
+       The file manager copies the path of the highlighted file with y,
+       into this same clipboard.
+
+EXAMPLES
+       ifconfig | copy              take the output
+       copy /etc/passwd             take a file
+       paste                        look at it
+       paste > saved.txt            into a file
+       paste 2 | grep error         an older one, through something
+       paste -i                     pick from the list
+
+NOTES
+       The clipboard lives in /tmp, so it is shared by everything on
+       the machine, including a session arriving over ssh, and is empty
+       again after a reboot.
+
+SEE ALSO
+       cfm(1), neo(1), csh(1)
