@@ -163,7 +163,8 @@ static int stored_block(inf_state *s) {
     return 0;
 }
 
-int raw_inflate(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen) {
+int raw_inflate_used(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen,
+                     size_t *used) {
     inf_state s;
     memset(&s, 0, sizeof s);
     s.in = in; s.inlen = inlen;
@@ -183,7 +184,25 @@ int raw_inflate(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen) 
     if (out_byte(&s, 0) < 0) { free(s.out); return -1; }
     s.outlen--;
     *out = s.out; *outlen = s.outlen;
+    if (used) *used = s.inpos;
     return 0;
+}
+
+int raw_inflate(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen) {
+    return raw_inflate_used(in, inlen, out, outlen, NULL);
+}
+
+int zlib_inflate_used(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen,
+                      size_t *used) {
+    if (inlen < 2) return -1;
+    if ((in[0] & 0x0f) != 8) return -1;
+    size_t off = 2;
+    if (in[1] & 0x20) off += 4;
+    if (off >= inlen) return -1;
+    size_t raw_used = 0;
+    int rc = raw_inflate_used(in + off, inlen - off, out, outlen, &raw_used);
+    if (rc == 0 && used) *used = off + raw_used + 4;
+    return rc;
 }
 
 int zlib_inflate(const uint8_t *in, size_t inlen, uint8_t **out, size_t *outlen) {

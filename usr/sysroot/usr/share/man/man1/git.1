@@ -14,6 +14,16 @@ COMMANDS
               Start a repository. Without an argument it uses the
               current directory.
 
+       clone <url> [directory]
+              Copy a repository from an HTTP server. It asks what
+              branches the server has, takes the one called main or
+              master, fetches a pack of everything reachable, unpacks
+              it - deltas included - and writes the files out.
+
+              Only http:// and https:// are understood; the ssh and
+              git protocols are not. The clone is complete history,
+              not a shallow copy.
+
        add <file>...
               Stage files for the next commit. Each file is stored as
               an object straight away, so staging is what fixes the
@@ -48,6 +58,10 @@ OBJECTS
        contents with a header, and stored zlib-compressed - the same
        as git. Refs are files under .git/refs holding a hash, and
        .git/HEAD names the branch in use.
+
+       A pack received from a server is unpacked into loose objects
+       rather than kept as a pack, so a large repository takes more
+       room here than it would elsewhere.
 
        The staging area is .git/index.txt, one line per file. Git's own
        index is a binary format this does not write, so git elsewhere

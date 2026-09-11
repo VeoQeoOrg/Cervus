@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <crypto.h>
 #include <inflate.h>
+#include <http.h>
 
 #define MAX_PATH_LEN 512
 #define MAX_INDEX    1024
@@ -17,6 +18,7 @@ static const char USAGE[] =
     "Usage: git <command> [arguments]\n"
     "\n"
     "  init [directory]        start a repository here\n"
+    "  clone <url> [dir]       copy a repository from a server\n"
     "  add <file>...           stage files for the next commit\n"
     "  rm <file>...            unstage files\n"
     "  status                  what is staged and what is not\n"
@@ -556,6 +558,454 @@ static int cmd_status(void)
     return 0;
 }
 
+
+typedef struct {
+    char     type[16];
+    uint8_t *data;
+    size_t   len;
+    char     hash[41];
+    size_t   offset;
+} pack_object_t;
+
+static void hash_object_name(const char *type, const uint8_t *body, size_t len, char out[41])
+{
+    char header[64];
+    int hlen = snprintf(header, sizeof header, "%s %zu", type, len);
+    uint8_t *whole = malloc((size_t)hlen + 1 + len);
+    if (!whole) { out[0] = 0; return; }
+    memcpy(whole, header, (size_t)hlen);
+    whole[hlen] = 0;
+    memcpy(whole + hlen + 1, body, len);
+    uint8_t d[20];
+    sha1(whole, (size_t)hlen + 1 + len, d);
+    free(whole);
+    hex_of(d, out);
+}
+
+static int http_to_file(const char *url, const char *method,
+                        const char *body, long body_len,
+                        const char *ctype, const char *path)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+
+    http_opts o;
+    memset(&o, 0, sizeof o);
+    o.method       = method;
+    o.data         = body;
+    o.data_len     = body_len;
+    o.content_type = ctype;
+    o.user_agent   = "git/2.0 (Cervus)";
+    o.follow       = 1;
+    o.max_redirs   = 5;
+    o.silent       = 1;
+    int status = 0;
+    o.out_status = &status;
+
+    int rc = http_request(url, fd, &o);
+    close(fd);
+
+    struct stat st;
+    long got = (stat(path, &st) == 0) ? (long)st.st_size : -1;
+
+    int code = status ? status : rc;
+    if (code < 200 || code >= 300) {
+        fprintf(stderr, "git: the server answered %d\n", code);
+        return -1;
+    }
+    if (got <= 0) {
+        fprintf(stderr, "git: the server sent nothing\n");
+        return -1;
+    }
+    return 0;
+}
+
+static int pkt_len(const uint8_t *p)
+{
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int c = p[i];
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if ((c | 32) >= 'a' && (c | 32) <= 'f') d = (c | 32) - 'a' + 10;
+        else return -1;
+        v = v * 16 + d;
+    }
+    return v;
+}
+
+static const char *type_name(int t)
+{
+    switch (t) {
+        case 1: return "commit";
+        case 2: return "tree";
+        case 3: return "blob";
+        case 4: return "tag";
+        default: return "";
+    }
+}
+
+static int find_by_hash(pack_object_t *o, int n, const char *hash)
+{
+    for (int i = 0; i < n; i++) if (!strcmp(o[i].hash, hash)) return i;
+    return -1;
+}
+
+static int find_by_offset(pack_object_t *o, int n, size_t off)
+{
+    for (int i = 0; i < n; i++) if (o[i].offset == off) return i;
+    return -1;
+}
+
+static size_t delta_varint(const uint8_t *d, size_t *at)
+{
+    size_t v = 0;
+    int shift = 0;
+    uint8_t b;
+    do {
+        b = d[(*at)++];
+        v |= (size_t)(b & 0x7F) << shift;
+        shift += 7;
+    } while (b & 0x80);
+    return v;
+}
+
+static uint8_t *apply_delta(const uint8_t *base, size_t base_len,
+                            const uint8_t *delta, size_t delta_len, size_t *out_len)
+{
+    size_t at = 0;
+    size_t want_base = delta_varint(delta, &at);
+    size_t result_len = delta_varint(delta, &at);
+    if (want_base != base_len) return NULL;
+
+    uint8_t *out = malloc(result_len ? result_len : 1);
+    if (!out) return NULL;
+    size_t wrote = 0;
+
+    while (at < delta_len && wrote < result_len) {
+        uint8_t op = delta[at++];
+        if (op & 0x80) {
+            size_t off = 0, size = 0;
+            if (op & 0x01) off  |= (size_t)delta[at++];
+            if (op & 0x02) off  |= (size_t)delta[at++] << 8;
+            if (op & 0x04) off  |= (size_t)delta[at++] << 16;
+            if (op & 0x08) off  |= (size_t)delta[at++] << 24;
+            if (op & 0x10) size |= (size_t)delta[at++];
+            if (op & 0x20) size |= (size_t)delta[at++] << 8;
+            if (op & 0x40) size |= (size_t)delta[at++] << 16;
+            if (size == 0) size = 0x10000;
+            if (off + size > base_len || wrote + size > result_len) { free(out); return NULL; }
+            memcpy(out + wrote, base + off, size);
+            wrote += size;
+        } else if (op) {
+            if (at + op > delta_len || wrote + op > result_len) { free(out); return NULL; }
+            memcpy(out + wrote, delta + at, op);
+            at += op;
+            wrote += op;
+        } else {
+            free(out);
+            return NULL;
+        }
+    }
+    *out_len = wrote;
+    return out;
+}
+
+static int unpack(const uint8_t *pack, size_t plen)
+{
+    if (plen < 12 || memcmp(pack, "PACK", 4)) {
+        fprintf(stderr, "git: that is not a pack file\n");
+        return -1;
+    }
+    uint32_t count = ((uint32_t)pack[8] << 24) | ((uint32_t)pack[9] << 16) |
+                     ((uint32_t)pack[10] << 8) | (uint32_t)pack[11];
+
+    pack_object_t *objs = calloc(count ? count : 1, sizeof(pack_object_t));
+    if (!objs) return -1;
+
+    size_t at = 12;
+    uint32_t done = 0;
+
+    while (done < count && at < plen) {
+        size_t start = at;
+        uint8_t c = pack[at++];
+        int type = (c >> 4) & 7;
+        size_t size = c & 15;
+        int shift = 4;
+        while (c & 0x80) {
+            if (at >= plen) goto broken;
+            c = pack[at++];
+            size |= (size_t)(c & 0x7F) << shift;
+            shift += 7;
+        }
+        (void)size;
+
+        char base_hash[41] = "";
+        size_t base_off = 0;
+
+        if (type == 7) {
+            if (at + 20 > plen) goto broken;
+            hex_of(pack + at, base_hash);
+            at += 20;
+        } else if (type == 6) {
+            if (at >= plen) goto broken;
+            uint8_t b = pack[at++];
+            size_t off = b & 0x7F;
+            while (b & 0x80) {
+                if (at >= plen) goto broken;
+                b = pack[at++];
+                off = ((off + 1) << 7) | (b & 0x7F);
+            }
+            if (off > start) goto broken;
+            base_off = start - off;
+        }
+
+        uint8_t *raw = NULL;
+        size_t rawlen = 0, used = 0;
+        if (zlib_inflate_used(pack + at, plen - at, &raw, &rawlen, &used) != 0) {
+            fprintf(stderr, "git: a pack entry would not decompress\n");
+            goto fail;
+        }
+        at += used;
+
+        objs[done].offset = start;
+
+        if (type >= 1 && type <= 4) {
+            snprintf(objs[done].type, sizeof objs[done].type, "%s", type_name(type));
+            objs[done].data = raw;
+            objs[done].len  = rawlen;
+            hash_object_name(objs[done].type, raw, rawlen, objs[done].hash);
+        } else {
+            int bi = (type == 7) ? find_by_hash(objs, (int)done, base_hash)
+                                 : find_by_offset(objs, (int)done, base_off);
+            if (bi < 0) {
+                fprintf(stderr, "git: a delta refers to an object the server did not send\n");
+                free(raw);
+                goto fail;
+            }
+            size_t outlen = 0;
+            uint8_t *full = apply_delta(objs[bi].data, objs[bi].len, raw, rawlen, &outlen);
+            free(raw);
+            if (!full) {
+                fprintf(stderr, "git: cannot rebuild a delta\n");
+                goto fail;
+            }
+            snprintf(objs[done].type, sizeof objs[done].type, "%s", objs[bi].type);
+            objs[done].data = full;
+            objs[done].len  = outlen;
+            hash_object_name(objs[done].type, full, outlen, objs[done].hash);
+        }
+        done++;
+    }
+
+    for (uint32_t i = 0; i < done; i++) {
+        char h[41];
+        write_object(objs[i].type, objs[i].data, objs[i].len, h);
+        free(objs[i].data);
+    }
+    free(objs);
+    printf("unpacked %u object%s\n", done, done == 1 ? "" : "s");
+    return 0;
+
+broken:
+    fprintf(stderr, "git: the pack ends in the middle of an object\n");
+fail:
+    for (uint32_t i = 0; i < done; i++) free(objs[i].data);
+    free(objs);
+    return -1;
+}
+
+static int checkout_tree(const char *tree_hash, const char *base)
+{
+    char type[16];
+    size_t len = 0;
+    uint8_t *body = read_object(tree_hash, type, &len);
+    if (!body || strcmp(type, "tree")) { free(body); return -1; }
+
+    size_t at = 0;
+    int files = 0;
+    while (at < len) {
+        char *entry = (char *)body + at;
+        size_t elen = strlen(entry);
+        if (at + elen + 1 + 20 > len) break;
+
+        char child[41];
+        hex_of(body + at + elen + 1, child);
+        at += elen + 1 + 20;
+
+        unsigned mode = 0;
+        char *space = strchr(entry, ' ');
+        if (!space) continue;
+        *space = 0;
+        mode = (unsigned)strtoul(entry, NULL, 8);
+        const char *name = space + 1;
+
+        char path[MAX_PATH_LEN];
+        snprintf(path, sizeof path, "%s/%s", base, name);
+
+        if (mode == 040000) {
+            mkdir(path, 0755);
+            files += checkout_tree(child, path);
+        } else {
+            char ctype[16];
+            size_t clen = 0;
+            uint8_t *content = read_object(child, ctype, &clen);
+            if (!content) continue;
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(content, 1, clen, f);
+                fclose(f);
+                if (mode & 0111) chmod(path, 0755);
+                files++;
+            }
+            free(content);
+        }
+    }
+    free(body);
+    return files;
+}
+
+static int cmd_clone(const char *url, const char *dest)
+{
+    char dir[MAX_PATH_LEN];
+    if (dest) snprintf(dir, sizeof dir, "%s", dest);
+    else {
+        const char *slash = strrchr(url, '/');
+        snprintf(dir, sizeof dir, "%s", slash ? slash + 1 : "repo");
+        size_t n = strlen(dir);
+        if (n > 4 && !strcmp(dir + n - 4, ".git")) dir[n - 4] = 0;
+    }
+
+    printf("cloning %s into %s\n", url, dir);
+
+    char base_url[512];
+    snprintf(base_url, sizeof base_url, "%s", url);
+    size_t bl = strlen(base_url);
+    while (bl && base_url[bl - 1] == '/') base_url[--bl] = 0;
+
+    if (cmd_init(dir) != 0) return 1;
+    snprintf(g_root, sizeof g_root, "%s", dir);
+
+    char refs_url[640];
+    snprintf(refs_url, sizeof refs_url, "%s/info/refs?service=git-upload-pack", base_url);
+
+    char refs_path[MAX_PATH_LEN];
+    snprintf(refs_path, sizeof refs_path, "%s/.git/refs.tmp", dir);
+
+    printf("asking what it has...\n");
+    if (http_to_file(refs_url, "GET", NULL, 0, NULL, refs_path) != 0) {
+        fprintf(stderr, "git: cannot reach %s\n", refs_url);
+        return 1;
+    }
+
+    size_t rlen = 0;
+    uint8_t *refs = slurp(refs_path, &rlen);
+    unlink(refs_path);
+    if (!refs) return 1;
+
+    char want[41] = "";
+    char branch[128] = "main";
+    size_t at = 0;
+    while (at + 4 <= rlen) {
+        int n = pkt_len(refs + at);
+        if (n < 0) break;
+        if (n == 0) { at += 4; continue; }
+        if ((size_t)n > rlen - at) break;
+        char *line = (char *)refs + at + 4;
+        size_t linelen = (size_t)n - 4;
+
+        if (linelen > 45 && line[40] == ' ') {
+            char h[41];
+            memcpy(h, line, 40);
+            h[40] = 0;
+            char name[160];
+            size_t nl = linelen - 41;
+            if (nl > sizeof name - 1) nl = sizeof name - 1;
+            memcpy(name, line + 41, nl);
+            name[nl] = 0;
+            char *nul = strchr(name, '\0');
+            for (char *p = name; p < nul; p++) if (*p == '\n' || *p == '\0') { *p = 0; break; }
+
+            if (!want[0] && !strncmp(name, "refs/heads/", 11)) {
+                snprintf(want, sizeof want, "%s", h);
+                snprintf(branch, sizeof branch, "%s", name + 11);
+            }
+            if (!strcmp(name, "refs/heads/main") || !strcmp(name, "refs/heads/master")) {
+                snprintf(want, sizeof want, "%s", h);
+                snprintf(branch, sizeof branch, "%s", name + 11);
+            }
+        }
+        at += (size_t)n;
+    }
+    free(refs);
+
+    if (!want[0]) {
+        fprintf(stderr, "git: the server offered no branches\n");
+        return 1;
+    }
+    printf("branch %s is at %.10s\n", branch, want);
+
+    char body[256];
+    int blen = snprintf(body, sizeof body, "0032want %s\n00000009done\n", want);
+
+    char pack_url[640];
+    snprintf(pack_url, sizeof pack_url, "%s/git-upload-pack", base_url);
+
+    char pack_path[MAX_PATH_LEN];
+    snprintf(pack_path, sizeof pack_path, "%s/.git/pack.tmp", dir);
+
+    printf("fetching...\n");
+    if (http_to_file(pack_url, "POST", body, blen,
+                     "application/x-git-upload-pack-request", pack_path) != 0) {
+        fprintf(stderr, "git: the server refused to send a pack\n");
+        return 1;
+    }
+
+    size_t plen = 0;
+    uint8_t *packet = slurp(pack_path, &plen);
+    unlink(pack_path);
+    if (!packet) return 1;
+
+    size_t skip = 0;
+    while (skip + 4 <= plen) {
+        int n = pkt_len(packet + skip);
+        if (n < 0) break;
+        if (n == 0) { skip += 4; continue; }
+        if (!memcmp(packet + skip + 4, "NAK", 3) || !memcmp(packet + skip + 4, "ACK", 3)) {
+            skip += (size_t)n;
+            continue;
+        }
+        break;
+    }
+    if (skip + 4 > plen) { free(packet); return 1; }
+
+    int rc = unpack(packet + skip, plen - skip);
+    free(packet);
+    if (rc != 0) return 1;
+
+    char refpath[MAX_PATH_LEN];
+    snprintf(refpath, sizeof refpath, "%s/.git/refs/heads/%s", dir, branch);
+    FILE *f = fopen(refpath, "w");
+    if (f) { fprintf(f, "%s\n", want); fclose(f); }
+
+    snprintf(refpath, sizeof refpath, "%s/.git/HEAD", dir);
+    f = fopen(refpath, "w");
+    if (f) { fprintf(f, "ref: refs/heads/%s\n", branch); fclose(f); }
+
+    char type[16];
+    size_t clen = 0;
+    uint8_t *commit = read_object(want, type, &clen);
+    if (commit && !strcmp(type, "commit") && clen > 45) {
+        char tree[41];
+        memcpy(tree, commit + 5, 40);
+        tree[40] = 0;
+        int files = checkout_tree(tree, dir);
+        printf("checked out %d file%s into %s\n", files, files == 1 ? "" : "s", dir);
+    }
+    free(commit);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
@@ -567,6 +1017,11 @@ int main(int argc, char **argv)
 
     if (!strcmp(cmd, "init"))
         return cmd_init(argc > 2 ? argv[2] : NULL);
+
+    if (!strcmp(cmd, "clone")) {
+        if (argc < 3) { fprintf(stderr, "git: clone needs a url\n"); return 1; }
+        return cmd_clone(argv[2], argc > 3 ? argv[3] : NULL);
+    }
 
     if (find_root() != 0) {
         fprintf(stderr, "git: not inside a repository (no .git here or above)\n");
