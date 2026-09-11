@@ -51,6 +51,14 @@
 #define SYS_FUTEX_WAIT       80
 #define SYS_FUTEX_WAKE       81
 
+#define SYS_EVENTFD          82
+#define SYS_TIMERFD_CREATE   83
+#define SYS_TIMERFD_SETTIME  84
+#define SYS_SOCKETPAIR       85
+#define SYS_EPOLL_CREATE     86
+#define SYS_EPOLL_CTL        87
+#define SYS_EPOLL_WAIT       88
+
 #define SYS_UNLINK          100
 #define SYS_RMDIR           101
 #define SYS_MKDIR           102

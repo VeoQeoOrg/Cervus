@@ -68,6 +68,25 @@ vnode_t *unix_new_vnode(int type) {
     return unix_make(type, NULL);
 }
 
+int unix_make_pair(vnode_t **a_out, vnode_t **b_out) {
+    unix_sock_t *sa = NULL, *sb = NULL;
+    vnode_t *va = unix_make(SOCK_STREAM, &sa);
+    if (!va) return -1;
+    vnode_t *vb = unix_make(SOCK_STREAM, &sb);
+    if (!vb) { free(sa); free(va); return -1; }
+
+    uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+    sa->peer = sb;
+    sb->peer = sa;
+    sa->state = U_CONNECTED;
+    sb->state = U_CONNECTED;
+    spinlock_release_irqrestore(&g_ulock, f);
+
+    *a_out = va;
+    *b_out = vb;
+    return 0;
+}
+
 int64_t unix_op_bind(vnode_t *vn, const char *path) {
     unix_sock_t *s = vn->fs_data;
     if (!path[0]) return -EINVAL;

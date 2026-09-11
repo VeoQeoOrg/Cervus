@@ -159,6 +159,13 @@ extern int64_t sys_shmdt(uint64_t);
 extern int64_t sys_shmctl(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semget(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_futex_wait(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_eventfd(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timerfd_create(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timerfd_settime(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_epoll_create(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_epoll_ctl(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_epoll_wait(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_socketpair(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_futex_wake(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semop(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semctl(uint64_t, uint64_t, uint64_t, uint64_t);
@@ -239,6 +246,9 @@ W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 W3(sys_futex_wait)  W3(sys_futex_wake)
+W3(sys_eventfd)     W3(sys_timerfd_create)  W3(sys_timerfd_settime)
+W3(sys_epoll_create) W3(sys_epoll_ctl)      W3(sys_epoll_wait)
+W3(sys_socketpair)
 W3(sys_mount9)
 W1(sys_audio_open)  W2(sys_audio_write)  W0(sys_audio_close)
 W3(sys_audio_mixer)
@@ -361,6 +371,13 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SHMAT]             = _sys_shmat,
     [SYS_SHMDT]             = _sys_shmdt,
     [SYS_SHMCTL]            = _sys_shmctl,
+    [SYS_EVENTFD]           = _sys_eventfd,
+    [SYS_TIMERFD_CREATE]    = _sys_timerfd_create,
+    [SYS_TIMERFD_SETTIME]   = _sys_timerfd_settime,
+    [SYS_EPOLL_CREATE]      = _sys_epoll_create,
+    [SYS_EPOLL_CTL]         = _sys_epoll_ctl,
+    [SYS_EPOLL_WAIT]        = _sys_epoll_wait,
+    [SYS_SOCKETPAIR]        = _sys_socketpair,
     [SYS_FUTEX_WAIT]        = _sys_futex_wait,
     [SYS_FUTEX_WAKE]        = _sys_futex_wake,
     [SYS_SEMGET]            = _sys_semget,

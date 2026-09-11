@@ -14,6 +14,13 @@ extern uint64_t sched_now_ns(void);
 #define POLL_MAX   256
 #define FDS_BYTES  128
 
+int vfs_poll_file(vfs_file_t *file, int events) {
+    if (!file || !file->vnode) return POLLNVAL;
+    if (file->vnode->ops && file->vnode->ops->poll)
+        return file->vnode->ops->poll(file->vnode, events);
+    return events & (POLLIN | POLLOUT);
+}
+
 static int vnode_poll(vnode_t *vn, int events) {
     if (vn && vn->ops && vn->ops->poll) return vn->ops->poll(vn, events);
     return POLLIN | POLLOUT;
