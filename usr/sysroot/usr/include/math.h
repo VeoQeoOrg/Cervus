@@ -18,6 +18,23 @@ double sin(double x);
 double cos(double x);
 double tan(double x);
 double atan2(double y, double x);
+double atan(double x);
+double asin(double x);
+double acos(double x);
+double exp(double x);
+double exp2(double x);
+double log(double x);
+double log10(double x);
+double fmod(double x, double y);
+double copysign(double x, double y);
+double trunc(double x);
+double fmin(double a, double b);
+double fmax(double a, double b);
+double hypot(double x, double y);
+double cbrt(double x);
+double sinh(double x);
+double cosh(double x);
+double tanh(double x);
 
 static inline double ldexp(double x, int exp) {
     union { double d; uint64_t u; } v;

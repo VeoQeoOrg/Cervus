@@ -5,12 +5,16 @@ static const double TWO_PI  = 6.283185307179586;
 
 static double sin_poly(double r) {
     double r2 = r * r;
-    return r * (1.0 + r2 * (-1.0/6.0 + r2 * (1.0/120.0 + r2 * (-1.0/5040.0 + r2 * (1.0/362880.0)))));
+    return r * (1.0 + r2 * (-1.0/6.0 + r2 * (1.0/120.0 + r2 * (-1.0/5040.0
+             + r2 * (1.0/362880.0 + r2 * (-1.0/39916800.0
+             + r2 * (1.0/6227020800.0 + r2 * (-1.0/1307674368000.0))))))));
 }
 
 static double cos_poly(double r) {
     double r2 = r * r;
-    return 1.0 + r2 * (-0.5 + r2 * (1.0/24.0 + r2 * (-1.0/720.0 + r2 * (1.0/40320.0 + r2 * (-1.0/3628800.0)))));
+    return 1.0 + r2 * (-0.5 + r2 * (1.0/24.0 + r2 * (-1.0/720.0
+         + r2 * (1.0/40320.0 + r2 * (-1.0/3628800.0
+         + r2 * (1.0/479001600.0 + r2 * (-1.0/87178291200.0)))))));
 }
 
 double cos(double x) {
@@ -36,17 +40,24 @@ double tan(double x) {
     return sin(x) / c;
 }
 
-static double atan_unit(double x) {
-    double ax = x < 0 ? -x : x;
-    double r = 0.785398163397448 * ax - ax * (ax - 1.0) * (0.2447 + 0.0663 * ax);
-    return x < 0 ? -r : r;
-}
-
 static double atan_one(double x) {
-    double ax = x < 0 ? -x : x;
-    if (ax <= 1.0) return atan_unit(x);
-    double r = HALF_PI - atan_unit(1.0 / ax);
-    return x < 0 ? -r : r;
+    int neg = 0;
+    if (x < 0.0) { x = -x; neg = 1; }
+
+    int k = 0;
+    while (x > 0.05 && k < 8) {
+        x = x / (1.0 + sqrt(1.0 + x * x));
+        k++;
+    }
+
+    double x2 = x * x, term = x, sum = 0.0;
+    for (int i = 0; i < 10; i++) {
+        double t = term / (double)(2 * i + 1);
+        sum += (i & 1) ? -t : t;
+        term *= x2;
+    }
+    sum *= (double)(1 << k);
+    return neg ? -sum : sum;
 }
 
 double atan2(double y, double x) {

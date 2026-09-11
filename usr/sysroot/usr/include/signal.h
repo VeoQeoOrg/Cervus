@@ -161,7 +161,6 @@ int sigaddset(sigset_t *set, int sig);
 int sigdelset(sigset_t *set, int sig);
 int sigismember(const sigset_t *set, int sig);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-int sigaltstack(const stack_t *ss, stack_t *oss);
 
 #define SIG_BLOCK    0
 #define SIG_UNBLOCK  1

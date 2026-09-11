@@ -1,6 +1,14 @@
 #ifndef _STDLIB_H
 #define _STDLIB_H
 
+typedef struct { int quot, rem; } div_t;
+typedef struct { long quot, rem; } ldiv_t;
+typedef struct { long long quot, rem; } lldiv_t;
+
+div_t   div(int num, int den);
+ldiv_t  ldiv(long num, long den);
+lldiv_t lldiv(long long num, long long den);
+
 #include <stddef.h>
 
 #define EXIT_SUCCESS 0
