@@ -50,8 +50,7 @@ DEFINE_IRQ(0x20, timer_handler)
     if (cpu == 0) ticks++;
     else tick_stall_check(cpu);
 
-    if (cpu == 0 && g_ctrlc_pending) {
-        g_ctrlc_pending = 0;
+    if (g_ctrlc_pending && __sync_bool_compare_and_swap(&g_ctrlc_pending, 1, 0)) {
         extern bool tty_has_isig_global(void);
         extern int  vt_active(void);
         extern void vt_write(int vt, const char *buf, size_t len);
@@ -64,9 +63,12 @@ DEFINE_IRQ(0x20, timer_handler)
             extern void signal_send_subtree(task_t *root, int sig);
             vt_write(vt, "^C\n", 3);
             task_t *fg = task_find_foreground();
+            LOG_D("[tty] ctrl-c on vt%d: isig=1 foreground=%u\n",
+                  vt, fg ? fg->pid : 0);
             if (fg) signal_send_subtree(fg, 2);
             else    tty_vt_input(vt, 0x03);
         } else {
+            LOG_D("[tty] ctrl-c on vt%d: the terminal is raw, passing 0x03 through\n", vt);
             tty_vt_input(vt, 0x03);
         }
     }

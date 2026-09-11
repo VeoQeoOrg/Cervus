@@ -71,6 +71,7 @@ typedef struct {
     int      nonblock;
     task_t  *nonblock_owner;
     task_t  *reader;
+    task_t  *raw_owner;
 } vt_tty_t;
 
 static vt_tty_t g_vtty[VT_COUNT];
@@ -136,6 +137,15 @@ bool tty_has_isig_global(void) {
 void tty_reset_nonblock(void) {
     g_vtty[cur_vt()].nonblock = 0;
     g_vtty[cur_vt()].nonblock_owner = NULL;
+}
+
+void tty_restore_sane(task_t *who) {
+    for (int i = 0; i < VT_COUNT; i++) {
+        vt_tty_t *t = &g_vtty[i];
+        if (t->raw_owner != who) continue;
+        t->raw_owner = NULL;
+        t->termios.c_lflag |= (T_ICANON | T_ECHO | T_ISIG);
+    }
 }
 
 void tty_clear_nonblock_owner(task_t *who) {
@@ -340,6 +350,10 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
     if (req == TCSETS || req == TCSETSW || req == TCSETSF) {
         if (!arg) return -EFAULT;
         memcpy(&t->termios, arg, sizeof(t->termios));
+        if ((t->termios.c_lflag & (T_ICANON | T_ISIG)) != (T_ICANON | T_ISIG))
+            t->raw_owner = devfs_cur_task();
+        else if (t->raw_owner == devfs_cur_task())
+            t->raw_owner = NULL;
         return 0;
     }
 

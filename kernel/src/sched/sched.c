@@ -478,6 +478,7 @@ void task_wakeup_waiters(uint32_t pid) {
 
 extern void tty_reset_nonblock(void);
 extern void tty_clear_nonblock_owner(task_t *who);
+extern void tty_restore_sane(task_t *who);
 
 __attribute__((noreturn)) void task_exit(void)
 {
@@ -491,6 +492,7 @@ __attribute__((noreturn)) void task_exit(void)
     LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
 
     tty_clear_nonblock_owner(me);
+    tty_restore_sane(me);
 
     extern void audio_task_exit(void *who);
     audio_task_exit(me);
