@@ -5,10 +5,74 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/cervus.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <signal.h>
+
+#define TIOCSNONBLOCK 0x5481
 
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD
 #include <minimp3.h>
+
+static struct termios g_orig;
+static int g_raw = 0;
+
+static void keys_end(void) {
+    if (!g_raw) return;
+    int nb = 0;
+    ioctl(0, TIOCSNONBLOCK, &nb);
+    tcsetattr(0, TCSAFLUSH, &g_orig);
+    g_raw = 0;
+}
+
+static void on_signal(int sig) {
+    (void)sig;
+    keys_end();
+    cervus_audio_close();
+    _exit(130);
+}
+
+static void keys_begin(void) {
+    if (!isatty(0)) return;
+    if (tcgetattr(0, &g_orig) != 0) return;
+    struct termios raw = g_orig;
+    raw.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(0, TCSAFLUSH, &raw);
+    int nb = 1;
+    ioctl(0, TIOCSNONBLOCK, &nb);
+    g_raw = 1;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_signal;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+}
+
+static int key_get(void) {
+    if (!g_raw) return -1;
+    char c;
+    if (read(0, &c, 1) == 1) return (unsigned char)c;
+    return -1;
+}
+
+static int g_paused = 0;
+
+static int should_stop(void) {
+    for (;;) {
+        int c = key_get();
+        if (c == 'q' || c == 'Q' || c == 27) return 1;
+        if (c == ' ') {
+            g_paused = !g_paused;
+            printf(g_paused ? "\rpaused  (space resume, q stop)   "
+                            : "\rplaying (space pause, q stop)   ");
+            fflush(stdout);
+        }
+        if (!g_paused) return 0;
+        if (c < 0) cervus_nanosleep(50000000ULL);
+    }
+}
 
 static uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -22,12 +86,14 @@ static int stream_stereo(const int16_t *st, size_t nframes, unsigned rate) {
         fprintf(stderr, "play: no audio device\n");
         return 1;
     }
+    if (g_raw) printf("space pause, q stop\n");
     const uint8_t *bytes = (const uint8_t *)st;
     size_t total = nframes * 4;
     size_t off = 0;
     while (off < total) {
+        if (should_stop()) break;
         size_t chunk = total - off;
-        if (chunk > 65536) chunk = 65536;
+        if (chunk > 16384) chunk = 16384;
         long w = cervus_audio_write(bytes + off, chunk);
         if (w <= 0) break;
         off += (size_t)w;
@@ -190,6 +256,7 @@ static int play_mp3(const char *path) {
             }
             printf("playing %s: MP3 %d Hz, %d ch, %d kbps\n",
                    path, info.hz, info.channels, info.bitrate_kbps);
+            printf("space pause, q stop\n");
             opened = 1;
         }
         int ch = info.channels;
@@ -199,6 +266,7 @@ static int play_mp3(const char *path) {
             st[i * 2] = l;
             st[i * 2 + 1] = r;
         }
+        if (should_stop()) break;
         cervus_audio_write(st, (unsigned long)samples * 4);
         total += samples;
     }
@@ -222,6 +290,14 @@ static int looks_like_mp3(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help"))) {
+        printf("Usage: play file.wav | file.mp3\n");
+        printf("       play -t [freq] [secs]   a plain tone\n");
+        printf("\nWhile playing: space pauses, q or Esc stops.\n");
+        return 0;
+    }
+    keys_begin();
+    atexit(keys_end);
     if (argc >= 2 && (!strcmp(argv[1], "-t") || !strcmp(argv[1], "--tone"))) {
         unsigned freq = (argc >= 3) ? (unsigned)atoi(argv[2]) : 440;
         unsigned secs = (argc >= 4) ? (unsigned)atoi(argv[3]) : 2;
