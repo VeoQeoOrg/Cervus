@@ -10,19 +10,44 @@ DESCRIPTION
        at the bottom.
 
 KEYS
-       Ctrl-O   save
-       Ctrl-X   exit
-       Ctrl-W   search
-       Ctrl-K   cut the current line
-       Ctrl-U   paste
-       Ctrl-G   help
+       Ctrl-S   save
+       Ctrl-Q   exit, twice if there are unsaved changes
+       Esc      exit as well
+       Ctrl-F   search
+       Ctrl-G   go to a line number
+       Ctrl-X   cut the current line
+       Ctrl-C   copy the current line
+       Ctrl-V   paste
+       Ctrl-D   duplicate the current line
+       Ctrl-B   jump to the start of the file
+       Ctrl-E   jump to the end of the file
+       Ctrl-N   line numbers on or off
+       Ctrl-L   pick the language for colouring
+       Ctrl-T   file tree
+       Ctrl-P   settings
        arrows, PgUp, PgDn, Home, End   move around
 
 SETTINGS
-       The settings menu covers line numbers, tab width, expanding tabs
-       into spaces, automatic indentation and trimming trailing
-       whitespace on save. Save settings writes them to ~/.neorc, which
-       is read at startup.
+       Ctrl-P opens the settings. Left and right change a value, Enter
+       acts on a line that says <Enter>.
+
+         Auto-pairs       type ( and get ), and the same for quotes
+         Line numbers     a number column down the left edge
+         Syntax           which language the colouring follows
+         Tab width        how wide a tab is drawn, 1 to 16
+         Quit confirm     ask before leaving an unsaved file
+         Expand tabs      insert spaces instead of a tab character
+         Auto indent      a new line starts where the last one did
+         Trim on save     drop trailing whitespace when saving
+         Highlight line   shade the line the cursor is on
+         Show tabs        draw tabs as > and dots, to see them
+         Backup on save   copy the old file to <name>.bak first
+         Scroll margin    lines kept above and below the cursor, 0 to 20
+         Edit syntax rules  the colouring editor, see below
+         Save settings    write them to ~/.neorc
+
+       ~/.neorc is read at startup, so the settings survive a reboot on
+       an installed system.
 
 FILES
        ~/.neorc
@@ -57,3 +82,12 @@ SYNTAX COLOURING
          types = integer real char boolean string
 
        /etc/neo/csh.syn ships as a working example.
+
+       Writing the file by hand is optional: Edit syntax rules in the
+       settings is a form for the same thing. It opens on the extension
+       of the file being edited, fills in whatever rules already exist,
+       and each line explains itself as you move onto it. Enter edits a
+       field, Ctrl-S writes the file and recolours the text at once.
+       Esc leaves without writing. When a Cervus system is mounted at
+       /mnt the file is written to /mnt/etc/neo so it survives a reboot;
+       otherwise it goes to /etc/neo, which a live session forgets.

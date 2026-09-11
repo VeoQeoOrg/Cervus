@@ -17,20 +17,43 @@ KEYS
        Backspace, left   go up
        e        run the selected file
        r        rename          d   delete
-       c        copy            x   cut          v   paste
+       c        copy            x   cut          v, p   paste
+       g        re-read the directory
        n        make a directory
+       o        open with another program
+       y        copy the path to the clipboard
        .        show hidden files
        s        settings
        q        quit
 
+       Up at the top of the listing wraps to the bottom, and down at
+       the bottom wraps back to the top.
+
+OPEN WITH
+       o offers the programs that suit the selected file - play for a
+       song, img for a picture, neo to edit it, less to read it - and
+       runs the one you pick. A directory is not offered anything.
+
 SETTINGS
-       The settings menu covers the preview pane, confirmation before
-       deleting, hidden files, sort order (name, size or type), the
-       width of the preview pane and GIF animation. Save settings
-       writes them to ~/.cfmrc, which is read at startup.
+       s opens the settings. Left and right change a value.
+
+         Preview pane     show the panel on the right at all
+         Confirm delete   ask before deleting
+         Show hidden      list names beginning with a dot
+         Sort by          name, size or type
+         Sort order       ascending or descending
+         Folders first    keep directories above files, however sorted
+         Show dates       a modification-time column in the listing
+         Preview width    how much of the screen the panel takes
+         Animate GIFs     play them in the panel, or show frame one
+         Confirm quit     ask before leaving
+         Save settings    write them to ~/.cfmrc
+
+       ~/.cfmrc is read at startup, so the settings survive a reboot on
+       an installed system.
 
 FILES
        ~/.cfmrc
 
 SEE ALSO
-       neo(1), img(1), ls(1)
+       neo(1), img(1), ls(1), play(1), copy(1), paste(1)

@@ -1,0 +1,48 @@
+NAME
+       console_theme, fb_setmode - console colours and screen resolution
+
+SYNOPSIS
+       #include <sys/syscall.h>
+
+       typedef struct {
+           uint32_t palette[16];
+           uint32_t fg;
+           uint32_t bg;
+       } console_theme_t;
+
+       syscall1(SYS_CONSOLE_THEME, &theme);
+       syscall3(SYS_FB_SETMODE, op, a, b);
+
+DESCRIPTION
+       SYS_CONSOLE_THEME replaces the sixteen palette entries, the
+       default text colour and the background, all as 0xRRGGBB.
+
+       Colours already on screen are mapped from the old palette to the
+       new one entry by entry, so what was red stays red and the
+       contents of every terminal survive the change. A grid allocated
+       afterwards takes the new colours, so a terminal opened later
+       matches. The debug monitor follows the theme as well, and the
+       kernel applies /etc/console.conf itself once the initramfs is
+       mounted, before init runs.
+
+       SYS_FB_SETMODE lists or sets the screen resolution. Operation 0
+       fills in a structure with the modes the adapter offers and the
+       one in use; operation 1 switches to the width and height given.
+       The backbuffer is reallocated and the terminals reflowed, the
+       same as after a font change.
+
+       Mode setting needs a Bochs display adapter, which is what QEMU,
+       Bochs and VirtualBox present. Real graphics chips have no driver
+       here and return ENODEV.
+
+RETURN VALUE
+       0 on success. Listing returns the count, or ENODEV where no
+       adapter supports it.
+
+ERRORS
+       EINVAL   the mode is not one the adapter accepts
+       ENODEV   this display cannot change mode
+       EFAULT   the structure is outside the address space
+
+SEE ALSO
+       theme(1), mode(1), setfont(2), framebuffer(2)

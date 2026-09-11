@@ -1,0 +1,28 @@
+NAME
+       driver_ctl - inspect and control device drivers
+
+SYNOPSIS
+       #include <sys/syscall.h>
+
+       syscall3(SYS_DRIVER_CTL, op, arg, value);
+
+DESCRIPTION
+       Operation 0 fills an array of driver records: the name, whether
+       anything on this machine matched, whether the probe succeeded,
+       how many devices were claimed, the vendor and device id of the
+       first, when it started, and whether it is probed at boot.
+
+       Operation 1 probes the hardware again with the named driver.
+       Operation 2 shuts it down, which only drivers carrying a stop
+       function can do. Operation 3 sets whether it is tried when a
+       matching device appears.
+
+       Listing is open to anyone; the rest require root.
+
+RETURN VALUE
+       Listing returns the number of drivers. The others return 0, or a
+       negative value: -1 no such driver, -2 nothing matched or the
+       driver cannot stop, -3 the probe or the stop failed.
+
+SEE ALSO
+       drv(1), lspci(2), sysreport(1)

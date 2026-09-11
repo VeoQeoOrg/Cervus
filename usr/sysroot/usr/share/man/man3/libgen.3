@@ -1,0 +1,30 @@
+NAME
+       basename, dirname - split a path into its last part and the rest
+
+SYNOPSIS
+       #include <libgen.h>
+
+       char *basename(char *path);
+       char *dirname(char *path);
+
+DESCRIPTION
+       basename returns the last component of the path; dirname
+       returns everything before it. Trailing slashes are ignored.
+
+         path            dirname    basename
+         /usr/lib/x      /usr/lib   x
+         /usr/lib/       /usr       lib
+         file            .          file
+         /               /          /
+         ""              .          .
+
+       Both may write to the string they are given and may return a
+       pointer into it, so pass a copy if the original still matters.
+       The result may also point at static storage that the next call
+       overwrites.
+
+RETURN VALUE
+       A pointer to the component. Never NULL.
+
+SEE ALSO
+       basename(1), dirname(1), string(3)

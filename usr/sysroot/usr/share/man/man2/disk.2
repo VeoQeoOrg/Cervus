@@ -14,6 +14,7 @@ SYNOPSIS
        int  cervus_disk_format(const char *dev, const char *label,
                                int ext4);
        int  cervus_disk_mkfs_fat32(const char *dev, const char *label);
+       int  cervus_disk_mkfs_udf(const char *dev, const char *label);
        int  cervus_disk_list_parts(cervus_part_info_t *out, int max);
        int  cervus_disk_format_progress(void);
        int  cervus_disk_eject(const char *dev);

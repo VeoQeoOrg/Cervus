@@ -1,0 +1,26 @@
+NAME
+       assert - stop the program when a condition does not hold
+
+SYNOPSIS
+       #include <assert.h>
+
+       void assert(scalar expression);
+
+DESCRIPTION
+       If the expression is false, assert prints the text of the
+       expression, the file, the line and the function to stderr and
+       aborts. If it is true, nothing happens.
+
+       Compiling with -DNDEBUG turns every assert into nothing, so the
+       expression is not evaluated at all. Never put work inside an
+       assert that the program depends on:
+
+         assert(read(fd, buf, n) == n);
+
+       reads nothing once NDEBUG is defined.
+
+RETURN VALUE
+       None. An assert that fails does not return.
+
+SEE ALSO
+       abort(3), err(3)
