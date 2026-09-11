@@ -34,16 +34,19 @@ static const char USAGE[] =
 "drv - the device drivers this kernel carries\n"
 "\n"
 "Usage\n"
-"  drv                      what is loaded, and what it found\n"
+"  drv                      the drivers this machine actually has hardware for\n"
+"  drv -a, drv all          every driver built in, matched or not\n"
 "  drv start <name>         probe the hardware again with that driver\n"
 "  drv stop <name>          shut it down, where the driver can\n"
 "  drv autostart <name> on|off\n"
 "\n"
 "A driver is listed as running once it has claimed at least one device.\n"
-"'idle' means the driver is built in but nothing here matches it, which\n"
-"is the normal state for most of them. 'failed' means it matched a\n"
-"device and could not bring it up - that is the one worth looking into,\n"
-"with dmesg or dbgmon.\n";
+"'failed' means it found its device and could not bring it up - that is\n"
+"the one worth looking into, with dmesg or dbgmon. 'stopped' means it\n"
+"has a device waiting but autostart is off.\n"
+"\n"
+"Drivers with no matching hardware are left out; drv -a shows them as\n"
+"'idle', which is the normal state for most drivers on any one machine.\n";
 
 static void fmt_uptime(uint64_t started_ns, char *out, size_t cap) {
     if (started_ns == 0) { snprintf(out, cap, "%8s", "-"); return; }
@@ -67,10 +70,14 @@ static const char *state_text(const drv_info_t *d, const char **colour) {
     }
 }
 
-static int list_drivers(void) {
+static int list_drivers(int show_all) {
     static drv_info_t d[DRV_MAX];
     long n = syscall3(SYS_DRIVER_CTL, DRV_OP_LIST, (long)d, 0);
     if (n < 0) { fprintf(stderr, "drv: cannot read the driver table\n"); return 1; }
+
+    int hidden = 0;
+    for (long i = 0; i < n; i++)
+        if (!d[i].matched) hidden++;
 
     printf("%-12s %-9s %-6s %-9s %-10s %s\n",
            "driver", "state", "auto", "uptime", "device", "");
@@ -78,8 +85,10 @@ static int list_drivers(void) {
     for (int i = 0; i < 58; i++) putchar('-');
     printf("\x1b[0m\n");
 
-    int running = 0, failed = 0;
+    int running = 0, failed = 0, shown = 0;
     for (long i = 0; i < n; i++) {
+        if (!show_all && !d[i].matched) continue;
+        shown++;
         const char *col;
         const char *st = state_text(&d[i], &col);
         if (d[i].state == ST_RUNNING) running++;
@@ -102,17 +111,24 @@ static int list_drivers(void) {
         putchar('\n');
     }
 
+    if (!shown)
+        printf("\x1b[90mno driver here has hardware to claim\x1b[0m\n");
+
     printf("\n%d running", running);
     if (failed) printf(", \x1b[31m%d failed\x1b[0m", failed);
-    printf(", %ld built in\n", n);
+    if (show_all) printf(", %ld built in\n", n);
+    else if (hidden) printf(", %d more built in with no hardware here (drv -a)\n", hidden);
+    else printf("\n");
     if (failed) printf("run 'dmesg' to see why a driver failed\n");
     return 0;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) return list_drivers();
+    if (argc < 2) return list_drivers(0);
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) { fputs(USAGE, stdout); return 0; }
-    if (!strcmp(argv[1], "list")) return list_drivers();
+    if (!strcmp(argv[1], "-a") || !strcmp(argv[1], "--all") || !strcmp(argv[1], "all"))
+        return list_drivers(1);
+    if (!strcmp(argv[1], "list")) return list_drivers(argc > 2 && !strcmp(argv[2], "all"));
 
     if (argc < 3) { fputs(USAGE, stderr); return 1; }
 

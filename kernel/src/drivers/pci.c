@@ -52,6 +52,12 @@ static int drv_index(const char *name) {
 }
 
 static bool drv_matches(const pci_driver_t *drv, const pci_device_t *d) {
+    if (drv->match_ids && drv->match_id_count > 0) {
+        uint32_t want = ((uint32_t)d->vendor_id << 16) | d->device_id;
+        for (int i = 0; i < drv->match_id_count; i++)
+            if (drv->match_ids[i] == want) return true;
+        return false;
+    }
     bool m_vendor   = (drv->match_vendor   < 0) || (uint16_t)drv->match_vendor   == d->vendor_id;
     bool m_device   = (drv->match_device   < 0) || (uint16_t)drv->match_device   == d->device_id;
     bool m_class    = (drv->match_class    < 0) || (uint8_t) drv->match_class    == d->class_code;

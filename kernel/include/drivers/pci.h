@@ -83,10 +83,13 @@ typedef struct pci_driver pci_driver_t;
 struct pci_driver {
     const char *name;
 
-    int16_t  match_vendor;
-    int16_t  match_device;
-    int16_t  match_class;
-    int16_t  match_subclass;
+    int32_t  match_vendor;
+    int32_t  match_device;
+    int32_t  match_class;
+    int32_t  match_subclass;
+
+    const uint32_t *match_ids;
+    int             match_id_count;
 
     int (*probe)(pci_device_t *dev);
     int (*stop)(void);

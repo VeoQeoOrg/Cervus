@@ -125,12 +125,20 @@ static int bga_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_bga_ids[] = {
+    0x12341111u,
+    0x80EEBEEFu,
+    0x1AF41050u,
+};
+
 static const pci_driver_t g_bga_driver = {
     .name           = "bga",
     .match_vendor   = -1,
     .match_device   = -1,
-    .match_class    = 0x03,
+    .match_class    = -1,
     .match_subclass = -1,
+    .match_ids      = g_bga_ids,
+    .match_id_count = (int)(sizeof g_bga_ids / sizeof g_bga_ids[0]),
     .probe          = bga_probe,
 };
 
