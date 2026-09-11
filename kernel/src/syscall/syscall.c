@@ -158,6 +158,8 @@ extern int64_t sys_shmat(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_shmdt(uint64_t);
 extern int64_t sys_shmctl(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semget(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_futex_wait(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_futex_wake(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semop(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semctl(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_mount9(uint64_t, uint64_t, uint64_t);
@@ -236,6 +238,7 @@ W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
+W3(sys_futex_wait)  W3(sys_futex_wake)
 W3(sys_mount9)
 W1(sys_audio_open)  W2(sys_audio_write)  W0(sys_audio_close)
 W3(sys_audio_mixer)
@@ -358,6 +361,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SHMAT]             = _sys_shmat,
     [SYS_SHMDT]             = _sys_shmdt,
     [SYS_SHMCTL]            = _sys_shmctl,
+    [SYS_FUTEX_WAIT]        = _sys_futex_wait,
+    [SYS_FUTEX_WAKE]        = _sys_futex_wake,
     [SYS_SEMGET]            = _sys_semget,
     [SYS_SEMOP]             = _sys_semop,
     [SYS_SEMCTL]            = _sys_semctl,

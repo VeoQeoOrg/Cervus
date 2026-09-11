@@ -494,6 +494,9 @@ __attribute__((noreturn)) void task_exit(void)
     tty_clear_nonblock_owner(me);
     tty_restore_sane(me);
 
+    extern void futex_task_exit(task_t *who);
+    futex_task_exit(me);
+
     extern void audio_task_exit(void *who);
     audio_task_exit(me);
 
