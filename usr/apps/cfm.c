@@ -38,6 +38,10 @@ static int      g_confirm_del = 1;
 static int      g_sort = 0;
 static int      g_preview_pct = 46;
 static int      g_gif_anim = 1;
+static int      g_show_dates = 1;
+static int      g_dirs_first = 1;
+static int      g_sort_desc  = 0;
+static int      g_confirm_quit = 0;
 static char     g_status[256];
 
 static image_t  g_thumb;
@@ -129,14 +133,16 @@ static const char *ext_of(const char *n) {
 }
 
 static int ent_cmp(const entry_t *a, const entry_t *b) {
-    if (a->is_dir != b->is_dir) return b->is_dir - a->is_dir;
+    if (g_dirs_first && a->is_dir != b->is_dir) return b->is_dir - a->is_dir;
+
+    int r = 0;
     if (g_sort == 1) {
-        if (a->size != b->size) return (a->size < b->size) ? 1 : -1;
+        if (a->size != b->size) r = (a->size < b->size) ? 1 : -1;
     } else if (g_sort == 2) {
-        int e = strcmp(ext_of(a->name), ext_of(b->name));
-        if (e) return e;
+        r = strcmp(ext_of(a->name), ext_of(b->name));
     }
-    return strcmp(a->name, b->name);
+    if (r == 0) r = strcmp(a->name, b->name);
+    return g_sort_desc ? -r : r;
 }
 
 static void load_dir(void) {
@@ -275,7 +281,7 @@ static void draw(void) {
             else           fmt_size(e->size, sz, sizeof(sz));
             char when[20];
             fmt_mtime(e->mtime, when, sizeof when);
-            int datew = (leftw >= 48) ? 15 : 0;
+            int datew = (g_show_dates && leftw >= 48) ? 15 : 0;
             int namew = leftw - 11 - datew; if (namew < 4) namew = 4;
             char nm[600];
             u8_pad(nm, sizeof nm, e->name, namew);
@@ -882,6 +888,10 @@ static void cfm_config_load(void) {
         else if (!strcmp(line, "sort"))        g_sort        = (v >= 0 && v <= 2) ? v : 0;
         else if (!strcmp(line, "previewpct"))  g_preview_pct = (v >= 20 && v <= 80) ? v : 46;
         else if (!strcmp(line, "gifanim"))     g_gif_anim    = v ? 1 : 0;
+        else if (!strcmp(line, "showdates"))   g_show_dates  = v ? 1 : 0;
+        else if (!strcmp(line, "dirsfirst"))   g_dirs_first  = v ? 1 : 0;
+        else if (!strcmp(line, "sortdesc"))    g_sort_desc   = v ? 1 : 0;
+        else if (!strcmp(line, "confirmquit")) g_confirm_quit = v ? 1 : 0;
     }
     fclose(f);
 }
@@ -897,28 +907,37 @@ static int cfm_config_save(void) {
     fprintf(f, "sort=%d\n",       g_sort);
     fprintf(f, "previewpct=%d\n", g_preview_pct);
     fprintf(f, "gifanim=%d\n",    g_gif_anim);
+    fprintf(f, "showdates=%d\n",  g_show_dates);
+    fprintf(f, "dirsfirst=%d\n",  g_dirs_first);
+    fprintf(f, "sortdesc=%d\n",   g_sort_desc);
+    fprintf(f, "confirmquit=%d\n", g_confirm_quit);
     fclose(f);
     return 0;
 }
 
 static void do_settings(void) {
     int sel = 0;
-    const int N = 7;
-    const char *names[7] = { "Preview pane", "Confirm delete", "Show hidden",
-                             "Sort by", "Preview width", "Animate GIFs",
-                             "Save settings" };
+    const int N = 11;
+    const char *names[11] = { "Preview pane", "Confirm delete", "Show hidden",
+                              "Sort by", "Sort order", "Folders first",
+                              "Show dates", "Preview width", "Animate GIFs",
+                              "Confirm quit", "Save settings" };
     static const char *sort_names[3] = { "name", "size", "type" };
     for (;;) {
         printf("\x1b[?25l\x1b[2J\x1b[H");
         printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n");
-        char vals[7][32];
+        char vals[11][32];
         snprintf(vals[0], sizeof vals[0], "%s", g_preview ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", g_confirm_del ? "ON" : "OFF");
         snprintf(vals[2], sizeof vals[2], "%s", g_show_hidden ? "ON" : "OFF");
         snprintf(vals[3], sizeof vals[3], "%s", sort_names[g_sort]);
-        snprintf(vals[4], sizeof vals[4], "%d%%", g_preview_pct);
-        snprintf(vals[5], sizeof vals[5], "%s", g_gif_anim ? "ON" : "OFF");
-        snprintf(vals[6], sizeof vals[6], "%s", "<Enter>");
+        snprintf(vals[4], sizeof vals[4], "%s", g_sort_desc ? "descending" : "ascending");
+        snprintf(vals[5], sizeof vals[5], "%s", g_dirs_first ? "ON" : "OFF");
+        snprintf(vals[6], sizeof vals[6], "%s", g_show_dates ? "ON" : "OFF");
+        snprintf(vals[7], sizeof vals[7], "%d%%", g_preview_pct);
+        snprintf(vals[8], sizeof vals[8], "%s", g_gif_anim ? "ON" : "OFF");
+        snprintf(vals[9], sizeof vals[9], "%s", g_confirm_quit ? "ON" : "OFF");
+        snprintf(vals[10], sizeof vals[10], "%s", "<Enter>");
         for (int i = 0; i < N; i++)
             printf("%s  %-16s %-12s\x1b[0m\r\n", i == sel ? "\x1b[7m" : "  ", names[i], vals[i]);
         fflush(stdout);
@@ -933,12 +952,16 @@ static void do_settings(void) {
                 case 1: g_confirm_del = !g_confirm_del; break;
                 case 2: g_show_hidden = !g_show_hidden; g_sel = 0; load_dir(); break;
                 case 3: g_sort = (g_sort + 3 + dir) % 3; load_dir(); break;
-                case 4: g_preview_pct += dir * 2;
+                case 4: g_sort_desc = !g_sort_desc; load_dir(); break;
+                case 5: g_dirs_first = !g_dirs_first; load_dir(); break;
+                case 6: g_show_dates = !g_show_dates; break;
+                case 7: g_preview_pct += dir * 2;
                         if (g_preview_pct < 20) g_preview_pct = 20;
                         if (g_preview_pct > 80) g_preview_pct = 80;
                         break;
-                case 5: g_gif_anim = !g_gif_anim; break;
-                case 6: cfm_config_save(); break;
+                case 8: g_gif_anim = !g_gif_anim; break;
+                case 9: g_confirm_quit = !g_confirm_quit; break;
+                case 10: cfm_config_save(); break;
             }
         }
     }
@@ -1036,7 +1059,9 @@ int main(int argc, char **argv) {
             load_dir();
             set_status(g_show_hidden ? "hidden files shown" : "hidden files hidden");
             break;
-        case 'q': running = 0; break;
+        case 'q':
+            if (!g_confirm_quit || confirm("leave the file manager?") == 1) running = 0;
+            break;
         default: break;
         }
     }
