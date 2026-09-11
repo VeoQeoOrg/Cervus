@@ -478,6 +478,12 @@ static void handle_sgr(void) {
             else         { if (ps_reverse) text_color = c; else bg_color = c; }
             i += 2;
         }
+        else if (p == 39) {
+            if (ps_reverse) bg_color = theme_fg; else text_color = theme_fg;
+        }
+        else if (p == 49) {
+            if (ps_reverse) text_color = theme_bg; else bg_color = theme_bg;
+        }
         else if (p >= 30 && p <= 37) {
             uint32_t c = ansi_color(p-30, ps_bold);
             if (ps_reverse) bg_color = c; else text_color = c;
