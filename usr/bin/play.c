@@ -59,6 +59,11 @@ static int key_get(void) {
 
 static int g_paused = 0;
 
+static void feed_silence(void) {
+    static int16_t silence[512 * 2];
+    cervus_audio_write(silence, sizeof silence);
+}
+
 static int should_stop(void) {
     for (;;) {
         int c = key_get();
@@ -70,7 +75,7 @@ static int should_stop(void) {
             fflush(stdout);
         }
         if (!g_paused) return 0;
-        if (c < 0) cervus_nanosleep(50000000ULL);
+        feed_silence();
     }
 }
 
