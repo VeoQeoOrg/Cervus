@@ -601,7 +601,7 @@ static void atl1e_report(atl1e_t *a) {
     a->last_tx = nd->tx_packets;
     a->last_drop = nd->rx_dropped;
 
-    LOG_I("[atl1e] %s rx=%llu tx=%llu rxdrop=%llu txdrop=%llu seqerr=%d "
+    LOG_D("[atl1e] %s rx=%llu tx=%llu rxdrop=%llu txdrop=%llu seqerr=%d "
           "using=%u p0(w=%u r=%u) p1(w=%u r=%u) isr=0x%08x tpd=%u/%u idle=0x%x\n",
           nd->name,
           (unsigned long long)nd->rx_packets, (unsigned long long)nd->tx_packets,
