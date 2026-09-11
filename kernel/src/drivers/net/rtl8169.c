@@ -230,12 +230,20 @@ static int rtl_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_rtl8169_ids[] = {
+    0x10EC8129u, 0x10EC8136u, 0x10EC8161u, 0x10EC8167u,
+    0x10EC8168u, 0x10EC8169u, 0x10EC2502u, 0x10EC2600u,
+    0x11864300u, 0x11864302u, 0x1259C107u, 0x17371032u,
+};
+
 static const pci_driver_t g_rtl8169_driver = {
     .name           = "rtl8169",
-    .match_vendor   = 0x10EC,
+    .match_vendor   = -1,
     .match_device   = -1,
-    .match_class    = 0x02,
-    .match_subclass = 0x00,
+    .match_class    = -1,
+    .match_subclass = -1,
+    .match_ids      = g_rtl8169_ids,
+    .match_id_count = (int)(sizeof g_rtl8169_ids / sizeof g_rtl8169_ids[0]),
     .probe          = rtl_probe,
 };
 

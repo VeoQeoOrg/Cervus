@@ -717,12 +717,18 @@ static int atl1e_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_atl1e_ids[] = {
+    0x19691026u, 0x19691066u,
+};
+
 static const pci_driver_t g_atl1e_driver = {
     .name           = "atl1e",
-    .match_vendor   = 0x1969,
-    .match_device   = 0x1026,
-    .match_class    = 0x02,
-    .match_subclass = 0x00,
+    .match_vendor   = -1,
+    .match_device   = -1,
+    .match_class    = -1,
+    .match_subclass = -1,
+    .match_ids      = g_atl1e_ids,
+    .match_id_count = (int)(sizeof g_atl1e_ids / sizeof g_atl1e_ids[0]),
     .probe          = atl1e_probe,
 };
 

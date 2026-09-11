@@ -293,12 +293,26 @@ static int e1000_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_e1000_ids[] = {
+    0x8086100Eu, 0x8086100Fu, 0x80861010u, 0x80861011u,
+    0x80861012u, 0x80861013u, 0x80861014u, 0x80861015u,
+    0x80861016u, 0x80861017u, 0x80861018u, 0x80861019u,
+    0x8086101Au, 0x8086101Du, 0x80861026u, 0x80861027u,
+    0x80861028u, 0x80861076u, 0x80861077u, 0x80861078u,
+    0x80861079u, 0x8086107Au, 0x8086107Bu, 0x80861107u,
+    0x80861112u, 0x808610B5u, 0x80861000u, 0x80861001u,
+    0x80861004u, 0x80861008u, 0x80861009u, 0x8086100Cu,
+    0x8086100Du, 0x8086153Au,
+};
+
 static const pci_driver_t g_e1000_driver = {
     .name           = "e1000",
-    .match_vendor   = 0x8086,
+    .match_vendor   = -1,
     .match_device   = -1,
-    .match_class    = 0x02,
-    .match_subclass = 0x00,
+    .match_class    = -1,
+    .match_subclass = -1,
+    .match_ids      = g_e1000_ids,
+    .match_id_count = (int)(sizeof g_e1000_ids / sizeof g_e1000_ids[0]),
     .probe          = e1000_probe,
 };
 

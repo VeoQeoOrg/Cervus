@@ -249,12 +249,18 @@ static int virtio_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_virtio_net_ids[] = {
+    0x1AF41000u, 0x1AF41041u,
+};
+
 static const pci_driver_t g_virtio_net_driver = {
     .name           = "virtio-net",
-    .match_vendor   = 0x1AF4,
+    .match_vendor   = -1,
     .match_device   = -1,
-    .match_class    = 0x02,
-    .match_subclass = 0x00,
+    .match_class    = -1,
+    .match_subclass = -1,
+    .match_ids      = g_virtio_net_ids,
+    .match_id_count = (int)(sizeof g_virtio_net_ids / sizeof g_virtio_net_ids[0]),
     .probe          = virtio_probe,
 };
 

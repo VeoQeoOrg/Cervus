@@ -485,19 +485,7 @@ static void atl1c_worker(void *arg) {
     }
 }
 
-static const uint16_t g_atl1c_ids[] = {
-    0x1062, 0x1063, 0x1066, 0x1067, 0x1073, 0x1083, 0x2060, 0x2062,
-};
-
 static int atl1c_probe(pci_device_t *dev) {
-    int known = 0;
-    for (size_t i = 0; i < sizeof g_atl1c_ids / sizeof g_atl1c_ids[0]; i++)
-        if (g_atl1c_ids[i] == dev->device_id) { known = 1; break; }
-    if (!known) {
-        serial_printf("[atl1c] %04x:%04x is not an L1c/L2c part, leaving it alone\n",
-                      dev->vendor_id, dev->device_id);
-        return -1;
-    }
 
     serial_printf("[atl1c] probe %02x:%02x.%u vendor=%04x device=%04x\n",
                   dev->bus, dev->device, dev->function, dev->vendor_id, dev->device_id);
@@ -607,12 +595,19 @@ static int atl1c_probe(pci_device_t *dev) {
 }
 
 
+static const uint32_t g_atl1c_ids[] = {
+    0x19691062u, 0x19691063u, 0x19691066u, 0x19691067u,
+    0x19691073u, 0x19691083u, 0x19692060u, 0x19692062u,
+};
+
 static const pci_driver_t g_atl1c_driver = {
     .name           = "atl1c",
-    .match_vendor   = 0x1969,
+    .match_vendor   = -1,
     .match_device   = -1,
-    .match_class    = 0x02,
-    .match_subclass = 0x00,
+    .match_class    = -1,
+    .match_subclass = -1,
+    .match_ids      = g_atl1c_ids,
+    .match_id_count = (int)(sizeof g_atl1c_ids / sizeof g_atl1c_ids[0]),
     .probe          = atl1c_probe,
 };
 

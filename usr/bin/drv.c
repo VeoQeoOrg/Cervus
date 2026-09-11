@@ -49,7 +49,7 @@ static const char USAGE[] =
 "'idle', which is the normal state for most drivers on any one machine.\n";
 
 static void fmt_uptime(uint64_t started_ns, char *out, size_t cap) {
-    if (started_ns == 0) { snprintf(out, cap, "%8s", "-"); return; }
+    if (started_ns == 0) { snprintf(out, cap, "%8s", "at boot"); return; }
     uint64_t now = cervus_uptime_ns();
     if (now <= started_ns) { snprintf(out, cap, "%8s", "0s"); return; }
     uint64_t s = (now - started_ns) / 1000000000ull;

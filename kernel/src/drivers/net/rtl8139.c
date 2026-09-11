@@ -158,12 +158,19 @@ static int rtl_probe(pci_device_t *dev) {
     return 0;
 }
 
+static const uint32_t g_rtl8139_ids[] = {
+    0x10EC8139u, 0x10EC8138u, 0x11131211u, 0x11861300u,
+    0x11861340u, 0x14321130u, 0x17438139u,
+};
+
 static const pci_driver_t g_rtl_driver = {
     .name           = "rtl8139",
-    .match_vendor   = 0x10EC,
-    .match_device   = 0x8139,
+    .match_vendor   = -1,
+    .match_device   = -1,
     .match_class    = -1,
     .match_subclass = -1,
+    .match_ids      = g_rtl8139_ids,
+    .match_id_count = (int)(sizeof g_rtl8139_ids / sizeof g_rtl8139_ids[0]),
     .probe          = rtl_probe,
 };
 
