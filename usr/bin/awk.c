@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -184,15 +185,28 @@ static void eval_unary(val_t *out)
     eval_primary(out);
 }
 
-static void eval_mul(val_t *out)
+static void eval_pow(val_t *out)
 {
     eval_unary(out);
+    skip_ws();
+    if (*E == '^' || (E[0] == '*' && E[1] == '*')) {
+        E += (*E == '^') ? 1 : 2;
+        val_t r;
+        eval_pow(&r);
+        set_num(out, pow(to_num(out), to_num(&r)));
+    }
+}
+
+static void eval_mul(val_t *out)
+{
+    eval_pow(out);
     for (;;) {
         skip_ws();
         char op = *E;
         if (op != '*' && op != '/' && op != '%') break;
+        if (op == '*' && E[1] == '*') break;
         E++;
-        val_t r; eval_unary(&r);
+        val_t r; eval_pow(&r);
         double a = to_num(out), b = to_num(&r);
         if (op == '*') set_num(out, a * b);
         else if (op == '/') set_num(out, b ? a / b : 0);
