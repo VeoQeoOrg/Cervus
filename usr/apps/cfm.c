@@ -268,7 +268,11 @@ static void draw(void) {
 
     printf("\x1b[?25l");
     tui_move(1, 1);
-    printf("\x1b[44m\x1b[97m cfm \x1b[0m\x1b[44m %-*.*s\x1b[0m", g_cols - 6, g_cols - 6, g_cwd);
+    {
+        char hdr[900];
+        u8_pad(hdr, sizeof hdr, g_cwd, g_cols - 6);
+        printf("\x1b[44m\x1b[97m cfm \x1b[0m\x1b[44m %s\x1b[0m", hdr);
+    }
 
     for (int i = 0; i < listrows; i++) {
         int idx = g_top + i;
@@ -444,8 +448,11 @@ static void view_file(const char *path) {
     for (;;) {
         printf("\x1b[?25l");
         tui_move(1, 1);
-        printf("\x1b[44m\x1b[97m view \x1b[0m\x1b[44m %-*.*s\x1b[0m",
-               g_cols - 7, g_cols - 7, path);
+        {
+            char hdr[900];
+            u8_pad(hdr, sizeof hdr, path, g_cols - 7);
+            printf("\x1b[44m\x1b[97m view \x1b[0m\x1b[44m %s\x1b[0m", hdr);
+        }
         for (int i = 0; i < view; i++) {
             tui_move(2 + i, 1);
             printf("\x1b[K");
@@ -750,18 +757,25 @@ static void open_with(void) {
 
         int inner = boxw - 2;
 
+        char cell[300];
+
         tui_move(r0, c0);
-        printf("\x1b[44m\x1b[97m %-*.*s \x1b[0m", inner, inner, "open with");
+        u8_pad(cell, sizeof cell, "open with", inner);
+        printf("\x1b[44m\x1b[97m %s \x1b[0m", cell);
+
         tui_move(r0 + 1, c0);
-        printf("\x1b[100m\x1b[97m %-*.*s \x1b[0m", inner, inner, e->name);
+        u8_pad(cell, sizeof cell, e->name, inner);
+        printf("\x1b[100m\x1b[97m %s \x1b[0m", cell);
 
         for (int i = 0; i < n; i++) {
             tui_move(r0 + 2 + i, c0);
-            if (i == sel) printf("\x1b[7m %-*.*s \x1b[0m", inner, inner, OPENERS[idx[i]].label);
-            else          printf("\x1b[47m\x1b[30m %-*.*s \x1b[0m", inner, inner, OPENERS[idx[i]].label);
+            u8_pad(cell, sizeof cell, OPENERS[idx[i]].label, inner);
+            if (i == sel) printf("\x1b[7m %s \x1b[0m", cell);
+            else          printf("\x1b[47m\x1b[30m %s \x1b[0m", cell);
         }
         tui_move(r0 + 2 + n, c0);
-        printf("\x1b[47m\x1b[30m %-*.*s \x1b[0m", inner, inner, "Enter open   Esc cancel");
+        u8_pad(cell, sizeof cell, "Enter open   Esc cancel", inner);
+        printf("\x1b[47m\x1b[30m %s \x1b[0m", cell);
         printf("\x1b[?25l");
         fflush(stdout);
 
