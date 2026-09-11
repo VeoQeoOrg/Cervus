@@ -90,6 +90,10 @@ typedef struct {
     int        expandtab;
     int        autoindent;
     int        trim_on_save;
+    int        hl_current_line;
+    int        show_tabs;
+    int        backup_on_save;
+    int        scroll_margin;
     struct termios orig_termios;
 } neo_t;
 
@@ -668,8 +672,9 @@ static void row_update(neo_row_t *row)
     int idx = 0;
     for (int j = 0; j < row->size; j++) {
         if (row->chars[j] == '\t') {
-            row->render[idx++] = ' ';
-            while (idx % E.tabstop != 0) row->render[idx++] = ' ';
+            row->render[idx++] = E.show_tabs ? '>' : ' ';
+            while (idx % E.tabstop != 0)
+                row->render[idx++] = E.show_tabs ? '.' : ' ';
         } else {
             row->render[idx++] = row->chars[j];
         }
@@ -1080,6 +1085,32 @@ static int editor_save(void)
         }
     }
 
+    if (E.backup_on_save) {
+        struct stat st;
+        if (stat(full, &st) == 0 && st.st_size > 0) {
+            char bak[540];
+            snprintf(bak, sizeof bak, "%s.bak", full);
+            int in = open(full, O_RDONLY);
+            if (in >= 0) {
+                int out = open(bak, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (out >= 0) {
+                    char cp[4096];
+                    long n;
+                    while ((n = read(in, cp, sizeof cp)) > 0) {
+                        long off = 0;
+                        while (off < n) {
+                            long w = write(out, cp + off, (size_t)(n - off));
+                            if (w <= 0) break;
+                            off += w;
+                        }
+                    }
+                    close(out);
+                }
+                close(in);
+            }
+        }
+    }
+
     int len = 0;
     char *buf = rows_to_string(&len);
 
@@ -1140,8 +1171,14 @@ static void scroll(void)
     int text_cols = E.screencols - E.lineno_width;
     if (text_cols < 1) text_cols = 1;
 
-    if (E.cy < E.rowoff) E.rowoff = E.cy;
-    if (E.cy >= E.rowoff + E.screenrows) E.rowoff = E.cy - E.screenrows + 1;
+    int margin = E.scroll_margin;
+    if (margin * 2 >= E.screenrows) margin = 0;
+
+    if (E.cy - margin < E.rowoff) E.rowoff = E.cy - margin;
+    if (E.cy + margin >= E.rowoff + E.screenrows)
+        E.rowoff = E.cy + margin - E.screenrows + 1;
+    if (E.rowoff < 0) E.rowoff = 0;
+    if (E.rowoff > E.cy) E.rowoff = E.cy;
     if (E.rx < E.coloff) E.coloff = E.rx;
     if (E.rx >= E.coloff + text_cols) E.coloff = E.rx - text_cols + 1;
 }
@@ -1158,6 +1195,8 @@ static void draw_rows(abuf_t *ab)
         ab_append(ab, pos, n);
 
         int filerow = y + E.rowoff;
+        int cur_line = (E.hl_current_line && filerow == E.cy && filerow < E.numrows);
+        if (cur_line) ab_append(ab, "\x1b[48;5;236m", 11);
 
         if (E.show_lineno) {
             char lnbuf[16];
@@ -1220,6 +1259,7 @@ static void draw_rows(abuf_t *ab)
             if (cur_hl != -1) ab_append(ab, "\x1b[39m", 5);
         }
         ab_append(ab, "\x1b[K", 3);
+        if (cur_line) ab_append(ab, "\x1b[49m", 5);
     }
 }
 
@@ -1779,6 +1819,10 @@ static void neo_config_load(void) {
         else if (!strcmp(line, "expandtab"))    E.expandtab    = v ? 1 : 0;
         else if (!strcmp(line, "autoindent"))   E.autoindent   = v ? 1 : 0;
         else if (!strcmp(line, "trimonsave"))   E.trim_on_save = v ? 1 : 0;
+        else if (!strcmp(line, "hlcurline"))    E.hl_current_line = v ? 1 : 0;
+        else if (!strcmp(line, "showtabs"))     E.show_tabs = v ? 1 : 0;
+        else if (!strcmp(line, "backup"))       E.backup_on_save = v ? 1 : 0;
+        else if (!strcmp(line, "scrollmargin")) E.scroll_margin = (v >= 0 && v <= 20) ? v : 0;
     }
     fclose(f);
 }
@@ -1795,23 +1839,229 @@ static int neo_config_save(void) {
     fprintf(f, "expandtab=%d\n",   E.expandtab);
     fprintf(f, "autoindent=%d\n",  E.autoindent);
     fprintf(f, "trimonsave=%d\n",  E.trim_on_save);
+    fprintf(f, "hlcurline=%d\n",    E.hl_current_line);
+    fprintf(f, "showtabs=%d\n",     E.show_tabs);
+    fprintf(f, "backup=%d\n",       E.backup_on_save);
+    fprintf(f, "scrollmargin=%d\n", E.scroll_margin);
     fclose(f);
     return 0;
+}
+
+static char g_syn_ext[16];
+
+static void syn_current_ext(char *out, size_t cap) {
+    out[0] = 0;
+    const char *dot = NULL;
+    if (E.filename)
+        for (const char *p = E.filename; *p; p++) if (*p == '.') dot = p;
+    if (dot && dot[1]) snprintf(out, cap, "%s", dot + 1);
+}
+
+static int syn_prompt_value(const char *label, char *buf, size_t cap)
+{
+    size_t n = strlen(buf);
+    for (;;) {
+        char line[256];
+        int k = snprintf(line, sizeof line,
+                         "\x1b[%d;1H\x1b[K\x1b[7m %s \x1b[0m %s_",
+                         E.screenrows + 2, label, buf);
+        write(1, line, k);
+
+        int c = read_key();
+        if (c == '\r' || c == '\n') break;
+        if (c == KEY_ESC) return -1;
+        if (c == 127 || c == 8) { if (n > 0) buf[--n] = 0; continue; }
+        if (c >= 32 && c < 127 && n + 1 < cap) { buf[n++] = (char)c; buf[n] = 0; }
+    }
+    return 0;
+}
+
+static void syn_dir_for_write(char *out, size_t cap)
+{
+    struct stat st;
+    if (stat("/mnt/etc", &st) == 0 && S_ISDIR(st.st_mode))
+        snprintf(out, cap, "/mnt%s", SYN_DIR);
+    else
+        snprintf(out, cap, "%s", SYN_DIR);
+}
+
+static int syn_write_file(const char *ext, char fields[8][256])
+{
+    char dir[160];
+    syn_dir_for_write(dir, sizeof dir);
+
+    struct stat st;
+    if (stat(dir, &st) != 0) mkdir(dir, 0755);
+
+    char path[224];
+    snprintf(path, sizeof path, "%s/%s.syn", dir, ext);
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+
+    if (fields[0][0]) fprintf(f, "name = %s\n", fields[0]);
+    if (fields[1][0]) fprintf(f, "comment = %s\n", fields[1]);
+    if (fields[2][0] && fields[3][0])
+        fprintf(f, "block = %s %s\n", fields[2], fields[3]);
+    fprintf(f, "strings = %s\n", fields[4][0] == 'd' ? "double" : "single");
+    fprintf(f, "backtick = %s\n", fields[5][0] == 'y' ? "1" : "0");
+    if (fields[6][0]) fprintf(f, "keywords = %s\n", fields[6]);
+    if (fields[7][0]) fprintf(f, "types = %s\n", fields[7]);
+    fclose(f);
+    return 0;
+}
+
+static void syn_load_into(const char *ext, char fields[8][256])
+{
+    for (int i = 0; i < 8; i++) fields[i][0] = 0;
+    snprintf(fields[4], 256, "single");
+    snprintf(fields[5], 256, "no");
+
+    char path[192];
+    snprintf(path, sizeof path, "%s/%s.syn", SYN_DIR, ext);
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        snprintf(path, sizeof path, "/mnt%s/%s.syn", SYN_DIR, ext);
+        f = fopen(path, "r");
+    }
+    if (!f) { snprintf(fields[0], 256, "%s", ext); return; }
+
+    char line[1024];
+    while (fgets(line, sizeof line, f)) {
+        char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+        char *t = syn_trim(line);
+        if (!*t || *t == '#') continue;
+        char *eq = strchr(t, '='); if (!eq) continue;
+        *eq = 0;
+        char *key = syn_trim(t), *val = syn_trim(eq + 1);
+
+        if      (!strcmp(key, "name"))     snprintf(fields[0], 256, "%s", val);
+        else if (!strcmp(key, "comment"))  snprintf(fields[1], 256, "%s", val);
+        else if (!strcmp(key, "block")) {
+            char *sp = strchr(val, ' ');
+            if (sp) { *sp = 0; snprintf(fields[2], 256, "%s", val);
+                      snprintf(fields[3], 256, "%s", syn_trim(sp + 1)); }
+        }
+        else if (!strcmp(key, "strings"))  snprintf(fields[4], 256, "%s", val);
+        else if (!strcmp(key, "backtick")) snprintf(fields[5], 256, "%s",
+                                                    (val[0]=='1'||val[0]=='y') ? "yes" : "no");
+        else if (!strcmp(key, "keywords")) {
+            size_t have = strlen(fields[6]);
+            snprintf(fields[6] + have, 256 - have, "%s%s", have ? " " : "", val);
+        }
+        else if (!strcmp(key, "types")) {
+            size_t have = strlen(fields[7]);
+            snprintf(fields[7] + have, 256 - have, "%s%s", have ? " " : "", val);
+        }
+    }
+    fclose(f);
+}
+
+static void editor_syntax_editor(void)
+{
+    syn_current_ext(g_syn_ext, sizeof g_syn_ext);
+    if (!g_syn_ext[0]) {
+        set_status("open a file with an extension first - the rules are named after it");
+        return;
+    }
+
+    static char fields[8][256];
+    syn_load_into(g_syn_ext, fields);
+
+    static const char *LBL[8] = {
+        "Language name", "Line comment", "Block opens", "Block closes",
+        "Strings", "Backtick strings", "Keywords", "Type names",
+    };
+    static const char *HINT[8] = {
+        "shown in the status bar",
+        "what starts a comment to end of line, such as # or //",
+        "what opens a block comment, such as /*",
+        "what closes it, such as */",
+        "single if ' quotes too, double if only \"",
+        "yes if ` quotes a string",
+        "words coloured as keywords, separated by spaces",
+        "words coloured as type names, in the second colour",
+    };
+
+    int sel = 0;
+    const int N = 8;
+    for (;;) {
+        abuf_t ab = {0};
+        ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
+
+        char hdr[200];
+        int n = snprintf(hdr, sizeof hdr,
+            "\x1b[44m\x1b[97m syntax rules for .%s \x1b[0m"
+            "  \x18\x19 move   Enter edit   ^S save   Esc close\r\n\r\n",
+            g_syn_ext);
+        ab_append(&ab, hdr, n);
+
+        for (int i = 0; i < N; i++) {
+            char line[400];
+            char shown[60];
+            snprintf(shown, sizeof shown, "%.55s%s", fields[i],
+                     strlen(fields[i]) > 55 ? "..." : "");
+            int k = snprintf(line, sizeof line, "%s  %-18s %-58s\x1b[0m\r\n",
+                             i == sel ? "\x1b[7m" : "  ", LBL[i], shown);
+            ab_append(&ab, line, k);
+        }
+
+        char wdir[160];
+        syn_dir_for_write(wdir, sizeof wdir);
+
+        char foot[280];
+        n = snprintf(foot, sizeof foot,
+                     "\r\n  \x1b[90m%s\x1b[0m\r\n\r\n"
+                     "  \x1b[90msaved to %s/%s.syn, and used by every .%s file\x1b[0m\r\n",
+                     HINT[sel], wdir, g_syn_ext, g_syn_ext);
+        ab_append(&ab, foot, n);
+
+        write(1, ab.b, ab.len);
+        ab_free(&ab);
+
+        int c = read_key();
+        if (c == KEY_ESC || c == 'q') break;
+        else if (c == KEY_ARROW_UP)   sel = (sel + N - 1) % N;
+        else if (c == KEY_ARROW_DOWN) sel = (sel + 1) % N;
+        else if (c == 19) {
+            if (syn_write_file(g_syn_ext, fields) == 0) {
+                E.syntax = lang_from_ext(E.filename ? E.filename : "");
+                for (int i = 0; i < E.numrows; i++) editor_update_syntax(i);
+                set_status("syntax rules saved and applied");
+                break;
+            }
+            set_status("cannot write the rules file");
+            break;
+        }
+        else if (c == '\r' || c == '\n') {
+            if (sel == 4) {
+                snprintf(fields[4], 256, "%s",
+                         fields[4][0] == 'd' ? "single" : "double");
+            } else if (sel == 5) {
+                snprintf(fields[5], 256, "%s",
+                         fields[5][0] == 'y' ? "no" : "yes");
+            } else {
+                syn_prompt_value(LBL[sel], fields[sel], 256);
+            }
+        }
+    }
+    write(1, "\x1b[2J\x1b[H", 7);
 }
 
 static void editor_settings(void)
 {
     int sel = 0;
-    const int NITEMS = 9;
-    const char *names[9] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width",
-                             "Quit confirm", "Expand tabs", "Auto indent",
-                             "Trim on save", "Save settings" };
+    const int NITEMS = 14;
+    const char *names[14] = { "Auto-pairs", "Line numbers", "Syntax", "Tab width",
+                              "Quit confirm", "Expand tabs", "Auto indent",
+                              "Trim on save", "Highlight line", "Show tabs",
+                              "Backup on save", "Scroll margin",
+                              "Edit syntax rules", "Save settings" };
     for (;;) {
         static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n";
         abuf_t ab = {0};
         ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
         ab_append(&ab, hdr, (int)(sizeof hdr - 1));
-        char vals[9][40];
+        char vals[14][40];
         snprintf(vals[0], sizeof vals[0], "%s", E.autopairs ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", E.show_lineno ? "ON" : "OFF");
         snprintf(vals[2], sizeof vals[2], "%s", LANG_NAMES[E.syntax]);
@@ -1820,7 +2070,12 @@ static void editor_settings(void)
         snprintf(vals[5], sizeof vals[5], "%s", E.expandtab ? "ON" : "OFF");
         snprintf(vals[6], sizeof vals[6], "%s", E.autoindent ? "ON" : "OFF");
         snprintf(vals[7], sizeof vals[7], "%s", E.trim_on_save ? "ON" : "OFF");
-        snprintf(vals[8], sizeof vals[8], "%s", "<Enter>");
+        snprintf(vals[8],  sizeof vals[8],  "%s", E.hl_current_line ? "ON" : "OFF");
+        snprintf(vals[9],  sizeof vals[9],  "%s", E.show_tabs ? "ON" : "OFF");
+        snprintf(vals[10], sizeof vals[10], "%s", E.backup_on_save ? "ON" : "OFF");
+        snprintf(vals[11], sizeof vals[11], "%d", E.scroll_margin);
+        snprintf(vals[12], sizeof vals[12], "%s", "<Enter>");
+        snprintf(vals[13], sizeof vals[13], "%s", "<Enter>");
         for (int i = 0; i < NITEMS; i++) {
             char line[128];
             int n = snprintf(line, sizeof line, "%s  %-16s %-12s\x1b[0m\r\n",
@@ -1847,7 +2102,15 @@ static void editor_settings(void)
                 case 5: E.expandtab = !E.expandtab; break;
                 case 6: E.autoindent = !E.autoindent; break;
                 case 7: E.trim_on_save = !E.trim_on_save; break;
-                case 8:
+                case 8:  E.hl_current_line = !E.hl_current_line; break;
+                case 9:  E.show_tabs = !E.show_tabs;
+                         for (int i = 0; i < E.numrows; i++) row_update(&E.row[i]); break;
+                case 10: E.backup_on_save = !E.backup_on_save; break;
+                case 11: E.scroll_margin += dir;
+                         if (E.scroll_margin < 0) E.scroll_margin = 0;
+                         if (E.scroll_margin > 20) E.scroll_margin = 20; break;
+                case 12: editor_syntax_editor(); return;
+                case 13:
                     if (neo_config_save() == 0) set_status("settings saved to ~/.neorc");
                     else                        set_status("cannot write ~/.neorc");
                     break;
