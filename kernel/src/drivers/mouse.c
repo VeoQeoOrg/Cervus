@@ -35,10 +35,16 @@ static mouse_scroll_t wheel_to_scroll(int32_t wheel) {
     return MOUSE_SCROLL_NONE;
 }
 
+extern void input_report_motion(int dx, int dy, int buttons, int prev_buttons);
+
 void mouse_inject_rel(int32_t dx, int32_t dy,
                       bool btn_left, bool btn_right, bool btn_middle,
                       int32_t wheel) {
     mouse_ensure_init();
+    int prev = (g_mouse.btn_left ? 1 : 0) | (g_mouse.btn_right ? 2 : 0)
+             | (g_mouse.btn_middle ? 4 : 0);
+    int now  = (btn_left ? 1 : 0) | (btn_right ? 2 : 0) | (btn_middle ? 4 : 0);
+    input_report_motion(dx, dy, now, prev);
     g_mouse.x += dx;
     g_mouse.y += dy;
     mouse_clamp();

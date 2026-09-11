@@ -200,6 +200,8 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
     static bool e0_prefix = false;
     uint8_t sc       = inb(PS2_DATA_PORT);
     bool    released = (sc & PS2_KEY_RELEASE_BIT) != 0;
+    extern void input_report_key(int keycode, int pressed);
+    input_report_key(sc & 0x7F, released ? 0 : 1);
     uint8_t key      = sc & ~PS2_KEY_RELEASE_BIT;
 
     if (sc == 0xE0) { e0_prefix = true; lapic_eoi(); return; }

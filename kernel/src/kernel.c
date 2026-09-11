@@ -429,6 +429,9 @@ void kmain(void) {
     printf("starting init...\n\n");
     kstage("load init (ELF)");
     load_elf_module();
+    extern void evdev_init(void);
+    evdev_init();
+
     puzzle_guardian_start();
 
     serial_writestring("Manually triggering first reschedule...\n");
