@@ -37,6 +37,7 @@ usr/sysroot/usr/lib/
 usr/installer/*.elf
 usr/apps/*.elf
 usr/bin/*.elf
+usr/ldso/*.elf
 .bash_history
 usr/cross/
 usr/sysroot/usr/share/media/*.mp3

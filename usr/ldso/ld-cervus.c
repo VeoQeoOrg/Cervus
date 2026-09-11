@@ -1,5 +1,12 @@
-#include <stdint.h>
-#include <stddef.h>
+typedef unsigned char      uint8_t;
+typedef unsigned short     uint16_t;
+typedef unsigned int       uint32_t;
+typedef unsigned long      uint64_t;
+typedef long               int64_t;
+typedef unsigned long      uintptr_t;
+typedef unsigned long      size_t;
+
+#define NULL ((void *)0)
 
 #define AT_NULL    0
 #define AT_PHDR    3

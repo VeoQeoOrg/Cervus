@@ -162,7 +162,6 @@ rule cc_app
 rule cc_ldso
   command = gcc -ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
     -mno-red-zone -mgeneral-regs-only -mcmodel=large -O2 -g -Wall -Wextra -nostdinc \
-    -isystem limine-tools/freestnd-c-hdrs/include \
     -Wl,-Ttext=0x7F0000001000 -Wl,--build-id=none -o \$out \$in
   description = CCLD(ldso) \$out
 
