@@ -9,7 +9,12 @@ DESCRIPTION
        reused from the beginning until every argument is consumed.
 
        Conversions: %s %d %i %u %x %X %o %c and %%.
-       Escapes: \n \t \r \\ and \0NNN for an octal byte.
+       Escapes: \n \t \r \a \b \f \v \e and \\.
+       \NNN writes a byte from one to three octal digits, \xNN from one
+       or two hex digits, so any byte can be written directly:
+
+         printf '\xd0\xaf\n'        prints the letter Я
+         printf 'red: \e[31mx\e[0m\n'
 
 EXAMPLES
        printf '%s is %d years old\n' Cervus 1

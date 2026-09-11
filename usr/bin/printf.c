@@ -4,33 +4,57 @@
 #include <cervus_util.h>
 
 static const char USAGE[] =
-    "Usage: printf format [arguments...]\nFormat and print data.\n\nSupports: %s %d %i %u %x %X %o %c %% and \\n \\t \\r \\\\ \\0NNN escapes.\nFormat is reused until all arguments are consumed.\n";
+    "Usage: printf format [arguments...]\nFormat and print data.\n\nSupports: %s %d %i %u %x %X %o %c %% and the escapes \\n \\t \\r \\a \\b \\f \\v \\e\n\\\\ \\NNN (octal) and \\xNN (hex), so bytes can be written directly.\nFormat is reused until all arguments are consumed.\n";
 
-static const char *emit_escaped(const char *s)
+static const char *emit_escape(const char *s)
 {
-    while (*s) {
-        if (*s == '\\' && s[1]) {
-            s++;
-            switch (*s) {
-                case 'n': putchar('\n'); break;
-                case 't': putchar('\t'); break;
-                case 'r': putchar('\r'); break;
-                case '\\': putchar('\\'); break;
-                case 'a': putchar('\a'); break;
-                case '0': {
-                    unsigned v = 0; int d = 0;
-                    while (d < 3 && s[1] >= '0' && s[1] <= '7') { s++; v = v*8 + (unsigned)(*s - '0'); d++; }
-                    putchar((char)v);
-                    break;
-                }
-                default: putchar('\\'); putchar(*s); break;
+    s++;
+    if (!*s) { putchar('\\'); return s; }
+
+    switch (*s) {
+        case 'n': putchar('\n');   return s + 1;
+        case 't': putchar('\t');   return s + 1;
+        case 'r': putchar('\r');   return s + 1;
+        case 'a': putchar('\a');   return s + 1;
+        case 'b': putchar('\b');   return s + 1;
+        case 'f': putchar('\f');   return s + 1;
+        case 'v': putchar('\v');   return s + 1;
+        case 'e': putchar('\x1b'); return s + 1;
+        case '\\': putchar('\\');  return s + 1;
+        case 'x': {
+            unsigned v = 0;
+            int d = 0;
+            const char *q = s + 1;
+            while (d < 2) {
+                char c = *q;
+                int hv;
+                if (c >= '0' && c <= '9') hv = c - '0';
+                else if ((c | 32) >= 'a' && (c | 32) <= 'f') hv = (c | 32) - 'a' + 10;
+                else break;
+                v = v * 16 + (unsigned)hv;
+                q++;
+                d++;
             }
-            s++;
-        } else {
-            putchar(*s++);
+            if (!d) { putchar('\\'); putchar('x'); return s + 1; }
+            putchar((char)v);
+            return q;
         }
+        default: break;
     }
-    return s;
+
+    if (*s >= '0' && *s <= '7') {
+        unsigned v = 0;
+        int d = 0;
+        const char *q = s;
+        if (*q == '0') q++;
+        while (d < 3 && *q >= '0' && *q <= '7') { v = v * 8 + (unsigned)(*q - '0'); q++; d++; }
+        putchar((char)v);
+        return q;
+    }
+
+    putchar('\\');
+    putchar(*s);
+    return s + 1;
 }
 
 int main(int argc, char **argv)
@@ -79,19 +103,7 @@ int main(int argc, char **argv)
                         break;
                 }
             } else if (*p == '\\') {
-                const char *one = p;
-                char tmp[8];
-                int tn = 0;
-                tmp[tn++] = *one++;
-                if (*one) {
-                    tmp[tn++] = *one++;
-                    if (tmp[1] == '0') {
-                        while (tn < 6 && *one >= '0' && *one <= '7') tmp[tn++] = *one++;
-                    }
-                }
-                tmp[tn] = '\0';
-                emit_escaped(tmp);
-                p = one;
+                p = emit_escape(p);
             } else {
                 putchar(*p++);
             }
