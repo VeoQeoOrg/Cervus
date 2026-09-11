@@ -87,6 +87,13 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
 
     const uint8_t *p = frame;
     uint16_t ethertype = rd16be(p + 12);
+
+    LOG_D("[net] %s rx type=0x%04x len=%u from %02x:%02x:%02x:%02x:%02x:%02x "
+          "to %02x:%02x:%02x:%02x:%02x:%02x\n",
+          dev->name, ethertype, (unsigned)len,
+          p[6], p[7], p[8], p[9], p[10], p[11],
+          p[0], p[1], p[2], p[3], p[4], p[5]);
+
     switch (ethertype) {
         case ETH_P_ARP:
             arp_rx(dev, p + 14, len - 14);

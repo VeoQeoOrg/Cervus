@@ -7,6 +7,7 @@
 #include "../../include/net/netdev.h"
 #include "../../include/sched/spinlock.h"
 #include <string.h>
+#include "../../include/io/serial.h"
 
 static uint16_t g_ip_id = 1;
 
@@ -114,7 +115,19 @@ void ip_rx(netdev_t *dev, const uint8_t *p, size_t len) {
     uint32_t dst   = rd32be(p + 16);
 
     int is_lb = (dst >> 24) == 127;
-    if (!is_lb && dev->ip && dst != dev->ip && dst != 0xFFFFFFFFu) return;
+    if (!is_lb && dev->ip && dst != dev->ip && dst != 0xFFFFFFFFu) {
+        LOG_D("[ip] %s dropping proto=%u for %u.%u.%u.%u, we are %u.%u.%u.%u\n",
+              dev->name, proto,
+              (dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff,
+              (dev->ip >> 24) & 0xff, (dev->ip >> 16) & 0xff,
+              (dev->ip >> 8) & 0xff, dev->ip & 0xff);
+        return;
+    }
+    LOG_D("[ip] %s rx proto=%u %u.%u.%u.%u -> %u.%u.%u.%u len=%u\n",
+          dev->name, proto,
+          (src >> 24) & 0xff, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff,
+          (dst >> 24) & 0xff, (dst >> 16) & 0xff, (dst >> 8) & 0xff, dst & 0xff,
+          (unsigned)total);
 
     const uint8_t *payload = p + ihl;
     size_t plen = total - ihl;

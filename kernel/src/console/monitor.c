@@ -162,18 +162,22 @@ static void mon_build_status(char *out, size_t n) {
     static const char *const FLT[] = { "all", "info", "warn", "err", "ok", "debug" };
     const char *flt = (g_filter < 0) ? FLT[0] : FLT[1 + g_filter];
 
+    static const char *const LVL[] = { "nothing", "errors", "warnings", "info", "everything" };
+    log_level_t lv = klog_get_level();
+    const char *lvname = LVL[((int)lv >= 0 && (int)lv <= 4) ? (int)lv : 3];
+
     char buf[240];
     if (g_mode == MON_LIVE) {
         snprintf(buf, sizeof buf,
-                 "  [debug monitor] LIVE   arrows/PgUp scroll  /:find  n:next"
-                 "  1-5:show %s  0:all  q:quit", flt);
+                 "  [debug monitor] LIVE   scroll  /:find  n:next  1-5:show %s  0:all"
+                 "  L:keeping %s  q:quit", flt, lvname);
     } else {
         uint64_t behind = klog_total() > g_pause_mark
                         ? klog_total() - g_pause_mark : 0;
         snprintf(buf, sizeof buf,
-                 "  [debug monitor] HELD (+%llu new, still logging)   G/End:live"
-                 "  /:find  n:next  1-5:show %s  0:all  q:quit",
-                 (unsigned long long)behind, flt);
+                 "  [debug monitor] HELD (+%llu new)  G:live  /:find  n:next"
+                 "  1-5:show %s  0:all  L:keeping %s  q:quit",
+                 (unsigned long long)behind, flt, lvname);
     }
     size_t p = 0;
     for (const char *q = buf; *q && p < n - 1; q++) out[p++] = *q;

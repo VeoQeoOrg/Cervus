@@ -103,9 +103,16 @@ void arp_rx(netdev_t *dev, const uint8_t *p, size_t len) {
     arp_cache_put(spa, sha);
 
     if (op == ARP_OP_REQUEST && dev->ip && tpa == dev->ip) {
+        LOG_I("[arp] %u.%u.%u.%u asks who has us, answering\n",
+              (spa >> 24) & 0xff, (spa >> 16) & 0xff, (spa >> 8) & 0xff, spa & 0xff);
         uint8_t reply[28];
         arp_build(reply, ARP_OP_REPLY, dev, sha, spa);
         eth_send(dev, sha, ETH_P_ARP, reply, sizeof(reply));
+    } else if (op == ARP_OP_REQUEST) {
+        LOG_D("[arp] request for %u.%u.%u.%u, not us (we are %u.%u.%u.%u)\n",
+              (tpa >> 24) & 0xff, (tpa >> 16) & 0xff, (tpa >> 8) & 0xff, tpa & 0xff,
+              (dev->ip >> 24) & 0xff, (dev->ip >> 16) & 0xff,
+              (dev->ip >> 8) & 0xff, dev->ip & 0xff);
     } else if (op == ARP_OP_REPLY) {
         serial_printf("[arp] %s: %u.%u.%u.%u is at %02x:%02x:%02x:%02x:%02x:%02x\n",
                       dev->name,

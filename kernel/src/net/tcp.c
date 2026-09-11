@@ -392,6 +392,16 @@ static tcp_tcb_t *find_listener6(uint16_t port) {
 }
 
 tcp_tcb_t *tcp_listen(uint16_t port) {
+    spinlock_acquire(&g_tcbs_lock);
+    for (tcp_tcb_t *e = g_tcbs; e; e = e->next) {
+        if (e->is_listener && e->local_port == port && e->state == TCP_LISTEN) {
+            spinlock_release(&g_tcbs_lock);
+            LOG_I("[tcp] port %u is already being listened on\n", port);
+            return NULL;
+        }
+    }
+    spinlock_release(&g_tcbs_lock);
+
     tcp_tcb_t *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
     netdev_t *dev = tdev();

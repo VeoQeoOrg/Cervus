@@ -473,7 +473,7 @@ void puzzle_destroy(puzzle_process_t *pp) {
 
 void puzzle_dump(const puzzle_process_t *pp) {
     if (!pp) return;
-    serial_printf("[puzzle] pid=%u '%s': %d pieces (alive=%d)\n",
+    LOG_D("[puzzle] pid=%u '%s': %d pieces (alive=%d)\n",
                   pp->logic ? pp->logic->pid : 0,
                   pp->logic ? pp->logic->name : "?",
                   pp->npieces, pp->alive_pieces);
@@ -483,17 +483,17 @@ void puzzle_dump(const puzzle_process_t *pp) {
         char w = (p->prot & PF_W) ? 'w' : '-';
         char x = (p->prot & PF_X) ? 'x' : '-';
         if (p->lives == PIECE_LIVES_INF)
-            serial_printf("[puzzle]   #%d %-6s [0x%llx..0x%llx] %c%c%c lives=INF\n",
+            LOG_D("[puzzle]   #%d %-6s [0x%llx..0x%llx] %c%c%c lives=INF\n",
                           i, piece_kind_name(p->kind),
                           (unsigned long long)p->va_start,
                           (unsigned long long)p->va_end, r, w, x);
         else
-            serial_printf("[puzzle]   #%d %-6s [0x%llx..0x%llx] %c%c%c lives=%d\n",
+            LOG_D("[puzzle]   #%d %-6s [0x%llx..0x%llx] %c%c%c lives=%d\n",
                           i, piece_kind_name(p->kind),
                           (unsigned long long)p->va_start,
                           (unsigned long long)p->va_end, r, w, x, p->lives);
     }
-    serial_printf("[puzzle]   ckpt seq=%llu armed=%d undo=%u snapshots=%llu%s\n",
+    LOG_D("[puzzle]   ckpt seq=%llu armed=%d undo=%u snapshots=%llu%s\n",
                   (unsigned long long)pp->ckpt_seq, pp->armed ? 1 : 0,
                   pp->undo_count, (unsigned long long)pp->total_snapshots,
                   pp->degraded ? " DEGRADED" : "");
