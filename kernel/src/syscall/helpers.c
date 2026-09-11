@@ -24,6 +24,12 @@ void syscall_save_user_regs(task_t *t)
     t->user_saved_r14 = pc->user_saved_r14;
     t->user_saved_r15 = pc->user_saved_r15;
     t->user_saved_r11 = pc->user_saved_r11;
+    t->user_saved_rdi = pc->user_saved_rdi;
+    t->user_saved_rsi = pc->user_saved_rsi;
+    t->user_saved_rdx = pc->user_saved_rdx;
+    t->user_saved_r10 = pc->user_saved_r10;
+    t->user_saved_r8  = pc->user_saved_r8;
+    t->user_saved_r9  = pc->user_saved_r9;
 }
 
 bool syscall_uptr_validate(const void *ptr, size_t len)

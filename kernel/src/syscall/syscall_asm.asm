@@ -12,6 +12,12 @@ PERCPU_SAVED_R13    equ 72
 PERCPU_SAVED_R14    equ 80
 PERCPU_SAVED_R15    equ 88
 PERCPU_SAVED_R11    equ 96
+PERCPU_SAVED_RDI    equ 136
+PERCPU_SAVED_RSI    equ 144
+PERCPU_SAVED_RDX    equ 152
+PERCPU_SAVED_R10    equ 160
+PERCPU_SAVED_R8     equ 168
+PERCPU_SAVED_R9     equ 176
 PERCPU_SAVED_RIP    equ 104
 PERCPU_NEED_RESCHED equ 40
 PERCPU_CURRENT_TASK equ 24
@@ -25,6 +31,13 @@ TASK_USER_SAVED_R13 equ 304
 TASK_USER_SAVED_R14 equ 312
 TASK_USER_SAVED_R15 equ 320
 TASK_USER_SAVED_R11 equ 328
+TASK_USER_SAVED_RDI equ 1680
+TASK_USER_SAVED_RSI equ 1688
+TASK_USER_SAVED_RDX equ 1696
+TASK_USER_SAVED_R10 equ 1704
+TASK_USER_SAVED_R8  equ 1712
+TASK_USER_SAVED_R9  equ 1720
+TASK_USER_SAVED_RAX equ 1728
 
 syscall_entry:
     swapgs
@@ -36,6 +49,12 @@ syscall_entry:
     mov  [gs:PERCPU_SAVED_R14], r14
     mov  [gs:PERCPU_SAVED_R15], r15
     mov  [gs:PERCPU_SAVED_R11], r11
+    mov  [gs:PERCPU_SAVED_RDI], rdi
+    mov  [gs:PERCPU_SAVED_RSI], rsi
+    mov  [gs:PERCPU_SAVED_RDX], rdx
+    mov  [gs:PERCPU_SAVED_R10], r10
+    mov  [gs:PERCPU_SAVED_R8],  r8
+    mov  [gs:PERCPU_SAVED_R9],  r9
     mov  [gs:PERCPU_SAVED_RIP], rcx
     mov  rsp, [gs:PERCPU_KERNEL_RSP]
 
@@ -101,6 +120,8 @@ syscall_entry:
 .fmt_zero_rip: db "[NO_RESCHED-BUG] task=0x%llx pid=%u user_saved_rip=0x%llx user_rsp=0x%llx", 10, 0
 .msg_zero_rip: db "sysret: user_saved_rip=0 — would fault at NULL", 0
 .rip_ok:
+    mov  [rax + TASK_USER_SAVED_RAX], r10
+
     mov  rsp, [rax + TASK_USER_RSP]
     mov  rcx, [rax + TASK_USER_SAVED_RIP]
     mov  r11, [rax + TASK_USER_SAVED_R11]
@@ -110,7 +131,6 @@ syscall_entry:
     mov  r13, [rax + TASK_USER_SAVED_R13]
     mov  r14, [rax + TASK_USER_SAVED_R14]
     mov  r15, [rax + TASK_USER_SAVED_R15]
-    mov  rax, r10
 
     and  r11, 0x00000000003C0FFF
     or   r11, 0x0000000000000202
@@ -123,12 +143,13 @@ syscall_entry:
     shr  r9, 47
     jnz  .sysret_bad_rsp
 
-    xor  rdx, rdx
-    xor  rsi, rsi
-    xor  rdi, rdi
-    xor  r8,  r8
-    xor  r9,  r9
-    xor  r10, r10
+    mov  rdi, [rax + TASK_USER_SAVED_RDI]
+    mov  rsi, [rax + TASK_USER_SAVED_RSI]
+    mov  rdx, [rax + TASK_USER_SAVED_RDX]
+    mov  r10, [rax + TASK_USER_SAVED_R10]
+    mov  r8,  [rax + TASK_USER_SAVED_R8]
+    mov  r9,  [rax + TASK_USER_SAVED_R9]
+    mov  rax, [rax + TASK_USER_SAVED_RAX]
 
     swapgs
     o64 sysret
@@ -137,7 +158,7 @@ syscall_entry:
     extern sysret_bad_rip_panic
     sti
     mov  rdi, rcx
-    mov  rsi, rax
+    mov  rsi, [rax + TASK_USER_SAVED_RAX]
     call sysret_bad_rip_panic
     cli
     hlt

@@ -37,6 +37,12 @@ typedef struct {
     uint8_t  _pad3[8];
     void* deferred_free_task;
     uint64_t sched_stack_top;
+    uint64_t user_saved_rdi;
+    uint64_t user_saved_rsi;
+    uint64_t user_saved_rdx;
+    uint64_t user_saved_r10;
+    uint64_t user_saved_r8;
+    uint64_t user_saved_r9;
 } __attribute__((aligned(64))) percpu_t;
 
 _Static_assert(__builtin_offsetof(percpu_t, syscall_kernel_rsp) == 0, "percpu: kernel_rsp");

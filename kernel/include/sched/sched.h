@@ -147,6 +147,13 @@ typedef struct task {
     uint64_t sig_restorer[32];
     uint64_t sig_mask[32];
 
+    uint64_t user_saved_rdi;
+    uint64_t user_saved_rsi;
+    uint64_t user_saved_rdx;
+    uint64_t user_saved_r10;
+    uint64_t user_saved_r8;
+    uint64_t user_saved_r9;
+    uint64_t user_saved_rax;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
