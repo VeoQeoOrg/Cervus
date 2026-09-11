@@ -713,8 +713,16 @@ int main(int argc, char **argv) {
     if (ls<0) { printf("sshd: socket failed\n"); return 1; }
     struct sockaddr_in a; memset(&a,0,sizeof a);
     a.sin_family=AF_INET; a.sin_port=htons((uint16_t)port); a.sin_addr.s_addr=INADDR_ANY;
-    if (bind(ls,(struct sockaddr*)&a,sizeof a)<0) { printf("sshd: bind :%d failed\n",port); return 1; }
-    if (listen(ls,4)<0) { printf("sshd: listen failed\n"); return 1; }
+    if (bind(ls,(struct sockaddr*)&a,sizeof a)<0) {
+        printf("\x1b[91msshd: cannot take port %d - something is already on it\x1b[0m\n", port);
+        printf("      'sysmon' shows what is running; use 'sshd -p <port>' for another one\n");
+        return 1;
+    }
+    if (listen(ls,4)<0) {
+        printf("\x1b[91msshd: port %d is already being listened on\x1b[0m\n", port);
+        printf("      an sshd is running already; kill it before starting another\n");
+        return 1;
+    }
     printf("sshd: listening on port %d\n", port);
 
     if (syscall2(SYS_AUTH, 0, 0) != 1) {
