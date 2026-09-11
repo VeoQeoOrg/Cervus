@@ -1,0 +1,68 @@
+NAME
+       git - track changes to files
+
+SYNOPSIS
+       git <command> [arguments]
+
+DESCRIPTION
+       Keeps the history of a directory the way git does, in the same
+       object format, so a repository made here can be read, checked
+       and cloned by git on another machine.
+
+COMMANDS
+       init [directory]
+              Start a repository. Without an argument it uses the
+              current directory.
+
+       add <file>...
+              Stage files for the next commit. Each file is stored as
+              an object straight away, so staging is what fixes the
+              content, not committing.
+
+       rm <file>...
+              Take files out of the staging area. The files themselves
+              are left alone.
+
+       status
+              Which branch this is, what is staged, and whether a
+              staged file has changed since it was staged.
+
+       commit -m <message>
+              Record everything staged. The author comes from
+              GIT_AUTHOR, or is 'Cervus user <user@cervus>'.
+
+       log    The commit leading here and every commit before it.
+
+       show <object>, cat-file <hash>
+              Print an object. A tree prints as one line per entry.
+
+       hash-object [-w] <file>
+              The name git would give the file. With -w it is also
+              written into the repository.
+
+       ls-files
+              What is staged, with mode and hash.
+
+OBJECTS
+       Objects live in .git/objects, named by the SHA-1 of their
+       contents with a header, and stored zlib-compressed - the same
+       as git. Refs are files under .git/refs holding a hash, and
+       .git/HEAD names the branch in use.
+
+       The staging area is .git/index.txt, one line per file. Git's own
+       index is a binary format this does not write, so git elsewhere
+       will not see the staging area, only the commits.
+
+ENVIRONMENT
+       GIT_AUTHOR
+              Name and address for commits, as 'Name <address>'.
+
+EXAMPLE
+         git init
+         echo 'hello' > readme.txt
+         git add readme.txt
+         git commit -m 'first commit'
+         git log
+
+SEE ALSO
+       sha1(3), inflate(3), ssh(1)
