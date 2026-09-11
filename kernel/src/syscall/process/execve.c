@@ -18,6 +18,7 @@
 #define AT_PHENT  4
 #define AT_PHNUM  5
 #define AT_PAGESZ 6
+#define AT_BASE   7
 #define AT_ENTRY  9
 
 static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
@@ -29,7 +30,7 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
     for (int i = 0; i < argc; i++) str_total += strlen(argv[i]) + 1;
     for (int i = 0; i < envc; i++) str_total += strlen(envp[i]) + 1;
 
-    size_t n_auxv      = 6;
+    size_t n_auxv      = 7;
     size_t ptr_count   = 1 + (size_t)argc + 1 + (size_t)envc + 1 + (n_auxv * 2);
     size_t frame_bytes = ptr_count * 8;
 
@@ -80,12 +81,20 @@ static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
     frame[fi++] = 0;
     for (int i = 0; i < envc; i++) frame[fi++] = envp_user[i];
     frame[fi++] = 0;
-    frame[fi++] = AT_PHDR;   frame[fi++] = elf->load_base + 0x40;
-    frame[fi++] = AT_PHENT;  frame[fi++] = 56;
-    frame[fi++] = AT_PHNUM;  frame[fi++] = 0;
+    frame[fi++] = AT_PHDR;   frame[fi++] = elf->phdr_vaddr ? elf->phdr_vaddr
+                                                        : elf->load_base + 0x40;
+    frame[fi++] = AT_PHENT;  frame[fi++] = elf->phentsize ? elf->phentsize : 56;
+    frame[fi++] = AT_PHNUM;  frame[fi++] = elf->phnum;
+    frame[fi++] = AT_BASE;   frame[fi++] = elf->has_interp ? elf->interp_base : 0;
     frame[fi++] = AT_ENTRY;  frame[fi++] = elf->entry;
     frame[fi++] = AT_PAGESZ; frame[fi++] = 4096;
     frame[fi++] = AT_NULL;   frame[fi++] = 0;
+
+    LOG_D("[execve] auxv phdr=0x%llx phnum=%u phent=%u entry=0x%llx base=0x%llx interp=%d\n",
+          (unsigned long long)(elf->phdr_vaddr ? elf->phdr_vaddr : elf->load_base + 0x40),
+          (unsigned)elf->phnum, (unsigned)elf->phentsize,
+          (unsigned long long)elf->entry,
+          (unsigned long long)elf->interp_base, elf->has_interp);
 
     memcpy(kbuf + (new_rsp - page_base), frame, fi * 8);
 
@@ -280,7 +289,7 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     t->brk_max    = 0x0000700000000000ULL;
 
     t->user_rsp       = new_rsp;
-    t->user_saved_rip = elf.entry;
+    t->user_saved_rip = elf.has_interp ? elf.interp_entry : elf.entry;
     t->user_saved_rbp = t->user_saved_rbx = 0;
     t->user_saved_r12 = t->user_saved_r13 = t->user_saved_r14 = 0;
     t->user_saved_r15 = t->user_saved_r11 = 0;
@@ -305,7 +314,7 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     percpu_t *pc = get_percpu();
     if (pc) {
         pc->syscall_user_rsp = new_rsp;
-        pc->user_saved_rip   = elf.entry;
+        pc->user_saved_rip   = elf.has_interp ? elf.interp_entry : elf.entry;
         pc->user_saved_rbp = pc->user_saved_rbx = 0;
         pc->user_saved_r12 = pc->user_saved_r13 = pc->user_saved_r14 = 0;
         pc->user_saved_r15 = 0;

@@ -159,6 +159,13 @@ rule cc_app
   depfile = \$out.d
   deps = gcc
 
+rule cc_ldso
+  command = gcc -ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
+    -mno-red-zone -mgeneral-regs-only -mcmodel=large -O2 -g -Wall -Wextra -nostdinc \
+    -isystem limine-tools/freestnd-c-hdrs/include \
+    -Wl,-Ttext=0x7F0000001000 -Wl,--build-id=none -o \$out \$in
+  description = CCLD(ldso) \$out
+
 rule ar
   command = rm -f \$out && ar rcs \$out \$in
   description = AR        \$out
@@ -208,12 +215,14 @@ for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     printf 'build %s: %s %s\n' "$obj" "$rule" "$src"
     LIB_OBJS="$LIB_OBJS $obj"
 done
+printf 'build obj/ldso/ld_start.o: asm_bare usr/ldso/ld_start.asm\n'
+printf 'build usr/ldso/ld-cervus.elf: cc_ldso obj/ldso/ld_start.o usr/ldso/ld-cervus.c\n\n'
 printf 'build obj/libcervus/setjmp.o: asm_bare usr/lib/libcervus/setjmp.asm\n'
 printf 'build %s: asm_bare usr/lib/libcervus/crt0.asm\n' "$CRT0"
 printf 'build %s: ar%s obj/libcervus/setjmp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
 
 PROG_DEPS="$CRT0 $LIBCERVUS_A"
-ALL_ELFS=""
+ALL_ELFS=" usr/ldso/ld-cervus.elf"
 for dir in usr/apps usr/bin usr/installer; do
     [ -d "$dir" ] || continue
     for src in "$dir"/*.c; do

@@ -119,6 +119,12 @@ typedef struct {
     uintptr_t       load_end;
     elf_segment_t   segments[ELF_MAX_SEGMENTS];
     int             nsegments;
+    uintptr_t       phdr_vaddr;
+    uint16_t        phnum;
+    uint16_t        phentsize;
+    int             has_interp;
+    uintptr_t       interp_base;
+    uintptr_t       interp_entry;
 } elf_load_result_t;
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);

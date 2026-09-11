@@ -35,6 +35,7 @@ static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len
 }
 
 #define ELF_PIE_BASE        0x0000000000400000ULL
+#define ELF_INTERP_BASE     0x00007F0000000000ULL
 #define ELF_USER_STACK_TOP  0x00007FFFFFFFE000ULL
 #define ELF_DEFAULT_STACK   (256 * 1024)
 
@@ -350,6 +351,57 @@ uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top) {
     return rsp;
 }
 
+static elf_error_t load_interp(vmm_pagemap_t *map, const char *path,
+                               elf_load_result_t *result)
+{
+    vfs_file_t *f = NULL;
+    if (vfs_open(path, 0, 0, &f) < 0 || !f) return ELF_ERR_NULL;
+
+    vfs_stat_t st;
+    if (vfs_fstat(f, &st) < 0) { vfs_close(f); return ELF_ERR_NULL; }
+
+    elf_source_t isrc = { .buf = NULL, .file = f, .size = (size_t)st.st_size };
+
+    elf64_ehdr_t ehdr;
+    if (src_read(&isrc, &ehdr, 0, sizeof ehdr) < 0) { vfs_close(f); return ELF_ERR_TOO_SMALL; }
+
+    elf_error_t verr = elf_validate(&ehdr, isrc.size);
+    if (verr != ELF_OK) { vfs_close(f); return verr; }
+
+    uintptr_t bias = (ehdr.e_type == ET_DYN) ? ELF_INTERP_BASE : 0;
+    uintptr_t max_vaddr = 0;
+    bool any = false;
+
+    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+        elf64_phdr_t ph;
+        if (src_read(&isrc, &ph, ehdr.e_phoff + (uint64_t)ehdr.e_phentsize * i,
+                     sizeof ph) < 0) { vfs_close(f); return ELF_ERR_TOO_SMALL; }
+        if (ph.p_type != PT_LOAD) continue;
+        any = true;
+        LOG_D("[ELF] interp seg vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=0x%x\n",
+              (unsigned long long)(ph.p_vaddr + bias),
+              (unsigned long long)ph.p_filesz,
+              (unsigned long long)ph.p_memsz, ph.p_flags);
+        elf_error_t err = load_segment(map, &isrc, isrc.size, &ph, bias);
+        if (err != ELF_OK) { vfs_close(f); return err; }
+        uintptr_t end = ph.p_vaddr + bias + ph.p_memsz;
+        if (end > max_vaddr) max_vaddr = end;
+    }
+    vfs_close(f);
+
+    if (!any) return ELF_ERR_NO_LOAD;
+
+    result->has_interp  = 1;
+    result->interp_base = bias;
+    result->interp_entry = ehdr.e_entry + bias;
+    result->load_end = page_align_up(max_vaddr) > result->load_end
+                     ? result->load_end : result->load_end;
+
+    LOG_D("[ELF] interpreter loaded at 0x%llx, entry 0x%llx\n",
+          (unsigned long long)bias, (unsigned long long)result->interp_entry);
+    return ELF_OK;
+}
+
 static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz) {
     elf_load_result_t result = {0};
     size_t size = src->size;
@@ -421,6 +473,30 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
 
     if (!has_load) { result.error = ELF_ERR_NO_LOAD; return result; }
 
+    result.phnum     = ehdr->e_phnum;
+    result.phentsize = ehdr->e_phentsize;
+    result.phdr_vaddr = 0;
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        elf64_phdr_t phbuf;
+        if (src_read(src, &phbuf,
+                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
+                     sizeof(phbuf)) < 0) break;
+        if (phbuf.p_type == PT_PHDR) {
+            result.phdr_vaddr = phbuf.p_vaddr + load_bias;
+            break;
+        }
+    }
+    if (!result.phdr_vaddr) {
+        for (int i = 0; i < result.nsegments; i++) {
+            const elf_segment_t *sg = &result.segments[i];
+            if (ehdr->e_phoff >= sg->offset &&
+                ehdr->e_phoff < sg->offset + sg->filesz) {
+                result.phdr_vaddr = sg->vaddr + (ehdr->e_phoff - sg->offset);
+                break;
+            }
+        }
+    }
+
     uintptr_t load_end = page_align_up(max_vaddr);
 
     load_end = cover_orphan_sections(map, ehdr, src, size, load_bias, load_end);
@@ -431,6 +507,34 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
 
     LOG_D("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
                   result.entry, result.load_end);
+
+    char interp_path[128];
+    interp_path[0] = 0;
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        elf64_phdr_t phbuf;
+        if (src_read(src, &phbuf,
+                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
+                     sizeof(phbuf)) < 0) break;
+        if (phbuf.p_type != PT_INTERP) continue;
+        size_t n = phbuf.p_filesz;
+        if (n == 0 || n >= sizeof interp_path) break;
+        if (src_read(src, interp_path, phbuf.p_offset, n) < 0) break;
+        interp_path[n] = 0;
+        break;
+    }
+
+    if (interp_path[0]) {
+        LOG_D("[ELF] interpreter: %s\n", interp_path);
+        elf_error_t ierr = load_interp(map, interp_path, &result);
+        if (ierr != ELF_OK) {
+            serial_printf("[ELF] cannot load interpreter %s: %s\n",
+                          interp_path, elf_strerror(ierr));
+            result.error = ierr;
+            return result;
+        }
+        if (result.interp_base + 0x1000000ULL > load_end)
+            load_end = result.load_end;
+    }
 
     if (stack_sz == 0) stack_sz = ELF_DEFAULT_STACK;
     result.stack_size = stack_sz;

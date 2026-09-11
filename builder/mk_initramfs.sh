@@ -15,7 +15,7 @@ green() { printf '\033[92m[initramfs]\033[0m %s\n' "$*"; }
 red()   { printf '\033[91m[initramfs] %s\033[0m\n' "$*" >&2; }
 
 rm -rf "$RFS"
-mkdir -p "$RFS"/bin "$RFS"/dev "$RFS"/etc "$RFS"/etc/skel "$RFS"/home "$RFS"/tmp "$RFS"/proc "$RFS"/apps "$RFS"/root
+mkdir -p "$RFS"/bin "$RFS"/dev "$RFS"/etc "$RFS"/etc/skel "$RFS"/home "$RFS"/tmp "$RFS"/proc "$RFS"/apps "$RFS"/root "$RFS"/lib
 
 printf 'root:x:0:0:root:/root:/bin/csh\n' > "$RFS/etc/passwd"
 chmod 0644 "$RFS/etc/passwd"
@@ -58,6 +58,16 @@ for elf in usr/bin/*.elf; do
     cp "$elf" "$RFS/bin/$(basename "$elf" .elf)"
 done
 [ -e "$RFS/bin/test" ] && cp "$RFS/bin/test" "$RFS/bin/["
+
+if [ -f usr/ldso/ld-cervus.elf ]; then
+    cp usr/ldso/ld-cervus.elf "$RFS/lib/ld-cervus.elf"
+    green "dynamic loader installed"
+fi
+for so in usr/lib/shared/*.so; do
+    [ -e "$so" ] || continue
+    cp "$so" "$RFS/lib/$(basename "$so")"
+    green "shared library $(basename "$so") installed"
+done
 green "copied /bin programs"
 
 for elf in usr/apps/*.elf; do
