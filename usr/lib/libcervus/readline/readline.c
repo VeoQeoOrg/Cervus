@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <sys/ioctl.h>
@@ -687,6 +688,27 @@ static int prompt_visible_len(const char *p) {
     return n;
 }
 
+static int cursor_column(void) {
+    struct pollfd pfd = { 0, POLLIN, 0 };
+    write(1, "\x1b[6n", 4);
+
+    char rep[32];
+    int n = 0;
+    while (n < (int)sizeof rep - 1) {
+        if (poll(&pfd, 1, 60) <= 0) break;
+        char c;
+        if (read(0, &c, 1) != 1) break;
+        rep[n++] = c;
+        if (c == 'R') break;
+    }
+    rep[n] = 0;
+    if (n < 6 || rep[n - 1] != 'R') return -1;
+
+    const char *semi = strchr(rep, ';');
+    if (!semi) return -1;
+    return atoi(semi + 1);
+}
+
 char *readline(const char *prompt) {
     fflush(stdout);
     g_eof_streak = 0;
@@ -697,6 +719,11 @@ char *readline(const char *prompt) {
         raw = orig;
         raw.c_lflag &= ~(ICANON | ECHO | ISIG);
         tcsetattr(0, TCSANOW, &raw);
+    }
+
+    if (have_tio) {
+        int col = cursor_column();
+        if (col > 1) write(1, "\n", 1);
     }
 
     g_prompt_str = prompt;

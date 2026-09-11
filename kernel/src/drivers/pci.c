@@ -4,6 +4,7 @@
 #include "../../include/io/serial.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/vmm.h"
+#include "../../include/drivers/timer.h"
 #include "../../include/memory/paging.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -31,6 +32,32 @@ static int          g_device_count = 0;
 #define DRIVER_MAX 32
 static const pci_driver_t *g_drivers[DRIVER_MAX];
 static int                 g_driver_count = 0;
+
+typedef struct {
+    uint8_t  state;
+    uint8_t  autostart;
+    uint16_t matched;
+    uint16_t vendor;
+    uint16_t device;
+    uint64_t started_ns;
+} drv_state_t;
+
+static drv_state_t g_drv_state[DRIVER_MAX];
+
+static int drv_index(const char *name) {
+    if (!name) return -1;
+    for (int i = 0; i < g_driver_count; i++)
+        if (g_drivers[i]->name && strcmp(g_drivers[i]->name, name) == 0) return i;
+    return -1;
+}
+
+static bool drv_matches(const pci_driver_t *drv, const pci_device_t *d) {
+    bool m_vendor   = (drv->match_vendor   < 0) || (uint16_t)drv->match_vendor   == d->vendor_id;
+    bool m_device   = (drv->match_device   < 0) || (uint16_t)drv->match_device   == d->device_id;
+    bool m_class    = (drv->match_class    < 0) || (uint8_t) drv->match_class    == d->class_code;
+    bool m_subclass = (drv->match_subclass < 0) || (uint8_t) drv->match_subclass == d->subclass;
+    return m_vendor && m_device && m_class && m_subclass;
+}
 
 static bool g_scanned[256];
 
@@ -182,18 +209,86 @@ static void size_bars(pci_device_t *d)
     }
 }
 
+static void drv_try_one(int i, pci_device_t *d)
+{
+    const pci_driver_t *drv = g_drivers[i];
+    if (!drv_matches(drv, d) || !drv->probe) return;
+
+    drv_state_t *st = &g_drv_state[i];
+    st->matched++;
+    if (!st->vendor) { st->vendor = d->vendor_id; st->device = d->device_id; }
+    if (!st->autostart) {
+        if (st->state == DRV_STATE_UNUSED) st->state = DRV_STATE_STOPPED;
+        return;
+    }
+
+    int r = drv->probe(d);
+    if (r == 0) {
+        st->state = DRV_STATE_RUNNING;
+        if (!st->started_ns) st->started_ns = sched_now_ns();
+    } else if (st->state != DRV_STATE_RUNNING) {
+        st->state = DRV_STATE_FAILED;
+    }
+}
+
 static void try_drivers_for(pci_device_t *d)
 {
-    for (int i = 0; i < g_driver_count; i++) {
-        const pci_driver_t *drv = g_drivers[i];
-        bool m_vendor   = (drv->match_vendor   < 0) || (uint16_t)drv->match_vendor   == d->vendor_id;
-        bool m_device   = (drv->match_device   < 0) || (uint16_t)drv->match_device   == d->device_id;
-        bool m_class    = (drv->match_class    < 0) || (uint8_t) drv->match_class    == d->class_code;
-        bool m_subclass = (drv->match_subclass < 0) || (uint8_t) drv->match_subclass == d->subclass;
-        if (m_vendor && m_device && m_class && m_subclass && drv->probe) {
-            drv->probe(d);
-        }
+    for (int i = 0; i < g_driver_count; i++) drv_try_one(i, d);
+}
+
+int pci_driver_list(pci_drv_info_t *out, int max) {
+    int n = 0;
+    for (int i = 0; i < g_driver_count && n < max; i++) {
+        pci_drv_info_t *o = &out[n++];
+        memset(o, 0, sizeof *o);
+        strncpy(o->name, g_drivers[i]->name ? g_drivers[i]->name : "?", sizeof o->name - 1);
+        o->state      = g_drv_state[i].state;
+        o->autostart  = g_drv_state[i].autostart;
+        o->can_stop   = g_drivers[i]->stop ? 1 : 0;
+        o->matched    = g_drv_state[i].matched;
+        o->vendor     = g_drv_state[i].vendor;
+        o->device     = g_drv_state[i].device;
+        o->started_ns = g_drv_state[i].started_ns;
     }
+    return n;
+}
+
+int pci_driver_start(const char *name) {
+    int i = drv_index(name);
+    if (i < 0) return -1;
+    const pci_driver_t *drv = g_drivers[i];
+    if (!drv->probe) return -1;
+
+    int started = 0;
+    for (int d = 0; d < g_device_count; d++) {
+        if (!drv_matches(drv, &g_devices[d])) continue;
+        if (drv->probe(&g_devices[d]) == 0) started++;
+    }
+    if (started) {
+        g_drv_state[i].state = DRV_STATE_RUNNING;
+        g_drv_state[i].started_ns = sched_now_ns();
+        return 0;
+    }
+    if (g_drv_state[i].matched == 0) return -2;
+    g_drv_state[i].state = DRV_STATE_FAILED;
+    return -3;
+}
+
+int pci_driver_stop(const char *name) {
+    int i = drv_index(name);
+    if (i < 0) return -1;
+    if (!g_drivers[i]->stop) return -2;
+    if (g_drivers[i]->stop() != 0) return -3;
+    g_drv_state[i].state = DRV_STATE_STOPPED;
+    g_drv_state[i].started_ns = 0;
+    return 0;
+}
+
+int pci_driver_set_autostart(const char *name, int on) {
+    int i = drv_index(name);
+    if (i < 0) return -1;
+    g_drv_state[i].autostart = on ? 1 : 0;
+    return 0;
 }
 
 static void scan_bus(uint16_t seg, uint8_t bus);
@@ -362,17 +457,11 @@ const pci_device_t *pci_find_by_class(uint8_t class_code, uint8_t subclass)
 void pci_register_driver(const pci_driver_t *drv)
 {
     if (!drv || g_driver_count >= DRIVER_MAX) return;
-    g_drivers[g_driver_count++] = drv;
-    for (int i = 0; i < g_device_count; i++) {
-        pci_device_t *d = &g_devices[i];
-        bool m_vendor   = (drv->match_vendor   < 0) || (uint16_t)drv->match_vendor   == d->vendor_id;
-        bool m_device   = (drv->match_device   < 0) || (uint16_t)drv->match_device   == d->device_id;
-        bool m_class    = (drv->match_class    < 0) || (uint8_t) drv->match_class    == d->class_code;
-        bool m_subclass = (drv->match_subclass < 0) || (uint8_t) drv->match_subclass == d->subclass;
-        if (m_vendor && m_device && m_class && m_subclass && drv->probe) {
-            drv->probe(d);
-        }
-    }
+    g_drv_state[g_driver_count].state     = DRV_STATE_UNUSED;
+    g_drv_state[g_driver_count].autostart = 1;
+    int idx = g_driver_count++;
+    g_drivers[idx] = drv;
+    for (int i = 0; i < g_device_count; i++) drv_try_one(idx, &g_devices[i]);
 }
 
 

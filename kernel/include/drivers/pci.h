@@ -89,7 +89,31 @@ struct pci_driver {
     int16_t  match_subclass;
 
     int (*probe)(pci_device_t *dev);
+    int (*stop)(void);
 };
+
+#define DRV_STATE_UNUSED   0
+#define DRV_STATE_FAILED   1
+#define DRV_STATE_RUNNING  2
+#define DRV_STATE_STOPPED  3
+
+typedef struct __attribute__((packed)) {
+    char     name[24];
+    uint8_t  state;
+    uint8_t  autostart;
+    uint8_t  can_stop;
+    uint8_t  _pad;
+    uint16_t matched;
+    uint16_t vendor;
+    uint16_t device;
+    uint16_t _pad2;
+    uint64_t started_ns;
+} pci_drv_info_t;
+
+int pci_driver_list(pci_drv_info_t *out, int max);
+int pci_driver_start(const char *name);
+int pci_driver_stop(const char *name);
+int pci_driver_set_autostart(const char *name, int on);
 
 void pci_init(void);
 

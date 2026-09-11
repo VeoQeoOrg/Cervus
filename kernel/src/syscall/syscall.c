@@ -168,6 +168,7 @@ extern int64_t sys_audio_mixer(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_console_theme(uint64_t);
 extern int64_t sys_fb_setmode(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_mkfs_udf(uint64_t, uint64_t);
+extern int64_t sys_driver_ctl(uint64_t, uint64_t, uint64_t);
 
 typedef int64_t (*syscall_fn_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
@@ -241,6 +242,7 @@ W3(sys_audio_mixer)
 W1(sys_console_theme)
 W3(sys_fb_setmode)
 W2(sys_disk_mkfs_udf)
+W3(sys_driver_ctl)
 
 static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EXIT]              = _sys_exit,
@@ -367,6 +369,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_CONSOLE_THEME]     = _sys_console_theme,
     [SYS_FB_SETMODE]        = _sys_fb_setmode,
     [SYS_DISK_MKFS_UDF]     = _sys_disk_mkfs_udf,
+    [SYS_DRIVER_CTL]        = _sys_driver_ctl,
     [SYS_SETFONT]           = _sys_setfont,
     [SYS_RT_SIGACTION]      = _sys_rt_sigaction,
     [SYS_RT_SIGPROCMASK]    = _sys_rt_sigprocmask,

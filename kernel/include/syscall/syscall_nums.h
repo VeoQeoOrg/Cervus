@@ -160,6 +160,7 @@
 #define SYS_CONSOLE_THEME     606
 #define SYS_FB_SETMODE        607
 #define SYS_DISK_MKFS_UDF     608
+#define SYS_DRIVER_CTL        609
 
 #define SYSCALL_TABLE_SIZE    640
 
