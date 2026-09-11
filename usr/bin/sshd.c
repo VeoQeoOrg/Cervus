@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -675,6 +676,14 @@ static int load_host_key(uint8_t priv[64], uint8_t pub[32], int *persistent) {
 
     *persistent = 0;
     for (int i = 0; i < 2; i++) {
+        char dir[128];
+        snprintf(dir, sizeof dir, "%s", paths[i]);
+        char *slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = 0;
+            struct stat st;
+            if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        }
         int fd = open(paths[i], O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd < 0) continue;
         write(fd, seed, 32);

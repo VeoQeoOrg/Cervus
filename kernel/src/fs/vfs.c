@@ -254,12 +254,12 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         vnode_t *dir = NULL;
         ret = vfs_lookup(dirpath, &dir);
         if (ret < 0) {
-            serial_printf("[VFS] open O_CREAT: lookup parent '%s' failed: %d\n", dirpath, ret);
+            LOG_D("[VFS] open O_CREAT: lookup parent '%s' failed: %d\n", dirpath, ret);
             return ret;
         }
 
         if (!dir->ops || !dir->ops->create) {
-            serial_printf("[VFS] open O_CREAT: parent has no create op\n");
+            LOG_D("[VFS] open O_CREAT: parent has no create op\n");
             vnode_unref(dir);
             return -ENOSYS;
         }
