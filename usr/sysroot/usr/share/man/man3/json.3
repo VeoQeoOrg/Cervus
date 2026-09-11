@@ -1,0 +1,134 @@
+NAME
+       json - read, build and write JSON
+
+SYNOPSIS
+       #include <json.h>
+
+       json_t *json_parse(const char *text, json_error_t *err);
+       json_t *json_parse_len(const char *text, size_t len, json_error_t *err);
+       json_t *json_parse_file(const char *path, json_error_t *err);
+       void    json_free(json_t *v);
+
+       json_type_t json_type(const json_t *v);
+       int         json_is_null(const json_t *v);
+
+       const char *json_string(const json_t *v, const char *fallback);
+       double      json_number(const json_t *v, double fallback);
+       long        json_int(const json_t *v, long fallback);
+       int         json_bool(const json_t *v, int fallback);
+
+       size_t      json_len(const json_t *v);
+       json_t     *json_at(const json_t *arr, size_t index);
+       json_t     *json_get(const json_t *obj, const char *key);
+       const char *json_key(const json_t *obj, size_t index);
+       json_t     *json_value_at(const json_t *obj, size_t index);
+       json_t     *json_query(const json_t *root, const char *path);
+
+       json_t *json_new_null(void);
+       json_t *json_new_bool(int b);
+       json_t *json_new_number(double n);
+       json_t *json_new_string(const char *s);
+       json_t *json_new_array(void);
+       json_t *json_new_object(void);
+
+       int   json_append(json_t *arr, json_t *item);
+       int   json_set(json_t *obj, const char *key, json_t *value);
+       int   json_remove(json_t *obj, const char *key);
+       char *json_dump(const json_t *v, int indent);
+       int   json_dump_file(const json_t *v, const char *path, int indent);
+
+DESCRIPTION
+       A whole JSON document is parsed into a tree of json_t nodes.
+       json_free on the root frees everything under it; nothing else
+       needs freeing, and no node may be freed twice or attached to two
+       parents.
+
+       Nothing here returns an error you have to check before you can
+       read a value. Every reader takes a fallback and returns it when
+       the node is missing or is the wrong type, so a missing field and
+       a field of the wrong shape both give a sensible default:
+
+         int port = (int)json_int(json_get(cfg, "port"), 8080);
+
+       That makes NULL safe to pass anywhere, and lets lookups be
+       chained without a check at each step.
+
+READING
+       json_get looks a key up in an object, json_at indexes an array,
+       and json_query does both along a path:
+
+         json_query(root, "servers[0].address.port")
+
+       A path segment is a key; [n] is an array index. Any step that
+       does not exist makes the whole query NULL.
+
+       To walk an object in the order the keys were written, use
+       json_len with json_key and json_value_at.
+
+BUILDING
+       The json_new_* functions make nodes. json_append hands a node to
+       an array and json_set hands one to an object; both take
+       ownership, so the node must not be freed afterwards, and setting
+       a key twice frees the value that was there before. Passing a
+       node that belongs to another tree will free it twice - copy it
+       instead.
+
+WRITING
+       json_dump returns a malloc'd string that the caller frees. An
+       indent of 0 gives the shortest form; anything larger indents by
+       that many spaces per level. json_dump_file writes it out.
+
+       Strings are escaped as JSON requires; bytes above 0x7F are
+       written through as they are, so UTF-8 in gives UTF-8 out.
+       A number that is a whole value prints without a decimal point,
+       and anything else prints with enough digits to read back
+       unchanged.
+
+PARSING
+       The parser accepts JSON as specified, plus a leading + on a
+       number. \\uXXXX escapes become UTF-8, and a surrogate pair
+       becomes the one character it stands for. Nesting deeper than
+       200 levels is refused, so a hostile document cannot exhaust the
+       stack. A trailing comma, an unquoted key, a raw newline inside a
+       string and text after the value are all rejected.
+
+       On failure the parse functions return NULL and, if err is not
+       NULL, fill in the line, the column and a message:
+
+         json_error_t e;
+         json_t *cfg = json_parse_file("/etc/thing.json", &e);
+         if (!cfg) {
+             fprintf(stderr, "%s at line %d column %d\n",
+                     e.message, e.line, e.column);
+             return 1;
+         }
+
+EXAMPLE
+       #include <json.h>
+       #include <stdio.h>
+       #include <stdlib.h>
+
+       int main(void) {
+           json_t *o = json_new_object();
+           json_set(o, "host", json_new_string("cervus"));
+           json_set(o, "port", json_new_number(22));
+
+           json_t *users = json_new_array();
+           json_append(users, json_new_string("root"));
+           json_set(o, "users", users);
+
+           char *text = json_dump(o, 2);
+           puts(text);
+           free(text);
+           json_free(o);
+           return 0;
+       }
+
+RETURN VALUE
+       The parse functions return the root node, or NULL on a bad
+       document. json_dump returns a malloc'd string or NULL.
+       json_append, json_set, json_remove and json_dump_file return 0
+       on success and -1 on failure.
+
+SEE ALSO
+       http(3), tls(3), inflate(3), malloc(3)
