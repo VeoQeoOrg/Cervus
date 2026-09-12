@@ -4,6 +4,7 @@ NAME
 SYNOPSIS
        theme
        theme <name> [--once]
+       theme --list
        theme bg #RRGGBB
        theme fg #RRGGBB
        theme -r
@@ -21,6 +22,10 @@ DESCRIPTION
 
        bg and fg change one colour on its own, taking a hex value with
        or without the leading #.
+
+       --list prints one scheme per line as a name and a description
+       separated by a tab, for anything that needs to offer the same
+       choice. The installer reads it.
 
        Changing the scheme clears the screen: cells keep the colours
        they were written with, so leaving the old ones in place would

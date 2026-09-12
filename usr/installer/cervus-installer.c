@@ -1844,6 +1844,297 @@ static int choose_timezone(void) {
     }
 }
 
+#define MAX_SCHEMES 40
+#define MAX_FONTS   24
+
+typedef struct { char name[32]; char about[64]; } scheme_t;
+typedef struct { char label[48]; char path[256]; int px; } fontchoice_t;
+
+static scheme_t     g_schemes[MAX_SCHEMES];
+static int          g_nschemes;
+static fontchoice_t g_fonts[MAX_FONTS];
+static int          g_nfonts;
+static int          g_scheme_sel;
+static int          g_font_sel;
+
+static int run_quiet(char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY, 0);
+        if (devnull >= 0) {
+            dup2(devnull, 1);
+            dup2(devnull, 2);
+            if (devnull > 2) close(devnull);
+        }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    return (st >> 8) & 0xFF;
+}
+
+static int run_capture(char *const argv[], char *out, size_t cap) {
+    int pfd[2];
+    if (pipe(pfd) < 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return -1; }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], 1);
+        if (pfd[1] != 1) close(pfd[1]);
+        int devnull = open("/dev/null", O_WRONLY, 0);
+        if (devnull >= 0) { dup2(devnull, 2); if (devnull > 2) close(devnull); }
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    close(pfd[1]);
+    size_t got = 0;
+    ssize_t r;
+    while (got + 1 < cap && (r = read(pfd[0], out + got, cap - got - 1)) > 0)
+        got += (size_t)r;
+    out[got] = 0;
+    close(pfd[0]);
+    int st = 0;
+    waitpid(pid, &st, 0);
+    return 0;
+}
+
+static void load_schemes(void) {
+    g_nschemes = 0;
+    static char buf[4096];
+    char *const argv[] = { "/bin/theme", "--list", NULL };
+    if (run_capture(argv, buf, sizeof buf) != 0) return;
+    char *line = buf;
+    while (*line && g_nschemes < MAX_SCHEMES) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        char *tab = strchr(line, '\t');
+        if (tab) *tab = 0;
+        if (line[0]) {
+            snprintf(g_schemes[g_nschemes].name, sizeof g_schemes[0].name, "%s", line);
+            snprintf(g_schemes[g_nschemes].about, sizeof g_schemes[0].about, "%s",
+                     tab ? tab + 1 : "");
+            g_nschemes++;
+        }
+        if (!nl) break;
+        line = nl + 1;
+    }
+}
+
+static int name_ends_with(const char *n, const char *ext) {
+    size_t ln = strlen(n), le = strlen(ext);
+    return ln > le && strcmp(n + ln - le, ext) == 0;
+}
+
+static void add_font(const char *dir, const char *name, int px) {
+    if (g_nfonts >= MAX_FONTS) return;
+    fontchoice_t *f = &g_fonts[g_nfonts];
+    snprintf(f->path, sizeof f->path, "%s/%s", dir, name);
+    f->px = px;
+    if (px) snprintf(f->label, sizeof f->label, "%s at %dpx", name, px);
+    else    snprintf(f->label, sizeof f->label, "%s", name);
+    g_nfonts++;
+}
+
+static int plain_face(const char *name) {
+    const char *dash = strchr(name, '-');
+    if (!dash) return 1;
+    const char *dot = strrchr(name, '.');
+    if (!dot || dot < dash) return 0;
+    size_t n = (size_t)(dot - dash - 1);
+    return (n == 7 && !strncmp(dash + 1, "Regular", 7)) ||
+           (n == 4 && !strncmp(dash + 1, "Bold", 4));
+}
+
+static void scan_font_dir(const char *dir, int depth) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        if (de->d_type == 1) {
+            if (depth > 0) {
+                char sub[256];
+                snprintf(sub, sizeof sub, "%s/%s", dir, de->d_name);
+                scan_font_dir(sub, depth - 1);
+            }
+            continue;
+        }
+        if (name_ends_with(de->d_name, ".psf") || name_ends_with(de->d_name, ".psfu"))
+            add_font(dir, de->d_name, 0);
+        else if (name_ends_with(de->d_name, ".ttf") || name_ends_with(de->d_name, ".otf")) {
+            if (!plain_face(de->d_name)) continue;
+            add_font(dir, de->d_name, 16);
+            add_font(dir, de->d_name, 20);
+        }
+    }
+    closedir(d);
+}
+
+static void load_fonts(void) {
+    g_nfonts = 0;
+    add_font("", "built-in 8x16", 0);
+    g_fonts[0].path[0] = 0;
+    scan_font_dir("/usr/share/consolefonts", 0);
+    scan_font_dir("/usr/share/fonts", 1);
+}
+
+static void apply_scheme(int i, int save) {
+    if (i < 0 || i >= g_nschemes) return;
+    char *const argv_once[] = { "/bin/theme", g_schemes[i].name, "--once", NULL };
+    char *const argv_save[] = { "/bin/theme", g_schemes[i].name, NULL };
+    run_quiet(save ? argv_save : argv_once);
+}
+
+static void apply_font(int i, int save) {
+    if (i < 0 || i >= g_nfonts) return;
+    if (!g_fonts[i].path[0]) {
+        char *const argv[] = { "/bin/setfont", "-r", NULL };
+        run_quiet(argv);
+        return;
+    }
+    char pxbuf[16];
+    snprintf(pxbuf, sizeof pxbuf, "%d", g_fonts[i].px);
+    if (g_fonts[i].px) {
+        char *const argv_once[] = { "/bin/setfont", "--once", g_fonts[i].path, pxbuf, NULL };
+        char *const argv_save[] = { "/bin/setfont", g_fonts[i].path, pxbuf, NULL };
+        run_quiet(save ? argv_save : argv_once);
+    } else {
+        char *const argv_once[] = { "/bin/setfont", "--once", g_fonts[i].path, NULL };
+        char *const argv_save[] = { "/bin/setfont", g_fonts[i].path, NULL };
+        run_quiet(save ? argv_save : argv_once);
+    }
+}
+
+static void info_appearance(int row, int col, int w) {
+    info_print(&row, col, w, 1, "The console takes on the scheme as soon");
+    info_print(&row, col, w, 1, "as you move over it, so what you see");
+    info_print(&row, col, w, 1, "here is what the installed system looks");
+    info_print(&row, col, w, 1, "like.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "Sample:");
+    go_xy(row + 1, col + 2);
+    for (int c = 1; c <= 6; c++) printf("\x1b[3%dm  %d  ", c, c);
+    fputs(C_RESET, stdout);
+    row += 2;
+    go_xy(row + 1, col + 2);
+    printf(C_GREEN "root" C_RESET ":" C_BLUE "/etc" C_RESET "# ls");
+    row += 3;
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "Both the scheme and the font are");
+    info_print(&row, col, w, 1, "written to the installed system and");
+    info_print(&row, col, w, 1, "can be changed later with theme and");
+    info_print(&row, col, w, 1, "setfont.");
+}
+
+static void info_fontpick(int row, int col, int w) {
+    info_print(&row, col, w, 1, "The console font. Bitmap fonts load");
+    info_print(&row, col, w, 1, "instantly; the outline fonts are");
+    info_print(&row, col, w, 1, "rasterized, which takes a moment.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 1, "A larger font means fewer rows and");
+    info_print(&row, col, w, 1, "columns. The screen is redrawn at the");
+    info_print(&row, col, w, 1, "new size so the fit is visible before");
+    info_print(&row, col, w, 1, "you commit.");
+    info_print(&row, col, w, 1, "");
+    info_print(&row, col, w, 0, "Enter accepts. Esc goes back and puts");
+    info_print(&row, col, w, 0, "the previous font back.");
+}
+
+static int pick_with_preview(const char *title, const char **items, int n_items,
+                             int initial, info_fn info, void (*preview)(int, int))
+{
+    int sel = initial;
+    if (sel < 0) sel = 0;
+    if (sel >= n_items) sel = n_items - 1;
+    int last_applied = -1;
+
+    for (;;) {
+        if (sel != last_applied) {
+            preview(sel, 0);
+            last_applied = sel;
+        }
+        term_size_query();
+        int pane_col = g_pane_left_col;
+        int pane_w   = g_pane_left_w;
+        int item_w   = pane_w - 2;
+        int rows_avail = g_rows - 7;
+        int top = 0;
+        if (n_items > rows_avail) {
+            top = sel - rows_avail / 2;
+            if (top < 0) top = 0;
+            if (top > n_items - rows_avail) top = n_items - rows_avail;
+        }
+        hide_cursor();
+        clear_screen();
+        draw_pane_title(2, pane_col, pane_w, title);
+        for (int i = top; i < n_items && i - top < rows_avail; i++)
+            render_menu_item(5 + i - top, pane_col, item_w, i == sel, items[i]);
+        draw_vsplit();
+        info_box("Help", info);
+        hint_line("Up/Down preview   Enter keep   Esc back");
+        hide_cursor();
+        fflush(stdout);
+
+        int k = read_key();
+        if (k == 12) { last_applied = -1; continue; }
+        else if (k == KEY_UP)   { if (sel > 0) sel--; else sel = n_items - 1; }
+        else if (k == KEY_DOWN) { if (sel + 1 < n_items) sel++; else sel = 0; }
+        else if (k == KEY_ENTER || k == ' ') return sel;
+        else if (k == KEY_ESC || k == 'q' || k == 'Q') return -1;
+    }
+}
+
+static void preview_scheme(int i, int save) { apply_scheme(i, save); }
+static void preview_font(int i, int save)   { apply_font(i, save); }
+
+static int choose_appearance(void) {
+    if (g_nschemes == 0) load_schemes();
+    if (g_nfonts == 0) load_fonts();
+
+    int start_scheme = g_scheme_sel;
+    int start_font   = g_font_sel;
+
+    for (;;) {
+        if (g_nschemes > 0) {
+            const char *items[MAX_SCHEMES];
+            static char rows[MAX_SCHEMES][100];
+            for (int i = 0; i < g_nschemes; i++) {
+                snprintf(rows[i], sizeof rows[0], "%-12s %s",
+                         g_schemes[i].name, g_schemes[i].about);
+                items[i] = rows[i];
+            }
+            int sel = pick_with_preview("Choose a colour scheme", items, g_nschemes,
+                                        g_scheme_sel, info_appearance, preview_scheme);
+            if (sel < 0) {
+                apply_scheme(start_scheme, 0);
+                apply_font(start_font, 0);
+                return -1;
+            }
+            g_scheme_sel = sel;
+        }
+
+        if (g_nfonts > 0) {
+            const char *items[MAX_FONTS];
+            for (int i = 0; i < g_nfonts; i++) items[i] = g_fonts[i].label;
+            int sel = pick_with_preview("Choose a console font", items, g_nfonts,
+                                        g_font_sel, info_fontpick, preview_font);
+            if (sel < 0) {
+                apply_font(start_font, 0);
+                continue;
+            }
+            g_font_sel = sel;
+        }
+        break;
+    }
+
+    apply_scheme(g_scheme_sel, 1);
+    apply_font(g_font_sel, 1);
+    return 0;
+}
+
 static int choose_bootloader(void) {
     const char *items[] = {
         "Limine  (default - small and fast)",
@@ -2179,6 +2470,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         }
         if (choose_timezone() < 0) continue;
         if (choose_rtc_mode() < 0) continue;
+        if (choose_appearance() < 0) continue;
         if (confirm_screen(&disks[picked], &L) != 1) continue;
 
         account_cfg_t acc;

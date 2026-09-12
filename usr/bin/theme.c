@@ -171,6 +171,7 @@ static const char USAGE[] =
 "\n"
 "Usage\n"
 "  theme                    list the schemes, marking the one in use\n"
+"  theme --list             one name and description per line\n"
 "  theme <name>             switch to it, and use it again after a reboot\n"
 "  theme <name> --once      switch without remembering\n"
 "  theme edit [name]        open the editor, starting from <name>\n"
@@ -323,6 +324,11 @@ int main(int argc, char **argv) {
 
     if (!strcmp(argv[1], "--restore")) {
         return apply(&g_cur) == 0 ? 0 : 1;
+    }
+    if (!strcmp(argv[1], "--list")) {
+        for (int i = 0; i < total_themes(); i++)
+            printf("%s\t%s\n", theme_at(i)->name, theme_at(i)->about);
+        return 0;
     }
     if (!strcmp(argv[1], "-r")) {
         g_cur = THEMES[0].t;
