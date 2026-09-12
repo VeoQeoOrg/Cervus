@@ -91,6 +91,16 @@ hardware support is limited to what has been implemented and tested.
 
 ---
 
+## Names and trademarks
+
+Several programs here carry the names of well-known tools - `git`,
+`make`, `sh` - and one library implements a subset of the OpenGL 1.1
+API. All of them are written from scratch for this project; none of
+them is derived from the source of the projects whose behaviour they
+follow. `TRADEMARKS.md` records what that means for each name and where
+the line is between implementing an interface and claiming to be the
+thing that defined it.
+
 ## Design Philosophy
 
 **Self-contained.** The whole stack, from the first instruction after the bootloader

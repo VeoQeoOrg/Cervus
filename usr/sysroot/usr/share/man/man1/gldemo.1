@@ -1,5 +1,5 @@
 NAME
-       gldemo - the software OpenGL demo
+       gldemo - the software 3D demo
 
 SYNOPSIS
        gldemo [--gears | --cube] [--size WxH] [--full] [--flat]
@@ -7,10 +7,15 @@ SYNOPSIS
 
 DESCRIPTION
        Draws the classic three meshing gears, or a lit cube, through
-       the software OpenGL in libcervus. There is no graphics
-       acceleration underneath: every triangle is transformed, lit and
-       filled by the processor, and the finished picture is copied
-       into the framebuffer.
+       the graphics library in libcervus, which implements a subset of
+       the OpenGL 1.1 API. There is no graphics acceleration
+       underneath: every triangle is transformed, lit and filled by
+       the processor, and the finished picture is copied into the
+       framebuffer.
+
+       That library is an independent implementation. It has not been
+       through Khronos conformance testing and is not a licensed
+       OpenGL implementation. See TRADEMARKS.md.
 
        A counter in the corner shows the frame rate, and a line at the
        foot shows the scene, the size being rendered and how many

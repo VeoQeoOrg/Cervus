@@ -295,7 +295,7 @@ static uint64_t now_ns(void)
 
 static const char USAGE[] =
     "Usage: gldemo [--gears|--cube] [--size WxH] [--full] [--frames N]\n"
-    "A software OpenGL demo: the classic three gears, or a lit cube.\n"
+    "Software 3D: the classic three gears, or a lit cube.\n"
     "\n"
     "  --gears       three meshing gears (default)\n"
     "  --cube        one rotating cube\n"
