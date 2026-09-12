@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <sys/cervus.h>
 #include <tui.h>
+#include <pwutil.h>
 
 #define AUDIO_CONF "/etc/audio.conf"
 
@@ -39,7 +40,7 @@ static int save_config(void) {
     cervus_audio_mixer_t m;
     if (load_mixer(&m) != 0) return 1;
     FILE *f = fopen(AUDIO_CONF, "w");
-    if (!f) { fprintf(stderr, "mixer: cannot write %s\n", AUDIO_CONF); return 1; }
+    if (!f) { priv_denied(AUDIO_CONF); return 1; }
     fprintf(f, "volume=%d\n", m.volume);
     fprintf(f, "mute=%d\n", m.mute);
     if (m.current < 0) fprintf(f, "output=auto\n");
@@ -183,6 +184,7 @@ static void interactive(void) {
 }
 
 int main(int argc, char **argv) {
+    priv_argv(argc, argv);
     if (argc < 2) { interactive(); return 0; }
 
     const char *a = argv[1];

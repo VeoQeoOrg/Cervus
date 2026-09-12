@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <curses.h>
+#include <pwutil.h>
 
 #define THEME_CONF "/etc/console.conf"
 #define THEME_DIR  "/etc/themes"
@@ -276,7 +277,7 @@ static void load_conf(void) {
 
 static int save_conf(void) {
     FILE *f = fopen(THEME_CONF, "w");
-    if (!f) { fprintf(stderr, "theme: cannot write %s\n", THEME_CONF); return -1; }
+    if (!f) { priv_denied(THEME_CONF); return -1; }
     fprintf(f, "theme=%s\n", g_cur_name);
     fprintf(f, "fg=%06X\n", g_cur.fg);
     fprintf(f, "bg=%06X\n", g_cur.bg);
@@ -313,6 +314,7 @@ static void show(void) {
 int theme_editor(const char *name);
 
 int main(int argc, char **argv) {
+    priv_argv(argc, argv);
     load_custom();
     load_conf();
 

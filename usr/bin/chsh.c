@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <cervus_util.h>
+#include <pwutil.h>
 
 static const char USAGE[] =
     "Usage: chsh [SHELL]\n"
@@ -44,6 +45,7 @@ static int write_shell_file(const char *path, const char *shell) {
 }
 
 int main(int argc, char **argv) {
+    priv_argv(argc, argv);
     if (cervus_check_help_version(argc, argv, USAGE, "chsh")) return 0;
 
     if (argc < 2) { print_current(); return 0; }
@@ -80,7 +82,7 @@ int main(int argc, char **argv) {
             if (write_shell_file(SHELL_FILE2, shell) == 0) wrote = 1;
     }
     if (!wrote) {
-        fputs(C_RED "chsh: cannot write /etc/shell\n" C_RESET, stderr);
+        priv_denied("/etc/shell");
         return 1;
     }
     printf("Default shell set to %s\n", shell);

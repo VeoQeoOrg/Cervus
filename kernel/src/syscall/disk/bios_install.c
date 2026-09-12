@@ -12,6 +12,9 @@ int64_t sys_disk_bios_install(uint64_t a1, uint64_t a2, uint64_t a3,
     uint32_t    sys_size  = (uint32_t)a3;
     int         generic   = (int)a4;
 
+    task_t *t = syscall_cur_task();
+    if (t && t->uid != UID_ROOT) return -EPERM;
+
     if (!disk_name || !sys_data || sys_size < 512) return -EINVAL;
 
     blkdev_t *dev = blkdev_get_by_name(disk_name);

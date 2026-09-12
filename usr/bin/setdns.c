@@ -5,8 +5,10 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/netcfg.h>
+#include <pwutil.h>
 
 int main(int argc, char **argv) {
+    priv_argv(argc, argv);
     if (argc < 2) {
         int fd = open("/etc/resolv.conf", O_RDONLY);
         if (fd >= 0) {
@@ -30,7 +32,7 @@ int main(int argc, char **argv) {
     }
 
     int fd = open("/etc/resolv.conf", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) { printf("setdns: cannot write /etc/resolv.conf\n"); return 1; }
+    if (fd < 0) { priv_denied("/etc/resolv.conf"); return 1; }
     char line[128];
     int n = snprintf(line, sizeof(line), "nameserver %s\n", argv[1]);
     write(fd, line, (size_t)n);

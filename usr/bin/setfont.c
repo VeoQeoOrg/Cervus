@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/cervus.h>
+#include <pwutil.h>
 
 #define CPN CERVUS_FONT_CP_MAP_SIZE
 
@@ -186,7 +187,7 @@ static void save_config(const char *path, unsigned px, int vector) {
         else                   snprintf(abs, sizeof abs, "%s/%s", cwd, path);
     }
     FILE *fp = fopen(VCONSOLE_CONF, "w");
-    if (!fp) { fprintf(stderr, "setfont: cannot save %s\n", VCONSOLE_CONF); return; }
+    if (!fp) { priv_denied(VCONSOLE_CONF); return; }
     fprintf(fp, "FONT=%s\n", abs);
     if (vector) fprintf(fp, "FONTSIZE=%u\n", px);
     fclose(fp);
@@ -202,6 +203,7 @@ static void usage(void) {
 }
 
 int main(int argc, char **argv) {
+    priv_argv(argc, argv);
     if (argc < 2) { usage(); return 1; }
     if (!strcmp(argv[1], "-r") || !strcmp(argv[1], "--reset")) {
         if (cervus_setfont_reset() < 0) { fprintf(stderr, "setfont: reset failed\n"); return 1; }

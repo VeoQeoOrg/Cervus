@@ -9,4 +9,9 @@ int pw_lookup_name(const char *name, uint32_t *uid, uint32_t *gid,
 int pw_lookup_uid(uint32_t uid, char *name, int name_cap,
                   char *home, int home_cap, char *shell, int shell_cap);
 
+void priv_argv(int argc, char **argv);
+int  priv_is_root(void);
+void priv_denied(const char *path);
+int  priv_require_root(const char *doing);
+
 #endif
