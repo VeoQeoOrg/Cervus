@@ -3,6 +3,7 @@
 #include "../../include/graphics/fb/fb.h"
 #include "../../include/apic/apic.h"
 #include "../../include/io/serial.h"
+#include "../../include/drivers/timer.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -134,11 +135,6 @@ static uint32_t mon_draw_wrapped_lvl(uint32_t row, uint32_t limit, const char *s
     return drawn;
 }
 
-static uint32_t mon_draw_wrapped(uint32_t row, uint32_t limit, const char *s,
-                                 int is_cursor) {
-    return mon_draw_wrapped_lvl(row, limit, s, is_cursor, KLOG_LVL_INFO);
-}
-
 static void mon_format(uint64_t ln, char *out, size_t cap) {
     char line[KLOG_LINE_MAX];
     if (klog_get_line(ln, line, sizeof line) < 0) { out[0] = 0; return; }
@@ -249,50 +245,6 @@ static void mon_render(int show_status) {
     g_shown = klog_total();
 }
 
-static void mon_scroll_region(uint32_t height_px, uint32_t by_px) {
-    if (by_px == 0 || by_px >= height_px) return;
-    uint32_t *bb = fb_get_backbuffer();
-    if (!bb) return;
-    uint32_t pitch = fb_backbuffer_pitch();
-    uint32_t move_px = height_px - by_px;
-    memmove(bb, bb + (size_t)by_px * pitch, (size_t)move_px * pitch * sizeof(uint32_t));
-    memset(bb + (size_t)move_px * pitch, 0, (size_t)by_px * pitch * sizeof(uint32_t));
-}
-
-static void mon_append_live(int show_status) {
-    if (!global_framebuffer) return;
-    uint32_t rows    = mon_rows();
-    uint32_t content = show_status ? (rows - 1) : rows;
-    uint64_t total   = klog_total();
-    uint64_t first   = klog_first();
-
-    if (g_shown < first) g_shown = first;
-    if (total <= g_shown) return;
-
-    uint64_t nnew = total - g_shown;
-    uint32_t newrows = 0;
-    for (uint64_t i = 0; i < nnew; i++) newrows += mon_rows_for(g_shown + 1 + i);
-    if (nnew >= content || newrows >= content) {
-        mon_render(show_status);
-        return;
-    }
-
-    mon_scroll_region(content * fb_font_height(), newrows * fb_font_height());
-    char display[KLOG_LINE_MAX + 16];
-    uint32_t row = content - newrows;
-    for (uint64_t i = 0; i < nnew; i++) {
-        mon_format(g_shown + 1 + i, display, sizeof display);
-        row += mon_draw_wrapped(row, content, display, 0);
-    }
-    if (show_status) {
-        char st[200];
-        mon_build_status(st, sizeof st);
-        mon_draw_line(rows - 1, st, MON_STATUS_FG, MON_STATUS_BG);
-    }
-    fb_flush(global_framebuffer);
-    g_shown = total;
-}
-
 static void mon_boot_echo(void) {
     if (!global_framebuffer) return;
     uint32_t rows  = mon_rows();
@@ -315,12 +267,23 @@ static void mon_notify(void) {
 }
 
 void monitor_tick(void) {
-    if (!g_dirty) return;
-    g_dirty = 0;
+    static uint64_t last_draw_ns;
+
     if (vt_active() == VT_MONITOR_INDEX) {
-        if (g_mode == MON_LIVE) mon_append_live(1);
+        if (g_mode != MON_LIVE) { g_dirty = 0; return; }
+        if (klog_total() == g_shown) { g_dirty = 0; return; }
+
+        uint64_t now = sched_now_ns();
+        if (last_draw_ns && now - last_draw_ns < 100000000ULL) return;
+        last_draw_ns = now;
+
+        g_dirty = 0;
+        mon_render(1);
         return;
     }
+
+    if (!g_dirty) return;
+    g_dirty = 0;
     if (g_boot_echo) mon_boot_echo();
 }
 

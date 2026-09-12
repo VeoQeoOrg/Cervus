@@ -460,12 +460,12 @@ static void view_file(const char *path) {
             if (idx < li) printf("%-.*s", g_cols, lines[idx]);
         }
         tui_move(g_rows, 1);
-        printf("\x1b[46m\x1b[30m \x18\x19 scroll  PgUp/PgDn  line %d/%d  q back \x1b[0m\x1b[K",
+        printf("\x1b[46m\x1b[30m \x18\x19 scroll  PgUp/PgDn  line %d/%d  left or q goes back \x1b[0m\x1b[K",
                off + 1, li);
         fflush(stdout);
 
         int k = tui_read_key();
-        if (k == 'q' || k == TK_ESC || k == TK_BACKSP) break;
+        if (k == 'q' || k == TK_ESC || k == TK_BACKSP || k == TK_LEFT) break;
         else if (k == TK_UP)   { if (off > 0) off--; }
         else if (k == TK_DOWN) { if (off < li - 1) off++; }
         else if (k == TK_PGUP) { off -= view; if (off < 0) off = 0; }
