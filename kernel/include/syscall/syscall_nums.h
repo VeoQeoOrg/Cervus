@@ -172,6 +172,7 @@
 #define SYS_FB_SETMODE        607
 #define SYS_DISK_MKFS_UDF     608
 #define SYS_DRIVER_CTL        609
+#define SYS_UTIMES            610
 
 #define SYSCALL_TABLE_SIZE    640
 

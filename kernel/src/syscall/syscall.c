@@ -92,6 +92,7 @@ extern int64_t sys_disk_bios_install (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_unlink            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rmdir             (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_mkdir             (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_utimes            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rename            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_list_mounts       (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_statvfs           (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -310,6 +311,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_UNLINK]            = sys_unlink,
     [SYS_RMDIR]             = sys_rmdir,
     [SYS_MKDIR]             = sys_mkdir,
+    [SYS_UTIMES]            = sys_utimes,
     [SYS_RENAME]            = sys_rename,
     [SYS_DISK_READ_RAW]     = sys_disk_read_raw,
     [SYS_DISK_WRITE_RAW]    = sys_disk_write_raw,

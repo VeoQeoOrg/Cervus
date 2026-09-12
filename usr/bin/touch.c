@@ -8,7 +8,7 @@
 #include <cervus_util.h>
 
 static const char USAGE[] =
-    "Usage: touch [-acm] file ...\nChange file timestamps or create empty files.\n\n  -a   change only access time (no-op, no atime)\n  -c   do not create files\n  -m   change only modification time (no-op)\n";
+    "Usage: touch [-acm] file ...\nSet a file's timestamps to now, creating it if it is not there.\n\n  -a   access time only\n  -c   do not create missing files\n  -m   modification time only\n";
 
 static void usage(void) { fputs(USAGE, stderr); }
 
@@ -35,8 +35,8 @@ int main(int argc, char **argv)
         snprintf(path, sizeof(path), "%s", argv[i]);
         struct stat st;
         if (stat(path, &st) == 0) {
-            if (st.st_type == DT_DIR) {
-                fprintf(stderr, "touch: cannot touch '%s': is a directory\n", argv[i]);
+            if (utimes_at(path, UTIME_NOW_SEC, UTIME_NOW_SEC) != 0) {
+                fprintf(stderr, "touch: cannot touch '%s'\n", argv[i]);
                 rc = 1;
             }
             continue;
@@ -45,6 +45,7 @@ int main(int argc, char **argv)
         int fd = open(path, O_WRONLY | O_CREAT, 0644);
         if (fd < 0) { fprintf(stderr, "touch: cannot create '%s'\n", argv[i]); rc = 1; continue; }
         close(fd);
+        utimes_at(path, UTIME_NOW_SEC, UTIME_NOW_SEC);
     }
     return rc;
 }

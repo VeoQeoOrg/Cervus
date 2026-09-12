@@ -20,6 +20,9 @@
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
+#define UTIME_NOW_SEC ((int64_t)-1)
+int utimes_at(const char *path, int64_t atime, int64_t mtime);
+
 #define S_IRWXU   00700
 #define S_IRUSR   00400
 #define S_IWUSR   00200

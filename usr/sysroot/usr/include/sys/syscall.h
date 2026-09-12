@@ -159,6 +159,7 @@
 #define SYS_FB_SETMODE      607
 #define SYS_DISK_MKFS_UDF   608
 #define SYS_DRIVER_CTL      609
+#define SYS_UTIMES          610
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
