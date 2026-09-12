@@ -25,9 +25,20 @@ KEYS
        .        show hidden files
        s        settings
        q        quit
+       Q        quit, and leave the shell in the directory on screen
 
        Up at the top of the listing wraps to the bottom, and down at
        the bottom wraps back to the top.
+
+LEAVING THE SHELL BEHIND
+       q leaves the shell where it was. Q leaves it in the directory
+       the listing was showing, which saves typing the same cd again
+       after a walk through the tree.
+
+       It works by writing that directory to the file named by
+       CD_ON_EXIT, which csh(1) and sh(1) set for every command they
+       run and read back afterwards. A shell that does not set it gets
+       a note instead, and stays where it was.
 
 OPEN WITH
        o offers the programs that suit the selected file - play for a

@@ -2507,6 +2507,35 @@ static int run_builtin(int argc, char **argv, int *is_bi)
     return 0;
 }
 
+static char g_cd_drop[64];
+
+static void cd_on_exit_setup(void)
+{
+    snprintf(g_cd_drop, sizeof g_cd_drop, "/tmp/.cd-on-exit.%d", (int)getpid());
+    unlink(g_cd_drop);
+    var_set("CD_ON_EXIT", g_cd_drop);
+    var_export("CD_ON_EXIT");
+}
+
+static void cd_on_exit_take(void)
+{
+    if (!g_cd_drop[0]) return;
+    int fd = open(g_cd_drop, O_RDONLY, 0);
+    if (fd < 0) return;
+    char dir[1024];
+    ssize_t n = read(fd, dir, sizeof dir - 1);
+    close(fd);
+    unlink(g_cd_drop);
+    if (n <= 0) return;
+    dir[n] = 0;
+    dir[strcspn(dir, "\n")] = 0;
+    if (!dir[0]) return;
+    if (chdir(dir) == 0) {
+        char cwd[1024];
+        if (getcwd(cwd, sizeof cwd)) { var_set("PWD", cwd); var_export("PWD"); }
+    }
+}
+
 static int exec_external(char **argv, redir_t *redirs, svec *assigns, int fork_it)
 {
     char full[1024];
@@ -2548,6 +2577,7 @@ static int exec_external(char **argv, redir_t *redirs, svec *assigns, int fork_i
     }
     int st = 0;
     waitpid(pid, &st, 0);
+    cd_on_exit_take();
     return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
 }
 
@@ -3303,6 +3333,7 @@ int main(int argc, char **argv)
 
     if (isatty(0) || g_interactive) {
         g_interactive = 1;
+        cd_on_exit_setup();
         interactive_loop();
         run_exit_trap();
         return g_exiting ? g_exit_code : g_status;

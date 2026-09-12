@@ -30,6 +30,13 @@ KEYBOARD
        layout en [ru] [key alt+shift|ctrl+shift|capslock] sets the
        console layouts and the key that switches them.
 
+DIRECTORY HANDBACK
+       Before running a command the shell puts the name of a scratch
+       file in CD_ON_EXIT. A program that wants to leave the shell
+       somewhere else writes a directory there before it exits, and
+       the shell moves there once the program is done. cfm(1) does
+       this on Q.
+
 FILES
        /etc/cshrc, ~/.cshrc, /etc/shell
 

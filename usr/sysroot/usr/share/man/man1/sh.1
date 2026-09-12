@@ -59,5 +59,12 @@ INTERACTIVE
        prompting with > until it is closed. History is kept in
        ~/.sh_history.
 
+DIRECTORY HANDBACK
+       Before running a command the shell puts the name of a scratch
+       file in CD_ON_EXIT. A program that wants to leave the shell
+       somewhere else writes a directory there before it exits, and
+       the shell moves there once the program is done. cfm(1) does
+       this on Q.
+
 SEE ALSO
        csh(1), test(1), echo(1), printf(1)

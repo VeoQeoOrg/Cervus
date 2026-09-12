@@ -326,7 +326,7 @@ static void draw(void) {
     tui_move(g_rows, 1);
     printf("\x1b[46m\x1b[30m"
            " \x18\x19 nav  Enter open  o open with  e run  y copy path  "
-           "r rename  d del  c/x/v  n mkdir  s settings  q quit \x1b[0m\x1b[K");
+           "r rename  d del  c/x/v  n mkdir  s settings  q quit  Q quit here \x1b[0m\x1b[K");
 
     if (prev_img) {
         char full[PMAX]; path_join(g_cwd, sel->name, full);
@@ -1000,6 +1000,7 @@ static const char CFM_USAGE[] =
     "  r rename       d delete    n new directory\n"
     "  c copy         x cut       v paste            g refresh\n"
     "  . hidden files s settings  q quit\n"
+    "  Q quit, and leave the shell in the directory on screen\n"
     "\n"
     "Settings are kept in ~/.cfmrc. See cfm(1).\n";
 
@@ -1024,6 +1025,7 @@ int main(int argc, char **argv) {
     load_dir();
     set_status("");
 
+    int hand_dir_to_shell = 0;
     int running = 1;
     while (running) {
         tui_size(&g_rows, &g_cols);
@@ -1102,10 +1104,29 @@ int main(int argc, char **argv) {
         case 'q':
             if (!g_confirm_quit || confirm("leave the file manager?") == 1) running = 0;
             break;
+        case 'Q':
+            if (!g_confirm_quit || confirm("leave, and take the shell here?") == 1) {
+                running = 0;
+                hand_dir_to_shell = 1;
+            }
+            break;
         default: break;
         }
     }
 
     tui_end();
+    if (hand_dir_to_shell) {
+        const char *drop = getenv("CD_ON_EXIT");
+        if (drop && *drop) {
+            int fd = open(drop, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (fd >= 0) {
+                write(fd, g_cwd, strlen(g_cwd));
+                close(fd);
+            }
+        } else {
+            fprintf(stderr, "cfm: this shell does not take a directory back; "
+                            "%s stays where it was\n", "it");
+        }
+    }
     return 0;
 }

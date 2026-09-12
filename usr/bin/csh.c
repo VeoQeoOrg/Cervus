@@ -526,6 +526,32 @@ static void jobs_reap(int verbose) {
     }
 }
 
+static char g_cd_drop[64];
+
+static void cd_on_exit_setup(void) {
+    snprintf(g_cd_drop, sizeof g_cd_drop, "/tmp/.cd-on-exit.%d", (int)getpid());
+    unlink(g_cd_drop);
+    var_setenv("CD_ON_EXIT", g_cd_drop);
+}
+
+static void cd_on_exit_take(void) {
+    if (!g_cd_drop[0]) return;
+    int fd = open(g_cd_drop, O_RDONLY, 0);
+    if (fd < 0) return;
+    char dir[CSH_PATH_MAX];
+    ssize_t n = read(fd, dir, sizeof dir - 1);
+    close(fd);
+    unlink(g_cd_drop);
+    if (n <= 0) return;
+    dir[n] = 0;
+    dir[strcspn(dir, "\n")] = 0;
+    if (!dir[0]) return;
+    if (chdir(dir) == 0 && !getcwd(g_cwd, sizeof g_cwd)) {
+        g_cwd[0] = '/';
+        g_cwd[1] = 0;
+    }
+}
+
 static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     char binpath[CSH_PATH_MAX];
     if (!find_in_path(argv[0], binpath, sizeof(binpath))) {
@@ -598,6 +624,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     }
     int status = 0;
     waitpid(child, &status, 0);
+    cd_on_exit_take();
     return (status >> 8) & 0xFF;
 }
 
@@ -2828,6 +2855,8 @@ int main(int argc, char **argv) {
     }
 
     if (!isatty(0)) return run_stdin_stream();
+
+    cd_on_exit_setup();
 
     {
         const char *home = var_get("HOME");
