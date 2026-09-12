@@ -35,6 +35,8 @@ APP_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-
 -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2 -mno-red-zone -O0 -g \
 -nostdinc -isystem usr/sysroot/usr/include -Wl,-Ttext-segment=0x401000"
 
+APP_CFLAGS_OPT="${APP_CFLAGS/-O0/-O2}"
+
 DEPS_STAMP=$STAMPS/deps
 LIMINE_STAMP=$STAMPS/limine
 TCC_STAMP=$STAMPS/tcc
@@ -159,6 +161,12 @@ rule cc_app
   depfile = \$out.d
   deps = gcc
 
+rule cc_app_opt
+  command = gcc $APP_CFLAGS_OPT -MMD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
+  description = CCLD(app*) \$out
+  depfile = \$out.d
+  deps = gcc
+
 rule cc_ldso
   command = gcc -ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
     -mno-red-zone -mgeneral-regs-only -mcmodel=large -O2 -g -Wall -Wextra -nostdinc \
@@ -208,7 +216,7 @@ LIB_OBJS=""
 for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     obj=$(obj_for "$src" libcervus)
     case "$src" in
-        */image/*|*/compress/inflate.c|*/math/trig.c) rule=cc_lib_opt ;;
+        */image/*|*/gl/*|*/compress/inflate.c|*/math/trig.c) rule=cc_lib_opt ;;
         *) rule=cc_lib ;;
     esac
     printf 'build %s: %s %s\n' "$obj" "$rule" "$src"
@@ -229,7 +237,11 @@ for dir in usr/apps usr/bin usr/installer; do
         base=$(basename "$src" .c)
         case "$base" in .*) continue ;; esac
         elf="$dir/$base.elf"
-        printf 'build %s: cc_app %s | %s\n' "$elf" "$src" "$PROG_DEPS"
+        case "$base" in
+            gldemo) arule=cc_app_opt ;;
+            *)      arule=cc_app ;;
+        esac
+        printf 'build %s: %s %s | %s\n' "$elf" "$arule" "$src" "$PROG_DEPS"
         ALL_ELFS="$ALL_ELFS $elf"
     done
 done
