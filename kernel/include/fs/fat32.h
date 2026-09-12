@@ -121,6 +121,9 @@ typedef struct {
     bool      dirty;
     bool      readonly;
     uint8_t   *shared_buf;
+    uint8_t   *fat_cache;
+    uint32_t   fat_cache_sec;
+    bool       fat_cache_dirty;
 } fat32_t;
 
 typedef struct {

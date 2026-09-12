@@ -23,38 +23,57 @@ static uint32_t cluster_to_lba(fat32_t *fs, uint32_t cluster) {
     return fs->first_data_sector + (cluster - 2) * fs->sectors_per_cluster;
 }
 
+#define FAT_CACHE_NONE 0xFFFFFFFFu
+
+static int fat_cache_flush(fat32_t *fs) {
+    if (!fs->fat_cache || fs->fat_cache_sec == FAT_CACHE_NONE || !fs->fat_cache_dirty)
+        return 0;
+    for (uint32_t i = 0; i < fs->num_fats; i++) {
+        uint32_t lba = fs->first_fat_sector + i * fs->fat_size_sectors + fs->fat_cache_sec;
+        int r = write_sector(fs, lba, fs->fat_cache);
+        if (r < 0) return r;
+    }
+    fs->fat_cache_dirty = false;
+    return 0;
+}
+
+static int fat_cache_load(fat32_t *fs, uint32_t rel) {
+    if (!fs->fat_cache) return -EIO;
+    if (fs->fat_cache_sec == rel) return 0;
+    int r = fat_cache_flush(fs);
+    if (r < 0) return r;
+    r = read_sector(fs, fs->first_fat_sector + rel, fs->fat_cache);
+    if (r < 0) { fs->fat_cache_sec = FAT_CACHE_NONE; return r; }
+    fs->fat_cache_sec = rel;
+    return 0;
+}
+
 static uint32_t fat_read_entry(fat32_t *fs, uint32_t cluster) {
     uint32_t fat_offset = cluster * 4;
-    uint32_t fat_sector = fs->first_fat_sector + (fat_offset / fs->bytes_per_sector);
+    uint32_t rel        = fat_offset / fs->bytes_per_sector;
     uint32_t ent_offset = fat_offset % fs->bytes_per_sector;
 
-    uint8_t sector[FAT32_SECTOR_SIZE];
-    if (read_sector(fs, fat_sector, sector) < 0) return FAT32_EOC;
+    if (fat_cache_load(fs, rel) < 0) return FAT32_EOC;
 
     uint32_t val;
-    memcpy(&val, sector + ent_offset, 4);
+    memcpy(&val, fs->fat_cache + ent_offset, 4);
     return val & FAT32_CLUSTER_MASK;
 }
 
 static int fat_write_entry(fat32_t *fs, uint32_t cluster, uint32_t value) {
     if (fs->readonly) return -EROFS;
     uint32_t fat_offset = cluster * 4;
+    uint32_t rel        = fat_offset / fs->bytes_per_sector;
     uint32_t ent_offset = fat_offset % fs->bytes_per_sector;
 
-    for (uint32_t i = 0; i < fs->num_fats; i++) {
-        uint32_t fat_sector = fs->first_fat_sector + i * fs->fat_size_sectors
-                              + (fat_offset / fs->bytes_per_sector);
-        uint8_t sector[FAT32_SECTOR_SIZE];
-        int r = read_sector(fs, fat_sector, sector);
-        if (r < 0) return r;
-        uint32_t existing;
-        memcpy(&existing, sector + ent_offset, 4);
-        uint32_t reserved = existing & 0xF0000000;
-        uint32_t merged = (value & FAT32_CLUSTER_MASK) | reserved;
-        memcpy(sector + ent_offset, &merged, 4);
-        r = write_sector(fs, fat_sector, sector);
-        if (r < 0) return r;
-    }
+    int r = fat_cache_load(fs, rel);
+    if (r < 0) return r;
+
+    uint32_t existing;
+    memcpy(&existing, fs->fat_cache + ent_offset, 4);
+    uint32_t merged = (value & FAT32_CLUSTER_MASK) | (existing & 0xF0000000);
+    memcpy(fs->fat_cache + ent_offset, &merged, 4);
+    fs->fat_cache_dirty = true;
     fs->dirty = true;
     return 0;
 }
@@ -73,7 +92,7 @@ static int write_cluster(fat32_t *fs, uint32_t cluster, const void *buf) {
     return fs->dev->ops->write_sectors(fs->dev, lba, fs->sectors_per_cluster, buf);
 }
 
-static uint32_t allocate_cluster(fat32_t *fs) {
+static uint32_t allocate_cluster_ex(fat32_t *fs, int zero_fill) {
     if (fs->readonly) return 0;
     uint32_t start = fs->next_free_hint;
     if (start < 2) start = 2;
@@ -85,16 +104,33 @@ static uint32_t allocate_cluster(fat32_t *fs) {
             fs->next_free_hint = c + 1;
             if (fs->free_count != 0xFFFFFFFF) fs->free_count--;
 
-            uint8_t *zero = (uint8_t *)malloc(fs->bytes_per_cluster);
-            if (zero) {
-                memset(zero, 0, fs->bytes_per_cluster);
-                write_cluster(fs, c, zero);
-                free(zero);
+            if (zero_fill) {
+                uint8_t *zero = (uint8_t *)malloc(fs->bytes_per_cluster);
+                if (zero) {
+                    memset(zero, 0, fs->bytes_per_cluster);
+                    write_cluster(fs, c, zero);
+                    free(zero);
+                }
             }
             return c;
         }
     }
     return 0;
+}
+
+static uint32_t allocate_cluster(fat32_t *fs) {
+    return allocate_cluster_ex(fs, 1);
+}
+
+#define FAT32_MAX_RUN_SECTORS 256
+
+static uint32_t chain_next_or_alloc(fat32_t *fs, uint32_t cluster, int zero_fill) {
+    uint32_t next = fat_read_entry(fs, cluster);
+    if (!fat32_is_eoc(next) && next >= 2) return next;
+    uint32_t nc = allocate_cluster_ex(fs, zero_fill);
+    if (nc == 0) return 0;
+    if (fat_write_entry(fs, cluster, nc) < 0) return 0;
+    return nc;
 }
 
 static int free_cluster_chain(fat32_t *fs, uint32_t first) {
@@ -111,6 +147,7 @@ static int free_cluster_chain(fat32_t *fs, uint32_t first) {
 
 int fat32_sync(fat32_t *fs) {
     if (!fs || fs->readonly) return 0;
+    fat_cache_flush(fs);
     if (fs->fsinfo_sector) {
         uint8_t sec[FAT32_SECTOR_SIZE];
         if (read_sector(fs, fs->fsinfo_sector, sec) == 0) {
@@ -386,16 +423,41 @@ static int64_t fat32_file_read(vnode_t *node, void *buf, size_t len, uint64_t of
     size_t done = 0;
     uint32_t in_cluster_off = (uint32_t)(offset % fs->bytes_per_cluster);
     uint8_t *cluster_buf = fs->shared_buf;
+    uint32_t prefetched = 0;
     if (!cluster_buf) return -EIO;
 
     while (done < len && !fat32_is_eoc(cluster) && cluster >= 2) {
-        if (read_cluster(fs, cluster, cluster_buf) < 0) return -EIO;
         uint32_t avail = fs->bytes_per_cluster - in_cluster_off;
         uint32_t take = (avail < (len - done)) ? avail : (uint32_t)(len - done);
-        memcpy((uint8_t *)buf + done, cluster_buf + in_cluster_off, take);
-        done += take;
+
+        if (in_cluster_off == 0 && take == fs->bytes_per_cluster) {
+            uint32_t run  = 1;
+            uint32_t last = cluster;
+            while ((size_t)(run + 1) * fs->bytes_per_cluster <= len - done &&
+                   run * fs->sectors_per_cluster < FAT32_MAX_RUN_SECTORS) {
+                uint32_t nxt = fat_read_entry(fs, last);
+                if (fat32_is_eoc(nxt) || nxt < 2) break;
+                if (nxt != last + 1) { prefetched = nxt; break; }
+                last = nxt;
+                run++;
+            }
+            if (fs->dev->ops->read_sectors(fs->dev,
+                    cluster_to_lba(fs, cluster),
+                    run * fs->sectors_per_cluster,
+                    (uint8_t *)buf + done) < 0) return -EIO;
+            done += (size_t)run * fs->bytes_per_cluster;
+            cluster = last;
+        } else {
+            if (read_cluster(fs, cluster, cluster_buf) < 0) return -EIO;
+            memcpy((uint8_t *)buf + done, cluster_buf + in_cluster_off, take);
+            done += take;
+        }
+
         in_cluster_off = 0;
-        if (done < len) cluster = fat_read_entry(fs, cluster);
+        if (done < len) {
+            cluster = prefetched ? prefetched : fat_read_entry(fs, cluster);
+            prefetched = 0;
+        }
     }
     return (int64_t)done;
 }
@@ -427,20 +489,15 @@ static int64_t fat32_file_write(vnode_t *node, const void *buf, size_t len, uint
     }
 
     for (uint32_t i = start_index; i < target_index; i++) {
-        uint32_t next = fat_read_entry(fs, cluster);
-        if (fat32_is_eoc(next) || next < 2) {
-            uint32_t nc = allocate_cluster(fs);
-            if (nc == 0) return -ENOSPC;
-            fat_write_entry(fs, cluster, nc);
-            cluster = nc;
-        } else {
-            cluster = next;
-        }
+        uint32_t next = chain_next_or_alloc(fs, cluster, 1);
+        if (next == 0) return -ENOSPC;
+        cluster = next;
     }
 
     size_t done = 0;
     uint32_t in_cluster_off = (uint32_t)(offset % fs->bytes_per_cluster);
     uint32_t current_index = target_index;
+    uint32_t prefetched = 0;
 
     if (!vd->io_buf) {
         vd->io_buf = (uint8_t *)malloc(fs->bytes_per_cluster);
@@ -452,27 +509,39 @@ static int64_t fat32_file_write(vnode_t *node, const void *buf, size_t len, uint
         uint32_t take = (avail < (len - done)) ? avail : (uint32_t)(len - done);
 
         if (in_cluster_off == 0 && take == fs->bytes_per_cluster) {
+            uint32_t run  = 1;
+            uint32_t last = cluster;
+            while ((size_t)(run + 1) * fs->bytes_per_cluster <= len - done &&
+                   run * fs->sectors_per_cluster < FAT32_MAX_RUN_SECTORS) {
+                uint32_t nxt = chain_next_or_alloc(fs, last, 0);
+                if (nxt == 0) break;
+                if (nxt != last + 1) { prefetched = nxt; break; }
+                last = nxt;
+                run++;
+            }
             if (fs->dev->ops->write_sectors(fs->dev,
                     cluster_to_lba(fs, cluster),
-                    fs->sectors_per_cluster,
+                    run * fs->sectors_per_cluster,
                     (const uint8_t *)buf + done) < 0) return -EIO;
+            done += (size_t)run * fs->bytes_per_cluster;
+            current_index += run - 1;
+            cluster = last;
         } else {
             if (read_cluster(fs, cluster, vd->io_buf) < 0) return -EIO;
             memcpy(vd->io_buf + in_cluster_off, (const uint8_t *)buf + done, take);
             if (write_cluster(fs, cluster, vd->io_buf) < 0) return -EIO;
+            done += take;
         }
 
-        done += take;
         in_cluster_off = 0;
 
         if (done < len) {
-            uint32_t next = fat_read_entry(fs, cluster);
-            if (fat32_is_eoc(next) || next < 2) {
-                uint32_t nc = allocate_cluster(fs);
-                if (nc == 0) break;
-                fat_write_entry(fs, cluster, nc);
-                next = nc;
-            }
+            uint32_t next = prefetched;
+            prefetched = 0;
+            if (next == 0)
+                next = chain_next_or_alloc(fs, cluster,
+                                           (len - done) < fs->bytes_per_cluster);
+            if (next == 0) break;
             cluster = next;
             current_index++;
         }
@@ -1055,9 +1124,15 @@ vnode_t *fat32_mount(blkdev_t *dev) {
 
     fs->shared_buf = (uint8_t *)malloc(fs->bytes_per_cluster);
     if (!fs->shared_buf) { free(fs); return NULL; }
+    fs->fat_cache = (uint8_t *)malloc(fs->bytes_per_sector);
+    if (!fs->fat_cache) { free(fs->shared_buf); free(fs); return NULL; }
+    fs->fat_cache_sec   = FAT_CACHE_NONE;
+    fs->fat_cache_dirty = false;
     if (fs->bytes_per_cluster > MAX_CLUSTER_BYTES) {
         serial_printf("[FAT32] %s: cluster too large %u, bailing\n",
                       dev->name, fs->bytes_per_cluster);
+        free(fs->fat_cache);
+        free(fs->shared_buf);
         free(fs);
         return NULL;
     }
@@ -1088,6 +1163,7 @@ void fat32_unmount(fat32_t *fs) {
     if (!fs) return;
     fat32_sync(fs);
     if (fs->shared_buf) { free(fs->shared_buf); fs->shared_buf = NULL; }
+    if (fs->fat_cache)  { free(fs->fat_cache);  fs->fat_cache = NULL; }
     free(fs);
 }
 
