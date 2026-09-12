@@ -16,7 +16,7 @@
 #define MAX_INDEX    1024
 
 static const char USAGE[] =
-    "Usage: git <command> [arguments]\n"
+    "Usage: git [-C <dir>] [-c <key>=<value>] <command> [arguments]\n"
     "\n"
     "  init [directory]        start a repository here\n"
     "  clone <url> [dir]       copy a repository from a server\n"
@@ -25,6 +25,7 @@ static const char USAGE[] =
     "  status                  what is staged and what is not\n"
     "  commit -m <message>     record the staged files\n"
     "  log                     the commits leading here\n"
+    "  checkout <commit|branch>  put that commit in the working tree\n"
     "  push [url] [branch]     send commits to a server\n"
     "  remote [-v|add <url>]   the server clone and push use\n"
     "  show <object>           print an object\n"
@@ -233,22 +234,55 @@ static int read_ref(const char *ref, char out[41])
     return 0;
 }
 
-static const char *head_ref(void)
+static int head_raw(char out[161])
 {
-    static char ref[128];
     char path[MAX_PATH_LEN];
     git_path(path, sizeof path, "HEAD");
     FILE *f = fopen(path, "r");
-    if (!f) return "refs/heads/main";
-    char line[160];
-    if (!fgets(line, sizeof line, f)) { fclose(f); return "refs/heads/main"; }
+    if (!f) return -1;
+    if (!fgets(out, 161, f)) { fclose(f); return -1; }
     fclose(f);
-    line[strcspn(line, "\n")] = 0;
+    out[strcspn(out, "\n")] = 0;
+    return 0;
+}
+
+static int is_hex40(const char *s)
+{
+    if (strlen(s) != 40) return 0;
+    for (int i = 0; i < 40; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || ((c | 32) >= 'a' && (c | 32) <= 'f'))) return 0;
+    }
+    return 1;
+}
+
+static int head_detached(void)
+{
+    char line[161];
+    if (head_raw(line) != 0) return 0;
+    return is_hex40(line);
+}
+
+static const char *head_ref(void)
+{
+    static char ref[128];
+    char line[161];
+    if (head_raw(line) != 0) return "refs/heads/main";
     if (!strncmp(line, "ref: ", 5)) {
         snprintf(ref, sizeof ref, "%s", line + 5);
         return ref;
     }
     return "refs/heads/main";
+}
+
+static int resolve_head(char out[41])
+{
+    char line[161];
+    if (head_raw(line) == 0 && is_hex40(line)) {
+        snprintf(out, 41, "%s", line);
+        return 0;
+    }
+    return read_ref(head_ref(), out);
 }
 
 static int cmd_init(const char *where)
@@ -527,7 +561,7 @@ static int cmd_commit(const char *message)
 static int cmd_log(void)
 {
     char hash[41];
-    if (read_ref(head_ref(), hash) != 0) {
+    if (resolve_head(hash) != 0) {
         printf("no commits yet\n");
         return 0;
     }
@@ -602,9 +636,10 @@ static int cmd_status(void)
 {
     index_load();
     char head[41];
-    int has_commit = (read_ref(head_ref(), head) == 0);
+    int has_commit = (resolve_head(head) == 0);
 
-    printf("on branch %s\n", head_ref() + 11);
+    if (head_detached()) printf("not on a branch, at %.7s\n", has_commit ? head : "?");
+    else                 printf("on branch %s\n", head_ref() + 11);
     if (!has_commit) printf("no commits yet\n");
 
     if (g_index_count == 0) {
@@ -1551,6 +1586,104 @@ static int cmd_push(int argc, char **argv)
     return 0;
 }
 
+static int write_head(const char *value)
+{
+    char path[MAX_PATH_LEN];
+    git_path(path, sizeof path, "HEAD");
+    FILE *f = fopen(path, "w");
+    if (!f) return -1;
+    fprintf(f, "%s\n", value);
+    fclose(f);
+    return 0;
+}
+
+static int cmd_checkout(int argc, char **argv)
+{
+    if (argc < 1) { fprintf(stderr, "git: checkout needs a commit or a branch\n"); return 1; }
+    const char *what = argv[0];
+
+    char target[41];
+    char headline[200];
+    int detach;
+
+    if (is_hex40(what)) {
+        snprintf(target, sizeof target, "%s", what);
+        snprintf(headline, sizeof headline, "%s", what);
+        detach = 1;
+    } else {
+        char refname[160];
+        snprintf(refname, sizeof refname, "refs/heads/%s", what);
+        if (read_ref(refname, target) != 0) {
+            fprintf(stderr, "git: no branch or commit called %s\n", what);
+            return 1;
+        }
+        snprintf(headline, sizeof headline, "ref: %s", refname);
+        detach = 0;
+    }
+
+    char type[16] = "";
+    size_t len = 0;
+    uint8_t *commit = read_object(target, type, &len);
+    if (!commit || strcmp(type, "commit") || len < 45) {
+        free(commit);
+        fprintf(stderr, "git: %s is not a commit here; was it fetched?\n", target);
+        return 1;
+    }
+    char tree[41];
+    memcpy(tree, commit + 5, 40);
+    tree[40] = 0;
+    free(commit);
+
+    index_load();
+    int old_count = g_index_count;
+    char (*old_paths)[MAX_PATH_LEN] = NULL;
+    if (old_count > 0) {
+        old_paths = malloc((size_t)old_count * MAX_PATH_LEN);
+        if (old_paths)
+            for (int i = 0; i < old_count; i++)
+                snprintf(old_paths[i], MAX_PATH_LEN, "%s", g_index[i].path);
+        else old_count = 0;
+    }
+
+    g_index_count = 0;
+    g_checked_out = 0;
+    int files = checkout_tree(tree, g_root);
+    step_done();
+    if (files < 0) {
+        free(old_paths);
+        fprintf(stderr, "git: cannot read the tree\n");
+        return 1;
+    }
+
+    int removed = 0;
+    for (int i = 0; i < old_count; i++) {
+        if (index_find(old_paths[i]) >= 0) continue;
+        char full[MAX_PATH_LEN * 2];
+        snprintf(full, sizeof full, "%s/%s", g_root, old_paths[i]);
+        if (unlink(full) != 0) continue;
+        removed++;
+        char *slash;
+        while ((slash = strrchr(full, '/')) && slash > full) {
+            *slash = 0;
+            if (strlen(full) <= strlen(g_root)) break;
+            if (rmdir(full) != 0) break;
+        }
+    }
+    free(old_paths);
+
+    index_save();
+    if (write_head(headline) != 0) {
+        fprintf(stderr, "git: cannot move HEAD\n");
+        return 1;
+    }
+
+    if (detach) printf("now at %.7s, not on a branch\n", target);
+    else        printf("switched to %s\n", what);
+    if (removed) printf("removed %d file%s not in this commit\n",
+                        removed, removed == 1 ? "" : "s");
+    return 0;
+}
+
 static int cmd_remote(int argc, char **argv)
 {
     char stored[640];
@@ -1731,10 +1864,44 @@ static int cmd_clone(const char *url, const char *dest)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
-        fputs(USAGE, argc < 2 ? stderr : stdout);
-        return argc < 2 ? 1 : 0;
+    int shift = 1;
+    while (shift < argc && argv[shift][0] == '-') {
+        const char *a = argv[shift];
+
+        if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
+            fputs(USAGE, stdout);
+            return 0;
+        }
+        if (!strcmp(a, "-C")) {
+            if (shift + 1 >= argc) { fprintf(stderr, "git: -C needs a directory\n"); return 1; }
+            if (chdir(argv[shift + 1]) != 0) {
+                fprintf(stderr, "git: cannot enter %s\n", argv[shift + 1]);
+                return 1;
+            }
+            shift += 2;
+            continue;
+        }
+        if (!strncmp(a, "-C", 2) && a[2]) {
+            if (chdir(a + 2) != 0) { fprintf(stderr, "git: cannot enter %s\n", a + 2); return 1; }
+            shift++;
+            continue;
+        }
+        if (!strcmp(a, "-c")) { shift += 2; continue; }
+        if (!strncmp(a, "-c", 2) && a[2]) { shift++; continue; }
+        if (!strncmp(a, "--git-dir=", 10) || !strncmp(a, "--work-tree=", 12)) { shift++; continue; }
+        if (!strcmp(a, "--no-pager") || !strcmp(a, "-P")) { shift++; continue; }
+
+        fprintf(stderr, "git: unknown option %s\n", a);
+        return 1;
     }
+
+    if (shift >= argc) {
+        fputs(USAGE, stderr);
+        return 1;
+    }
+
+    argv += shift - 1;
+    argc -= shift - 1;
 
     const char *cmd = argv[1];
 
@@ -1756,6 +1923,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "ls-files"))    return cmd_ls_files();
     if (!strcmp(cmd, "status"))      return cmd_status();
     if (!strcmp(cmd, "log"))         return cmd_log();
+    if (!strcmp(cmd, "checkout"))    return cmd_checkout(argc - 2, argv + 2);
     if (!strcmp(cmd, "push"))        return cmd_push(argc - 2, argv + 2);
     if (!strcmp(cmd, "remote"))      return cmd_remote(argc - 2, argv + 2);
 
