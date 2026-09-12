@@ -584,7 +584,7 @@ static void hash_object_name(const char *type, const uint8_t *body, size_t len, 
 
 static int http_to_file(const char *url, const char *method,
                         const char *body, long body_len,
-                        const char *ctype, const char *path)
+                        const char *ctype, const char *path, int show_progress)
 {
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return -1;
@@ -599,6 +599,7 @@ static int http_to_file(const char *url, const char *method,
     o.follow       = 1;
     o.max_redirs   = 5;
     o.silent       = 1;
+    o.progress     = show_progress;
     int status = 0;
     o.out_status = &status;
 
@@ -711,6 +712,19 @@ static uint8_t *apply_delta(const uint8_t *base, size_t base_len,
     return out;
 }
 
+static void step_line(const char *what, unsigned done, unsigned total)
+{
+    if (total) fprintf(stderr, "\r  %s %u/%u  ", what, done, total);
+    else       fprintf(stderr, "\r  %s %u  ", what, done);
+    fflush(stderr);
+}
+
+static void step_done(void)
+{
+    fprintf(stderr, "\r                                        \r");
+    fflush(stderr);
+}
+
 static int unpack(const uint8_t *pack, size_t plen)
 {
     if (plen < 12 || memcmp(pack, "PACK", 4)) {
@@ -796,14 +810,17 @@ static int unpack(const uint8_t *pack, size_t plen)
             hash_object_name(objs[done].type, full, outlen, objs[done].hash);
         }
         done++;
+        if ((done & 15) == 0) step_line("unpacking", done, count);
     }
 
     for (uint32_t i = 0; i < done; i++) {
         char h[41];
         write_object(objs[i].type, objs[i].data, objs[i].len, h);
         free(objs[i].data);
+        if ((i & 15) == 0) step_line("storing", i, done);
     }
     free(objs);
+    step_done();
     printf("unpacked %u object%s\n", done, done == 1 ? "" : "s");
     return 0;
 
@@ -814,6 +831,8 @@ fail:
     free(objs);
     return -1;
 }
+
+static int g_checked_out;
 
 static int checkout_tree(const char *tree_hash, const char *base)
 {
@@ -857,6 +876,9 @@ static int checkout_tree(const char *tree_hash, const char *base)
                 fclose(f);
                 if (mode & 0111) chmod(path, 0755);
                 files++;
+                g_checked_out++;
+                if ((g_checked_out & 7) == 0)
+                    step_line("checking out", (unsigned)g_checked_out, 0);
             }
             free(content);
         }
@@ -893,7 +915,7 @@ static int cmd_clone(const char *url, const char *dest)
     snprintf(refs_path, sizeof refs_path, "%s/.git/refs.tmp", dir);
 
     printf("asking what it has...\n");
-    if (http_to_file(refs_url, "GET", NULL, 0, NULL, refs_path) != 0) {
+    if (http_to_file(refs_url, "GET", NULL, 0, NULL, refs_path, 0) != 0) {
         fprintf(stderr, "git: cannot reach %s\n", refs_url);
         return 1;
     }
@@ -956,7 +978,7 @@ static int cmd_clone(const char *url, const char *dest)
 
     printf("fetching...\n");
     if (http_to_file(pack_url, "POST", body, blen,
-                     "application/x-git-upload-pack-request", pack_path) != 0) {
+                     "application/x-git-upload-pack-request", pack_path, 1) != 0) {
         fprintf(stderr, "git: the server refused to send a pack\n");
         return 1;
     }
@@ -999,7 +1021,9 @@ static int cmd_clone(const char *url, const char *dest)
         char tree[41];
         memcpy(tree, commit + 5, 40);
         tree[40] = 0;
+        g_checked_out = 0;
         int files = checkout_tree(tree, dir);
+        step_done();
         printf("checked out %d file%s into %s\n", files, files == 1 ? "" : "s", dir);
     }
     free(commit);

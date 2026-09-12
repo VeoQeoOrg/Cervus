@@ -38,6 +38,7 @@ typedef struct {
     int         verbose;
     int         fail_on_error;
     int         silent;
+    int         progress;
     int        *out_status;
     http_cookie_jar *jar;
 } http_opts;

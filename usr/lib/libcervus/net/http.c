@@ -294,7 +294,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
                     if (n <= 0) break;
                     body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); got += n; total += n;
                 }
-                if (opts->verbose && total - prog_last >= 262144) {
+                if ((opts->verbose || opts->progress) && total - prog_last >= 262144) {
                     prog_last = total;
                     fprintf(stderr, "\r  %ld KB received  ", total / 1024);
                 }
@@ -307,7 +307,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
                 int n = hr_read(&r, body, want);
                 if (n <= 0) break;
                 body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); got += n; total += n;
-                if (opts->verbose && (got - prog_last >= 262144 || got == content_len)) {
+                if ((opts->verbose || opts->progress) && (got - prog_last >= 262144 || got == content_len)) {
                     prog_last = got;
                     long pct = content_len ? (long)((long long)got * 100 / content_len) : 0;
                     fprintf(stderr, "\r  %ld / %ld KB (%ld%%)  ",
@@ -318,7 +318,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             int n;
             while ((n = hr_read(&r, body, sizeof body)) > 0) {
                 body_emit(cenc, out_fd, &cbuf, &clen, &ccap, body, n); total += n;
-                if (opts->verbose && total - prog_last >= 262144) {
+                if ((opts->verbose || opts->progress) && total - prog_last >= 262144) {
                     prog_last = total;
                     fprintf(stderr, "\r  %ld KB received  ", total / 1024);
                 }
@@ -335,10 +335,8 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             free(cbuf);
         }
 
-        if (opts->verbose) {
-            if (prog_last > 0) fprintf(stderr, "\r                                        \r");
-            fprintf(stderr, "* [%ld bytes]\n", total);
-        }
+        if (prog_last > 0) fprintf(stderr, "\r                                        \r");
+        if (opts->verbose) fprintf(stderr, "* [%ld bytes]\n", total);
         if (tc) tls_free(tc);
         close(fd);
         if (opts->out_status) *opts->out_status = status;
