@@ -1401,7 +1401,9 @@ static int exec_tokens(char **tok, int n) {
     if (strcmp(tok[0], "unsetenv") == 0) { int rc = run_unsetenv(tok, n); rc_set(rc); return rc; }
 
     if (strcmp(tok[0], "cd") == 0) {
-        const char *path = (n > 1) ? tok[1] : var_get("HOME");
+        int ai = 1;
+        while (ai < n && strcmp(tok[ai], "--") == 0) ai++;
+        const char *path = (ai < n) ? tok[ai] : var_get("HOME");
         if (!path || !path[0]) path = "/";
 
         char dotbuf[128];
