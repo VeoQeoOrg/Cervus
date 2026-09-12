@@ -1,17 +1,63 @@
 NAME
-       sh - POSIX-style shell
+       sh - the POSIX shell
 
 SYNOPSIS
-       sh [-c command] [script]
+       sh
+       sh -c 'command'
+       sh [-eunx] script [argument ...]
 
 DESCRIPTION
-       A smaller shell kept for scripts that expect POSIX syntax. For
-       interactive work csh(1) is the better choice.
+       A POSIX shell, kept separate from csh(1) so that scripts written
+       for sh or bash run unchanged. A file whose first line is
+       #!/bin/sh is handed to it automatically once the file is
+       executable.
+
+GRAMMAR
+       Pipelines with |, lists with ; && || and &, grouping with { }
+       and ( ), and the compound commands if/elif/else/fi,
+       while/do/done, until/do/done, for/in/do/done and case/in/esac.
+       Functions are written name() { ... } and take positional
+       parameters of their own.
+
+EXPANSION
+       $name and ${name}, with ${name:-word} ${name:=word}
+       ${name:+word} ${name:?word} for defaults, ${#name} for the
+       length, ${name#pat} ${name##pat} ${name%pat} ${name%%pat} for
+       trimming, ${name/pat/repl} ${name//pat/repl} for substitution
+       and ${name:offset:length} for a slice.
+
+       $(command) and `command` substitute output, $((expression))
+       evaluates integer arithmetic, and * ? [...] match path names.
+       Unquoted results are split on IFS.
+
+       The special parameters are $? $$ $! $# $@ $* $- and $0 to $9.
+
+REDIRECTION
+       < > >> <> >| and n>&m, plus here-documents with << and <<-.
+       A quoted delimiter, as in <<'EOF', turns off expansion in the
+       body.
+
+BUILTINS
+       : . source break cd continue echo eval exec exit export false
+       getopts hash local pwd read return set shift test [ times trap
+       true type umask unset command
 
 OPTIONS
-       -c C   run C and exit
-       -n     read without executing
-       -v     echo input lines as they are read
+       -c CMD  run CMD and exit
+       -s      read commands from standard input
+       -e      exit as soon as a command fails
+       -n      parse the input but do not run it
+       -u      treat an unset parameter as an error
+       -x      print each command before running it
+
+       set turns the same letters on with - and off with + while the
+       script is running.
+
+INTERACTIVE
+       Line editing, history and Tab completion come from the shared
+       readline in libcervus. An unfinished compound command keeps
+       prompting with > until it is closed. History is kept in
+       ~/.sh_history.
 
 SEE ALSO
-       csh(1), test(1)
+       csh(1), test(1), echo(1), printf(1)
