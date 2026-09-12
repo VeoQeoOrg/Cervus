@@ -77,13 +77,27 @@ static int b64enc(const char *in, int inlen, char *out, int cap) {
     return o;
 }
 
-static int parse_url(const char *url, int *https, char *host, int hostcap, int *port, char *path, int pathcap) {
+static int parse_url(const char *url, int *https, char *host, int hostcap, int *port,
+                    char *path, int pathcap, char *userinfo, int uicap) {
     const char *p = url;
     *https = 0;
+    if (userinfo && uicap > 0) userinfo[0] = 0;
     if (!strncmp(p, "https://", 8)) { *https = 1; p += 8; }
     else if (!strncmp(p, "http://", 7)) p += 7;
     else return -1;
     *port = *https ? 443 : 80;
+
+    const char *slash = strchr(p, '/');
+    const char *at = strchr(p, '@');
+    if (at && (!slash || at < slash)) {
+        if (userinfo && uicap > 0) {
+            int k = 0;
+            for (const char *u = p; u < at && k < uicap - 1; u++) userinfo[k++] = *u;
+            userinfo[k] = 0;
+        }
+        p = at + 1;
+    }
+
     int i = 0;
     while (*p && *p != '/' && *p != ':' && i < hostcap - 1) host[i++] = *p++;
     host[i] = 0;
@@ -144,13 +158,18 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
 
     int max_redirs = opts->follow ? (opts->max_redirs > 0 ? opts->max_redirs : 20) : 0;
     int status = 0;
+    char urlauth[256] = "";
 
     for (int hop = 0; ; hop++) {
         int https, port;
         char host[256], path[1024];
-        if (parse_url(cururl, &https, host, sizeof host, &port, path, sizeof path)) {
+        char hopauth[256];
+        if (parse_url(cururl, &https, host, sizeof host, &port, path, sizeof path,
+                      hopauth, sizeof hopauth)) {
             fprintf(stderr, "http: bad url\n"); return -1;
         }
+
+        if (hopauth[0]) snprintf(urlauth, sizeof urlauth, "%s", hopauth);
 
         in_addr_t ip = inet_resolve(host);
         if (ip == 0xffffffffu) { fprintf(stderr, "http: cannot resolve %s\n", host); return -1; }
@@ -185,9 +204,10 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         rl += snprintf(req + rl, sizeof req - rl, "Accept: */*\r\n");
         if (opts->referer) rl += snprintf(req + rl, sizeof req - rl, "Referer: %s\r\n", opts->referer);
         if (opts->range)   rl += snprintf(req + rl, sizeof req - rl, "Range: bytes=%s\r\n", opts->range);
-        if (opts->userpwd) {
+        const char *auth = opts->userpwd ? opts->userpwd : (urlauth[0] ? urlauth : NULL);
+        if (auth) {
             char enc[512];
-            b64enc(opts->userpwd, (int)strlen(opts->userpwd), enc, sizeof enc);
+            b64enc(auth, (int)strlen(auth), enc, sizeof enc);
             rl += snprintf(req + rl, sizeof req - rl, "Authorization: Basic %s\r\n", enc);
         }
         int have_ct = 0, have_ae = 0;

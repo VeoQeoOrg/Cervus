@@ -43,6 +43,26 @@ COMMANDS
 
        log    The commit leading here and every commit before it.
 
+       push [url] [branch]
+              Send commits to a server. Without arguments it uses the
+              url recorded by clone or by remote add, and the branch
+              HEAD is on.
+
+              It asks the server which commit the branch is at, works
+              out which objects the server is missing, builds a pack
+              of them and posts it. Objects go in whole, without delta
+              compression, so a push is larger on the wire than git's
+              own would be but is read by any git.
+
+              A server that wants credentials gets them from the url
+              as https://user:token@host/path, or asks for them at the
+              terminal. Nothing is written to disk: the url recorded
+              for next time has the credentials removed.
+
+       remote [-v | add <url> | remove]
+              The server clone and push use. It is one line in
+              .git/remote, not git's config format.
+
        show <object>, cat-file <hash>
               Print an object. A tree prints as one line per entry.
 
@@ -67,6 +87,12 @@ OBJECTS
        index is a binary format this does not write, so git elsewhere
        will not see the staging area, only the commits.
 
+       Trees nest the way git's do: a directory is its own tree object
+       rather than a slash in a name, so git fsck --strict is happy
+       with what is pushed. Cloning fills the staging area from the
+       checkout, so the first commit after a clone keeps the files
+       that were already there.
+
 ENVIRONMENT
        GIT_AUTHOR
               Name and address for commits, as 'Name <address>'.
@@ -77,6 +103,7 @@ EXAMPLE
          git add readme.txt
          git commit -m 'first commit'
          git log
+         git push https://user:token@example.com/repo.git
 
 SEE ALSO
        sha1(3), inflate(3), ssh(1)
