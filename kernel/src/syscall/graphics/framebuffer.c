@@ -2,6 +2,7 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
+#include "../../../include/io/serial.h"
 #include <string.h>
 
 extern fb_info_t *global_framebuffer;
@@ -91,11 +92,15 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
     if (uaddr <= t->brk_current) return -ENOMEM;
     t->brk_max = uaddr;
 
-    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED;
+    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED
+                | VMM_PWT | VMM_PAT;
     for (uint64_t i = 0; i < pages; i++) {
         if (!vmm_map_page(t->pagemap, uaddr + i * 0x1000, phys + i * 0x1000, vf))
             return -ENOMEM;
     }
+
+    serial_printf("[FB] mapped %llu pages to user at 0x%llx (write-combining)\n",
+                  (unsigned long long)pages, (unsigned long long)uaddr);
 
     return syscall_copy_to_user((void *)out_addr_ptr, &uaddr, sizeof(uaddr));
 }
