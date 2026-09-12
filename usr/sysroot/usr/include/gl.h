@@ -1,12 +1,6 @@
 #ifndef _CERVUS_GL_H
 #define _CERVUS_GL_H
 
-/*
- * A subset of the OpenGL 1.1 fixed-function API, implemented for Cervus.
- * Independent implementation: not Khronos-conformant, not a licensed
- * OpenGL implementation. OpenGL is a trademark of Hewlett Packard
- * Enterprise. See TRADEMARKS.md.
- */
 
 #include <stdint.h>
 #include <stddef.h>
