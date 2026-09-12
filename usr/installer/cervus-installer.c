@@ -1056,18 +1056,25 @@ static int ensure_parent_dir(const char *path) {
     return 0;
 }
 
+static int  g_copy_bytes_mode = 0;
+static long g_copy_bytes_done = 0;
+
 static int copy_one_file(const char *src, const char *dst) {
     int sfd = open(src, O_RDONLY, 0);
     if (sfd < 0) return sfd;
     ensure_parent_dir(dst);
     int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     if (dfd < 0) { close(sfd); return dfd; }
-    static char fbuf[8192];
+    static char fbuf[128 * 1024];
     ssize_t n;
     int rc = 0;
     while ((n = read(sfd, fbuf, sizeof(fbuf))) > 0) {
         ssize_t w = write(dfd, fbuf, (size_t)n);
         if (w < 0) { rc = (int)w; break; }
+        if (g_copy_bytes_mode) {
+            g_copy_bytes_done += w;
+            progress_substep((int)(g_copy_bytes_done / 1024), g_substep_total);
+        }
     }
     close(sfd);
     close(dfd);
@@ -1509,14 +1516,27 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
         { NULL, NULL, 0 }
     };
     int required_missing = 0;
+    long boot_kb = 0;
+    for (int i = 0; boot_files[i].src; i++) {
+        struct stat st;
+        if (stat(boot_files[i].src, &st) == 0) boot_kb += (st.st_size + 1023) / 1024;
+    }
+    g_substep_done    = 0;
+    g_substep_total   = boot_kb > 0 ? (int)boot_kb : 1;
+    g_copy_bytes_done = 0;
+    g_copy_bytes_mode = 1;
+    progress_substep(0, g_substep_total);
     for (int i = 0; boot_files[i].src; i++) {
         struct stat st;
         if (stat(boot_files[i].src, &st) != 0) {
             if (boot_files[i].req) required_missing++;
             continue;
         }
+        snprintf(g_progress_caption, sizeof(g_progress_caption),
+                 "copying %s", boot_files[i].dst);
         copy_one_file(boot_files[i].src, boot_files[i].dst);
     }
+    g_copy_bytes_mode = 0;
     if (required_missing > 0) {
         step_fail("boot files missing", -1);
         cervus_disk_umount("/mnt/esp");
