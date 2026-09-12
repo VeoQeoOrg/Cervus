@@ -1,0 +1,80 @@
+NAME
+       make - build what is out of date
+
+SYNOPSIS
+       make [-f makefile] [-C dir] [-nskiBq] [VAR=value] [target...]
+
+DESCRIPTION
+       Reads a makefile, works out which targets are older than what
+       they are built from, and runs the recipes that bring them up to
+       date. With no target named it builds the first one the makefile
+       defines.
+
+       Recipe lines begin with a tab and are handed to sh(1), one line
+       per shell, so a recipe that needs several commands to share a
+       directory joins them with && or \ the way it would anywhere
+       else.
+
+RULES
+       A rule is targets, a colon, the things they are built from, and
+       a recipe indented with tabs:
+
+         app: main.o util.o
+                 $(CC) -o $@ $^
+
+       % in a target makes a pattern rule that matches any name, with
+       the part % stood for available as $*:
+
+         %.o: %.c
+                 $(CC) $(CFLAGS) -c -o $@ $<
+
+       Prerequisites after a | are order-only: they are built first but
+       do not make the target out of date. .PHONY names targets that
+       are not files, so they run every time.
+
+       Pattern rules for .c, .s and .S objects and for linking a single
+       object or source are built in, and are tried only after the ones
+       the makefile defines.
+
+VARIABLES
+       = defines a variable expanded each time it is used, := expands
+       it once at that point, += appends and ?= sets it only if it has
+       no value yet. A variable named on the command line wins over the
+       makefile. Anything not defined falls back to the environment.
+
+       $(VAR:.c=.o) rewrites the end of every word.
+
+       Inside a recipe $@ is the target, $< the first prerequisite, $^
+       all of them, $? those newer than the target, and $* the stem the
+       pattern matched.
+
+FUNCTIONS
+       subst patsubst strip findstring filter filter-out sort word
+       words wordlist firstword lastword dir notdir suffix basename
+       addprefix addsuffix join wildcard shell if foreach error
+       warning info
+
+CONDITIONALS
+       ifeq, ifneq, ifdef and ifndef with else and endif, and include,
+       -include and sinclude for pulling in another makefile.
+
+OPTIONS
+       -f FILE  read FILE rather than GNUmakefile, makefile or Makefile
+       -C DIR   change to DIR before doing anything
+       -n       print the recipes without running them
+       -s       run the recipes without printing them
+       -k       carry on with other targets after one fails
+       -i       ignore a failing recipe line everywhere
+       -B       rebuild regardless of the timestamps
+       -q       print nothing; exit 1 if something needs remaking
+
+       A recipe line starting with @ is not printed, one starting with
+       - may fail without stopping the build.
+
+LIMITS
+       Timestamps are compared to the second, so a file written in the
+       same second as the target it is built from does not count as
+       newer. There is no -j: recipes run one at a time.
+
+SEE ALSO
+       sh(1), gcc(1)
