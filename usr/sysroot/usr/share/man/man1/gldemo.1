@@ -1,0 +1,45 @@
+NAME
+       gldemo - the software OpenGL demo
+
+SYNOPSIS
+       gldemo [--gears | --cube] [--size WxH] [--full] [--flat]
+              [--frames N]
+
+DESCRIPTION
+       Draws the classic three meshing gears, or a lit cube, through
+       the software OpenGL in libcervus. There is no graphics
+       acceleration underneath: every triangle is transformed, lit and
+       filled by the processor, and the finished picture is copied
+       into the framebuffer.
+
+       A counter in the corner shows the frame rate, and a line at the
+       foot shows the scene, the size being rendered and how many
+       triangles survived back-face culling in the last frame.
+
+OPTIONS
+       --gears     three meshing gears (the default)
+       --cube      one rotating cube
+       --size WxH  render at this size rather than 800x600
+       --full      render at the whole screen size
+       --flat      one colour per face instead of shading across it
+       --frames N  stop after N frames and print the average rate
+
+KEYS
+       g   gears          c   cube
+       f   flat or smooth shading
+       space  hold the rotation
+       q   quit
+
+SPEED
+       Only what changed is repainted. The renderer records the left
+       and right edge of every row it drew into, and the next frame
+       clears and copies just those spans rather than the whole
+       picture. That is what keeps the cube cheap - it covers a small
+       part of the screen, so almost nothing is touched per frame.
+
+       The cost is close to proportional to the pixels covered, so a
+       smaller --size is the lever to pull on a slow machine. --frames
+       prints a figure to compare against.
+
+SEE ALSO
+       img(1), fbdemo(1)
