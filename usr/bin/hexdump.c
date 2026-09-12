@@ -50,6 +50,7 @@ static int dump_fd(int fd, long skip, long count)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "hexdump")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     long skip = 0;
     long count = -1;

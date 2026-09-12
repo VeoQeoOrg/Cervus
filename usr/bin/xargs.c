@@ -28,6 +28,7 @@ static int run(char **args)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "xargs")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int max_n = 0;
     const char *repl = NULL;

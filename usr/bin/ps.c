@@ -40,6 +40,7 @@ static void fmt_mem(uint64_t b, char *out, size_t n)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ps")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int full = 0;
     int opt;

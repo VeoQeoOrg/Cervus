@@ -8,6 +8,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tty")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int silent = 0;
     int opt;

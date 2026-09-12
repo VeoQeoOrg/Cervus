@@ -14,6 +14,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "env")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     int keep = 1;
 
     int opt;

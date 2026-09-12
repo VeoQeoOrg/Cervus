@@ -35,6 +35,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "mkdir")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int flag_p = 0;
     mode_t mode = 0755;

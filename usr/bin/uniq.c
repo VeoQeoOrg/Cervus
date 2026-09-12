@@ -36,6 +36,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "uniq")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int count_mode = 0, dup_only = 0, uniq_only = 0, ci = 0;
     int opt;

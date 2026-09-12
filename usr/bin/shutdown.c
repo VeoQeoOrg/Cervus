@@ -55,6 +55,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "shutdown")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     (void)argc; (void)argv;
     fputs(C_YELLOW "[Shutdown]" C_RESET "\n\n", stdout);
     fputs("Are you sure you want to " C_RED "shut down" C_RESET " the computer?\n", stdout);

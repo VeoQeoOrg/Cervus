@@ -32,6 +32,7 @@ static int try_path(const char *dir, const char *name, char *out, size_t sz)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "which")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int all = 0;
     int opt;

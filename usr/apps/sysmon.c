@@ -549,6 +549,7 @@ int main(int argc, char **argv)
         "  arrows  select process\n"
         "  ?       toggle help line\n";
     if (cervus_check_help_version(argc, argv, USAGE, "sysmon")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     (void)argc; (void)argv;
 
     if (!isatty(0) || !isatty(1)) {

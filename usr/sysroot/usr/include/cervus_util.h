@@ -104,6 +104,19 @@ static inline void __cervus_help_write(const char *s)
     if (n) write(1, s, n);
 }
 
+static inline int cervus_end_of_options(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (!argv[i] || argv[i][0] != '-' || argv[i][1] == '\0') break;
+        if (argv[i][1] == '-' && argv[i][2] == '\0') {
+            for (int k = i; k + 1 < argc; k++) argv[k] = argv[k + 1];
+            argv[argc - 1] = (char *)0;
+            return argc - 1;
+        }
+    }
+    return argc;
+}
+
 static inline int cervus_check_help_version(int argc, char **argv,
                                             const char *usage,
                                             const char *prog)

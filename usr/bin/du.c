@@ -55,6 +55,7 @@ static unsigned long long walk(const char *path, int top)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "du")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int opt;
     while ((opt = getopt(argc, argv, "sh")) != -1) {

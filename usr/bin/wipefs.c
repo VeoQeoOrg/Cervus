@@ -30,6 +30,7 @@ static int find_disk(const char *name, cervus_disk_info_t *out)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "wipefs")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int force = 0;
     const char *devname = NULL;

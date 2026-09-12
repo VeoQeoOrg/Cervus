@@ -10,6 +10,7 @@ static const char USAGE[] =
 
 int main(int argc, char **argv) {
     if (cervus_check_help_version(argc, argv, USAGE, "fbdemo")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     (void)argc; (void)argv;
 
     cervus_fb_info_t fbi;

@@ -20,6 +20,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "mv")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int force = 0, interactive = 0, verbose = 0;
     int opt;

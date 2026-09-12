@@ -216,6 +216,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "diskinfo")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     (void)argc; (void)argv;
 
     cervus_disk_info_t disks[16];

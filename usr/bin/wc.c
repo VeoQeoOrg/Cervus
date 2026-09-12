@@ -57,6 +57,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "wc")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int sl = 0, sw = 0, sc = 0, sm = 0;
     int opt;

@@ -157,6 +157,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ls")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     ls_opts_t o;
     memset(&o, 0, sizeof(o));

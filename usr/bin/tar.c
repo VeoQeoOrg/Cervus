@@ -56,6 +56,7 @@ static void mkparents(const char *path)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tar")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int list = 0, extract = 0, verbose = 0;
     const char *file = NULL, *cdir = NULL;

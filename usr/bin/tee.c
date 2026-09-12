@@ -13,6 +13,7 @@ static void usage(void) { fputs(USAGE, stderr); }
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tee")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int append = 0;
     int opt;

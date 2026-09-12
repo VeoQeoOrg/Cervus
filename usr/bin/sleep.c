@@ -28,6 +28,7 @@ static uint64_t parse_ns(const char *s)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "sleep")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     const char *arg = NULL;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];

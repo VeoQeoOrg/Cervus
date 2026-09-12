@@ -200,6 +200,7 @@ static int process(FILE *f)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "sed")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     const char *script = NULL;
     int opt;

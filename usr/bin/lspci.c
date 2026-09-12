@@ -87,6 +87,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "lspci")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     int verbose;
     if (parse_flags(argc, argv, &verbose) < 0) return 0;
 

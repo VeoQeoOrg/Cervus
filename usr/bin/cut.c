@@ -77,6 +77,7 @@ static void do_stream(FILE *f, int mode_c, char delim)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "cut")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int mode_c = -1;
     char delim = '\t';

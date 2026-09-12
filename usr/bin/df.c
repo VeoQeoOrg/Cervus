@@ -23,6 +23,7 @@ static void fmt(uint64_t bytes, char *out, int max)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "df")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int opt;
     while ((opt = getopt(argc, argv, "h")) != -1) {

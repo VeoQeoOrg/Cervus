@@ -405,6 +405,7 @@ static void draw(uint64_t up_ns) {
 
 int main(int argc, char **argv) {
     if (cervus_check_help_version(argc, argv, USAGE, "top")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     (void)argc; (void)argv;
 
     g_ncpus = detect_ncpus();

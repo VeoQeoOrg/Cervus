@@ -16,6 +16,7 @@ static const char USAGE[] =
 
 int main(int argc, char **argv) {
     if (cervus_check_help_version(argc, argv, USAGE, "watch")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     double interval = 2.0;
     int i = 1;

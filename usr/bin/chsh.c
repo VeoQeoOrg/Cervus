@@ -47,6 +47,7 @@ static int write_shell_file(const char *path, const char *shell) {
 int main(int argc, char **argv) {
     priv_argv(argc, argv);
     if (cervus_check_help_version(argc, argv, USAGE, "chsh")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     if (argc < 2) { print_current(); return 0; }
 

@@ -53,6 +53,7 @@ static int expand_set(const char *spec, char *out, int max)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tr")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int del = 0, squeeze = 0;
     int opt;

@@ -9,6 +9,7 @@ static const char USAGE[] =
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "basename")) return 0;
+    argc = cervus_end_of_options(argc, argv);
     const char *path = NULL;
     const char *suffix = NULL;
     int seen = 0;

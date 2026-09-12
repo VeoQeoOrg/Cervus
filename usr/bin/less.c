@@ -414,6 +414,7 @@ int main(int argc, char **argv)
         "  less -N /usr/share/man/man1/find.1\n"
         "  cat big.log | less\n";
     if (cervus_check_help_version(argc, argv, USAGE, "less")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     int fd = 0;
     int show_lineno = 0;

@@ -22,6 +22,7 @@ static unsigned long long parse_sz(const char *s)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "dd")) return 0;
+    argc = cervus_end_of_options(argc, argv);
 
     const char *inf = NULL, *outf = NULL;
     unsigned long long bs = 512, count = ~0ULL, skip = 0, seek = 0;
