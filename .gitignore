@@ -42,3 +42,7 @@ usr/ldso/*.elf
 usr/cross/
 usr/sysroot/usr/share/media/*.mp3
 usr/sysroot/usr/share/media/*.wav
+
+# hardware compatibility sweep output
+hwtest-out/
+hwtest-out.console
