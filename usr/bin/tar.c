@@ -5,10 +5,19 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <cervus_util.h>
 
 static const char USAGE[] =
-    "Usage: tar -t|-x [-v] -f archive.tar [-C dir]\nList or extract files from a ustar archive.\n\n  -t   list contents\n  -x   extract\n  -v   verbose\n  -f F archive file\n  -C D change to directory D before extracting\n";
+    "Usage: tar -c|-t|-x [-v] -f archive.tar [-C dir] [file ...]\n"
+    "Create, list or extract a ustar archive.\n"
+    "\n"
+    "  -c   create from the named files, walking directories\n"
+    "  -t   list contents\n"
+    "  -x   extract\n"
+    "  -v   verbose\n"
+    "  -f F archive file, or - for standard output\n"
+    "  -C D change to directory D first\n";
 
 typedef struct {
     char name[100];
@@ -53,16 +62,123 @@ static void mkparents(const char *path)
     }
 }
 
+static int wr_full(int fd, const void *b, size_t n)
+{
+    const unsigned char *p = b;
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, p + off, n - off);
+        if (w <= 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
+
+static void octal(char *dst, int width, unsigned long long v)
+{
+    for (int i = width - 2; i >= 0; i--) {
+        dst[i] = (char)('0' + (v & 7));
+        v >>= 3;
+    }
+    dst[width - 1] = '\0';
+}
+
+static void finish_header(tar_hdr_t *h)
+{
+    memset(h->chksum, ' ', 8);
+    const unsigned char *p = (const unsigned char *)h;
+    unsigned long sum = 0;
+    for (size_t i = 0; i < sizeof(*h); i++) sum += p[i];
+    octal(h->chksum, 7, sum);
+    h->chksum[7] = ' ';
+}
+
+static int emit_file(int out, const char *path, int verbose);
+
+static int emit_dir(int out, const char *path, int verbose)
+{
+    DIR *d = opendir(path);
+    if (!d) { fprintf(stderr, "tar: cannot read '%s'\n", path); return 1; }
+    struct dirent *de;
+    int rc = 0;
+    while ((de = readdir(d)) != NULL) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char sub[512];
+        snprintf(sub, sizeof sub, "%s/%s", path, de->d_name);
+        if (emit_file(out, sub, verbose)) rc = 1;
+    }
+    closedir(d);
+    return rc;
+}
+
+static int emit_file(int out, const char *path, int verbose)
+{
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        fprintf(stderr, "tar: cannot stat '%s'\n", path);
+        return 1;
+    }
+
+    int isdir = S_ISDIR(st.st_mode);
+    const char *rel = path;
+    while (*rel == '/') rel++;
+
+    tar_hdr_t h;
+    memset(&h, 0, sizeof h);
+    snprintf(h.name, sizeof h.name, "%s%s", rel, isdir ? "/" : "");
+    octal(h.mode, 8, (unsigned long long)(st.st_mode & 07777));
+    octal(h.uid, 8, (unsigned long long)st.st_uid);
+    octal(h.gid, 8, (unsigned long long)st.st_gid);
+    octal(h.size, 12, isdir ? 0ULL : (unsigned long long)st.st_size);
+    octal(h.mtime, 12, (unsigned long long)st.st_mtime);
+    h.typeflag = isdir ? '5' : '0';
+    memcpy(h.magic, "ustar", 5);
+    h.version[0] = '0'; h.version[1] = '0';
+    snprintf(h.uname, sizeof h.uname, "root");
+    snprintf(h.gname, sizeof h.gname, "root");
+    finish_header(&h);
+
+    if (wr_full(out, &h, 512)) return 1;
+    if (verbose) fprintf(stderr, "%s\n", h.name);
+
+    if (isdir) return emit_dir(out, path, verbose);
+
+    int in = open(path, O_RDONLY);
+    if (in < 0) { fprintf(stderr, "tar: cannot open '%s'\n", path); return 1; }
+
+    static char blk[8192];
+    unsigned long long left = (unsigned long long)st.st_size;
+    int rc = 0;
+    while (left > 0) {
+        size_t want = left < sizeof blk ? (size_t)left : sizeof blk;
+        ssize_t r = read(in, blk, want);
+        if (r <= 0) { rc = 1; break; }
+        if (wr_full(out, blk, (size_t)r)) { rc = 1; break; }
+        left -= (unsigned long long)r;
+    }
+    close(in);
+
+    unsigned long long written = (unsigned long long)st.st_size - left;
+    size_t pad = (size_t)((512 - (written % 512)) % 512);
+    if (pad) {
+        static char zeros[512];
+        memset(zeros, 0, pad);
+        if (wr_full(out, zeros, pad)) rc = 1;
+    }
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "tar")) return 0;
     argc = cervus_end_of_options(argc, argv);
 
-    int list = 0, extract = 0, verbose = 0;
+    int list = 0, extract = 0, verbose = 0, create = 0;
     const char *file = NULL, *cdir = NULL;
     int opt;
-    while ((opt = getopt(argc, argv, "txvf:C:")) != -1) {
+    while ((opt = getopt(argc, argv, "ctxvf:C:")) != -1) {
         switch (opt) {
+            case 'c': create = 1; break;
             case 't': list = 1; break;
             case 'x': extract = 1; break;
             case 'v': verbose = 1; break;
@@ -71,7 +187,27 @@ int main(int argc, char **argv)
             default: fputs(USAGE, stderr); return 1;
         }
     }
-    if ((!list && !extract) || !file) { fputs(USAGE, stderr); return 1; }
+    if ((!list && !extract && !create) || !file) { fputs(USAGE, stderr); return 1; }
+
+    if (create) {
+        if (cdir && chdir(cdir) < 0) {
+            fprintf(stderr, "tar: cannot chdir to '%s'\n", cdir);
+            return 1;
+        }
+        int out = strcmp(file, "-") ? open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644) : 1;
+        if (out < 0) { fprintf(stderr, "tar: cannot create '%s'\n", file); return 1; }
+
+        int rc = 0;
+        if (optind >= argc) { fputs("tar: nothing to archive\n", stderr); rc = 1; }
+        for (int i = optind; i < argc; i++)
+            if (emit_file(out, argv[i], verbose)) rc = 1;
+
+        static char endblk[1024];
+        memset(endblk, 0, sizeof endblk);
+        if (wr_full(out, endblk, sizeof endblk)) rc = 1;
+        if (out != 1) close(out);
+        return rc;
+    }
 
     int fd = open(file, O_RDONLY);
     if (fd < 0) { fprintf(stderr, "tar: cannot open '%s'\n", file); return 1; }

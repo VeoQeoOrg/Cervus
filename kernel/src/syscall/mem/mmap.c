@@ -3,6 +3,7 @@
 #include "../../../include/memory/pmm.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/fs/vfs.h"
+#include <string.h>
 
 extern int memfd_is(const vnode_t *n);
 extern int memfd_page_phys(vnode_t *n, size_t index, uintptr_t *out);
@@ -13,11 +14,17 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     if (!t || !t->is_userspace) return (int64_t)MAP_FAILED;
 
     vnode_t *backing = NULL;
+    vfs_file_t *filebacked = NULL;
     if (!(flags & MAP_ANONYMOUS)) {
         if (!t->fd_table) return (int64_t)MAP_FAILED;
         vfs_file_t *file = fd_get(t->fd_table, (int)fd);
-        if (!file || !file->vnode || !memfd_is(file->vnode)) return (int64_t)MAP_FAILED;
-        backing = file->vnode;
+        if (!file || !file->vnode) return (int64_t)MAP_FAILED;
+        if (memfd_is(file->vnode)) {
+            backing = file->vnode;
+        } else {
+            if (flags & MAP_SHARED) { fd_put(file); return (int64_t)MAP_FAILED; }
+            filebacked = file;
+        }
     } else if (fd != (uint64_t)-1 && fd != 0) {
         return (int64_t)MAP_FAILED;
     }
@@ -56,6 +63,20 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
                 for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
                 return (int64_t)MAP_FAILED;
             }
+        } else if (filebacked) {
+            void *ph = pmm_alloc_zero(1);
+            if (!ph) {
+                for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
+                fd_put(filebacked);
+                return (int64_t)MAP_FAILED;
+            }
+            phys = pmm_virt_to_phys(ph);
+            int64_t save = vfs_seek(filebacked, 0, 1);
+            vfs_seek(filebacked, (int64_t)(offset + (uint64_t)i * 0x1000), 0);
+            int64_t got = vfs_read(filebacked, ph, 0x1000);
+            vfs_seek(filebacked, save, 0);
+            if (got < 0) got = 0;
+            if (got < 0x1000) memset((uint8_t *)ph + got, 0, 0x1000 - (size_t)got);
         } else {
             void *ph = pmm_alloc_zero(1);
             if (!ph) {
@@ -66,9 +87,11 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
         }
         if (!vmm_map_page(t->pagemap, addr + i * 0x1000, phys, vf)) {
             for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
+            if (filebacked) fd_put(filebacked);
             return (int64_t)MAP_FAILED;
         }
     }
+    if (filebacked) fd_put(filebacked);
     LOG_D("[SYSCALL] mmap: addr=0x%llx pages=%zu prot=0x%llx\n", addr, pages, prot);
     return (int64_t)addr;
 }
