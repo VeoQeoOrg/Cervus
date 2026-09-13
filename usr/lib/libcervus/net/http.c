@@ -130,8 +130,19 @@ static void resolve_location(int cur_https, const char *cur_host, int cur_port,
         snprintf(out, cap, "%s://%s:%d%s%s", scheme, cur_host, cur_port, base, loc);
 }
 
+static int write_full(int fd, const void *buf, size_t n) {
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, p + off, n - off);
+        if (w <= 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
+
 static int body_emit(int enc, int out_fd, uint8_t **cb, size_t *cl, size_t *cc, const unsigned char *b, int n) {
-    if (!enc) { write(out_fd, b, n); return 0; }
+    if (!enc) { return write_full(out_fd, b, n); }
     if (*cl + (size_t)n > *cc) {
         size_t nc = *cc ? *cc : 16384;
         while (nc < *cl + (size_t)n) nc *= 2;
@@ -233,7 +244,15 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             fprintf(stderr, "> %s %s HTTP/1.1\n> Host: %s\n", method, path, host);
         }
         if (tc) tls_write(tc, req, rl); else send(fd, req, rl, 0);
-        if (data && data_len > 0) { if (tc) tls_write(tc, data, data_len); else send(fd, data, data_len, 0); }
+        if (data && data_len > 0) {
+            long off = 0;
+            while (off < data_len) {
+                int w = tc ? tls_write(tc, data + off, (size_t)(data_len - off))
+                           : (int)send(fd, data + off, (size_t)(data_len - off), 0);
+                if (w <= 0) break;
+                off += w;
+            }
+        }
 
         hreader r; memset(&r, 0, sizeof r); r.fd = fd; r.tc = tc;
 
@@ -345,13 +364,24 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
             }
         }
 
+        if (content_len >= 0 && total < content_len) {
+            if (!opts->silent)
+                fprintf(stderr, "http: connection ended after %ld of %ld bytes\n",
+                        total, content_len);
+            free(cbuf);
+            if (tc) tls_free(tc);
+            close(fd);
+            if (opts->out_status) *opts->out_status = status;
+            return -1;
+        }
+
         if (cenc && cbuf) {
             uint8_t *ubuf = 0; size_t ulen = 0;
             int ir = -1;
             if (cenc == 1) ir = gunzip(cbuf, clen, &ubuf, &ulen);
             else { ir = zlib_inflate(cbuf, clen, &ubuf, &ulen); if (ir) ir = raw_inflate(cbuf, clen, &ubuf, &ulen); }
-            if (ir == 0) { write(out_fd, ubuf, ulen); free(ubuf); }
-            else write(out_fd, cbuf, clen);
+            if (ir == 0) { write_full(out_fd, ubuf, ulen); free(ubuf); }
+            else write_full(out_fd, cbuf, clen);
             free(cbuf);
         }
 

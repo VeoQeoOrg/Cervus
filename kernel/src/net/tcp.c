@@ -24,6 +24,9 @@ enum { TCP_CLOSED, TCP_LISTEN, TCP_SYN_SENT, TCP_SYN_RCVD, TCP_ESTABLISHED,
        TCP_FIN_WAIT1, TCP_FIN_WAIT2, TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT };
 
 #define TCP_MSS     1400
+#define TCP_RTO_MIN 200
+#define TCP_RTO_MAX 60000
+#define TCP_WSCALE  7
 #define TCP_SNDBUF  16384
 #define TCP_RCVBUF  65536
 
@@ -45,7 +48,18 @@ struct tcp_tcb {
 
     uint32_t  iss, snd_una, snd_nxt;
     uint32_t  rcv_nxt;
-    uint16_t  snd_wnd;
+    uint32_t  snd_wnd;
+
+    uint8_t   snd_wscale, rcv_wscale;
+    uint8_t   wscale_ok;
+    uint16_t  peer_mss;
+    uint32_t  cwnd, ssthresh;
+    uint32_t  dupacks;
+    uint32_t  rtt_seq;
+    uint64_t  rtt_start;
+    int       rtt_timing;
+    int32_t   srtt, rttvar;
+    uint32_t  rto_ms;
 
     uint8_t   sndbuf[TCP_SNDBUF];
     uint32_t  snd_buflen;
@@ -153,6 +167,42 @@ static uint32_t ooo_drain(tcp_tcb_t *t) {
     return total;
 }
 
+static void tcp_rto_init(tcp_tcb_t *t) {
+    t->srtt = -1;
+    t->rttvar = 0;
+    t->rto_ms = 1000;
+    t->cwnd = 2 * TCP_MSS;
+    t->ssthresh = 64 * 1024;
+    t->rcv_wscale = TCP_WSCALE;
+    t->peer_mss = 536;
+}
+
+static void tcp_rtt_update(tcp_tcb_t *t, int32_t sample) {
+    if (sample < 1) sample = 1;
+    if (t->srtt < 0) {
+        t->srtt = sample;
+        t->rttvar = sample / 2;
+    } else {
+        int32_t d = t->srtt - sample;
+        if (d < 0) d = -d;
+        t->rttvar = (3 * t->rttvar + d) / 4;
+        t->srtt = (7 * t->srtt + sample) / 8;
+    }
+    int32_t rto = t->srtt + 4 * t->rttvar;
+    if (rto < TCP_RTO_MIN) rto = TCP_RTO_MIN;
+    if (rto > TCP_RTO_MAX) rto = TCP_RTO_MAX;
+    t->rto_ms = (uint32_t)rto;
+}
+
+static void tcp_loss(tcp_tcb_t *t) {
+    uint32_t inflight = t->snd_nxt - t->snd_una;
+    uint32_t half = inflight / 2;
+    if (half < 2 * TCP_MSS) half = 2 * TCP_MSS;
+    t->ssthresh = half;
+    t->cwnd = TCP_MSS;
+    t->dupacks = 0;
+}
+
 static void tcb_wake(tcp_tcb_t *t) {
     task_t *w = t->waiter;
     t->waiter = NULL;
@@ -183,33 +233,68 @@ static uint16_t tcp6_csum(const uint8_t *src, const uint8_t *dst, const uint8_t 
     return (uint16_t)~sum;
 }
 
+static void tcp_try_send(tcp_tcb_t *t);
+
 static void tcp_output(tcp_tcb_t *t, uint32_t seq, uint8_t flags,
                        const uint8_t *data, uint32_t dlen) {
     netdev_t *dev = tdev();
     if (!dev) return;
-    uint8_t seg[20 + TCP_MSS];
+    uint8_t seg[40 + TCP_MSS];
     if (dlen > TCP_MSS) dlen = TCP_MSS;
+
+    uint32_t hlen = 20;
+    if (flags & TH_SYN) {
+        seg[20] = 2; seg[21] = 4;
+        wr16be(seg + 22, TCP_MSS);
+        seg[24] = 3; seg[25] = 3; seg[26] = TCP_WSCALE;
+        seg[27] = 1;
+        hlen = 28;
+    }
 
     wr16be(seg + 0, t->local_port);
     wr16be(seg + 2, t->remote_port);
     wr32be(seg + 4, seq);
     wr32be(seg + 8, t->rcv_nxt);
-    seg[12] = 5 << 4;
+    seg[12] = (uint8_t)((hlen / 4) << 4);
     seg[13] = flags;
+
     uint32_t win = (t->rcvbuf) ? (TCP_RCVBUF - t->rcv_count) : 8192;
+    if (!(flags & TH_SYN) && t->rcv_wscale) win >>= t->rcv_wscale;
     if (win > 65535) win = 65535;
     wr16be(seg + 14, (uint16_t)win);
     wr16be(seg + 16, 0);
     wr16be(seg + 18, 0);
-    if (dlen && data) memcpy(seg + 20, data, dlen);
+    if (dlen && data) memcpy(seg + hlen, data, dlen);
 
     if (t->family == AF_INET6) {
-        wr16be(seg + 16, tcp6_csum(t->laddr6, t->raddr6, seg, 20 + dlen));
-        ipv6_output(dev, t->laddr6, t->raddr6, IPPROTO_TCP, seg, 20 + dlen);
+        wr16be(seg + 16, tcp6_csum(t->laddr6, t->raddr6, seg, hlen + dlen));
+        ipv6_output(dev, t->laddr6, t->raddr6, IPPROTO_TCP, seg, hlen + dlen);
         return;
     }
-    wr16be(seg + 16, tcp_csum(t->local_ip, t->remote_ip, seg, 20 + dlen));
-    ip_send(dev, t->remote_ip, IPPROTO_TCP, seg, 20 + dlen, IP_DEFAULT_TTL);
+    wr16be(seg + 16, tcp_csum(t->local_ip, t->remote_ip, seg, hlen + dlen));
+    ip_send(dev, t->remote_ip, IPPROTO_TCP, seg, hlen + dlen, IP_DEFAULT_TTL);
+}
+
+static void tcp_parse_opts(tcp_tcb_t *t, const uint8_t *seg, uint32_t doff) {
+    uint32_t i = 20;
+    while (i + 1 < doff) {
+        uint8_t kind = seg[i];
+        if (kind == 0) break;
+        if (kind == 1) { i++; continue; }
+        if (i + 1 >= doff) break;
+        uint8_t olen = seg[i + 1];
+        if (olen < 2 || i + olen > doff) break;
+        if (kind == 2 && olen == 4) {
+            uint16_t m = rd16be(seg + i + 2);
+            if (m >= 128) t->peer_mss = m;
+        } else if (kind == 3 && olen == 3) {
+            uint8_t ws = seg[i + 2];
+            if (ws > 14) ws = 14;
+            t->snd_wscale = ws;
+            t->wscale_ok = 1;
+        }
+        i += olen;
+    }
 }
 
 static void tcp_reject(uint32_t dst_ip, const uint8_t *dst6,
@@ -286,6 +371,7 @@ int tcp_connect_start(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     t->iss = (uint32_t)(now_ms() * 2654435761u) ^ 0xa5a5;
     t->snd_una = t->iss;
     t->snd_nxt = t->iss + 1;
+    tcp_rto_init(t);
     t->state = TCP_SYN_SENT;
     t->pend_syn = 1;
     t->rexmit_ms = now_ms() + 1000;
@@ -342,17 +428,24 @@ static void tcp_try_send(tcp_tcb_t *t) {
         uint32_t inflight = t->snd_nxt - t->snd_una;
         uint32_t unsent = (t->snd_buflen > inflight) ? (t->snd_buflen - inflight) : 0;
         uint32_t wnd = t->snd_wnd ? t->snd_wnd : 1;
+        if (t->cwnd && t->cwnd < wnd) wnd = t->cwnd;
         uint32_t canwnd = (inflight < wnd) ? (wnd - inflight) : 0;
+        uint32_t mss = t->peer_mss < TCP_MSS ? t->peer_mss : TCP_MSS;
         uint32_t n = unsent;
         if (n > canwnd) n = canwnd;
-        if (n > TCP_MSS) n = TCP_MSS;
+        if (n > mss) n = mss;
 
         if (n > 0) {
             uint8_t seg[TCP_MSS];
             memcpy(seg, t->sndbuf + inflight, n);
             uint32_t seq = t->snd_nxt;
             t->snd_nxt += n;
-            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + 1000;
+            if (!t->rtt_timing) {
+                t->rtt_timing = 1;
+                t->rtt_seq = seq;
+                t->rtt_start = now_ms();
+            }
+            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + t->rto_ms;
             spinlock_release_irqrestore(&t->lock, f);
             tcp_output(t, seq, TH_ACK | TH_PSH, seg, n);
             continue;
@@ -551,6 +644,7 @@ static void tcp_accept_syn(tcp_tcb_t *lst, uint32_t src, uint16_t sport, uint32_
     c->iss = (uint32_t)(now_ms() * 2654435761u) ^ 0x5a5a;
     c->snd_una = c->iss;
     c->snd_nxt = c->iss + 1;
+    tcp_rto_init(c);
     c->state = TCP_SYN_RCVD;
     c->pend_syn = 1;
     c->listener = lst;
@@ -582,7 +676,11 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
         return;
     }
 
-    t->snd_wnd = win;
+    if (flags & TH_SYN) {
+        tcp_parse_opts(t, seg, doff);
+        if (!t->wscale_ok) { t->snd_wscale = 0; t->rcv_wscale = 0; }
+    }
+    t->snd_wnd = (uint32_t)win << ((flags & TH_SYN) ? 0 : t->snd_wscale);
 
     if (t->state == TCP_SYN_SENT) {
         if ((flags & TH_SYN) && (flags & TH_ACK) && ack == t->iss + 1) {
@@ -632,10 +730,38 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
                 memmove(t->sndbuf, t->sndbuf + data_acked, t->snd_buflen - data_acked);
                 t->snd_buflen -= data_acked;
             }
+
+            if (t->rtt_timing && (int32_t)(ack - t->rtt_seq) > 0) {
+                tcp_rtt_update(t, (int32_t)(now_ms() - t->rtt_start));
+                t->rtt_timing = 0;
+            }
+
+            if (t->cwnd < t->ssthresh) {
+                t->cwnd += TCP_MSS;
+            } else {
+                uint32_t inc = (TCP_MSS * TCP_MSS) / (t->cwnd ? t->cwnd : TCP_MSS);
+                t->cwnd += inc ? inc : 1;
+            }
+            if (t->cwnd > TCP_SNDBUF * 4) t->cwnd = TCP_SNDBUF * 4;
+
+            t->dupacks = 0;
             t->snd_una = ack;
             t->retries = 0;
-            t->rexmit_ms = (t->snd_una == t->snd_nxt) ? 0 : (now_ms() + 1000);
+            t->rexmit_ms = (t->snd_una == t->snd_nxt) ? 0 : (now_ms() + t->rto_ms);
             tcb_wake(t);
+        } else if (dlen == 0 && ack == t->snd_una && t->snd_nxt != t->snd_una &&
+                   !(flags & (TH_SYN | TH_FIN))) {
+            if (++t->dupacks == 3) {
+                tcp_loss(t);
+                t->ssthresh = t->cwnd > TCP_MSS ? t->cwnd : 2 * TCP_MSS;
+                t->cwnd = t->ssthresh + 3 * TCP_MSS;
+                t->snd_nxt = t->snd_una;
+                t->fin_sent = 0;
+                t->rexmit_ms = now_ms() + t->rto_ms;
+                spinlock_release_irqrestore(&t->lock, f);
+                tcp_try_send(t);
+                f = spinlock_acquire_irqsave(&t->lock);
+            }
         }
         if (t->state == TCP_FIN_WAIT1 && t->snd_una == t->snd_nxt) t->state = TCP_FIN_WAIT2;
         else if (t->state == TCP_LAST_ACK && t->snd_una == t->snd_nxt) { t->state = TCP_CLOSED; }
@@ -702,6 +828,7 @@ int tcp_connect6(const uint8_t dst6[16], uint16_t port, tcp_tcb_t **out) {
     t->iss = (uint32_t)(now_ms() * 2654435761u) ^ 0xa5a5;
     t->snd_una = t->iss;
     t->snd_nxt = t->iss + 1;
+    tcp_rto_init(t);
     t->state = TCP_SYN_SENT;
     t->pend_syn = 1;
     t->rexmit_ms = now_ms() + 1000;
@@ -777,6 +904,7 @@ static void tcp_accept_syn6(tcp_tcb_t *lst, const uint8_t *src6, const uint8_t *
     c->iss = (uint32_t)(now_ms() * 2654435761u) ^ 0x5a5a;
     c->snd_una = c->iss;
     c->snd_nxt = c->iss + 1;
+    tcp_rto_init(c);
     c->state = TCP_SYN_RCVD;
     c->pend_syn = 1;
     c->listener = lst;
@@ -880,11 +1008,15 @@ void tcp_tick(void) {
             if (nowt - t->close_ms > 2000) reap = 1;
             spinlock_release_irqrestore(&t->lock, f);
         } else if (t->rexmit_ms && nowt >= t->rexmit_ms) {
-            if (++t->retries > 8) {
+            if (++t->retries > 10) {
                 t->reset = 1; tcb_wake(t);
                 spinlock_release_irqrestore(&t->lock, f);
             } else {
-                t->rexmit_ms = nowt + 1000;
+                tcp_loss(t);
+                t->rtt_timing = 0;
+                uint32_t back = t->rto_ms << (t->retries > 6 ? 6 : t->retries);
+                if (back > TCP_RTO_MAX) back = TCP_RTO_MAX;
+                t->rexmit_ms = nowt + back;
                 int do_syn = t->pend_syn;
                 int syn_ack = (t->state == TCP_SYN_RCVD);
                 uint32_t seq = t->snd_una;

@@ -24,6 +24,7 @@ struct tls_conn {
 
     uint8_t wkey[32], wiv[12]; uint64_t wseq; int wkeys_set;
     uint8_t rkey[32], riv[12]; uint64_t rseq; int rkeys_set;
+    uint8_t wsecret[32], rsecret[32];
     int cipher;
     int established;
 
@@ -94,14 +95,28 @@ static void derive_secret(const uint8_t secret[32], const char *label,
 }
 
 static void set_write_keys(tls_conn *c, const uint8_t secret[32]) {
+    memcpy(c->wsecret, secret, 32);
     expand_label(secret, "key", 0, 0, c->wkey, c->cipher == 1 ? 16 : 32);
     expand_label(secret, "iv",  0, 0, c->wiv, 12);
     c->wseq = 0; c->wkeys_set = 1;
 }
 static void set_read_keys(tls_conn *c, const uint8_t secret[32]) {
+    memcpy(c->rsecret, secret, 32);
     expand_label(secret, "key", 0, 0, c->rkey, c->cipher == 1 ? 16 : 32);
     expand_label(secret, "iv",  0, 0, c->riv, 12);
     c->rseq = 0; c->rkeys_set = 1;
+}
+
+static void advance_read_key(tls_conn *c) {
+    uint8_t next[32];
+    expand_label(c->rsecret, "traffic upd", 0, 0, next, 32);
+    set_read_keys(c, next);
+}
+
+static void advance_write_key(tls_conn *c) {
+    uint8_t next[32];
+    expand_label(c->wsecret, "traffic upd", 0, 0, next, 32);
+    set_write_keys(c, next);
 }
 
 static void make_nonce(const uint8_t iv[12], uint64_t seq, uint8_t nonce[12]) {
@@ -482,7 +497,18 @@ int tls_read(tls_conn *c, void *buf, size_t len) {
             uint8_t rt; size_t rl;
             if (record_recv(c, &rt, c->plain, &rl)) return -1;
             if (rt == 23) { c->plain_off = 0; c->plain_len = rl; if (rl == 0) continue; break; }
-            if (rt == 22) continue;
+            if (rt == 22) {
+                if (rl >= 4 && c->plain[0] == 24) {
+                    int want_reply = (rl >= 5 && c->plain[4] == 1);
+                    advance_read_key(c);
+                    if (want_reply) {
+                        uint8_t ku[5] = { 24, 0, 0, 1, 0 };
+                        record_send(c, 22, ku, 5);
+                        advance_write_key(c);
+                    }
+                }
+                continue;
+            }
             if (rt == 21) return 0;
         }
     }
