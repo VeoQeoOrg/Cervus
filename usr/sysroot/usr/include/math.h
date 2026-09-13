@@ -51,17 +51,24 @@ static inline double ldexp(double x, int exp) {
     return v.d;
 }
 
+static inline int __m_small(double x) {
+    return x > -9.007199254740992e15 && x < 9.007199254740992e15;
+}
+
 static inline double floor(double x) {
+    if (!__m_small(x)) return x;
     int64_t i = (int64_t)x;
     return (double)(i - (x < (double)i));
 }
 
 static inline double ceil(double x) {
+    if (!__m_small(x)) return x;
     int64_t i = (int64_t)x;
     return (double)(i + (x > (double)i));
 }
 
 static inline double round(double x) {
+    if (!__m_small(x)) return x;
     return (x >= 0.0) ? floor(x + 0.5) : ceil(x - 0.5);
 }
 
@@ -88,6 +95,72 @@ static inline double log2(double x) {
     );
     return result;
 }
+
+double frexp(double x, int *e);
+double modf(double x, double *ip);
+double scalbn(double x, int n);
+double rint(double x);
+double nearbyint(double x);
+long      lround(double x);
+long long llround(double x);
+long long llrint(double x);
+double fdim(double x, double y);
+double fma(double x, double y, double z);
+double log1p(double x);
+double expm1(double x);
+double asinh(double x);
+double acosh(double x);
+double atanh(double x);
+double remainder(double x, double y);
+double nan(const char *tag);
+
+float powf(float x, float y);
+float expf(float x);
+float exp2f(float x);
+float logf(float x);
+float log2f(float x);
+float log10f(float x);
+float log1pf(float x);
+float expm1f(float x);
+float tanf(float x);
+float asinf(float x);
+float acosf(float x);
+float atanf(float x);
+float atan2f(float y, float x);
+float sinhf(float x);
+float coshf(float x);
+float tanhf(float x);
+float asinhf(float x);
+float acoshf(float x);
+float atanhf(float x);
+float fmodf(float x, float y);
+float roundf(float x);
+float truncf(float x);
+float rintf(float x);
+float nearbyintf(float x);
+float copysignf(float x, float y);
+float fminf(float a, float b);
+float fmaxf(float a, float b);
+float fdimf(float a, float b);
+float hypotf(float x, float y);
+float cbrtf(float x);
+float fmaf(float x, float y, float z);
+float ldexpf(float x, int e);
+float scalbnf(float x, int e);
+float frexpf(float x, int *e);
+float modff(float x, float *ip);
+
+#define signbit(x)   ((x) < 0 || (1.0 / (x)) < 0)
+#define isfinite(x)  (!isnan(x) && !isinf(x))
+#define isnormal(x)  (isfinite(x) && (x) != 0)
+#define HUGE_VAL     INFINITY
+#define HUGE_VALF    ((float)INFINITY)
+#define M_E          2.7182818284590452354
+#define M_LN2        0.69314718055994530942
+#define M_LN10       2.30258509299404568402
+#define M_SQRT2      1.41421356237309504880
+#define M_PI_2       1.57079632679489661923
+#define M_PI_4       0.78539816339744830962
 
 static inline float  fabsf(float x)  { return x < 0 ? -x : x; }
 static inline float  floorf(float x) { return (float)floor((double)x); }

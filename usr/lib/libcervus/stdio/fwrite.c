@@ -4,8 +4,6 @@
 #include <string.h>
 #include <libcervus.h>
 
-#define STDIO_BUFSZ 4096
-
 static size_t raw_write(int fd, const char *p, size_t total)
 {
     size_t sent = 0;
@@ -18,32 +16,27 @@ static size_t raw_write(int fd, const char *p, size_t total)
     return sent;
 }
 
-int __cervus_fflush(FILE *s)
-{
-    if (!s) return 0;
-    if (s->buf && s->buf_pos > 0) {
-        size_t n = s->buf_pos;
-        s->buf_pos = 0;
-        if (raw_write(s->fd, s->buf, n) != n) { s->err = 1; return EOF; }
-    }
-    return 0;
-}
-
 size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *s)
 {
     if (!s || size == 0 || nmemb == 0) return 0;
     size_t total = size * nmemb;
     const char *src = (const char *)buf;
 
-    if (s->fd != 1) {
+    if (s->dir == __CDIR_READ) __cervus_fflush(s);
+    __cervus_setup_buf(s);
+
+    if (s->bufmode == __CBUF_NONE) {
         size_t sent = raw_write(s->fd, src, total);
         if (sent < total) s->err = 1;
         return sent / size;
     }
 
     if (!s->buf) {
-        s->buf = (char *)malloc(STDIO_BUFSZ);
-        if (s->buf) s->buf_size = STDIO_BUFSZ;
+        s->buf = (char *)malloc(BUFSIZ);
+        if (s->buf) {
+            s->buf_size = BUFSIZ;
+            __cervus_stream_register(s);
+        }
     }
     if (!s->buf) {
         size_t sent = raw_write(s->fd, src, total);
@@ -51,18 +44,32 @@ size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *s)
         return sent / size;
     }
 
-    int has_nl = memchr(src, '\n', total) != NULL;
+    s->dir = __CDIR_WRITE;
 
-    for (size_t i = 0; i < total; i++) {
-        s->buf[s->buf_pos++] = src[i];
-        if (s->buf_pos >= s->buf_size) {
+    if (total >= s->buf_size) {
+        if (__cervus_fflush(s) == EOF) return 0;
+        s->dir = __CDIR_WRITE;
+        size_t sent = raw_write(s->fd, src, total);
+        if (sent < total) { s->err = 1; return sent / size; }
+        return nmemb;
+    }
+
+    size_t done = 0;
+    while (done < total) {
+        size_t room = s->buf_size - s->buf_pos;
+        size_t take = total - done;
+        if (take > room) take = room;
+        memcpy(s->buf + s->buf_pos, src + done, take);
+        s->buf_pos += take;
+        done += take;
+        if (s->buf_pos == s->buf_size) {
             size_t n = s->buf_pos;
             s->buf_pos = 0;
-            if (raw_write(s->fd, s->buf, n) != n) { s->err = 1; return i / size; }
+            if (raw_write(s->fd, s->buf, n) != n) { s->err = 1; return done / size; }
         }
     }
 
-    if (has_nl)
+    if (s->bufmode == __CBUF_LINE && memchr(src, '\n', total))
         __cervus_fflush(s);
 
     return nmemb;

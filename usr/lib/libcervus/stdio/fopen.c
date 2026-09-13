@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stddef.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -21,13 +22,9 @@ FILE *fopen(const char *path, const char *mode)
     if (fd < 0) return NULL;
     FILE *f = (FILE *)malloc(sizeof(FILE));
     if (!f) { close(fd); return NULL; }
-    f->fd       = fd;
-    f->eof      = 0;
-    f->err      = 0;
-    f->flags    = 1;
-    f->buf      = NULL;
-    f->buf_size = 0;
-    f->buf_pos  = 0;
-    f->unget    = 0;
+    memset(f, 0, sizeof(*f));
+    f->fd    = fd;
+    f->flags = 1;
+    __cervus_stream_register(f);
     return f;
 }

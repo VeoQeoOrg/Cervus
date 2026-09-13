@@ -13,6 +13,13 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+#ifndef BUFSIZ
+#define BUFSIZ 4096
+#endif
+
 typedef struct __cervus_FILE FILE;
 
 extern FILE *stdin;
@@ -27,6 +34,11 @@ int fputc(int c, FILE *stream);
 int fgetc(FILE *stream);
 char *fgets(char *s, int n, FILE *stream);
 int ungetc(int c, FILE *stream);
+int setvbuf(FILE *stream, char *buf, int mode, size_t size);
+void setbuf(FILE *stream, char *buf);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
+int fseeko(FILE *stream, off_t off, int whence);
+off_t ftello(FILE *stream);
 
 int printf(const char *fmt, ...);
 int fprintf(FILE *stream, const char *fmt, ...);

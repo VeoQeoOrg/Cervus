@@ -15,6 +15,17 @@ long __cervus_sys_ret(long r);
 
 long long __cervus_parse_signed(const char *s, char **end, int base, int is_unsigned);
 
+#define __CF_OWNED   1
+
+#define __CBUF_UNSET 0
+#define __CBUF_FULL  1
+#define __CBUF_LINE  2
+#define __CBUF_NONE  3
+
+#define __CDIR_IDLE  0
+#define __CDIR_READ  1
+#define __CDIR_WRITE 2
+
 struct __cervus_FILE {
     int    fd;
     int    eof;
@@ -24,9 +35,17 @@ struct __cervus_FILE {
     size_t buf_size;
     size_t buf_pos;
     int    unget;
+    int    bufmode;
+    int    dir;
+    size_t buf_len;
 };
 
-int __cervus_fflush(struct __cervus_FILE *s);
+int  __cervus_fflush(struct __cervus_FILE *s);
+void __cervus_stream_register(struct __cervus_FILE *s);
+void __cervus_stream_forget(struct __cervus_FILE *s);
+void __cervus_flush_all(void);
+int  __cervus_fill(struct __cervus_FILE *s);
+void __cervus_setup_buf(struct __cervus_FILE *s);
 
 struct __cervus_DIR {
     int fd;
