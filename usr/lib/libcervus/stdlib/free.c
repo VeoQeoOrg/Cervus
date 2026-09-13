@@ -5,6 +5,7 @@
 void free(void *p)
 {
     if (!p) return;
+    __cervus_lock(&__cervus_heap_lock);
     __mblock_t *b = MB_FROM_USER(p);
     b->size = MB_SIZE(b) | MB_FREE_BIT;
 
@@ -22,4 +23,5 @@ void free(void *p)
         __mblock_t *after = __cervus_mb_next(prev);
         if (after) after->prev_size = merged;
     }
+    __cervus_unlock(&__cervus_heap_lock);
 }

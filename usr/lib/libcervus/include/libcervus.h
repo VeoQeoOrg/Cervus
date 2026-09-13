@@ -15,6 +15,14 @@ long __cervus_sys_ret(long r);
 
 long long __cervus_parse_signed(const char *s, char **end, int base, int is_unsigned);
 
+typedef struct { volatile int state; } __cervus_lock_t;
+
+#define CERVUS_LOCK_INIT { 0 }
+
+void __cervus_lock(__cervus_lock_t *l);
+void __cervus_unlock(__cervus_lock_t *l);
+extern __cervus_lock_t __cervus_heap_lock;
+
 #define __CF_OWNED   1
 
 #define __CBUF_UNSET 0

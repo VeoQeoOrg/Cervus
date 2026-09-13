@@ -8,6 +8,8 @@ void *realloc(void *p, size_t n)
     if (!p) return malloc(n);
     if (n == 0) { free(p); return NULL; }
 
+    __cervus_lock(&__cervus_heap_lock);
+
     __mblock_t *b = MB_FROM_USER(p);
     size_t cur_total = MB_SIZE(b);
     size_t cur_user  = cur_total - MB_HDR_SZ;
@@ -29,6 +31,7 @@ void *realloc(void *p, size_t n)
                 if (aft2) aft2->prev_size = merged;
             }
         }
+        __cervus_unlock(&__cervus_heap_lock);
         return p;
     }
 
@@ -48,8 +51,11 @@ void *realloc(void *p, size_t n)
             __mblock_t *aft = __cervus_mb_next(rest);
             if (aft) aft->prev_size = MB_SIZE(rest);
         }
+        __cervus_unlock(&__cervus_heap_lock);
         return p;
     }
+
+    __cervus_unlock(&__cervus_heap_lock);
 
     void *np = malloc(n);
     if (!np) return NULL;
