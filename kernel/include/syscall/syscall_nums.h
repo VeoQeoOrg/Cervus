@@ -173,6 +173,8 @@
 #define SYS_DISK_MKFS_UDF     608
 #define SYS_DRIVER_CTL        609
 #define SYS_UTIMES            610
+#define SYS_THREAD_CREATE     611
+#define SYS_THREAD_EXIT       612
 
 #define SYSCALL_TABLE_SIZE    640
 

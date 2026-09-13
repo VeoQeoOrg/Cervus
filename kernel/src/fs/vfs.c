@@ -548,6 +548,7 @@ int64_t vfs_readlink(const char *path, char *buf, size_t bufsiz) {
 
 fd_table_t *fd_table_create(void) {
     fd_table_t *t = kzalloc(sizeof(fd_table_t));
+    if (t) t->refs = 1;
     return t;
 }
 
@@ -555,6 +556,7 @@ fd_table_t *fd_table_clone(const fd_table_t *src) {
     if (!src) return NULL;
     fd_table_t *dst = kzalloc(sizeof(fd_table_t));
     if (!dst) return NULL;
+    dst->refs = 1;
     uint64_t f = spinlock_acquire_irqsave((spinlock_t *)&src->lock);
     for (int i = 0; i < TASK_MAX_FDS; i++) {
         if (src->entries[i].file) {
@@ -582,8 +584,14 @@ void fd_table_cloexec(fd_table_t *table) {
     for (int i = 0; i < n_free; i++) vfs_file_free(to_free[i]);
 }
 
+void fd_table_ref(fd_table_t *table) {
+    if (!table) return;
+    __atomic_add_fetch(&table->refs, 1, __ATOMIC_SEQ_CST);
+}
+
 void fd_table_destroy(fd_table_t *table) {
     if (!table) return;
+    if (__atomic_sub_fetch(&table->refs, 1, __ATOMIC_SEQ_CST) > 0) return;
     vfs_file_t *to_free[TASK_MAX_FDS];
     int n_free = 0;
     uint64_t f = spinlock_acquire_irqsave(&table->lock);

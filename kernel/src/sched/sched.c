@@ -235,6 +235,77 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
     return t;
 }
 
+task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
+                          uintptr_t stack_top, uint64_t arg) {
+    if (!parent || !parent->pagemap) return NULL;
+
+    task_t* t = calloc(1, sizeof(task_t));
+    if (!t) return NULL;
+    t->pid = task_alloc_pid();
+    if (!t->pid) { free(t); return NULL; }
+
+    t->ppid            = parent->pid;
+    t->pgid            = parent->pgid;
+    t->sid             = parent->sid;
+    t->uid             = parent->uid;
+    t->gid             = parent->gid;
+    t->ctty            = parent->ctty;
+    t->capabilities    = parent->capabilities;
+    t->priority        = parent->priority;
+    t->is_userspace    = parent->is_userspace;
+    t->cpu_id          = (uint32_t)-1;
+    t->time_slice      = parent->time_slice_init;
+    t->time_slice_init = parent->time_slice_init;
+    memcpy(t->cwd, parent->cwd, sizeof(t->cwd));
+    strncpy(t->name, parent->name, sizeof(t->name) - 1);
+
+    t->pagemap = parent->pagemap;
+    t->cr3     = parent->cr3;
+    t->brk_start   = parent->brk_start;
+    t->brk_current = parent->brk_current;
+    t->brk_max     = parent->brk_max;
+
+    t->entry    = (void (*)(void *))entry;
+    t->rip      = (uint64_t)entry;
+    t->user_rsp = (uint64_t)stack_top;
+
+    if (parent->fd_table) {
+        fd_table_ref(parent->fd_table);
+        t->fd_table = parent->fd_table;
+    }
+
+    atomic_init_bool(&t->on_cpu, false);
+    atomic_init_bool(&t->on_rq, false);
+
+    t->rsp = alloc_and_init_stack(t);
+    if (!t->rsp) {
+        if (t->fd_table) fd_table_destroy(t->fd_table);
+        free(t);
+        return NULL;
+    }
+
+    t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
+    fpu_state_init(t->fpu_state);
+
+    t->state    = TASK_READY;
+    t->runnable = true;
+    t->parent   = parent;
+    t->create_time_ns = sched_now_ns();
+
+    (void)arg;
+
+    {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        t->sibling       = parent->children;
+        parent->children = t;
+        spinlock_release_irqrestore(&children_lock, _cf);
+    }
+
+    pid_register(t);
+    enqueue_global(t);
+    return t;
+}
+
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
     return task_create_ex(name, entry, arg, priority, 0);
 }

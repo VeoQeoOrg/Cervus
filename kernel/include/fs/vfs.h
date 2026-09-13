@@ -130,6 +130,7 @@ typedef struct fd_table fd_table_t;
 struct fd_table {
     fd_entry_t entries[TASK_MAX_FDS];
     spinlock_t lock;
+    volatile int refs;
 };
 
 void    vfs_init   (void);
@@ -170,6 +171,7 @@ fd_table_t *fd_table_create (void);
 fd_table_t *fd_table_clone  (const fd_table_t *src);
 void        fd_table_cloexec(fd_table_t *table);
 void        fd_table_destroy(fd_table_t *table);
+void        fd_table_ref    (fd_table_t *table);
 
 int         fd_alloc    (fd_table_t *table, vfs_file_t *file, int min_fd);
 vfs_file_t *fd_get      (const fd_table_t *table, int fd);

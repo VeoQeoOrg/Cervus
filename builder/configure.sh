@@ -225,8 +225,9 @@ done
 printf 'build obj/ldso/ld_start.o: asm_bare usr/ldso/ld_start.asm\n'
 printf 'build usr/ldso/ld-cervus.elf: cc_ldso obj/ldso/ld_start.o usr/ldso/ld-cervus.c\n\n'
 printf 'build obj/libcervus/setjmp.o: asm_bare usr/lib/libcervus/setjmp.asm\n'
+printf 'build obj/libcervus/pthread_tramp.o: asm_bare usr/lib/libcervus/pthread/trampoline.asm\n'
 printf 'build %s: asm_bare usr/lib/libcervus/crt0.asm\n' "$CRT0"
-printf 'build %s: ar%s obj/libcervus/setjmp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
+printf 'build %s: ar%s obj/libcervus/setjmp.o obj/libcervus/pthread_tramp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
 
 PROG_DEPS="$CRT0 $LIBCERVUS_A"
 ALL_ELFS=" usr/ldso/ld-cervus.elf"
