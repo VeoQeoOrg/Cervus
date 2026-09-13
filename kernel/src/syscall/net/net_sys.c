@@ -281,11 +281,13 @@ int64_t sys_recvfd(uint64_t sockfd) {
     return nfd;
 }
 
-int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf) {
-    if (!syscall_uptr_validate((void *)ubuf, sizeof(net_ifcfg_t))) return -EFAULT;
+int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf, uint64_t ubuf_len) {
+    size_t n = (size_t)ubuf_len;
+    if (n == 0 || n > sizeof(net_ifcfg_t)) n = sizeof(net_ifcfg_t);
+    if (!syscall_uptr_validate_write((void *)ubuf, n)) return -EFAULT;
     net_ifcfg_t cfg;
     if (net_ifcfg_get((int)index, &cfg) != 0) return -1;
-    memcpy((void *)ubuf, &cfg, sizeof(cfg));
+    memcpy((void *)ubuf, &cfg, n);
     return 0;
 }
 
