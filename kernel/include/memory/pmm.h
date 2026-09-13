@@ -10,7 +10,7 @@
 #define PAGE_SHIFT         12
 #define PMM_PAGE_ALIGN(x)  (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 
-#define PMM_MAX_ORDER      10
+#define PMM_MAX_ORDER      13
 #define PMM_MAX_ORDER_NR   (PMM_MAX_ORDER + 1)
 
 #define SLAB_MIN_SIZE      8
