@@ -3,6 +3,6 @@
 
 int fflush(FILE *s)
 {
-    if (!s) return 0;
+    if (!s) { __cervus_flush_all(); return 0; }
     return __cervus_fflush(s);
 }

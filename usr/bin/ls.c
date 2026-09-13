@@ -9,8 +9,15 @@
 #include <cervus_util.h>
 
 typedef struct {
-    int l, a, A, d, F, h, one, R;
+    int l, a, A, d, F, h, one, R, i;
 } ls_opts_t;
+
+static int g_color;
+
+static void paint(const char *code)
+{
+    if (g_color) fputs(code, stdout);
+}
 
 static void fmt_size(off_t sz, char *buf, int buflen)
 {
@@ -55,9 +62,9 @@ static char type_indicator(const Entry *e)
 
 static void color_for(const Entry *e)
 {
-    if (e->d_type == DT_DIR) fputs(C_BLUE, stdout);
-    else if (e->d_type == DT_CHR || e->d_type == DT_BLK) fputs(C_YELLOW, stdout);
-    else if (e->has_stat && (e->st.st_mode & S_IXUSR)) fputs(C_GREEN, stdout);
+    if (e->d_type == DT_DIR) paint(C_BLUE);
+    else if (e->d_type == DT_CHR || e->d_type == DT_BLK) paint(C_YELLOW);
+    else if (e->has_stat && (e->st.st_mode & S_IXUSR)) paint(C_GREEN);
 }
 
 static void fmt_time(int64_t t, char *out, size_t cap)
@@ -81,11 +88,15 @@ static void fmt_time(int64_t t, char *out, size_t cap)
 
 static void emit_entry(const Entry *e, const ls_opts_t *o)
 {
+    if (o->i) {
+        if (e->has_stat) printf("%8llu ", (unsigned long long)e->st.st_ino);
+        else             printf("%8s ", "?");
+    }
     if (o->l) {
         char mbuf[12];
         if (e->has_stat) fmt_mode(e->st.st_mode, e->st.st_type, mbuf);
         else strcpy(mbuf, "??????????");
-        fputs(C_GRAY, stdout); fputs(mbuf, stdout); fputs(C_RESET "  ", stdout);
+        paint(C_GRAY); fputs(mbuf, stdout); paint(C_RESET); fputs("  ", stdout);
 
         char sbuf[16];
         if (e->has_stat && !S_ISDIR(e->st.st_mode)) {
@@ -94,16 +105,16 @@ static void emit_entry(const Entry *e, const ls_opts_t *o)
         } else {
             snprintf(sbuf, sizeof(sbuf), "%7s", "-");
         }
-        fputs(C_CYAN, stdout); fputs(sbuf, stdout); fputs(C_RESET "  ", stdout);
+        paint(C_CYAN); fputs(sbuf, stdout); paint(C_RESET); fputs("  ", stdout);
 
         char tbuf[24];
         if (e->has_stat) fmt_time(e->st.st_mtime, tbuf, sizeof tbuf);
         else             snprintf(tbuf, sizeof tbuf, "%12s", "-");
-        fputs(C_GRAY, stdout); fputs(tbuf, stdout); fputs(C_RESET "  ", stdout);
+        paint(C_GRAY); fputs(tbuf, stdout); paint(C_RESET); fputs("  ", stdout);
     }
     color_for(e);
     fputs(e->name, stdout);
-    fputs(C_RESET, stdout);
+    paint(C_RESET);
     if (o->F || o->l) {
         char ind = type_indicator(e);
         if (ind) putchar(ind);
@@ -133,7 +144,7 @@ static int list_dir(const char *path, const char *display, const ls_opts_t *o, i
         e->name[255] = '\0';
         e->d_type = de->d_type;
         e->has_stat = 0;
-        if (o->l || o->F) {
+        if (o->l || o->F || o->i) {
             char full[512];
             path_join(path, e->name, full, sizeof(full));
             if (stat(full, &e->st) == 0) e->has_stat = 1;
@@ -150,7 +161,7 @@ static int list_dir(const char *path, const char *display, const ls_opts_t *o, i
 }
 
 static const char USAGE[] =
-    "Usage: ls [-1ACFRadhl] [file ...]\nList directory contents.\n\n  -1   one entry per line\n  -a   show hidden files (starting with .)\n  -A   like -a but without . and ..\n  -C   multi-column (default)\n  -d   list directories themselves, not contents\n  -F   classify entries (append /, *, etc.)\n  -h   human-readable sizes (with -l)\n  -l   long listing\n  -R   recursive (per dir block)\n";
+    "Usage: ls [-1ACFRadhil] [file ...]\nList directory contents.\n\n  -1   one entry per line\n  -a   show hidden files (starting with .)\n  -A   like -a but without . and ..\n  -C   multi-column (default)\n  -d   list directories themselves, not contents\n  -F   classify entries (append /, *, etc.)\n  -h   human-readable sizes (with -l)\n  -i   print the inode number of each entry\n  -l   long listing\n  -R   recursive (per dir block)\n";
 
 static void usage(void) { fputs(USAGE, stderr); }
 
@@ -161,9 +172,10 @@ int main(int argc, char **argv)
 
     ls_opts_t o;
     memset(&o, 0, sizeof(o));
+    g_color = isatty(1);
 
     int opt;
-    while ((opt = getopt(argc, argv, "1ACFRadhl")) != -1) {
+    while ((opt = getopt(argc, argv, "1ACFRadhil")) != -1) {
         switch (opt) {
             case '1': o.one = 1; break;
             case 'A': o.A = 1; break;
@@ -173,6 +185,7 @@ int main(int argc, char **argv)
             case 'a': o.a = 1; break;
             case 'd': o.d = 1; break;
             case 'h': o.h = 1; break;
+            case 'i': o.i = 1; break;
             case 'l': o.l = 1; break;
             default: usage(); return 1;
         }
