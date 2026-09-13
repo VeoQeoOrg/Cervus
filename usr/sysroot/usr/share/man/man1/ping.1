@@ -2,7 +2,7 @@ NAME
        ping - send ICMP echo requests
 
 SYNOPSIS
-       ping [-c count] <host>
+       ping [-c count] [-s size] <host>
 
 DESCRIPTION
        Sends ICMP echo requests to HOST, which may be a name or an
@@ -11,6 +11,9 @@ DESCRIPTION
 
 OPTIONS
        -c N   stop after N requests
+       -s N   send N bytes of payload instead of 32. Anything past the
+              link's limit is sent as IP fragments and reassembled by
+              the far end, so this is the way to test that path.
 
 SEE ALSO
        ifconfig(1), nslookup(1), nmap(1)

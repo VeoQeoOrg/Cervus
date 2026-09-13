@@ -336,7 +336,7 @@ static void tcp_reject(uint32_t dst_ip, const uint8_t *dst6,
         ipv6_output(dev, src6, dst6, IPPROTO_TCP, seg, 20);
         return;
     }
-    wr16be(seg + 16, tcp_csum(dev->ip, dst_ip, seg, 20));
+    wr16be(seg + 16, tcp_csum(ip_source_for(dev, dst_ip), dst_ip, seg, 20));
     ip_send(dev, dst_ip, IPPROTO_TCP, seg, 20, IP_DEFAULT_TTL);
 }
 
@@ -363,7 +363,7 @@ int tcp_connect_start(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     t->rcvbuf = malloc(TCP_RCVBUF);
     if (!t->rcvbuf) { free(t); return -ENOMEM; }
 
-    t->local_ip = dev->ip;
+    t->local_ip = ip_source_for(dev, ip);
     t->remote_ip = ip;
     t->remote_port = port;
     t->local_port = g_eport++;
@@ -404,6 +404,7 @@ int tcp_connect(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
     task_t *me = syscall_cur_task();
     uint64_t deadline = now_ms() + 5000;
     for (;;) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&t->lock);
         if (t->state == TCP_ESTABLISHED) { spinlock_release_irqrestore(&t->lock, f); *out = t; return 0; }
         if (t->reset || now_ms() > deadline) { spinlock_release_irqrestore(&t->lock, f); break; }
@@ -473,6 +474,7 @@ int64_t tcp_send(tcp_tcb_t *t, const void *buf, size_t len) {
     size_t done = 0;
 
     while (done < len) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&t->lock);
         if (t->reset || t->state == TCP_CLOSED) { spinlock_release_irqrestore(&t->lock, f); return done ? (int64_t)done : -EINVAL; }
         if (t->state != TCP_ESTABLISHED && t->state != TCP_CLOSE_WAIT) {
@@ -494,6 +496,7 @@ int64_t tcp_send(tcp_tcb_t *t, const void *buf, size_t len) {
         done += n;
         spinlock_release_irqrestore(&t->lock, f);
         tcp_try_send(t);
+        loopback_drain_all();
     }
     return (int64_t)done;
 }
@@ -504,6 +507,7 @@ int64_t tcp_recv(tcp_tcb_t *t, void *buf, size_t len, int nonblock) {
     uint8_t *dst = buf;
 
     for (;;) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&t->lock);
         if (t->rcv_count > 0) {
             uint32_t before = t->rcv_count;
@@ -598,6 +602,7 @@ tcp_tcb_t *tcp_listen(uint16_t port) {
 tcp_tcb_t *tcp_accept(tcp_tcb_t *lst, int nonblock, uint32_t *rip, uint16_t *rport) {
     task_t *me = syscall_cur_task();
     for (;;) {
+        loopback_drain_all();
         spinlock_acquire(&g_tcbs_lock);
         if (lst->accept_q) {
             tcp_tcb_t *c = lst->accept_q;
@@ -629,14 +634,14 @@ int tcp_poll(tcp_tcb_t *t) {
     return r;
 }
 
-static void tcp_accept_syn(tcp_tcb_t *lst, uint32_t src, uint16_t sport, uint32_t seq) {
+static void tcp_accept_syn(tcp_tcb_t *lst, uint32_t src, uint32_t dst, uint16_t sport, uint32_t seq) {
     netdev_t *dev = tdev();
     if (!dev) return;
     tcp_tcb_t *c = calloc(1, sizeof(*c));
     if (!c) return;
     c->rcvbuf = malloc(TCP_RCVBUF);
     if (!c->rcvbuf) { free(c); return; }
-    c->local_ip = dev->ip;
+    c->local_ip = dst ? dst : ip_source_for(dev, src);
     c->local_port = lst->local_port;
     c->remote_ip = src;
     c->remote_port = sport;
@@ -843,6 +848,7 @@ int tcp_connect6(const uint8_t dst6[16], uint16_t port, tcp_tcb_t **out) {
     task_t *me = syscall_cur_task();
     uint64_t deadline = now_ms() + 5000;
     for (;;) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&t->lock);
         if (t->state == TCP_ESTABLISHED) { spinlock_release_irqrestore(&t->lock, f); *out = t; return 0; }
         if (t->reset || now_ms() > deadline) { spinlock_release_irqrestore(&t->lock, f); break; }
@@ -872,6 +878,7 @@ tcp_tcb_t *tcp_listen6(uint16_t port) {
 tcp_tcb_t *tcp_accept6(tcp_tcb_t *lst, int nonblock, uint8_t rip6[16], uint16_t *rport) {
     task_t *me = syscall_cur_task();
     for (;;) {
+        loopback_drain_all();
         spinlock_acquire(&g_tcbs_lock);
         if (lst->accept_q) {
             tcp_tcb_t *c = lst->accept_q;
@@ -951,7 +958,7 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
             LOG_I("[tcp] SYN from %u.%u.%u.%u:%u -> :%u, answering\n",
                   (src_ip >> 24) & 0xFF, (src_ip >> 16) & 0xFF,
                   (src_ip >> 8) & 0xFF, src_ip & 0xFF, sport, dport);
-            tcp_accept_syn(lst, src_ip, sport, seq);
+            tcp_accept_syn(lst, src_ip, dst_ip, sport, seq);
         } else if (!lst) {
             if (flags & TH_SYN)
                 LOG_I("[tcp] SYN to closed port %u from %u.%u.%u.%u:%u, refusing\n",

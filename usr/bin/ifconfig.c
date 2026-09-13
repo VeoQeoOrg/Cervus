@@ -38,8 +38,9 @@ static void show(void) {
         if (netif_get(i, &c) != 0) break;
         found = 1;
         printf("%s\tlink %s  mtu %d\n", c.name, c.link_up ? "UP" : "DOWN", c.mtu);
-        printf("\tether %02x:%02x:%02x:%02x:%02x:%02x\n",
-               c.mac[0], c.mac[1], c.mac[2], c.mac[3], c.mac[4], c.mac[5]);
+        if (c.is_loopback) printf("\tloopback\n");
+        else printf("\tether %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    c.mac[0], c.mac[1], c.mac[2], c.mac[3], c.mac[4], c.mac[5]);
         ip4("\tinet ", c.ip);
         ip4("  netmask ", c.netmask);
         putchar('\n');
@@ -56,6 +57,13 @@ static void show(void) {
                (unsigned)c.rx_arp, (unsigned)c.rx_ip,
                (unsigned)c.rx_other, (unsigned)c.rx_not_for_us);
         printf("\tconnection attempts reaching TCP: %u\n", (unsigned)c.rx_tcp_syn);
+        if (c.rx_bad_csum)
+            printf("\tbad checksums: %u\n", (unsigned)c.rx_bad_csum);
+        if (c.tx_fragmented || c.rx_frag_reasm || c.rx_frag_dropped || c.rx_frag_timeout)
+            printf("\tfragments: %u datagrams split to send, %u reassembled, "
+                   "%u dropped, %u timed out\n",
+                   (unsigned)c.tx_fragmented, (unsigned)c.rx_frag_reasm,
+                   (unsigned)c.rx_frag_dropped, (unsigned)c.rx_frag_timeout);
     }
     if (!found) printf("ifconfig: no network interfaces\n");
 }

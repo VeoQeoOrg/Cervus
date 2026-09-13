@@ -14,15 +14,17 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define SOCK_RXQ       16
-#define SOCK_DGRAM_MAX 1536
+#define SOCK_RXQ          16
+#define SOCK_DGRAM_INLINE 1536
+#define SOCK_DGRAM_MAX    65535
 
 typedef struct {
     uint32_t ip;
     uint8_t  src6[16];
     uint16_t port;
-    uint16_t len;
-    uint8_t  data[SOCK_DGRAM_MAX];
+    uint32_t len;
+    uint8_t *big;
+    uint8_t  data[SOCK_DGRAM_INLINE];
 } dgram_t;
 
 typedef struct sock {
@@ -61,12 +63,20 @@ int sock_is_vnode(const vnode_t *vn) {
 
 static void sock_enqueue2(sock_t *s, uint32_t ip, const uint8_t *ip6, uint16_t port, const uint8_t *data, size_t len) {
     if (len > SOCK_DGRAM_MAX) len = SOCK_DGRAM_MAX;
+
+    uint8_t *big = NULL;
+    if (len > SOCK_DGRAM_INLINE) {
+        big = malloc(len);
+        if (!big) len = SOCK_DGRAM_INLINE;
+    }
+
     uint64_t f = spinlock_acquire_irqsave(&s->lock);
     if (s->qc < SOCK_RXQ) {
         dgram_t *d = &s->q[s->qt];
-        d->ip = ip; d->port = port; d->len = (uint16_t)len;
+        d->ip = ip; d->port = port; d->len = (uint32_t)len;
+        d->big = big;
         if (ip6) memcpy(d->src6, ip6, 16); else memset(d->src6, 0, 16);
-        memcpy(d->data, data, len);
+        memcpy(big ? big : d->data, data, len);
         s->qt = (s->qt + 1) % SOCK_RXQ;
         s->qc++;
         task_t *r = s->reader;
@@ -75,6 +85,7 @@ static void sock_enqueue2(sock_t *s, uint32_t ip, const uint8_t *ip6, uint16_t p
         if (r) task_unblock(r);
     } else {
         spinlock_release_irqrestore(&s->lock, f);
+        free(big);
     }
 }
 static void sock_enqueue(sock_t *s, uint32_t ip, uint16_t port, const uint8_t *data, size_t len) {
@@ -182,6 +193,7 @@ int64_t sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, ui
         if (r == 0) break;
         task_sleep_ms(5);
     }
+    if (r == 0) loopback_drain_all();
     return (r == 0) ? (int64_t)len : -EAGAIN;
 }
 
@@ -198,14 +210,17 @@ int64_t sock_op_recvfrom(vnode_t *vn, void *buf, size_t len, int nonblock,
     }
 
     for (;;) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&s->lock);
         if (s->qc > 0) {
             dgram_t *d = &s->q[s->qh];
             size_t n = d->len;
             if (n > len) n = len;
-            memcpy(buf, d->data, n);
+            memcpy(buf, d->big ? d->big : d->data, n);
             if (src_ip)   *src_ip = d->ip;
             if (src_port) *src_port = d->port;
+            free(d->big);
+            d->big = NULL;
             s->qh = (s->qh + 1) % SOCK_RXQ;
             s->qc--;
             spinlock_release_irqrestore(&s->lock, f);
@@ -251,6 +266,7 @@ static void sock_unref_op(vnode_t *n) {
         pp = &(*pp)->next;
     }
     spinlock_release(&g_socks_lock);
+    for (int i = 0; i < s->qc; i++) free(s->q[(s->qh + i) % SOCK_RXQ].big);
     free(s);
     free(n);
 }
@@ -341,6 +357,7 @@ int64_t sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t 
         if (r == 0) break;
         task_sleep_ms(5);
     }
+    if (r == 0) loopback_drain_all();
     return (r == 0) ? (int64_t)len : -EAGAIN;
 }
 
@@ -354,13 +371,16 @@ int64_t sock_op_recvfrom6(vnode_t *vn, void *buf, size_t len, int nonblock, uint
         return tcp_recv(s->tcb, buf, len, nonblock);
     }
     for (;;) {
+        loopback_drain_all();
         uint64_t f = spinlock_acquire_irqsave(&s->lock);
         if (s->qc > 0) {
             dgram_t *d = &s->q[s->qh];
             size_t n = d->len; if (n > len) n = len;
-            memcpy(buf, d->data, n);
+            memcpy(buf, d->big ? d->big : d->data, n);
             if (src6) memcpy(src6, d->src6, 16);
             if (src_port) *src_port = d->port;
+            free(d->big);
+            d->big = NULL;
             s->qh = (s->qh + 1) % SOCK_RXQ; s->qc--;
             spinlock_release_irqrestore(&s->lock, f);
             return (int64_t)n;

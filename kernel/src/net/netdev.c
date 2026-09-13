@@ -26,15 +26,13 @@ const uint8_t eth_broadcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 static netdev_t *g_netdevs;
 static int       g_eth_index;
 
-netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
-                          int (*transmit)(netdev_t *, const void *, size_t),
-                          void *priv) {
+netdev_t *netdev_register_named(const char *name, const uint8_t mac[ETH_ALEN], uint32_t mtu,
+                                int (*transmit)(netdev_t *, const void *, size_t),
+                                void *priv) {
     netdev_t *d = calloc(1, sizeof(*d));
     if (!d) return NULL;
 
-    d->name[0] = 'e'; d->name[1] = 't'; d->name[2] = 'h';
-    d->name[3] = (char)('0' + (g_eth_index++ % 10));
-    d->name[4] = '\0';
+    strncpy(d->name, name, NETDEV_NAME_MAX - 1);
 
     memcpy(d->mac, mac, ETH_ALEN);
     d->mtu = mtu;
@@ -51,7 +49,27 @@ netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
     return d;
 }
 
-netdev_t *netdev_first(void) { return g_netdevs; }
+netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
+                          int (*transmit)(netdev_t *, const void *, size_t),
+                          void *priv) {
+    char name[NETDEV_NAME_MAX];
+    name[0] = 'e'; name[1] = 't'; name[2] = 'h';
+    name[3] = (char)('0' + (g_eth_index++ % 10));
+    name[4] = '\0';
+    return netdev_register_named(name, mac, mtu, transmit, priv);
+}
+
+netdev_t *netdev_first(void) {
+    for (netdev_t *d = g_netdevs; d; d = d->next)
+        if (!d->is_loopback) return d;
+    return g_netdevs;
+}
+
+netdev_t *netdev_loopback(void) {
+    for (netdev_t *d = g_netdevs; d; d = d->next)
+        if (d->is_loopback) return d;
+    return NULL;
+}
 
 netdev_t *netdev_get(const char *name) {
     for (netdev_t *d = g_netdevs; d; d = d->next)
@@ -117,22 +135,22 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
 static void net_worker(void *arg) {
     (void)arg;
     netdev_t *dev = netdev_first();
-    if (!dev) { for (;;) task_sleep_ms(1000); }
+    if (dev && dev->is_loopback) dev = NULL;
 
-    dhcp_start(dev);
+    if (dev) dhcp_start(dev);
 
     int tick = 0;
     uint64_t next_tick = 0;
     for (;;) {
         int did = 0, spins = 0;
-        extern int ipv6_loopback_drain_one(void);
-        while ((loopback_drain_one() | ipv6_loopback_drain_one()) && ++spins < 8192) did = 1;
+        while (loopback_drain_one() && ++spins < 8192) did = 1;
 
         uint64_t now = sched_now_ns();
         if (now >= next_tick) {
             tcp_tick();
+            ip_frag_tick();
             if (++tick % 4 == 0) {
-                if (!dhcp_bound()) dhcp_start(dev);
+                if (dev && !dhcp_bound()) dhcp_start(dev);
                 arp_age();
             }
             next_tick = now + 250000000ULL;
@@ -154,6 +172,10 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     out->rx_dropped = d->rx_dropped; out->tx_dropped = d->tx_dropped;
     out->rx_arp = d->rx_arp; out->rx_ip = d->rx_ip; out->rx_other = d->rx_other;
     out->rx_not_for_us = d->rx_not_for_us; out->rx_tcp_syn = d->rx_tcp_syn;
+    out->rx_bad_csum = d->rx_bad_csum; out->rx_frag_dropped = d->rx_frag_dropped;
+    out->rx_frag_reasm = d->rx_frag_reasm; out->rx_frag_timeout = d->rx_frag_timeout;
+    out->tx_fragmented = d->tx_fragmented;
+    out->is_loopback = d->is_loopback;
     out->link_up = d->link_up;
     out->mtu = (int32_t)d->mtu;
     memcpy(out->ip6_ll, d->ip6_ll, 16);
@@ -164,6 +186,7 @@ int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, ui
     netdev_t *d = g_netdevs;
     for (int i = 0; d && i < index; i++) d = d->next;
     if (!d) return -1;
+    if (d->is_loopback) return -1;
     d->ip = ip;
     if (netmask) d->netmask = netmask;
     if (gateway == 0xFFFFFFFFu) d->gateway = 0; else if (gateway) d->gateway = gateway;
@@ -176,6 +199,7 @@ void net_start_worker(void) {
 }
 
 void net_init(void) {
+    loopback_init();
     e1000_init();
     rtl8139_init();
     rtl8169_init();

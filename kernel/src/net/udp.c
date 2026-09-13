@@ -4,6 +4,7 @@
 #include "../../include/net/net.h"
 #include "../../include/net/socket.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define UDP_MAX_BINDS 16
 
@@ -37,15 +38,25 @@ static uint16_t udp_checksum(uint32_t src, uint32_t dst, const uint8_t *udp, siz
 
 int udp_send(netdev_t *dev, uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
              const void *data, size_t len) {
-    if (len + 8 > 1480) return -1;
-    uint8_t pkt[1500];
+    if (len + 8 > 65515) return -1;
+
+    uint8_t  sbuf[1500];
+    uint8_t *pkt = sbuf;
+    if (8 + len > sizeof(sbuf)) {
+        pkt = malloc(8 + len);
+        if (!pkt) return -1;
+    }
+
     wr16be(pkt + 0, src_port);
     wr16be(pkt + 2, dst_port);
     wr16be(pkt + 4, (uint16_t)(8 + len));
     wr16be(pkt + 6, 0);
     memcpy(pkt + 8, data, len);
-    wr16be(pkt + 6, udp_checksum(dev->ip, dst_ip, pkt, 8 + len));
-    return ip_send(dev, dst_ip, IPPROTO_UDP, pkt, 8 + len, IP_DEFAULT_TTL);
+    wr16be(pkt + 6, udp_checksum(ip_source_for(dev, dst_ip), dst_ip, pkt, 8 + len));
+
+    int r = ip_send(dev, dst_ip, IPPROTO_UDP, pkt, 8 + len, IP_DEFAULT_TTL);
+    if (pkt != sbuf) free(pkt);
+    return r;
 }
 
 static uint16_t udp6_checksum(const uint8_t *src, const uint8_t *dst, const uint8_t *udp, size_t len) {

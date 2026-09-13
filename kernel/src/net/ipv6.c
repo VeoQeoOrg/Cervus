@@ -1,6 +1,7 @@
 #include "../../include/net/netdev.h"
 #include "../../include/net/net.h"
 #include "../../include/net/ipv6.h"
+#include "../../include/net/ip.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/io/serial.h"
 #include <string.h>
@@ -44,19 +45,6 @@ static int nd_lookup(const uint8_t *ip, uint8_t *mac) {
     return -1;
 }
 
-#define LB6_Q 32
-typedef struct { netdev_t *dev; size_t len; uint8_t data[1500]; } lb6_pkt_t;
-static lb6_pkt_t g_lb6[LB6_Q];
-static int g_lb6_h, g_lb6_t, g_lb6_c;
-static spinlock_t g_lb6_lock = SPINLOCK_INIT;
-
-static void lb6_enqueue(netdev_t *dev, const uint8_t *pkt, size_t len) {
-    if (len > 1500) return;
-    uint64_t f = spinlock_acquire_irqsave(&g_lb6_lock);
-    if (g_lb6_c < LB6_Q) { g_lb6[g_lb6_t].dev = dev; g_lb6[g_lb6_t].len = len; memcpy(g_lb6[g_lb6_t].data, pkt, len); g_lb6_t = (g_lb6_t + 1) % LB6_Q; g_lb6_c++; }
-    spinlock_release_irqrestore(&g_lb6_lock, f);
-}
-
 static uint16_t icmp6_cksum(const uint8_t *src, const uint8_t *dst, const uint8_t *msg, uint32_t len) {
     uint32_t sum = 0;
     for (int i = 0; i < 16; i += 2) sum += (uint32_t)((src[i] << 8) | src[i + 1]);
@@ -84,10 +72,8 @@ int ipv6_output(netdev_t *dev, const uint8_t *src_in, const uint8_t *dst, uint8_
     memcpy(pkt + 24, dst, 16);
     memcpy(pkt + 40, payload, plen);
 
-    if (is_lo6(dst) || memcmp(dst, dev->ip6_ll, 16) == 0) {
-        lb6_enqueue(dev, pkt, 40 + plen);
-        return 0;
-    }
+    if (is_lo6(dst) || memcmp(dst, dev->ip6_ll, 16) == 0)
+        return loopback_output(ETH_P_IPV6, pkt, 40 + plen);
 
     uint8_t mac[6];
     if (is_mcast6(dst)) { mac[0] = 0x33; mac[1] = 0x33; mac[2] = dst[12]; mac[3] = dst[13]; mac[4] = dst[14]; mac[5] = dst[15]; }
@@ -159,18 +145,6 @@ void ipv6_rx(netdev_t *dev, const uint8_t *smac, const uint8_t *pkt, size_t len)
     if (nexthdr == IPPROTO_ICMPV6 && plen >= 8) icmp6_rx(dev, src, dst, msg, plen);
     else if (nexthdr == IPPROTO_UDP && plen >= 8) udp6_rx(dev, src, dst, msg, plen);
     else if (nexthdr == IPPROTO_TCP && plen >= 20) tcp6_rx(dev, src, dst, msg, plen);
-}
-
-int ipv6_loopback_drain_one(void) {
-    lb6_pkt_t p;
-    uint64_t f = spinlock_acquire_irqsave(&g_lb6_lock);
-    if (g_lb6_c == 0) { spinlock_release_irqrestore(&g_lb6_lock, f); return 0; }
-    p.dev = g_lb6[g_lb6_h].dev; p.len = g_lb6[g_lb6_h].len;
-    memcpy(p.data, g_lb6[g_lb6_h].data, p.len);
-    g_lb6_h = (g_lb6_h + 1) % LB6_Q; g_lb6_c--;
-    spinlock_release_irqrestore(&g_lb6_lock, f);
-    ipv6_rx(p.dev, 0, p.data, p.len);
-    return 1;
 }
 
 void ipv6_get_lladdr(netdev_t *dev, uint8_t out[16]) { memcpy(out, dev->ip6_ll, 16); }

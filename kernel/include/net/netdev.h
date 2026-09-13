@@ -14,6 +14,7 @@ struct netdev {
     uint8_t  mac[ETH_ALEN];
     uint32_t mtu;
     int      link_up;
+    int      is_loopback;
 
     uint32_t ip;
     uint32_t netmask;
@@ -27,6 +28,7 @@ struct netdev {
 
     uint64_t rx_packets, rx_bytes, tx_packets, tx_bytes, rx_dropped, tx_dropped;
     uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
+    uint64_t rx_frag_reasm, rx_frag_timeout, tx_fragmented;
 
     netdev_t *next;
 };
@@ -34,7 +36,11 @@ struct netdev {
 netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
                           int (*transmit)(netdev_t *, const void *, size_t),
                           void *priv);
+netdev_t *netdev_register_named(const char *name, const uint8_t mac[ETH_ALEN], uint32_t mtu,
+                                int (*transmit)(netdev_t *, const void *, size_t),
+                                void *priv);
 netdev_t *netdev_first(void);
+netdev_t *netdev_loopback(void);
 netdev_t *netdev_get(const char *name);
 int       netdev_transmit(netdev_t *dev, const void *frame, size_t len);
 
@@ -54,6 +60,9 @@ typedef struct {
     uint8_t  ip6_ll[16];
     uint64_t rx_dropped, tx_dropped;
     uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
+    uint64_t rx_frag_reasm, rx_frag_timeout, tx_fragmented;
+    int32_t  is_loopback;
+    int32_t  _pad2;
 } net_ifcfg_t;
 
 int net_ifcfg_get(int index, net_ifcfg_t *out);

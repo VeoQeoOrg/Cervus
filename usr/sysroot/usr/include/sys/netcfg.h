@@ -14,6 +14,9 @@ typedef struct {
     uint8_t  ip6_ll[16];
     uint64_t rx_dropped, tx_dropped;
     uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
+    uint64_t rx_frag_reasm, rx_frag_timeout, tx_fragmented;
+    int32_t  is_loopback;
+    int32_t  _pad2;
 } net_ifcfg_t;
 
 int netif_get(int index, net_ifcfg_t *out);
