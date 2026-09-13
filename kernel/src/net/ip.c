@@ -107,6 +107,17 @@ void ip_rx(netdev_t *dev, const uint8_t *p, size_t len) {
     uint32_t ihl = (uint32_t)(p[0] & 0x0f) * 4;
     if (ihl < 20 || len < ihl) return;
 
+    if (ip_checksum(p, ihl) != 0) {
+        dev->rx_bad_csum++;
+        return;
+    }
+
+    uint16_t frag = rd16be(p + 6);
+    if ((frag & 0x2000) || (frag & 0x1FFF)) {
+        dev->rx_frag_dropped++;
+        return;
+    }
+
     uint16_t total = rd16be(p + 2);
     if (total < ihl || total > len) total = (uint16_t)len;
 

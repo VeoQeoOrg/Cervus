@@ -26,7 +26,7 @@ struct netdev {
     int    (*transmit)(netdev_t *dev, const void *frame, size_t len);
 
     uint64_t rx_packets, rx_bytes, tx_packets, tx_bytes, rx_dropped, tx_dropped;
-    uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn;
+    uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
 
     netdev_t *next;
 };
@@ -53,7 +53,7 @@ typedef struct {
     int32_t  mtu;
     uint8_t  ip6_ll[16];
     uint64_t rx_dropped, tx_dropped;
-    uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn;
+    uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
 } net_ifcfg_t;
 
 int net_ifcfg_get(int index, net_ifcfg_t *out);

@@ -189,6 +189,41 @@ void vmm_switch_pagemap(vmm_pagemap_t* map) {
     asm volatile ("mov %0, %%cr3" :: "r"(phys) : "memory");
 }
 
+bool vmm_virt_flags(vmm_pagemap_t* map, uintptr_t virt, uint64_t* flags_out) {
+    if (!map || !map->pml4 || !flags_out) return false;
+
+    size_t pml4_i = (virt >> 39) & MASK;
+    size_t pdpt_i = (virt >> 30) & MASK;
+    size_t pd_i   = (virt >> 21) & MASK;
+    size_t pt_i   = (virt >> 12) & MASK;
+
+    uint64_t acc = VMM_WRITE | VMM_USER;
+
+    vmm_pte_t e4 = map->pml4[pml4_i];
+    if (!(e4 & VMM_PRESENT)) return false;
+    acc &= e4;
+
+    vmm_pte_t* pdpt = (vmm_pte_t*)pmm_phys_to_virt(e4 & PTE_PHYS_MASK);
+    vmm_pte_t e3 = pdpt[pdpt_i];
+    if (!(e3 & VMM_PRESENT)) return false;
+    acc &= e3;
+    if (e3 & VMM_PSE) { *flags_out = acc; return true; }
+
+    vmm_pte_t* pd = (vmm_pte_t*)pmm_phys_to_virt(e3 & PTE_PHYS_MASK);
+    vmm_pte_t e2 = pd[pd_i];
+    if (!(e2 & VMM_PRESENT)) return false;
+    acc &= e2;
+    if (e2 & VMM_PSE) { *flags_out = acc; return true; }
+
+    vmm_pte_t* pt = (vmm_pte_t*)pmm_phys_to_virt(e2 & PTE_PHYS_MASK);
+    vmm_pte_t e1 = pt[pt_i];
+    if (!(e1 & VMM_PRESENT)) return false;
+    acc &= e1;
+
+    *flags_out = acc;
+    return true;
+}
+
 bool vmm_virt_to_phys(vmm_pagemap_t* map, uintptr_t virt, uintptr_t* phys_out) {
     if (!map || !phys_out) {
         serial_printf("VMM_VIRT_TO_PHYS ERROR: null parameters\n");

@@ -13,6 +13,7 @@ task_t *syscall_cur_task(void);
 void    syscall_save_user_regs(task_t *t);
 
 bool syscall_uptr_validate(const void *ptr, size_t len);
+bool syscall_uptr_validate_write(const void *ptr, size_t len);
 int  syscall_copy_from_user(void *dst, const void *src, size_t n);
 int  syscall_copy_to_user(void *dst, const void *src, size_t n);
 int  syscall_strncpy_from_user(char *dst, const char *src, size_t max);

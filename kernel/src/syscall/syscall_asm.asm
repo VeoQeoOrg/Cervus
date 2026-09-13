@@ -67,7 +67,7 @@ syscall_entry:
     push r15
     push rbp
 
-    push rcx
+    push r9
     mov  rcx, rdx
     mov  r9,  r8
     mov  r8,  r10

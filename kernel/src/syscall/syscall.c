@@ -438,9 +438,8 @@ __attribute__((noreturn)) void sysret_bad_rsp_panic(uint64_t bad_rsp, uint64_t u
 }
 
 int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
-                          uint64_t a4, uint64_t a5, uint64_t user_rip)
+                          uint64_t a4, uint64_t a5, uint64_t a6)
 {
-    (void)user_rip;
     task_t *t = syscall_cur_task();
     if (t) {
         syscall_save_user_regs(t);
@@ -451,7 +450,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         return -ENOSYS;
     }
 
-    int64_t ret = syscall_table[nr](a1, a2, a3, a4, a5, 0);
+    int64_t ret = syscall_table[nr](a1, a2, a3, a4, a5, a6);
 
     task_t *me = syscall_cur_task();
     if (me && me->pending_kill) {

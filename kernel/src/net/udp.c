@@ -84,9 +84,32 @@ void udp6_rx(netdev_t *dev, const uint8_t *src, const uint8_t *dst, const uint8_
     sock_udp6_input(src, src_port, dst_port, p + 8, (size_t)(ulen - 8));
 }
 
+static int udp_csum_ok(uint32_t src, uint32_t dst, const uint8_t *p, size_t len) {
+    if (len < 8) return 0;
+    if (rd16be(p + 6) == 0) return 1;
+
+    uint32_t sum = 0;
+    sum += (src >> 16) & 0xffff; sum += src & 0xffff;
+    sum += (dst >> 16) & 0xffff; sum += dst & 0xffff;
+    sum += 17;
+    sum += (uint32_t)len & 0xffff;
+    for (size_t i = 0; i + 1 < len; i += 2) sum += (uint32_t)((p[i] << 8) | p[i + 1]);
+    if (len & 1) sum += (uint32_t)(p[len - 1] << 8);
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    uint16_t c = (uint16_t)~sum;
+    return c == 0 || c == 0xFFFF;
+}
+
 void udp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *p, size_t len) {
-    (void)dst_ip;
     if (len < 8) return;
+    {
+        uint16_t ulen = rd16be(p + 4);
+        size_t clen = (ulen >= 8 && ulen <= len) ? (size_t)ulen : len;
+        if (!udp_csum_ok(src_ip, dst_ip, p, clen)) {
+            if (dev) dev->rx_bad_csum++;
+            return;
+        }
+    }
     uint16_t src_port = rd16be(p + 0);
     uint16_t dst_port = rd16be(p + 2);
     uint16_t ulen     = rd16be(p + 4);

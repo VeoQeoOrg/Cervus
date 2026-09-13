@@ -32,7 +32,7 @@ void syscall_save_user_regs(task_t *t)
     t->user_saved_r9  = pc->user_saved_r9;
 }
 
-bool syscall_uptr_validate(const void *ptr, size_t len)
+static bool uptr_range_ok(const void *ptr, size_t len, int need_write)
 {
     uintptr_t addr = (uintptr_t)ptr;
     if (addr < 0x1000ULL) return false;
@@ -44,26 +44,39 @@ bool syscall_uptr_validate(const void *ptr, size_t len)
     if (len == 0) return true;
     task_t *t = syscall_cur_task();
     if (!t || !t->pagemap) return true;
+    if (!t->is_userspace) return true;
 
     uintptr_t page_start = addr & ~0xFFFULL;
     uintptr_t page_end   = (addr + len - 1) & ~0xFFFULL;
     for (uintptr_t p = page_start; p <= page_end; p += 0x1000) {
-        uintptr_t phys;
-        if (!vmm_virt_to_phys(t->pagemap, p, &phys)) return false;
+        uint64_t flags;
+        if (!vmm_virt_flags(t->pagemap, p, &flags)) return false;
+        if (!(flags & VMM_USER)) return false;
+        if (need_write && !(flags & VMM_WRITE)) return false;
     }
     return true;
 }
 
+bool syscall_uptr_validate(const void *ptr, size_t len)
+{
+    return uptr_range_ok(ptr, len, 0);
+}
+
+bool syscall_uptr_validate_write(const void *ptr, size_t len)
+{
+    return uptr_range_ok(ptr, len, 1);
+}
+
 int syscall_copy_from_user(void *dst, const void *src, size_t n)
 {
-    if (!syscall_uptr_validate(src, n)) return -EFAULT;
+    if (!uptr_range_ok(src, n, 0)) return -EFAULT;
     memcpy(dst, src, n);
     return 0;
 }
 
 int syscall_copy_to_user(void *dst, const void *src, size_t n)
 {
-    if (!syscall_uptr_validate(dst, n)) return -EFAULT;
+    if (!uptr_range_ok(dst, n, 1)) return -EFAULT;
     memcpy(dst, src, n);
     return 0;
 }

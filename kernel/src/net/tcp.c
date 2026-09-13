@@ -27,6 +27,15 @@ enum { TCP_CLOSED, TCP_LISTEN, TCP_SYN_SENT, TCP_SYN_RCVD, TCP_ESTABLISHED,
 #define TCP_SNDBUF  16384
 #define TCP_RCVBUF  65536
 
+#define TCP_OOO_MAX 16
+
+typedef struct tcp_ooo {
+    uint32_t seq;
+    uint32_t len;
+    uint8_t *data;
+    struct tcp_ooo *next;
+} tcp_ooo_t;
+
 struct tcp_tcb {
     int       state;
     int       family;
@@ -50,6 +59,8 @@ struct tcp_tcb {
     int       retries;
     uint64_t  close_ms;
 
+    struct tcp_ooo *ooo;
+
     int       is_listener;
     struct tcp_tcb *listener;
     struct tcp_tcb *accept_q;
@@ -66,6 +77,81 @@ static uint16_t    g_eport = 40000;
 
 static uint64_t now_ms(void) { return sched_now_ns() / 1000000ull; }
 static netdev_t *tdev(void) { return netdev_first(); }
+
+static uint32_t rcv_push(tcp_tcb_t *t, const uint8_t *data, uint32_t dlen) {
+    uint32_t space = TCP_RCVBUF - t->rcv_count;
+    uint32_t n = dlen < space ? dlen : space;
+    for (uint32_t i = 0; i < n; i++) {
+        t->rcvbuf[t->rcv_tail] = data[i];
+        t->rcv_tail = (t->rcv_tail + 1) % TCP_RCVBUF;
+    }
+    t->rcv_count += n;
+    t->rcv_nxt += n;
+    return n;
+}
+
+static void ooo_free_all(tcp_tcb_t *t) {
+    tcp_ooo_t *q = t->ooo;
+    while (q) {
+        tcp_ooo_t *nx = q->next;
+        free(q->data);
+        free(q);
+        q = nx;
+    }
+    t->ooo = NULL;
+}
+
+static void ooo_insert(tcp_tcb_t *t, uint32_t seq, const uint8_t *data, uint32_t dlen) {
+    int count = 0;
+    for (tcp_ooo_t *q = t->ooo; q; q = q->next) {
+        if (q->seq == seq && q->len >= dlen) return;
+        count++;
+    }
+    if (count >= TCP_OOO_MAX) return;
+
+    tcp_ooo_t *n = calloc(1, sizeof(*n));
+    if (!n) return;
+    n->data = malloc(dlen);
+    if (!n->data) { free(n); return; }
+    memcpy(n->data, data, dlen);
+    n->seq = seq;
+    n->len = dlen;
+
+    tcp_ooo_t **pp = &t->ooo;
+    while (*pp && (int32_t)((*pp)->seq - seq) < 0) pp = &(*pp)->next;
+    n->next = *pp;
+    *pp = n;
+}
+
+static uint32_t ooo_drain(tcp_tcb_t *t) {
+    uint32_t total = 0;
+    int progress = 1;
+    while (progress) {
+        progress = 0;
+        tcp_ooo_t **pp = &t->ooo;
+        while (*pp) {
+            tcp_ooo_t *q = *pp;
+            int32_t off = (int32_t)(t->rcv_nxt - q->seq);
+            if (off >= 0 && (uint32_t)off < q->len) {
+                total += rcv_push(t, q->data + off, q->len - (uint32_t)off);
+                *pp = q->next;
+                free(q->data);
+                free(q);
+                progress = 1;
+                continue;
+            }
+            if (off >= (int32_t)q->len) {
+                *pp = q->next;
+                free(q->data);
+                free(q);
+                progress = 1;
+                continue;
+            }
+            pp = &q->next;
+        }
+    }
+    return total;
+}
 
 static void tcb_wake(tcp_tcb_t *t) {
     task_t *w = t->waiter;
@@ -555,24 +641,29 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
         else if (t->state == TCP_LAST_ACK && t->snd_una == t->snd_nxt) { t->state = TCP_CLOSED; }
     }
 
-    if (dlen > 0 && seq == t->rcv_nxt &&
-        (t->state == TCP_ESTABLISHED || t->state == TCP_FIN_WAIT1 || t->state == TCP_FIN_WAIT2)) {
-        uint32_t space = TCP_RCVBUF - t->rcv_count;
-        uint32_t n = dlen < space ? dlen : space;
-        for (uint32_t i = 0; i < n; i++) {
-            t->rcvbuf[t->rcv_tail] = data[i];
-            t->rcv_tail = (t->rcv_tail + 1) % TCP_RCVBUF;
+    int data_ok = (t->state == TCP_ESTABLISHED || t->state == TCP_FIN_WAIT1 ||
+                   t->state == TCP_FIN_WAIT2);
+
+    if (dlen > 0 && data_ok) {
+        int32_t off = (int32_t)(t->rcv_nxt - seq);
+        if (off >= (int32_t)dlen) {
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
+            return;
         }
-        t->rcv_count += n;
-        t->rcv_nxt += n;
-        tcb_wake(t);
-        spinlock_release_irqrestore(&t->lock, f);
-        tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
-        f = spinlock_acquire_irqsave(&t->lock);
-    } else if (dlen > 0 && seq != t->rcv_nxt) {
-        spinlock_release_irqrestore(&t->lock, f);
-        tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
-        return;
+        if (off >= 0) {
+            rcv_push(t, data + off, dlen - (uint32_t)off);
+            ooo_drain(t);
+            tcb_wake(t);
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
+            f = spinlock_acquire_irqsave(&t->lock);
+        } else {
+            ooo_insert(t, seq, data, dlen);
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_output(t, t->snd_nxt, TH_ACK, NULL, 0);
+            return;
+        }
     }
 
     if ((flags & TH_FIN) && seq + dlen == t->rcv_nxt) {
@@ -697,9 +788,27 @@ static void tcp_accept_syn6(tcp_tcb_t *lst, const uint8_t *src6, const uint8_t *
     tcp_output(c, c->iss, TH_SYN | TH_ACK, NULL, 0);
 }
 
+static int tcp_csum_ok(uint32_t src, uint32_t dst, const uint8_t *seg, size_t len) {
+    if (len < 20) return 0;
+    if (rd16be(seg + 16) == 0) return 1;
+
+    uint32_t sum = 0;
+    sum += (src >> 16) & 0xffff; sum += src & 0xffff;
+    sum += (dst >> 16) & 0xffff; sum += dst & 0xffff;
+    sum += 6;
+    sum += (uint32_t)len & 0xffff;
+    for (size_t i = 0; i + 1 < len; i += 2) sum += (uint32_t)((seg[i] << 8) | seg[i + 1]);
+    if (len & 1) sum += (uint32_t)(seg[len - 1] << 8);
+    while (sum >> 16) sum = (sum & 0xffff) + (sum >> 16);
+    return (uint16_t)~sum == 0;
+}
+
 void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, size_t len) {
-    (void)dst_ip;
     if (len < 20) return;
+    if (!tcp_csum_ok(src_ip, dst_ip, seg, len)) {
+        if (dev) dev->rx_bad_csum++;
+        return;
+    }
     if (dev && (seg[13] & TH_SYN) && !(seg[13] & TH_ACK)) dev->rx_tcp_syn++;
     uint16_t sport = rd16be(seg + 0);
     uint16_t dport = rd16be(seg + 2);
@@ -795,6 +904,7 @@ void tcp_tick(void) {
 
         if (reap && !t->waiter) {
             *pp = t->next;
+            ooo_free_all(t);
             free(t->rcvbuf);
             free(t);
             continue;
