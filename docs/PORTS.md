@@ -111,13 +111,30 @@ GET and nothing else.
 `build` is handed to sh(1), which is why sh had to come first. A recipe
 that needs patches lists them and they sit in the same directory.
 
+## Setting up the client
+
+`herd` reads the repository URL from `/etc/herd.conf`:
+
+    repo=https://github.com/<org>/cervus-ports/releases/download/index
+
+and checks the index signature against the Ed25519 public key in
+`/etc/herd.pub`, written as hex. Generate the key pair once with
+`ssh-keygen -t ed25519` (or any Ed25519 tool), keep the private half on
+the signing machine, and ship the public half as `/etc/herd.pub`.
+Without a key file `herd` still runs but warns that the index is
+unverified; with one, an index whose signature does not check out is
+refused outright.
+
 ## What has to exist before any of this runs
 
-`herd` itself is a small program: fetch, verify a signature, unpack a
-tarball, record what was installed so it can be removed again. The parts
-it stands on are the ones that took the work, and most are now there -
-sh, make, tar that can create as well as extract, HTTP that does not
-truncate, Ed25519.
+`herd` itself is written and works: `herd update` fetches and verifies
+the signed index, `search`/`info`/`list` read it, `install` resolves
+dependencies, downloads each tarball, checks its size and sha256 against
+the trusted index, decompresses it and unpacks the ustar rooted at `/`
+while recording every path so `remove` can undo it. The parts it stands
+on are the ones that took the work, and they are there now - sh, make,
+tar that can create as well as extract, HTTP that does not truncate,
+gunzip, Ed25519.
 
 The one thing still missing for the *building* half is a compiler that
 runs on Cervus. Recipes can be cross-built on Linux and shipped as

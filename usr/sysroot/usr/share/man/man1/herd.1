@@ -1,0 +1,39 @@
+NAME
+       herd - package manager for Cervus
+
+SYNOPSIS
+       herd update
+       herd search TERM
+       herd list
+       herd info NAME
+       herd install NAME...
+       herd remove NAME...
+
+DESCRIPTION
+       herd installs pre-built packages from a remote repository. A
+       package is a gzipped ustar archive rooted at /, described by a
+       manifest in the repository index.
+
+       The repository URL comes from $HERD_REPO or the repo= line in
+       /etc/herd.conf. On 'update' the index is downloaded together with
+       its Ed25519 signature and checked against the public key in
+       /etc/herd.pub; an index that does not verify is refused. Because
+       the signed index carries each package's sha256, 'install' needs
+       only match the downloaded tarball against the index to trust it.
+
+COMMANDS
+       update        download and verify the package index
+       search TERM   list packages whose name or summary contains TERM
+       list          list installed packages and their versions
+       info NAME     print the index entry for NAME
+       install NAME  install NAME and, before it, anything it depends on
+       remove NAME   delete the files a package installed
+
+FILES
+       /etc/herd.conf         repo= line giving the repository URL
+       /etc/herd.pub          Ed25519 public key, as hex
+       /var/lib/herd/INDEX    the last downloaded index
+       /var/lib/herd/*.files  the file list of each installed package
+
+SEE ALSO
+       tar(1), wget(1)
