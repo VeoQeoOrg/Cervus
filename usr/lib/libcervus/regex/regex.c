@@ -7,7 +7,7 @@
 
 #include "regex_internal.h"
 
-#define RE_MAX_DEPTH 8000
+#define RE_MAX_DEPTH 20000
 
 static int re_emit(re_prog_t *p, uint16_t op, int32_t x, int32_t y, uint32_t cls_off) {
     if (p->code_len >= p->code_cap) {
@@ -158,7 +158,7 @@ static int parse_bracket(re_prog_t *p, const char **pat) {
 static int is_ere(re_prog_t *p) { return (p->cflags & REG_EXTENDED) != 0; }
 
 static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) {
-    if (depth > 200) return REG_ESPACE;
+    if (depth > 200) return -REG_ESPACE;
     const char *s = *pat;
     int start = (int)p->code_len;
 
@@ -171,13 +171,13 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
     if (c == '(' && ere) {
         s++;
         int gid = ++(*group_id);
-        if (gid >= RE_MAX_GROUPS) return REG_ESUBREG;
+        if (gid >= RE_MAX_GROUPS) return -REG_ESUBREG;
         re_emit(p, OP_GSTART, gid, 0, 0);
         *pat = s;
         int rc = parse_alt(p, pat, depth + 1, group_id);
-        if (rc != 0) return rc;
+        if (rc != 0) return -rc;
         s = *pat;
-        if (*s != ')') return REG_EPAREN;
+        if (*s != ')') return -REG_EPAREN;
         s++;
         re_emit(p, OP_GEND, gid, 0, 0);
         *pat = s;
@@ -188,13 +188,13 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
     if (!ere && c == '\\' && s[1] == '(') {
         s += 2;
         int gid = ++(*group_id);
-        if (gid >= RE_MAX_GROUPS) return REG_ESUBREG;
+        if (gid >= RE_MAX_GROUPS) return -REG_ESUBREG;
         re_emit(p, OP_GSTART, gid, 0, 0);
         *pat = s;
         int rc = parse_alt(p, pat, depth + 1, group_id);
-        if (rc != 0) return rc;
+        if (rc != 0) return -rc;
         s = *pat;
-        if (!(s[0] == '\\' && s[1] == ')')) return REG_EPAREN;
+        if (!(s[0] == '\\' && s[1] == ')')) return -REG_EPAREN;
         s += 2;
         re_emit(p, OP_GEND, gid, 0, 0);
         *pat = s;
@@ -204,7 +204,7 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
 
     if (c == '[') {
         int rc = parse_bracket(p, &s);
-        if (rc != 0) return rc;
+        if (rc != 0) return -rc;
         *pat = s;
         return start;
     }
@@ -227,14 +227,16 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
     }
 
     if (c == '\\') {
-        if (!s[1]) return REG_EESCAPE;
+        if (!s[1]) return -REG_EESCAPE;
         char e = s[1];
         if (!ere && e == '(') return parse_atom(p, pat, depth, group_id);
         if (e == 'b') { re_emit(p, OP_WBOUND, 0, 0, 0); *pat = s + 2; return start; }
         if (e == 'B') { re_emit(p, OP_NWBOUND, 0, 0, 0); *pat = s + 2; return start; }
+        if (e == '<') { re_emit(p, OP_WSTART, 0, 0, 0); *pat = s + 2; return start; }
+        if (e == '>') { re_emit(p, OP_WEND, 0, 0, 0); *pat = s + 2; return start; }
         if (e == 'w' || e == 'W' || e == 'd' || e == 'D' || e == 's' || e == 'S') {
             uint32_t off = 0;
-            if (re_new_class(p, &off) < 0) return REG_ESPACE;
+            if (re_new_class(p, &off) < 0) return -REG_ESPACE;
             uint8_t *cs = p->cls + off;
             int neg = (e == 'W' || e == 'D' || e == 'S');
             if (e == 'w' || e == 'W') {
@@ -258,7 +260,7 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
         int ch = parse_escape_char((unsigned char)e);
         if (p->cflags & REG_ICASE) {
             uint32_t off = 0;
-            if (re_new_class(p, &off) < 0) return REG_ESPACE;
+            if (re_new_class(p, &off) < 0) return -REG_ESPACE;
             cls_set(p->cls + off, ch);
             if (ch >= 'A' && ch <= 'Z') cls_set(p->cls + off, ch - 'A' + 'a');
             if (ch >= 'a' && ch <= 'z') cls_set(p->cls + off, ch - 'a' + 'A');
@@ -280,7 +282,7 @@ static int parse_atom(re_prog_t *p, const char **pat, int depth, int *group_id) 
     if (p->cflags & REG_ICASE) {
         if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
             uint32_t off = 0;
-            if (re_new_class(p, &off) < 0) return REG_ESPACE;
+            if (re_new_class(p, &off) < 0) return -REG_ESPACE;
             cls_set(p->cls + off, (unsigned char)c);
             if (c >= 'A' && c <= 'Z') cls_set(p->cls + off, c - 'A' + 'a');
             if (c >= 'a' && c <= 'z') cls_set(p->cls + off, c - 'a' + 'A');
@@ -299,42 +301,68 @@ static int re_dup(re_prog_t *p, int from, int end) {
     int new_start = (int)p->code_len;
     for (int i = 0; i < n; i++) {
         re_inst_t in = p->code[from + i];
-        if (in.op == OP_JMP || in.op == OP_SPLIT) {
+        if (in.op == OP_JMP || in.op == OP_SPLIT || in.op == OP_LOOP || in.op == OP_LSPLIT) {
             if (in.x >= from && in.x < end) in.x = new_start + (in.x - from);
-            if (in.op == OP_SPLIT && in.y >= from && in.y < end) in.y = new_start + (in.y - from);
+            if ((in.op == OP_SPLIT || in.op == OP_LSPLIT) && in.y >= from && in.y < end)
+                in.y = new_start + (in.y - from);
         }
+        if (in.op == OP_LOOP && in.y >= 0)
+            in.y = p->nloops < RE_MAX_LOOPS ? p->nloops++ : -1;
         re_emit(p, in.op, in.x, in.y, in.cls_off);
     }
     return new_start;
+}
+
+static int re_insert_slot(re_prog_t *p, int at) {
+    if (re_emit(p, OP_JMP, 0, 0, 0) < 0) return -1;
+    for (int i = (int)p->code_len - 1; i > at; i--) p->code[i] = p->code[i - 1];
+    memset(&p->code[at], 0, sizeof(p->code[at]));
+    for (size_t i = 0; i < p->code_len; i++) {
+        re_inst_t *in = &p->code[i];
+        if (in->op != OP_JMP && in->op != OP_SPLIT && in->op != OP_LOOP && in->op != OP_LSPLIT) continue;
+        if (in->x >= at) in->x++;
+        if ((in->op == OP_SPLIT || in->op == OP_LSPLIT) && in->y >= at) in->y++;
+    }
+    return 0;
+}
+
+static int make_star(re_prog_t *p, int start, int greedy) {
+    if ((int)p->code_len - start == 1) {
+        re_inst_t *a = &p->code[start];
+        if (a->op == OP_CHAR || a->op == OP_ANY || a->op == OP_CLASS || a->op == OP_NCLASS) {
+            int atom = a->op;
+            int ch = a->x;
+            a->op = OP_STAR1;
+            a->x = (int32_t)((uint32_t)atom | (greedy ? 0x100u : 0u));
+            a->y = ch;
+            return 0;
+        }
+    }
+    int id = p->nloops < RE_MAX_LOOPS ? p->nloops++ : -1;
+    if (re_insert_slot(p, start) < 0) return REG_ESPACE;
+    if (re_emit(p, OP_LOOP, start, id, 0) < 0) return REG_ESPACE;
+    p->code[start].op = OP_LSPLIT;
+    p->code[start].x = start + 1;
+    p->code[start].y = (int)p->code_len;
+    p->code[start].cls_off = greedy ? 1u : 0u;
+    return 0;
 }
 
 static int apply_quant(re_prog_t *p, int start, int min, int max, int greedy) {
     int end = (int)p->code_len;
 
     if (min == 0 && max == 1) {
-        int split_pos = start;
-        re_emit(p, OP_JMP, 0, 0, 0);
-        for (int i = (int)p->code_len - 1; i > start; i--) p->code[i] = p->code[i - 1];
-        p->code[split_pos].op = OP_SPLIT;
-        p->code[split_pos].x = greedy ? start + 1 : (int)p->code_len;
-        p->code[split_pos].y = greedy ? (int)p->code_len : start + 1;
-        p->code[split_pos].cls_off = 0;
-        return 0;
-    }
-    if (min == 0 && max == -1) {
-        re_emit(p, OP_JMP, start, 0, 0);
-        for (int i = (int)p->code_len - 1; i > start; i--) p->code[i] = p->code[i - 1];
+        if (re_insert_slot(p, start) < 0) return REG_ESPACE;
         p->code[start].op = OP_SPLIT;
         p->code[start].x = greedy ? start + 1 : (int)p->code_len;
         p->code[start].y = greedy ? (int)p->code_len : start + 1;
         p->code[start].cls_off = 0;
         return 0;
     }
+    if (min == 0 && max == -1) return make_star(p, start, greedy);
     if (min == 1 && max == -1) {
-        re_emit(p, OP_SPLIT,
-                greedy ? start : (int)p->code_len + 1,
-                greedy ? (int)p->code_len + 1 : start, 0);
-        return 0;
+        int copy = re_dup(p, start, end);
+        return make_star(p, copy, greedy);
     }
 
     if (max == 0) return REG_BADBR;
@@ -347,15 +375,8 @@ static int apply_quant(re_prog_t *p, int start, int min, int max, int greedy) {
     }
 
     if (max == -1) {
-        int split = (int)p->code_len;
-        re_emit(p, OP_SPLIT, 0, 0, 0);
-        int body = re_dup(p, start, end);
-        int after_body = (int)p->code_len;
-        re_emit(p, OP_JMP, split, 0, 0);
-        int after = (int)p->code_len;
-        p->code[split].x = greedy ? body : after;
-        p->code[split].y = greedy ? after : body;
-        (void)after_body;
+        int copy = re_dup(p, start, end);
+        return make_star(p, copy, greedy);
     } else {
         int extras = max - min;
         for (int i = 0; i < extras; i++) {
@@ -408,7 +429,8 @@ static int parse_brace(const char **pat, int *min_out, int *max_out, int ere) {
 
 static int parse_piece(re_prog_t *p, const char **pat, int depth, int *group_id) {
     int start = parse_atom(p, pat, depth, group_id);
-    if (start < 0) return start;
+    if (start == -2) return -2;
+    if (start < 0) return -start;
 
     const char *s = *pat;
     int ere = is_ere(p);
@@ -418,6 +440,8 @@ static int parse_piece(re_prog_t *p, const char **pat, int depth, int *group_id)
     if (*s == '*') { q = 0; s++; }
     else if (ere && *s == '+') { q = 1; s++; }
     else if (ere && *s == '?') { q = 2; s++; }
+    else if (!ere && s[0] == '\\' && s[1] == '+') { q = 1; s += 2; }
+    else if (!ere && s[0] == '\\' && s[1] == '?') { q = 2; s += 2; }
     else if (ere && *s == '{') {
         int rc = parse_brace(&s, &min, &max, 1);
         if (rc != 0) return rc;
@@ -448,10 +472,10 @@ static int parse_concat(re_prog_t *p, const char **pat, int depth, int *group_id
         if (!*s) return 0;
         if (*s == '|' && is_ere(p)) return 0;
         if (*s == ')' && is_ere(p)) return 0;
-        if (!is_ere(p) && s[0] == '\\' && s[1] == ')') return 0;
+        if (!is_ere(p) && s[0] == '\\' && (s[1] == ')' || s[1] == '|')) return 0;
         int rc = parse_piece(p, pat, depth, group_id);
         if (rc == -2) return 0;
-        if (rc < 0) return rc;
+        if (rc != 0) return rc;
     }
 }
 
@@ -460,28 +484,26 @@ static int parse_alt(re_prog_t *p, const char **pat, int depth, int *group_id) {
     int rc = parse_concat(p, pat, depth, group_id);
     if (rc != 0) return rc;
     const char *s = *pat;
-    if (*s != '|' || !is_ere(p)) return 0;
+    int ere = is_ere(p);
+    int is_alt = ere ? (*s == '|') : (s[0] == '\\' && s[1] == '|');
+    if (!is_alt) return 0;
 
-    int branch1_end = (int)p->code_len;
-
-    re_emit(p, OP_JMP, 0, 0, 0);
-    for (int i = (int)p->code_len - 1; i > alt_start; i--) p->code[i] = p->code[i - 1];
+    if (re_insert_slot(p, alt_start) < 0) return REG_ESPACE;
     p->code[alt_start].op = OP_SPLIT;
     p->code[alt_start].x = alt_start + 1;
     p->code[alt_start].cls_off = 0;
-    branch1_end++;
 
-    re_emit(p, OP_JMP, 0, 0, 0);
-    int jmp_pos = branch1_end;
+    int jmp_pos = (int)p->code_len;
+    if (re_emit(p, OP_JMP, 0, 0, 0) < 0) return REG_ESPACE;
 
-    s++;
+    s += ere ? 1 : 2;
     *pat = s;
-    int branch2_start = (int)p->code_len;
-    p->code[alt_start].y = branch2_start;
+    int branch2 = (int)p->code_len;
 
     rc = parse_alt(p, pat, depth, group_id);
     if (rc != 0) return rc;
 
+    p->code[alt_start].y = branch2;
     p->code[jmp_pos].x = (int)p->code_len;
     return 0;
 }
@@ -539,7 +561,7 @@ static int char_eq(int a, int b, int icase) {
 }
 
 static int re_step(const re_prog_t *p, int pc, const char *s, regoff_t pos,
-                   regoff_t slen, re_grp_t *grps, int eflags, int depth,
+                   regoff_t slen, re_grp_t *grps, regoff_t *loops, int eflags, int depth,
                    regoff_t *match_end) {
     if (depth > RE_MAX_DEPTH) return 0;
     int newline_mode = (p->cflags & REG_NEWLINE) != 0;
@@ -596,6 +618,20 @@ static int re_step(const re_prog_t *p, int pc, const char *s, regoff_t pos,
                 pc++;
                 break;
             }
+            case OP_WSTART: {
+                int prev_w = pos > 0 && is_word_ch((unsigned char)s[pos - 1]);
+                int next_w = pos < slen && is_word_ch((unsigned char)s[pos]);
+                if (prev_w || !next_w) return 0;
+                pc++;
+                break;
+            }
+            case OP_WEND: {
+                int prev_w = pos > 0 && is_word_ch((unsigned char)s[pos - 1]);
+                int next_w = pos < slen && is_word_ch((unsigned char)s[pos]);
+                if (!prev_w || next_w) return 0;
+                pc++;
+                break;
+            }
             case OP_NWBOUND: {
                 int prev_w = pos > 0 && is_word_ch((unsigned char)s[pos - 1]);
                 int next_w = pos < slen && is_word_ch((unsigned char)s[pos]);
@@ -606,14 +642,14 @@ static int re_step(const re_prog_t *p, int pc, const char *s, regoff_t pos,
             case OP_GSTART: {
                 regoff_t old = grps[in->x].so;
                 grps[in->x].so = pos;
-                if (re_step(p, pc + 1, s, pos, slen, grps, eflags, depth + 1, match_end)) return 1;
+                if (re_step(p, pc + 1, s, pos, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
                 grps[in->x].so = old;
                 return 0;
             }
             case OP_GEND: {
                 regoff_t old = grps[in->x].eo;
                 grps[in->x].eo = pos;
-                if (re_step(p, pc + 1, s, pos, slen, grps, eflags, depth + 1, match_end)) return 1;
+                if (re_step(p, pc + 1, s, pos, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
                 grps[in->x].eo = old;
                 return 0;
             }
@@ -636,9 +672,50 @@ static int re_step(const re_prog_t *p, int pc, const char *s, regoff_t pos,
                 pc = in->x;
                 break;
             case OP_SPLIT:
-                if (re_step(p, in->x, s, pos, slen, grps, eflags, depth + 1, match_end)) return 1;
+                if (re_step(p, in->x, s, pos, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
                 pc = in->y;
                 break;
+            case OP_LSPLIT: {
+                int id = p->code[in->y - 1].y;
+                int greedy = in->cls_off != 0;
+                if (!greedy &&
+                    re_step(p, in->y, s, pos, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
+                regoff_t old = id >= 0 ? loops[id] : 0;
+                if (id >= 0) loops[id] = pos;
+                int r = re_step(p, in->x, s, pos, slen, grps, loops, eflags, depth + 1, match_end);
+                if (id >= 0) loops[id] = old;
+                if (r) return 1;
+                if (!greedy) return 0;
+                pc = in->y;
+                break;
+            }
+            case OP_LOOP:
+                if (in->y >= 0 && loops[in->y] == pos) return 0;
+                pc = in->x;
+                break;
+            case OP_STAR1: {
+                int atom = in->x & 0xff;
+                int greedy = (in->x & 0x100) != 0;
+                regoff_t n = 0;
+                while (pos + n < slen) {
+                    int c = (unsigned char)s[pos + n];
+                    int ok;
+                    if (atom == OP_CHAR)        ok = char_eq(c, in->y, icase);
+                    else if (atom == OP_ANY)    ok = !(newline_mode && c == '\n');
+                    else if (atom == OP_CLASS)  ok = cls_get(p->cls + in->cls_off, c);
+                    else                        ok = !cls_get(p->cls + in->cls_off, c) && !(newline_mode && c == '\n');
+                    if (!ok) break;
+                    n++;
+                }
+                if (greedy) {
+                    for (regoff_t k = n; k >= 0; k--)
+                        if (re_step(p, pc + 1, s, pos + k, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
+                } else {
+                    for (regoff_t k = 0; k <= n; k++)
+                        if (re_step(p, pc + 1, s, pos + k, slen, grps, loops, eflags, depth + 1, match_end)) return 1;
+                }
+                return 0;
+            }
             default:
                 return 0;
         }
@@ -652,15 +729,17 @@ int regexec(const regex_t *preg, const char *string, size_t nmatch,
     if (!p) return REG_NOMATCH;
     regoff_t slen = (regoff_t)strlen(string);
     re_grp_t grps[RE_MAX_GROUPS];
+    regoff_t loops[RE_MAX_LOOPS];
 
     int anchored = (p->code_len > 0 && p->code[0].op == OP_BOL);
     int newline_mode = (p->cflags & REG_NEWLINE) != 0;
 
     for (regoff_t start = 0; start <= slen; start++) {
         for (int i = 0; i < RE_MAX_GROUPS; i++) { grps[i].so = -1; grps[i].eo = -1; }
+        for (int i = 0; i < RE_MAX_LOOPS; i++) loops[i] = -1;
         grps[0].so = start;
         regoff_t end = -1;
-        if (re_step(p, 0, string, start, slen, grps, eflags, 0, &end)) {
+        if (re_step(p, 0, string, start, slen, grps, loops, eflags, 0, &end)) {
             grps[0].eo = end;
             if (!(preg->__cflags & REG_NOSUB) && pmatch && nmatch > 0) {
                 for (size_t i = 0; i < nmatch; i++) {

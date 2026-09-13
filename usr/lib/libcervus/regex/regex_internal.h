@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #define RE_MAX_GROUPS 32
+#define RE_MAX_LOOPS  64
 
 enum {
     OP_CHAR,
@@ -16,11 +17,16 @@ enum {
     OP_EOL,
     OP_WBOUND,
     OP_NWBOUND,
+    OP_WSTART,
+    OP_WEND,
     OP_GSTART,
     OP_GEND,
     OP_BACKREF,
     OP_JMP,
     OP_SPLIT,
+    OP_LSPLIT,
+    OP_LOOP,
+    OP_STAR1,
     OP_MATCH
 };
 
@@ -41,6 +47,7 @@ typedef struct {
     size_t     cls_cap;
 
     size_t     ngroup;
+    int        nloops;
     int        cflags;
 } re_prog_t;
 
