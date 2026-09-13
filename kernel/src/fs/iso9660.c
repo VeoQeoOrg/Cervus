@@ -15,6 +15,7 @@ typedef struct {
     uint32_t  total_blocks;
     uint32_t  root_extent_lba;
     uint32_t  root_size;
+    uint8_t   susp_skip;
     char      volume_id[33];
 } iso9660_fs_t;
 
@@ -57,7 +58,7 @@ static void iso9660_common_unref(vnode_t *n) {
 
 static vnode_t *iso9660_alloc_vnode(iso9660_fs_t *fs, uint32_t extent_lba,
                                     uint32_t size_bytes, bool is_dir,
-                                    int64_t mtime)
+                                    int64_t mtime, uint32_t mode)
 {
     vnode_t *vn = calloc(1, sizeof(vnode_t));
     if (!vn) return NULL;
@@ -77,11 +78,11 @@ static vnode_t *iso9660_alloc_vnode(iso9660_fs_t *fs, uint32_t extent_lba,
 
     if (is_dir) {
         vn->type = VFS_NODE_DIR;
-        vn->mode = 0555;
+        vn->mode = mode ? (mode & 0555) : 0555;
         vn->ops  = &iso9660_dir_ops;
     } else {
         vn->type = VFS_NODE_FILE;
-        vn->mode = 0444;
+        vn->mode = mode ? (mode & 0555) : 0444;
         vn->ops  = &iso9660_file_ops;
     }
     return vn;
@@ -89,6 +90,70 @@ static vnode_t *iso9660_alloc_vnode(iso9660_fs_t *fs, uint32_t extent_lba,
 
 static int iso9660_read_block(iso9660_fs_t *fs, uint32_t lba, void *buf) {
     return fs->dev->ops->read_sectors(fs->dev, lba, 1, buf);
+}
+
+static uint32_t iso_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+typedef struct {
+    char   name[VFS_MAX_NAME];
+    size_t name_len;
+    uint32_t mode;
+    bool   have_mode;
+} iso9660_rr_t;
+
+static void iso9660_susp_scan(iso9660_fs_t *fs, const uint8_t *p, const uint8_t *end,
+                              iso9660_rr_t *rr, int depth)
+{
+    while (p + 4 <= end) {
+        uint8_t len = p[2];
+        if (len < 4 || p + len > end) break;
+
+        if (p[0] == 'S' && p[1] == 'T') break;
+
+        if (p[0] == 'N' && p[1] == 'M' && len >= 5) {
+            uint8_t fl = p[4];
+            if (!(fl & 0x06)) {
+                size_t n = (size_t)(len - 5);
+                for (size_t i = 0; i < n && rr->name_len + 1 < sizeof(rr->name); i++)
+                    rr->name[rr->name_len++] = (char)p[5 + i];
+                rr->name[rr->name_len] = '\0';
+            }
+        } else if (p[0] == 'P' && p[1] == 'X' && len >= 12) {
+            rr->mode = iso_le32(p + 4) & 07777;
+            rr->have_mode = true;
+        } else if (p[0] == 'C' && p[1] == 'E' && len >= 28 && depth < 4) {
+            uint32_t blk = iso_le32(p + 4);
+            uint32_t ofs = iso_le32(p + 12);
+            uint32_t cl  = iso_le32(p + 20);
+            if (cl && ofs + cl <= fs->block_size) {
+                uint8_t *cont = kmalloc(fs->block_size);
+                if (cont) {
+                    if (iso9660_read_block(fs, blk, cont) >= 0)
+                        iso9660_susp_scan(fs, cont + ofs, cont + ofs + cl, rr, depth + 1);
+                    kfree(cont);
+                }
+            }
+        }
+
+        p += len;
+    }
+}
+
+static void iso9660_rock_ridge(iso9660_fs_t *fs, const uint8_t *rec, iso9660_rr_t *rr)
+{
+    memset(rr, 0, sizeof(*rr));
+
+    uint8_t rec_len  = rec[0];
+    uint8_t name_len = rec[32];
+    uint32_t sua = 33u + name_len;
+    if (sua & 1) sua++;
+    sua += fs->susp_skip;
+    if (sua >= rec_len) return;
+
+    iso9660_susp_scan(fs, rec + sua, rec + rec_len, rr, 0);
 }
 
 static void iso9660_normalize_name(const char *raw, size_t raw_len, char *out, size_t out_cap) {
@@ -125,7 +190,8 @@ static int iso9660_scan_dir(iso9660_fs_t *fs, uint32_t dir_lba, uint32_t dir_siz
                             const char *target_name, uint64_t want_index,
                             uint32_t *out_lba, uint32_t *out_size, bool *out_is_dir,
                             char *out_name_buf, size_t out_name_cap,
-                            uint64_t *visited_count, int64_t *out_time)
+                            uint64_t *visited_count, int64_t *out_time,
+                            uint32_t *out_mode)
 {
     uint8_t *block = kmalloc(fs->block_size);
     if (!block) return -ENOMEM;
@@ -158,23 +224,38 @@ static int iso9660_scan_dir(iso9660_fs_t *fs, uint32_t dir_lba, uint32_t dir_siz
             if (name_len == 1 && (name[0] == 0 || name[0] == 1)) skip = true;
 
             if (!skip) {
+                iso9660_rr_t rr;
+                iso9660_rock_ridge(fs, block + off, &rr);
+
                 if (target_name) {
-                    if (iso9660_name_matches(name, name_len, target_name)) {
+                    bool hit = rr.name_len ? (strcmp(rr.name, target_name) == 0)
+                                           : iso9660_name_matches(name, name_len, target_name);
+                    if (hit) {
                         *out_lba    = ext_lba;
                         *out_size   = ext_size;
                         *out_is_dir = (flags & 0x02) != 0;
                         if (out_time) *out_time = iso9660_rec_time(block + off + 18);
+                        if (out_mode) *out_mode = rr.have_mode ? rr.mode : 0;
                         kfree(block);
                         return 0;
                     }
                 } else {
                     if (seen == want_index) {
-                        if (out_name_buf && out_name_cap)
-                            iso9660_normalize_name(name, name_len, out_name_buf, out_name_cap);
+                        if (out_name_buf && out_name_cap) {
+                            if (rr.name_len) {
+                                size_t n = rr.name_len;
+                                if (n >= out_name_cap) n = out_name_cap - 1;
+                                memcpy(out_name_buf, rr.name, n);
+                                out_name_buf[n] = '\0';
+                            } else {
+                                iso9660_normalize_name(name, name_len, out_name_buf, out_name_cap);
+                            }
+                        }
                         *out_lba    = ext_lba;
                         *out_size   = ext_size;
                         *out_is_dir = (flags & 0x02) != 0;
                         if (out_time) *out_time = iso9660_rec_time(block + off + 18);
+                        if (out_mode) *out_mode = rr.have_mode ? rr.mode : 0;
                         kfree(block);
                         if (visited_count) *visited_count = seen;
                         return 0;
@@ -197,14 +278,14 @@ static int iso9660_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     iso9660_node_t *nd = (iso9660_node_t *)dir->fs_data;
     if (!nd || !nd->is_dir) return -ENOTDIR;
 
-    uint32_t lba = 0, size = 0;
+    uint32_t lba = 0, size = 0, mode = 0;
     bool is_dir = false;
     int64_t mtime = 0;
     int r = iso9660_scan_dir(nd->fs, nd->extent_lba, nd->size_bytes,
-                             name, 0, &lba, &size, &is_dir, NULL, 0, NULL, &mtime);
+                             name, 0, &lba, &size, &is_dir, NULL, 0, NULL, &mtime, &mode);
     if (r < 0) return r;
 
-    vnode_t *child = iso9660_alloc_vnode(nd->fs, lba, size, is_dir, mtime);
+    vnode_t *child = iso9660_alloc_vnode(nd->fs, lba, size, is_dir, mtime, mode);
     if (!child) return -ENOMEM;
     *out = child;
     return 0;
@@ -220,7 +301,7 @@ static int iso9660_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) 
     char nm[VFS_MAX_NAME];
     int r = iso9660_scan_dir(nd->fs, nd->extent_lba, nd->size_bytes,
                              NULL, index, &lba, &size, &is_dir,
-                             nm, sizeof(nm), NULL, NULL);
+                             nm, sizeof(nm), NULL, NULL, NULL);
     if (r < 0) return r;
 
     memset(out, 0, sizeof(*out));
@@ -335,6 +416,20 @@ vnode_t *iso9660_mount(blkdev_t *dev) {
     memcpy(&fs->root_extent_lba, root_rec + 2,  4);
     memcpy(&fs->root_size,       root_rec + 10, 4);
 
+    {
+        uint8_t *rblk = kmalloc(fs->block_size);
+        if (rblk && iso9660_read_block(fs, fs->root_extent_lba, rblk) >= 0) {
+            uint8_t rl = rblk[0];
+            uint8_t nl = rblk[32];
+            uint32_t sua = 33u + nl;
+            if (sua & 1) sua++;
+            if (sua + 7 <= rl && rblk[sua] == 'S' && rblk[sua + 1] == 'P' &&
+                rblk[sua + 2] == 7 && rblk[sua + 4] == 0xBE && rblk[sua + 5] == 0xEF)
+                fs->susp_skip = rblk[sua + 6];
+        }
+        if (rblk) kfree(rblk);
+    }
+
     memcpy(fs->volume_id, pvd + 40, 32);
     fs->volume_id[32] = '\0';
     for (int i = 31; i >= 0 && fs->volume_id[i] == ' '; i--) fs->volume_id[i] = '\0';
@@ -343,10 +438,11 @@ vnode_t *iso9660_mount(blkdev_t *dev) {
                   dev->name, fs->volume_id, fs->block_size, fs->total_blocks,
                   fs->root_extent_lba, fs->root_size);
 
+    int64_t root_time = iso9660_rec_time(root_rec + 18);
     kfree(pvd);
 
     vnode_t *root = iso9660_alloc_vnode(fs, fs->root_extent_lba, fs->root_size, true,
-                                        iso9660_rec_time(root_rec + 18));
+                                        root_time, 0);
     if (!root) { free(fs); return NULL; }
     return root;
 }
