@@ -1,0 +1,17 @@
+NAME
+       pthtest - exercise POSIX threads
+
+SYNOPSIS
+       pthtest [threads] [iterations]
+
+DESCRIPTION
+       Starts the given number of threads (4 by default) and checks three
+       things in turn: that a mutex keeps a shared counter exact under
+       contention, that concurrent malloc and free do not corrupt the heap,
+       and that a condition variable broadcast wakes every waiter.
+
+       Each thread performs iterations increments of the counter; the
+       default is 20000.
+
+SEE ALSO
+       sigtest(1), semtest(1)
