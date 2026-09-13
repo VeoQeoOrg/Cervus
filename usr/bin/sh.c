@@ -17,6 +17,8 @@ extern char **environ;
 #define SH_MAX_NEST 64
 
 static const char *g_shname = "sh";
+static pid_t g_shell_pid;
+static int   g_lineno;
 static int  g_status;
 static int  g_opt_e, g_opt_u, g_opt_x, g_opt_n;
 static int  g_interactive;
@@ -244,6 +246,7 @@ struct node {
     int      has_items;
     casearm_t *arms;
     int      bg;
+    int      line;
 };
 
 static node_t *node_new(int t)
@@ -342,6 +345,8 @@ typedef struct {
     redir_t    *pending[16];
     int         npending;
     int         error;
+    size_t      line, counted_to, tok_line;
+    unsigned long tokno;
 } lexer_t;
 
 static void lx_init(lexer_t *lx, const char *s)
@@ -349,6 +354,8 @@ static void lx_init(lexer_t *lx, const char *s)
     memset(lx, 0, sizeof(*lx));
     lx->s = s;
     lx->n = strlen(s);
+    lx->line = 1;
+    lx->tok_line = 1;
 }
 
 static int lx_at(lexer_t *lx, size_t off)
@@ -520,7 +527,15 @@ static void lx_next(lexer_t *lx)
     lx->had_io_number = 0;
     lx->spaced = 0;
 
+    lx->tokno++;
+
     lx_skip_blanks(lx);
+
+    while (lx->counted_to < lx->p && lx->counted_to < lx->n) {
+        if (lx->s[lx->counted_to] == '\n') lx->line++;
+        lx->counted_to++;
+    }
+    lx->tok_line = lx->line;
 
     if (lx->p >= lx->n) { lx->type = T_EOF; return; }
 
@@ -666,7 +681,8 @@ static int parse_redir(lexer_t *lx, redir_t **list)
 
     lx_next(lx);
     if (lx->type != T_WORD) {
-        fprintf(stderr, "%s: syntax error after redirection\n", g_shname);
+        fprintf(stderr, "%s: line %zu: syntax error after redirection near '%s'\n",
+                g_shname, lx->tok_line, lx->text ? lx->text : "");
         free(r);
         lx->error = 1;
         return 0;
@@ -713,6 +729,7 @@ static node_t *parse_compound(lexer_t *lx);
 static node_t *parse_simple(lexer_t *lx)
 {
     node_t *n = node_new(N_SIMPLE);
+    n->line = (int)lx->tok_line;
     int seen_word = 0;
 
     for (;;) {
@@ -755,6 +772,7 @@ static node_t *parse_case(lexer_t *lx)
 
     casearm_t **tail = &n->arms;
     while (!is_word(lx, "esac") && lx->type != T_EOF) {
+        unsigned long before = lx->tokno;
         casearm_t *arm = xmalloc(sizeof(casearm_t));
         memset(arm, 0, sizeof(*arm));
         sv_init(&arm->pats);
@@ -778,8 +796,9 @@ static node_t *parse_case(lexer_t *lx)
 
         if (lx->type == T_DSEMI) { lx_next(lx); skip_newlines(lx); }
         else break;
+        if (lx->tokno == before) { lx->error = 1; break; }
     }
-    if (!is_word(lx, "esac")) { lx->error = 1; node_free(n); return NULL; }
+    if (lx->error || !is_word(lx, "esac")) { lx->error = 1; node_free(n); return NULL; }
     lx_next(lx);
     return n;
 }
@@ -872,30 +891,29 @@ static node_t *parse_compound(lexer_t *lx)
     return NULL;
 }
 
+static int lx_lparen_follows(lexer_t *lx)
+{
+    size_t q = lx->p;
+    while (q < lx->n && (lx->s[q] == ' ' || lx->s[q] == '\t')) q++;
+    return q < lx->n && lx->s[q] == '(';
+}
+
 static node_t *parse_command(lexer_t *lx)
 {
-    if (lx->type == T_WORD && !lx->quoted && !is_reserved_text(lx->text)) {
-        size_t save_p = lx->p;
+    if (lx->type == T_WORD && !lx->quoted && !is_reserved_text(lx->text) &&
+        lx_lparen_follows(lx)) {
         char *name = xstrdup(lx->text);
-        int save_type = lx->type;
         lx_next(lx);
-        if (lx->type == T_LPAREN) {
-            lx_next(lx);
-            if (lx->type != T_RPAREN) { lx->error = 1; free(name); return NULL; }
-            lx_next(lx);
-            skip_newlines(lx);
-            node_t *body = parse_compound(lx);
-            if (!body) { lx->error = 1; free(name); return NULL; }
-            node_t *n = node_new(N_FUNC);
-            n->name = name;
-            n->a = body;
-            return n;
-        }
-        lx->p = save_p;
-        free(lx->text);
-        lx->text = name;
-        lx->type = save_type;
-        lx->quoted = 0;
+        lx_next(lx);
+        if (lx->type != T_RPAREN) { lx->error = 1; free(name); return NULL; }
+        lx_next(lx);
+        skip_newlines(lx);
+        node_t *body = parse_compound(lx);
+        if (!body) { lx->error = 1; free(name); return NULL; }
+        node_t *n = node_new(N_FUNC);
+        n->name = name;
+        n->a = body;
+        return n;
     }
 
     node_t *c = parse_compound(lx);
@@ -984,8 +1002,10 @@ static node_t *parse_list(lexer_t *lx, int allow_reserved_stop)
         if (lx->type == T_EOF) break;
         if (allow_reserved_stop && at_list_end(lx)) break;
 
+        unsigned long before = lx->tokno;
         node_t *cmd = parse_and_or(lx);
         if (!cmd) break;
+        if (lx->tokno == before) { lx->error = 1; node_free(cmd); break; }
 
         if (lx->type == T_AMP) { cmd->bg = 1; lx_next(lx); }
         else if (lx->type == T_SEMI) lx_next(lx);
@@ -1503,8 +1523,9 @@ static void expand_param(sbuf *out, const char *spec, int in_dq, svec *fields, i
     char numbuf[32];
 
     if (!strcmp(name, "?")) { snprintf(numbuf, sizeof numbuf, "%d", g_status); val = numbuf; }
-    else if (!strcmp(name, "$")) { snprintf(numbuf, sizeof numbuf, "%d", (int)getpid()); val = numbuf; }
+    else if (!strcmp(name, "$")) { snprintf(numbuf, sizeof numbuf, "%d", (int)g_shell_pid); val = numbuf; }
     else if (!strcmp(name, "!")) { snprintf(numbuf, sizeof numbuf, "%d", g_last_bg); val = numbuf; }
+    else if (!strcmp(name, "LINENO") && !var_get("LINENO")) { snprintf(numbuf, sizeof numbuf, "%d", g_lineno); val = numbuf; }
     else if (!strcmp(name, "#")) { snprintf(numbuf, sizeof numbuf, "%d", g_argv.n); val = numbuf; }
     else if (!strcmp(name, "-")) {
         size_t o = 0;
@@ -2856,6 +2877,7 @@ static int exec_node(node_t *n)
         }
 
         case N_SIMPLE: {
+            if (n->line) g_lineno = n->line;
             if (n->bg) {
                 pid_t pid = fork();
                 if (pid == 0) {
@@ -3005,7 +3027,8 @@ static int run_string(const char *src)
         if (g_exiting || g_return || g_break || g_continue) break;
     }
     if (lx.error) {
-        fprintf(stderr, "%s: syntax error\n", g_shname);
+        fprintf(stderr, "%s: line %zu: syntax error near '%s'\n",
+                g_shname, lx.tok_line, lx.text ? lx.text : "");
         rc = 2;
         g_status = 2;
     }
@@ -3270,6 +3293,8 @@ int main(int argc, char **argv)
     g_shname = argv[0] && argv[0][0] ? argv[0] : "sh";
     const char *base = strrchr(g_shname, '/');
     if (base) g_shname = base + 1;
+
+    g_shell_pid = getpid();
 
     sv_init(&g_argv);
     import_environ();
