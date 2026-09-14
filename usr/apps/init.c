@@ -286,6 +286,8 @@ int main(void) {
     sync_clock_from_network();
     restore_audio_settings();
 
+    unlink("/var/lib/herd/reboot-required");
+
     boot_stage("spawning shell on vt0");
     spawn_shell(0);
     boot_stage("shell spawned, entering supervisor loop");

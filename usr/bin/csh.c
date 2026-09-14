@@ -2553,6 +2553,12 @@ static void print_motd(void) {
     if (n > 0) write(1, buf, (size_t)n);
 }
 
+static void print_reboot_notice(void) {
+    struct stat st;
+    if (stat("/var/lib/herd/reboot-required", &st) != 0) return;
+    printf(C_YELLOW "  updates are installed -- reboot to run them" C_RESET "\n\n");
+}
+
 static int line_opens_block(const char *s) {
     return starts_with_word(s, "if") || starts_with_word(s, "foreach") ||
            starts_with_word(s, "while");
@@ -2762,6 +2768,7 @@ static int interactive_main(void) {
     interactive_init_paths();
     write(1, "\033[2J\033[H", 7);
     print_motd();
+    print_reboot_notice();
 
     readline_set_completion(csh_complete2);
     readline_set_suggest(autosuggest_find);

@@ -25,6 +25,7 @@ static const char USAGE[] =
     "  available         list every package the repository offers\n"
     "  info NAME         show what the index knows about NAME\n"
     "  install NAME...   fetch, verify and install packages and their deps\n"
+    "  upgrade [NAME...] update everything installed, or just what you name\n"
     "  remove NAME...    remove installed packages\n"
     "\n"
     "  boot-status              show the boot partition and its bootloader\n"
@@ -39,7 +40,8 @@ static const char USAGE[] =
     "  --progress=STYLE  bar, pacman, hash, dots, percent or none\n"
     "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n"
     "  --root=DIR        install into DIR instead of /, for setting up\n"
-    "                    another system from this one\n";
+    "                    another system from this one\n"
+    "  -y, --yes         do not ask before pulling in dependencies\n";
 
 #define DBDIR    "/var/lib/herd"
 #define INDEXF   DBDIR "/INDEX"
@@ -421,6 +423,70 @@ static int is_installed(const char *name)
     return stat(p, &st) == 0;
 }
 
+static char *installed_version(const char *name)
+{
+    char p[512];
+    snprintf(p, sizeof p, "%s" DBDIR "/%s.manifest", g_root, name);
+    char *m = read_file(p, NULL);
+    if (!m) return NULL;
+    char *v = field(m, "version");
+    free(m);
+    return v;
+}
+
+static int version_cmp(const char *a, const char *b)
+{
+    if (!a) return b ? -1 : 0;
+    if (!b) return 1;
+    while (*a || *b) {
+        while (*a && !isdigit((unsigned char)*a)) a++;
+        while (*b && !isdigit((unsigned char)*b)) b++;
+        long na = 0, nb = 0;
+        while (isdigit((unsigned char)*a)) na = na * 10 + (*a++ - '0');
+        while (isdigit((unsigned char)*b)) nb = nb * 10 + (*b++ - '0');
+        if (na != nb) return na < nb ? -1 : 1;
+        if (!*a && !*b) break;
+    }
+    return 0;
+}
+
+static int g_assume_yes;
+static int g_reboot_needed;
+
+static int confirm(const char *question)
+{
+    if (g_assume_yes) return 1;
+    if (!isatty(0)) {
+        fprintf(stderr, "herd: %s -- rerun with -y to agree\n", question);
+        return 0;
+    }
+    printf("%s [Y/n] ", question);
+    fflush(stdout);
+    char line[16] = {0};
+    if (!fgets(line, sizeof line, stdin)) return 0;
+    return line[0] == '\n' || line[0] == 'y' || line[0] == 'Y';
+}
+
+static void note_reboot(const char *flist_path)
+{
+    char *fl = read_file(flist_path, NULL);
+    if (!fl) return;
+    int hit = 0;
+    for (char *line = strtok(fl, "\n"); line; line = strtok(NULL, "\n")) {
+        if (line[0] != 'f') continue;
+        const char *path = line + 2;
+        if (!strncmp(path, "/boot/", 6) || !strncmp(path, "/bin/", 5) ||
+            !strncmp(path, "/usr/lib/", 9)) { hit = 1; break; }
+    }
+    free(fl);
+    if (!hit) return;
+    g_reboot_needed = 1;
+    char flag[512];
+    snprintf(flag, sizeof flag, "%s" DBDIR "/reboot-required", g_root);
+    int fd = open(flag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
+}
+
 static int cmd_update(void)
 {
     load_repo();
@@ -564,7 +630,6 @@ static int cmd_info(const char *name)
 
 static int install_one(const char *idx, const char *name)
 {
-    if (is_installed(name)) { printf("%s is already installed\n", name); return 0; }
     char *rec = find_record(idx, name);
     if (!rec) { fprintf(stderr, "herd: no package '%s' in index\n", name); return 1; }
 
@@ -612,19 +677,40 @@ static int install_one(const char *idx, const char *name)
 
     { char b[512]; mkpath(rooted(DBDIR, b, sizeof b), 0755); }
     char flist[512]; snprintf(flist, sizeof flist, "%s" DBDIR "/%s.files", g_root, name);
-    FILE *ff = fopen(flist, "w");
+    char oldlist[512]; snprintf(oldlist, sizeof oldlist, "%s" DBDIR "/%s.files.old", g_root, name);
+    char *prev = read_file(flist, NULL);
+    FILE *ff = fopen(oldlist, "w");
     if (!ff) { die("cannot record file list"); }
     int rc = extract_tar(tar, tarlen, ff);
     fclose(ff);
     if (is_gz) free(tar);
     free(data);
 
-    if (rc != 0) { fprintf(stderr, "herd: extraction of %s failed\n", name); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
+    if (rc != 0) {
+        fprintf(stderr, "herd: extraction of %s failed\n", name);
+        unlink(oldlist);
+        free(prev); free(rec); free(ver); free(filef); free(shaf); free(sizef);
+        return 1;
+    }
+
+    if (prev) {
+        char *fresh = read_file(oldlist, NULL);
+        for (char *line = strtok(prev, "\n"); line; line = strtok(NULL, "\n")) {
+            if (line[0] != 'f' || line[1] != ' ') continue;
+            if (fresh && strstr(fresh, line)) continue;
+            unlink(line + 2);
+        }
+        free(fresh);
+        free(prev);
+    }
+    unlink(flist);
+    rename(oldlist, flist);
 
     char mpath[512]; snprintf(mpath, sizeof mpath, "%s" DBDIR "/%s.manifest", g_root, name);
     int mfd = open(mpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (mfd >= 0) { write(mfd, rec, strlen(rec)); close(mfd); }
 
+    note_reboot(flist);
     printf("installed %s %s\n", name, ver ? ver : "");
     free(rec); free(ver); free(filef); free(shaf); free(sizef);
     return 0;
@@ -636,18 +722,28 @@ static int seen_dep(char list[][64], int n, const char *name)
     return 0;
 }
 
-static int install_with_deps(const char *idx, const char *name, char order[][64], int *norder)
+static int plan_install(const char *idx, const char *name, char order[][64], int *norder,
+                        int allow_upgrade)
 {
     if (seen_dep(order, *norder, name)) return 0;
-    if (is_installed(name)) return 0;
+
     char *rec = find_record(idx, name);
-    if (!rec) { fprintf(stderr, "herd: no package '%s'\n", name); return 1; }
+    if (!rec) { fprintf(stderr, "herd: no package '%s' in the index\n", name); return 1; }
+
+    if (is_installed(name)) {
+        char *have = installed_version(name);
+        char *want = field(rec, "version");
+        int newer = allow_upgrade && version_cmp(have, want) < 0;
+        free(have); free(want);
+        if (!newer) { free(rec); return 0; }
+    }
+
     char *dep = field(rec, "depends");
     free(rec);
     if (dep) {
         for (char *tok = strtok(dep, " ,"); tok; tok = strtok(NULL, " ,")) {
             if (!strcmp(tok, "libc")) continue;
-            if (install_with_deps(idx, tok, order, norder) != 0) { free(dep); return 1; }
+            if (plan_install(idx, tok, order, norder, 0) != 0) { free(dep); return 1; }
         }
         free(dep);
     }
@@ -655,23 +751,103 @@ static int install_with_deps(const char *idx, const char *name, char order[][64]
     return 0;
 }
 
+static int apply_plan(const char *idx, char order[][64], int norder)
+{
+    for (int i = 0; i < norder; i++) {
+        if (is_installed(order[i])) {
+            char *have = installed_version(order[i]);
+            printf("replacing %s %s\n", order[i], have ? have : "");
+            free(have);
+        }
+        if (install_one(idx, order[i]) != 0) return 1;
+    }
+    if (g_reboot_needed)
+        puts("\nthis touched the kernel or the base system -- reboot to run the new one");
+    return 0;
+}
+
 static int cmd_install(int argc, char **argv)
 {
     load_repo();
     char *idx = load_index();
+
     char order[256][64]; int norder = 0;
     for (int i = 0; i < argc; i++)
-        if (install_with_deps(idx, argv[i], order, &norder) != 0) { free(idx); return 1; }
-    int rc = 0;
-    for (int i = 0; i < norder; i++)
-        if (install_one(idx, order[i]) != 0) { rc = 1; break; }
+        if (plan_install(idx, argv[i], order, &norder, 1) != 0) { free(idx); return 1; }
+
+    if (norder == 0) { puts("nothing to do -- everything asked for is already installed"); free(idx); return 0; }
+
+    int extra = 0;
+    for (int i = 0; i < norder; i++) {
+        int asked = 0;
+        for (int k = 0; k < argc; k++) if (!strcmp(order[i], argv[k])) asked = 1;
+        if (!asked) extra++;
+    }
+
+    if (extra) {
+        printf("these are needed as well:\n");
+        for (int i = 0; i < norder; i++) {
+            int asked = 0;
+            for (int k = 0; k < argc; k++) if (!strcmp(order[i], argv[k])) asked = 1;
+            if (asked) continue;
+            char *rec = find_record(idx, order[i]);
+            char *ver = rec ? field(rec, "version") : NULL;
+            printf("  %-14s %s\n", order[i], ver ? ver : "");
+            free(ver); free(rec);
+        }
+        if (!confirm("Install them too?")) { puts("nothing done"); free(idx); return 1; }
+    }
+
+    int rc = apply_plan(idx, order, norder);
     free(idx);
     return rc;
 }
 
-static int remove_one(const char *name)
+static int cmd_upgrade(int argc, char **argv)
 {
-    if (!is_installed(name)) { fprintf(stderr, "herd: %s is not installed\n", name); return 1; }
+    load_repo();
+    if (cmd_update() != 0) return 1;
+    char *idx = load_index();
+
+    char order[256][64]; int norder = 0;
+
+    if (argc > 0) {
+        for (int i = 0; i < argc; i++)
+            if (plan_install(idx, argv[i], order, &norder, 1) != 0) { free(idx); return 1; }
+    } else {
+        char dbb[512];
+        DIR *d = opendir(rooted(DBDIR, dbb, sizeof dbb));
+        if (!d) { puts("no packages installed"); free(idx); return 0; }
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            if (l <= 9 || strcmp(e->d_name + l - 9, ".manifest") != 0) continue;
+            char name[256]; snprintf(name, sizeof name, "%.*s", (int)(l - 9), e->d_name);
+            plan_install(idx, name, order, &norder, 1);
+        }
+        closedir(d);
+    }
+
+    if (norder == 0) { puts("everything is up to date"); free(idx); return 0; }
+
+    printf("to be updated:\n");
+    for (int i = 0; i < norder; i++) {
+        char *have = installed_version(order[i]);
+        char *rec = find_record(idx, order[i]);
+        char *want = rec ? field(rec, "version") : NULL;
+        if (have) printf("  %-14s %s -> %s\n", order[i], have, want ? want : "?");
+        else      printf("  %-14s %s (new)\n", order[i], want ? want : "?");
+        free(have); free(want); free(rec);
+    }
+    if (!confirm("Go ahead?")) { puts("nothing done"); free(idx); return 1; }
+
+    int rc = apply_plan(idx, order, norder);
+    free(idx);
+    return rc;
+}
+
+static int remove_files(const char *name)
+{
     char flist[512]; snprintf(flist, sizeof flist, "%s" DBDIR "/%s.files", g_root, name);
     char *fl = read_file(flist, NULL);
     if (fl) {
@@ -685,8 +861,15 @@ static int remove_one(const char *name)
     char p[512];
     snprintf(p, sizeof p, "%s" DBDIR "/%s.files", g_root, name); unlink(p);
     snprintf(p, sizeof p, "%s" DBDIR "/%s.manifest", g_root, name); unlink(p);
-    printf("removed %s\n", name);
     return 0;
+}
+
+static int remove_one(const char *name)
+{
+    if (!is_installed(name)) { fprintf(stderr, "herd: %s is not installed\n", name); return 1; }
+    int r = remove_files(name);
+    if (r == 0) printf("removed %s\n", name);
+    return r;
 }
 
 static int cmd_remove(int argc, char **argv)
@@ -795,10 +978,8 @@ static int install_pkg_to(const char *name, const char *root)
 
     char *idx = load_index();
     char order[256][64]; int norder = 0;
-    int rc = install_with_deps(idx, name, order, &norder);
-    if (rc == 0)
-        for (int i = 0; i < norder; i++)
-            if ((rc = install_one(idx, order[i])) != 0) break;
+    int rc = plan_install(idx, name, order, &norder, 1);
+    if (rc == 0) rc = apply_plan(idx, order, norder);
     free(idx);
 
     snprintf(g_root, sizeof g_root, "%s", saved);
@@ -920,6 +1101,8 @@ int main(int argc, char **argv)
     for (int argi = 1; argi < argc; ) {
         if (!strncmp(argv[argi], "--progress=", 11)) {
             progress_style(argv[argi] + 11);
+        } else if (!strcmp(argv[argi], "-y") || !strcmp(argv[argi], "--yes")) {
+            g_assume_yes = 1;
         } else if (!strncmp(argv[argi], "--root=", 7)) {
             snprintf(g_root, sizeof g_root, "%s", argv[argi] + 7);
             size_t l = strlen(g_root);
@@ -942,6 +1125,11 @@ int main(int argc, char **argv)
         if (elevate("install") != 0) return 1;
         load_repo();
         return cmd_install(argc - 2, argv + 2);
+    }
+    if (!strcmp(cmd, "upgrade")) {
+        if (elevate("upgrade") != 0) return 1;
+        load_repo();
+        return cmd_upgrade(argc - 2, argv + 2);
     }
     if (!strcmp(cmd, "remove")) {
         if (argc < 3) die("remove needs a name");

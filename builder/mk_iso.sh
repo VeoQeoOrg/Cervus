@@ -4,7 +4,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
 IMAGE=Cervus
-VERSION=v0.0.2
+VERSION=v$(cat builder/VERSION 2>/dev/null || echo 0.0.2)
 INIT_ELF=usr/apps/init.elf
 WALLPAPER=wallpapers/cervus1280x720.png
 WALLPAPER_DST="boot():/boot/wallpapers/cervus.png"

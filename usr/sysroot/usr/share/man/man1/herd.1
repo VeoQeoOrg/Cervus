@@ -8,6 +8,7 @@ SYNOPSIS
        herd available
        herd info NAME
        herd install NAME...
+       herd upgrade [NAME...]
        herd remove NAME...
        herd boot-status
        herd update-kernel
@@ -32,6 +33,11 @@ DESCRIPTION
        password, unless you are already root.
 
 OPTIONS
+       -y, --yes
+              Agree to the dependencies and the upgrade list without
+              asking. Without a terminal herd will not guess, so scripts
+              need this.
+
        --progress=STYLE
               How to draw download progress: bar (the default), pacman,
               hash, dots, percent, or none. It can also be set with
@@ -45,7 +51,14 @@ COMMANDS
        available     list every package the repository offers, marking
                      the ones already installed
        info NAME     print the index entry for NAME
-       install NAME  install NAME and, before it, anything it depends on
+       install NAME  install NAME and, before it, anything it depends on.
+                     Anything pulled in that you did not name is listed
+                     first and installed only if you agree.
+       upgrade       replace everything installed with the newer version
+                     in the index, or just the packages you name. The
+                     base system (cervus-base, cervus-libc, cervus-media
+                     and kernel) is registered like any other package, so
+                     a plain 'herd upgrade' updates the whole machine.
        remove NAME   delete the files a package installed
 
        boot-status   find the boot partition and say which bootloader
@@ -65,6 +78,10 @@ FILES
        /etc/herd.pub          Ed25519 public key, as hex
        /var/lib/herd/INDEX    the last downloaded index
        /var/lib/herd/*.files  the file list of each installed package
+       /var/lib/herd/reboot-required
+                              written when an update replaced the kernel
+                              or part of the base system; the shell says
+                              so at login and init clears it on boot
 
 SEE ALSO
        tar(1), wget(1)

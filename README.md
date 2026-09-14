@@ -1121,14 +1121,20 @@ a package.
 ```sh
 herd available           # everything on offer, installed ones marked
 herd search c            # find something
-herd install lua         # install it, and whatever it depends on
+herd install git         # install it, listing what it drags in first
+herd upgrade             # bring the whole machine up to date
 herd list                # what is installed
-herd remove lua          # take it away again
-herd update              # refresh the package list
+herd remove git          # take it away again
 ```
 
-What is packaged today — Lua, GNU make, SQLite, bzip2, NASM, TCC, and the
-system's own kernel and bootloaders:
+Cervus is itself packaged — `cervus-base` (everything in `/bin`), `cervus-libc`,
+`cervus-media` and `kernel` are registered in herd's database when the image is
+built. So `herd upgrade` updates the operating system the same way it updates
+anything else, and tells you to reboot when it has replaced the kernel or part of
+the base system.
+
+What is packaged today — Git, Lua, GNU make, SQLite, bzip2, zlib, NASM, TCC, and
+Cervus itself:
 
 <div align="center">
   <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">

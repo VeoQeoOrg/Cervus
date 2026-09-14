@@ -20,7 +20,51 @@ configure() { prune_orphans; sh builder/configure.sh; }
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
 
 
-upload_kernel() {
+herd_manifest() {
+  outdir=$1; name=$2; ver=$3; deps=$4; summary=$5; license=$6
+  f="$name-$ver-x86_64.tar.gz"
+  sz=$(wc -c < "$outdir/$f" | tr -d ' ')
+  sha=$(sha256sum "$outdir/$f" | awk '{print $1}')
+  cat > "$outdir/$name-$ver-x86_64.manifest" <<MEOF
+name: $name
+version: $ver
+arch: x86_64
+size: $sz
+sha256: $sha
+file: $f
+depends: $deps
+summary: $summary
+license: $license
+MEOF
+}
+
+pack_tree() {
+  outdir=$1; name=$2; ver=$3; shift 3
+  stage=$(mktemp -d)
+  for dir in "$@"; do
+    [ -d "rootfs$dir" ] || continue
+    mkdir -p "$stage$(dirname "$dir")"
+    cp -a "rootfs$dir" "$stage$(dirname "$dir")/"
+  done
+  tar -C "$stage" --owner=0 --group=0 --numeric-owner \
+      -czf "$outdir/$name-$ver-x86_64.tar.gz" .
+  rm -rf "$stage"
+}
+
+bump_version() {
+  cur=$(cat builder/VERSION 2>/dev/null || echo 0.0.2.0)
+  case "$cur" in
+    *.*.*.*) base=${cur%.*}; build=${cur##*.} ;;
+    *)       base=$cur;      build=0 ;;
+  esac
+  case "$build" in
+    ''|*[!0-9]*) build=0 ;;
+  esac
+  printf '%s.%s\n' "$base" "$((build + 1))" > builder/VERSION
+  cat builder/VERSION
+}
+
+publish_system() {
   keyfile=${HERD_KEY:-$HOME/cervus-keys/herd.pem}
   outdir=${HERD_OUT:-$HOME/herd-packs/out}
   repo=${HERD_GH_REPO:-VeoQeoOrg/herd-packs}
@@ -32,52 +76,67 @@ upload_kernel() {
     exit 1
   }
   command -v gh >/dev/null 2>&1 || { echo "nb upload: gh is not installed" >&2; exit 1; }
-  gh auth status >/dev/null 2>&1 || { echo "nb upload: gh is not logged in (run: gh auth login)" >&2; exit 1; }
+  n=0
+  until gh api user >/dev/null 2>&1; do
+    n=$((n + 1))
+    [ "$n" -ge 5 ] && { echo "nb upload: gh cannot reach GitHub (logged in? run: gh auth login)" >&2; exit 1; }
+  done
 
-  [ -n "$ver" ] || ver=$(awk -F= '/^VERSION=/ {gsub(/^v/,"",$2); print $2; exit}' builder/mk_iso.sh 2>/dev/null)
-  [ -n "$ver" ] || ver=0.0.2
+  if [ -n "$ver" ]; then printf '%s\n' "$ver" > builder/VERSION
+  else ver=$(bump_version); fi
+  echo "publishing Cervus $ver"
 
   configure
-  ninja -j "$JOBS" bin/kernel usr/apps/init.elf
+  ninja -j "$JOBS"
   [ -f bin/kernel ] || { echo "nb upload: bin/kernel was not built" >&2; exit 1; }
-
-  stage=$(mktemp -d)
-  mkdir -p "$stage/boot"
-  cp bin/kernel "$stage/boot/kernel"
-  cp rootfs/boot/shell.elf "$stage/boot/shell.elf" 2>/dev/null || cp usr/apps/init.elf "$stage/boot/shell.elf"
+  [ -d rootfs ]     || { echo "nb upload: rootfs was not assembled" >&2; exit 1; }
 
   mkdir -p "$outdir"
-  tar -C "$stage" -czf "$outdir/kernel-$ver-x86_64.tar.gz" .
-  rm -rf "$stage"
+  rm -f "$outdir"/kernel-*.tar.gz "$outdir"/kernel-*.manifest \
+        "$outdir"/cervus-base-*.tar.gz "$outdir"/cervus-base-*.manifest \
+        "$outdir"/cervus-libc-*.tar.gz "$outdir"/cervus-libc-*.manifest \
+        "$outdir"/cervus-media-*.tar.gz "$outdir"/cervus-media-*.manifest \
+        "$outdir"/cervus-system-*.tar.gz "$outdir"/cervus-system-*.manifest
 
-  f="kernel-$ver-x86_64.tar.gz"
-  sz=$(wc -c < "$outdir/$f" | tr -d ' ')
-  sha=$(sha256sum "$outdir/$f" | awk '{print $1}')
-  cat > "$outdir/kernel-$ver-x86_64.manifest" <<MEOF
-name: kernel
-version: $ver
-arch: x86_64
-size: $sz
-sha256: $sha
-file: $f
-depends: libc
-summary: the Cervus kernel and init, for the boot partition
-license: GPL-3.0
-MEOF
+  pack_tree "$outdir" kernel       "$ver" /boot
+  pack_tree "$outdir" cervus-base  "$ver" /bin /apps /usr/share/man
+  pack_tree "$outdir" cervus-libc  "$ver" /usr/lib /usr/include
+  pack_tree "$outdir" cervus-media "$ver" /usr/share/fonts /usr/share/consolefonts /usr/share/media
 
-  rm -f "$outdir"/kernel-*.manifest.tmp
-  for old in "$outdir"/kernel-*.manifest; do
-    case "$old" in *"kernel-$ver-x86_64.manifest") ;; *) rm -f "$old" ;; esac
-  done
+  meta=$(mktemp -d); mkdir -p "$meta/var/lib/herd"
+  printf 'Cervus %s\n' "$ver" > "$meta/var/lib/herd/system-release"
+  tar -C "$meta" --owner=0 --group=0 --numeric-owner \
+      -czf "$outdir/cervus-system-$ver-x86_64.tar.gz" .
+  rm -rf "$meta"
+
+  herd_manifest "$outdir" kernel       "$ver" libc \
+      "the Cervus kernel and init, for the boot partition" GPL-3.0
+  herd_manifest "$outdir" cervus-base  "$ver" libc \
+      "the Cervus command line: every utility in /bin and /apps" GPL-3.0
+  herd_manifest "$outdir" cervus-libc  "$ver" libc \
+      "the Cervus C library, its headers and crt0" GPL-3.0
+  herd_manifest "$outdir" cervus-media "$ver" libc \
+      "console and TrueType fonts, wallpapers and sounds" GPL-3.0
+  herd_manifest "$outdir" cervus-system "$ver" "cervus-base cervus-libc cervus-media kernel" \
+      "all of Cervus: kernel, command line, library and assets" GPL-3.0
 
   ( cd "$outdir" && awk 'FNR==1 && NR!=1 {print ""} {print}' ./*.manifest > INDEX )
   openssl pkeyutl -sign -inkey "$keyfile" -rawin -in "$outdir/INDEX" -out "$outdir/INDEX.sig" || {
     echo "nb upload: signing failed" >&2; exit 1; }
 
-  echo "publishing kernel $ver to $repo"
-  gh release upload index "$outdir/$f" "$outdir/INDEX" "$outdir/INDEX.sig" \
-     --clobber --repo "$repo" || exit 1
-  echo "done -- 'herd update-kernel' on a Cervus machine will pick it up"
+  echo "uploading to $repo"
+  for f in $(awk '/^file:/ {print $2}' "$outdir/INDEX") INDEX INDEX.sig; do
+    [ -f "$outdir/$f" ] || { echo "nb upload: $f is in the index but not in $outdir" >&2; exit 1; }
+    n=0
+    until gh release upload index "$outdir/$f" --clobber --repo "$repo" >/dev/null 2>&1; do
+      n=$((n + 1))
+      [ "$n" -ge 12 ] && { echo "nb upload: giving up on $f after $n attempts" >&2; exit 1; }
+      sleep 3
+    done
+    echo "  $f"
+  done
+
+  echo "published Cervus $ver -- 'herd upgrade' on a Cervus machine picks it up"
 }
 
 deep_clean() {
@@ -174,7 +233,7 @@ flash)
   ;;
 upload)
   shift
-  upload_kernel "${1:-}"
+  publish_system "${1:-}"
   ;;
 clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja

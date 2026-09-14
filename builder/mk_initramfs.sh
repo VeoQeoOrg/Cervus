@@ -9,7 +9,8 @@ INIT_ELF=usr/apps/init.elf
 INSTALLER_ELF=usr/installer/cervus-installer.elf
 SYSROOT=usr/sysroot
 WALLPAPER=wallpapers/cervus1280x720.png
-VERSION=v0.0.2
+VERSION=v$(cat builder/VERSION 2>/dev/null || echo 0.0.2)
+SYSVER=$(cat builder/VERSION 2>/dev/null || echo 0.0.2)
 
 green() { printf '\033[92m[initramfs]\033[0m %s\n' "$*"; }
 red()   { printf '\033[91m[initramfs] %s\033[0m\n' "$*" >&2; }
@@ -161,6 +162,35 @@ copy_boot builder/grub-bios.img      "$RFS/boot/grub-bios.img"         optional
 copy_boot limine/BOOTX64.EFI         "$RFS/boot/BOOTX64.EFI"           optional
 copy_boot limine/BOOTIA32.EFI        "$RFS/boot/BOOTIA32.EFI"          optional
 copy_boot "$WALLPAPER"               "$RFS/boot/wallpaper.png"         optional
+
+register_pkg() {
+    name=$1; summary=$2; shift 2
+    db="$RFS/var/lib/herd"
+    mkdir -p "$db"
+    : > "$db/$name.files"
+    for dir in "$@"; do
+        [ -d "$RFS$dir" ] || continue
+        ( cd "$RFS" && find ".$dir" \( -type f -o -type l \) -printf 'f %p\n' ) |
+            sed 's|^f \.|f |' >> "$db/$name.files"
+        ( cd "$RFS" && find ".$dir" -type d -printf 'd %p\n' ) |
+            sed 's|^d \.|d |' >> "$db/$name.files"
+    done
+    cat > "$db/$name.manifest" <<PKGEOF
+name: $name
+version: $SYSVER
+arch: x86_64
+file: $name-$SYSVER-x86_64.tar.gz
+depends: libc
+summary: $summary
+license: GPL-3.0
+PKGEOF
+}
+
+register_pkg cervus-base  "the Cervus command line: every utility in /bin and /apps" /bin /apps /usr/share/man
+register_pkg cervus-libc  "the Cervus C library, its headers and crt0"               /usr/lib /usr/include
+register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        /usr/share/fonts /usr/share/consolefonts /usr/share/media
+register_pkg kernel       "the Cervus kernel and init, for the boot partition"       /boot
+green "registered the base system with herd as $SYSVER"
 
 green "packing $TAR"
 tar --format=ustar -cf "$TAR" -C "$RFS" .
