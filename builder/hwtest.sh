@@ -42,7 +42,7 @@ ISO="$ROOT/demo_iso/Cervus.latest.iso"
 [ -e "$ISO" ] || { echo "hwtest: no ISO at $ISO (run ./nb first)" >&2; exit 1; }
 ISO=$(readlink -f "$ISO")
 
-OUT="$ROOT/hwtest-out"
+OUT="${TMPDIR:-/tmp}/cervus-hwtest"
 rm -rf "$OUT"; mkdir -p "$OUT"
 REPORT="$OUT/report.txt"
 BLANK="$OUT/blank.img"
