@@ -17,10 +17,8 @@ deep_clean() {
     cervus_disk.img cervus_ata.img cervus_sata.img cervus_nvme.img \
     cervus_data.iso Cervus.iso Cervus.hdd temp_*
   rm -f usr/sysroot/usr/lib/libcervus.a usr/sysroot/usr/lib/crt0.o
-  rm -rf usr/sysroot/usr/bin usr/sysroot/usr/lib/tcc
+  rm -rf usr/sysroot/usr/bin
   rm -rf usr/cross/src usr/cross/build
-  rm -rf usr/tcc/tcc-0.9.27 usr/tcc/tcc.elf usr/tcc/libtcc1.a
-  rm -f usr/tcc/*.o usr/tcc/*.tar.bz2
   find usr/lib/libcervus -name '*.o' -delete 2>/dev/null || true
   rm -f usr/lib/libcervus/libcervus.a
   find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
@@ -107,11 +105,11 @@ clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja
   rm -f initramfs.tar limine.conf
   find usr/apps usr/bin usr/installer -name '*.elf' -delete 2>/dev/null || true
-  echo "cleaned (deps/limine/tcc kept; cinder lives in /usr/bin; './nb gitclean' for a full wipe)"
+  echo "cleaned (deps/limine kept; cinder lives in /usr/bin; './nb gitclean' for a full wipe)"
   ;;
 gitclean)
   deep_clean
-  echo "deep clean complete (deps/limine/tcc removed too)"
+  echo "deep clean complete (deps/limine removed too)"
   ;;
 cleaniso)
   rm -rf demo_iso

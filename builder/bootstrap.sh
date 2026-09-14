@@ -63,11 +63,6 @@ do_limine() {
     extract_hdd_bin
 }
 
-do_tcc() {
-    say "building tcc"
-    sh builder/build_tcc.sh
-}
-
 CINDER_VERSION=0.1
 CINDER_URL="https://github.com/z3nnix/cinder/releases/download/v${CINDER_VERSION}/cinder"
 CINDER_BIN=/usr/bin/cinder
@@ -94,11 +89,10 @@ do_cinder() {
     say "installed $CINDER_BIN"
 }
 
-[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|tcc}"
+[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|cinder}"
 case "$1" in
     deps)   do_deps ;;
     limine) do_limine ;;
-    tcc)    do_tcc ;;
     cinder) do_cinder ;;
     *)      die "unknown step: $1" ;;
 esac

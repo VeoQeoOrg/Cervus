@@ -39,7 +39,6 @@ APP_CFLAGS_OPT="${APP_CFLAGS/-O0/-O2}"
 
 DEPS_STAMP=$STAMPS/deps
 LIMINE_STAMP=$STAMPS/limine
-TCC_STAMP=$STAMPS/tcc
 CINDER_STAMP=$STAMPS/cinder
 
 obj_for() {  # $1=src  $2=category
@@ -248,8 +247,6 @@ for dir in usr/apps usr/bin usr/installer; do
 done
 printf '\n'
 
-printf 'build %s: bootstrap || %s\n  step = tcc\n\n' "$TCC_STAMP" "$PROG_DEPS"
-
 KOBJS=""
 for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o -name '*.cnd' \) | sort) \
            $(find libc/src -name '*.c' | sort); do
@@ -273,7 +270,7 @@ printf 'build bin/kernel: link_kernel%s | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
 printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s | %s %s %s\n\n' \
-    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$TCC_STAMP" "$LIMINE_STAMP"
+    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$LIMINE_STAMP"
 
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"
