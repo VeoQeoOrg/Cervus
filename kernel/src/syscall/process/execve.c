@@ -288,6 +288,12 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     t->brk_start  = t->brk_current = elf.load_end;
     t->brk_max    = 0x0000700000000000ULL;
 
+    t->fs_base    = 0;
+    t->tls_vaddr  = elf.tls_vaddr;
+    t->tls_filesz = elf.tls_filesz;
+    t->tls_memsz  = elf.tls_memsz;
+    t->tls_align  = elf.tls_align;
+
     t->user_rsp       = new_rsp;
     t->user_saved_rip = elf.has_interp ? elf.interp_entry : elf.entry;
     t->user_saved_rbp = t->user_saved_rbx = 0;

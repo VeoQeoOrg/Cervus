@@ -8,6 +8,7 @@ section .text
     extern __cervus_argc
     extern __cervus_argv
     extern environ
+    extern __cervus_tls_init
 
 _start:
     xor     rbp, rbp
@@ -28,6 +29,10 @@ _start:
 
     and     rsp, -16
 
+    call    __cervus_tls_init
+
+    mov     edi, [rel __cervus_argc]
+    mov     rsi, [rel __cervus_argv]
     call    main
 
     movsxd  rdi, eax

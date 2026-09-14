@@ -481,9 +481,18 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
         if (src_read(src, &phbuf,
                      ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
                      sizeof(phbuf)) < 0) break;
-        if (phbuf.p_type == PT_PHDR) {
+        if (phbuf.p_type == PT_PHDR && !result.phdr_vaddr)
             result.phdr_vaddr = phbuf.p_vaddr + load_bias;
-            break;
+        if (phbuf.p_type == PT_TLS) {
+            result.tls_vaddr  = phbuf.p_vaddr + load_bias;
+            result.tls_filesz = phbuf.p_filesz;
+            result.tls_memsz  = phbuf.p_memsz;
+            result.tls_align  = phbuf.p_align ? phbuf.p_align : 1;
+            LOG_D("[ELF] PT_TLS vaddr=0x%llx filesz=%llu memsz=%llu align=%llu\n",
+                  (unsigned long long)result.tls_vaddr,
+                  (unsigned long long)result.tls_filesz,
+                  (unsigned long long)result.tls_memsz,
+                  (unsigned long long)result.tls_align);
         }
     }
     if (!result.phdr_vaddr) {

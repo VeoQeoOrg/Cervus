@@ -19,39 +19,13 @@ struct __pthread {
     void         *stack;
     size_t        stacksize;
     int           tid;
+    void         *tls;
 };
 
 #define DEFAULT_STACK (256 * 1024)
 
-#define TH_TABLE_MAX 128
-static struct __pthread *g_table[TH_TABLE_MAX];
-static __cervus_lock_t   g_table_lock = CERVUS_LOCK_INIT;
-
-static void table_add(struct __pthread *th)
-{
-    __cervus_lock(&g_table_lock);
-    for (int i = 0; i < TH_TABLE_MAX; i++)
-        if (!g_table[i]) { g_table[i] = th; break; }
-    __cervus_unlock(&g_table_lock);
-}
-
-static void table_remove(struct __pthread *th)
-{
-    __cervus_lock(&g_table_lock);
-    for (int i = 0; i < TH_TABLE_MAX; i++)
-        if (g_table[i] == th) { g_table[i] = NULL; break; }
-    __cervus_unlock(&g_table_lock);
-}
-
-static struct __pthread *table_find(int tid)
-{
-    struct __pthread *r = NULL;
-    __cervus_lock(&g_table_lock);
-    for (int i = 0; i < TH_TABLE_MAX; i++)
-        if (g_table[i] && g_table[i]->tid == tid) { r = g_table[i]; break; }
-    __cervus_unlock(&g_table_lock);
-    return r;
-}
+static __thread struct __pthread *g_self;
+static struct __pthread g_main;
 
 static void futex_wait(volatile int *addr, int val)
 {
@@ -65,8 +39,11 @@ static void futex_wake(volatile int *addr, int n)
 
 void __cervus_thread_entry(struct __pthread *th)
 {
+    void *tp = __cervus_tls_alloc();
+    if (tp) __cervus_tls_set(tp);
+    th->tls = tp;
+    g_self = th;
     th->tid = (int)getpid();
-    table_add(th);
     void *r = th->fn(th->arg);
 
     th->retval = r;
@@ -76,8 +53,9 @@ void __cervus_thread_entry(struct __pthread *th)
     if (__atomic_load_n(&th->detached, __ATOMIC_ACQUIRE)) {
         void *stk = th->stack;
         size_t sz = th->stacksize;
-        table_remove(th);
+        void *mytls = th->tls;
         free(th);
+        __cervus_tls_free(mytls);
         if (stk) munmap(stk, sz);
     }
 
@@ -136,8 +114,9 @@ int pthread_join(pthread_t th, void **retval)
 
     void *stk = th->stack;
     size_t sz = th->stacksize;
-    table_remove(th);
+    void *tls = th->tls;
     free(th);
+    __cervus_tls_free(tls);
     if (stk) munmap(stk, sz);
     return 0;
 }
@@ -151,7 +130,7 @@ int pthread_detach(pthread_t th)
 
 void pthread_exit(void *retval)
 {
-    struct __pthread *th = table_find((int)getpid());
+    struct __pthread *th = pthread_self();
     if (th) {
         th->retval = retval;
         __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
@@ -161,7 +140,11 @@ void pthread_exit(void *retval)
     for (;;) {}
 }
 
-pthread_t pthread_self(void) { return table_find((int)getpid()); }
+pthread_t pthread_self(void)
+{
+    if (!g_self) { g_main.tid = (int)getpid(); g_self = &g_main; }
+    return g_self;
+}
 int pthread_equal(pthread_t a, pthread_t b) { return a == b; }
 
 int pthread_attr_init(pthread_attr_t *a)

@@ -125,6 +125,10 @@ typedef struct {
     int             has_interp;
     uintptr_t       interp_base;
     uintptr_t       interp_entry;
+    uintptr_t       tls_vaddr;
+    uint64_t        tls_filesz;
+    uint64_t        tls_memsz;
+    uint64_t        tls_align;
 } elf_load_result_t;
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);

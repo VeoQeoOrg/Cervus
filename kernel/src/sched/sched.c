@@ -850,6 +850,10 @@ void sched_reschedule(void) {
     next->cpu_id = cpu;
     next->state  = TASK_RUNNING;
     if (next->fpu_state) fpu_restore(next->fpu_state);
+    if (next->is_userspace)
+        asm volatile("wrmsr" :: "c"(0xC0000100u),
+                     "a"((uint32_t)next->fs_base),
+                     "d"((uint32_t)(next->fs_base >> 32)));
 
     if (!(next->flags & TASK_FLAG_STARTED)) {
         next->flags |= TASK_FLAG_STARTED;

@@ -95,6 +95,8 @@ extern int64_t sys_mkdir             (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_utimes            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_thread_create     (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_thread_exit       (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_set_fsbase        (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_tls_info          (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rename            (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_list_mounts       (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_statvfs           (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -316,6 +318,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_UTIMES]            = sys_utimes,
     [SYS_THREAD_CREATE]     = sys_thread_create,
     [SYS_THREAD_EXIT]       = sys_thread_exit,
+    [SYS_SET_FSBASE]        = sys_set_fsbase,
+    [SYS_TLS_INFO]          = sys_tls_info,
     [SYS_RENAME]            = sys_rename,
     [SYS_DISK_READ_RAW]     = sys_disk_read_raw,
     [SYS_DISK_WRITE_RAW]    = sys_disk_write_raw,

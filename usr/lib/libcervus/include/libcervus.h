@@ -19,6 +19,11 @@ typedef struct { volatile int state; } __cervus_lock_t;
 
 #define CERVUS_LOCK_INIT { 0 }
 
+void  *__cervus_tls_alloc(void);
+int    __cervus_tls_set(void *tp);
+void   __cervus_tls_free(void *tp);
+void   __cervus_tls_init(void);
+
 void __cervus_lock(__cervus_lock_t *l);
 void __cervus_unlock(__cervus_lock_t *l);
 extern __cervus_lock_t __cervus_heap_lock;

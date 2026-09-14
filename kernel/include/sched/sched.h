@@ -154,6 +154,12 @@ typedef struct task {
     uint64_t user_saved_r8;
     uint64_t user_saved_r9;
     uint64_t user_saved_rax;
+
+    uint64_t  fs_base;
+    uintptr_t tls_vaddr;
+    uint64_t  tls_filesz;
+    uint64_t  tls_memsz;
+    uint64_t  tls_align;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)

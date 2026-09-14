@@ -162,6 +162,8 @@
 #define SYS_UTIMES          610
 #define SYS_THREAD_CREATE   611
 #define SYS_THREAD_EXIT     612
+#define SYS_SET_FSBASE      613
+#define SYS_TLS_INFO        614
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

@@ -113,6 +113,12 @@ static void load_elf_module(void) {
     uint64_t cr3 = (uint64_t)pmm_virt_to_phys(r.pagemap->pml4);
 
     task_t *t = task_create_user("init", r.entry, init_rsp, cr3, 16, r.pagemap, 0, 0);
+    if (t) {
+        t->tls_vaddr  = r.tls_vaddr;
+        t->tls_filesz = r.tls_filesz;
+        t->tls_memsz  = r.tls_memsz;
+        t->tls_align  = r.tls_align;
+    }
 
     if (!t) {
         serial_writestring("[ELF] task_create_user failed\n");

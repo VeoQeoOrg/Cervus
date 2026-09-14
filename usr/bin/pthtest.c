@@ -17,6 +17,20 @@ static long            g_counter;
 static int             g_ready;
 static int             g_iters = 20000;
 
+static __thread int tls_counter;
+static __thread char tls_tag[16] = "unset";
+
+static void *tls_thread(void *arg)
+{
+    long id = (long)arg;
+    snprintf(tls_tag, sizeof tls_tag, "t%ld", id);
+    for (int i = 0; i < 1000; i++) tls_counter++;
+    char want[16];
+    snprintf(want, sizeof want, "t%ld", id);
+    if (tls_counter != 1000 || strcmp(tls_tag, want) != 0) return (void *)-1;
+    return NULL;
+}
+
 static void *counter_thread(void *arg)
 {
     long id = (long)arg;
@@ -94,6 +108,22 @@ int main(int argc, char **argv)
         if (r) { printf("  corruption in thread %d\n", i); fails++; }
     }
     printf("  no corruption : %s\n", fails ? "FAILED" : "OK");
+
+    printf("thread-local storage: %d threads with their own copies\n", nth);
+    tls_counter = 4242;
+    snprintf(tls_tag, sizeof tls_tag, "main");
+    for (int i = 0; i < nth; i++)
+        pthread_create(&th[i], NULL, tls_thread, (void *)(long)i);
+    for (int i = 0; i < nth; i++) {
+        void *r = NULL;
+        pthread_join(th[i], &r);
+        if (r) { printf("  thread %d saw the wrong __thread value\n", i); fails++; }
+    }
+    if (tls_counter != 4242 || strcmp(tls_tag, "main") != 0) {
+        printf("  main thread's __thread was clobbered (%d, %s)\n", tls_counter, tls_tag);
+        fails++;
+    }
+    printf("  each thread kept its own : %s\n", fails ? "FAILED" : "OK");
 
     printf("condition variable: %d waiters\n", nth);
     g_ready = 0;
