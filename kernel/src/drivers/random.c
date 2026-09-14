@@ -5,7 +5,8 @@
 
 static uint32_t g_state[16];
 static uint64_t g_counter;
-static int      g_have_hw;
+static int      g_have_rdrand;
+static int      g_have_rdseed;
 static int      g_ready;
 
 static inline uint64_t rnd_rdtsc(void)
@@ -24,7 +25,7 @@ static void cpuid_leaf(uint32_t leaf, uint32_t sub, uint32_t out[4])
 
 static int hw_random64(uint64_t *out)
 {
-    if (!g_have_hw) return 0;
+    if (!g_have_rdrand) return 0;
     for (int i = 0; i < 32; i++) {
         uint64_t v;
         unsigned char ok;
@@ -36,7 +37,7 @@ static int hw_random64(uint64_t *out)
 
 static int hw_seed64(uint64_t *out)
 {
-    if (!g_have_hw) return 0;
+    if (!g_have_rdseed) return hw_random64(out);
     for (int i = 0; i < 32; i++) {
         uint64_t v;
         unsigned char ok;
@@ -98,10 +99,15 @@ void random_init(void)
     uint32_t r[4];
     cpuid_leaf(0, 0, r);
     uint32_t maxleaf = r[0];
-    g_have_hw = 0;
+    g_have_rdrand = 0;
+    g_have_rdseed = 0;
     if (maxleaf >= 1) {
         cpuid_leaf(1, 0, r);
-        if (r[2] & (1u << 30)) g_have_hw = 1;
+        if (r[2] & (1u << 30)) g_have_rdrand = 1;
+    }
+    if (maxleaf >= 7) {
+        cpuid_leaf(7, 0, r);
+        if (r[1] & (1u << 18)) g_have_rdseed = 1;
     }
 
     g_state[0] = 0x61707865; g_state[1] = 0x3320646e;
@@ -121,7 +127,8 @@ void random_init(void)
     g_counter = 0;
     g_ready = 1;
     serial_printf("[random] seeded from %s\n",
-                  g_have_hw ? "RDSEED/RDRAND" : "timing jitter");
+                  g_have_rdseed ? "RDSEED" :
+                  g_have_rdrand ? "RDRAND" : "timing jitter");
 }
 
 void random_bytes(void *buf, size_t len)
