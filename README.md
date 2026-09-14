@@ -1119,18 +1119,27 @@ a package.
 </div>
 
 ```sh
-herd update              # fetch the package list and check its signature
+herd available           # everything on offer, installed ones marked
 herd search c            # find something
-herd install tcc         # install it, and whatever it depends on
+herd install lua         # install it, and whatever it depends on
 herd list                # what is installed
-herd remove tcc          # take it away again
+herd remove lua          # take it away again
+herd update              # refresh the package list
 ```
+
+What is packaged today — Lua, GNU make, SQLite, bzip2, NASM, TCC, and the
+system's own kernel and bootloaders:
+
+<div align="center">
+  <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">
+</div>
 
 Packages come from the **[herd-packs](https://github.com/VeoQeoOrg/herd-packs)**
 repository, which also documents how to build and submit one. The index is signed
 with Ed25519 and checked against `/etc/herd.pub`; an index that does not verify is
 refused, and each package is then matched against the sha256 in that signed index.
-Add `--progress=pacman` if you want something to watch while it downloads.
+herd fetches the list by itself the first time, asks for your password when it
+needs one, and takes `--progress=pacman` if you want something to watch.
 
 Two things a running system cannot replace by hand are handled too:
 
