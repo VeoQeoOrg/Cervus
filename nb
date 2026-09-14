@@ -18,6 +18,7 @@ deep_clean() {
     cervus_data.iso Cervus.iso Cervus.hdd temp_*
   rm -f usr/sysroot/usr/lib/libcervus.a usr/sysroot/usr/lib/crt0.o
   rm -rf usr/sysroot/usr/bin usr/sysroot/usr/lib/tcc
+  rm -rf usr/cross/src usr/cross/build
   rm -rf usr/tcc/tcc-0.9.27 usr/tcc/tcc.elf usr/tcc/libtcc1.a
   rm -f usr/tcc/*.o usr/tcc/*.tar.bz2
   find usr/lib/libcervus -name '*.o' -delete 2>/dev/null || true
