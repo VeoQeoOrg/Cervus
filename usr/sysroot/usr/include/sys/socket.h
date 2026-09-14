@@ -7,6 +7,7 @@
 
 #define AF_UNIX      1
 #define AF_LOCAL     1
+#define AF_UNSPEC    0
 #define AF_INET      2
 #define AF_INET6     10
 #define PF_UNIX      AF_UNIX
@@ -29,6 +30,9 @@ int     bind    (int fd, const struct sockaddr *addr, socklen_t addrlen);
 int     connect (int fd, const struct sockaddr *addr, socklen_t addrlen);
 int     listen  (int fd, int backlog);
 int     accept  (int fd, struct sockaddr *addr, socklen_t *addrlen);
+int     shutdown(int fd, int how);
+int     setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen);
+int     getsockopt(int fd, int level, int optname, void *optval, socklen_t *optlen);
 ssize_t sendto  (int fd, const void *buf, size_t len, int flags,
                  const struct sockaddr *dest, socklen_t addrlen);
 ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
@@ -43,6 +47,27 @@ int socketpair(int domain, int type, int protocol, int fds[2]);
 
 #define SCM_RIGHTS 1
 #define SOL_SOCKET 1
+
+#define SO_REUSEADDR   2
+#define SO_TYPE        3
+#define SO_ERROR       4
+#define SO_BROADCAST   6
+#define SO_SNDBUF      7
+#define SO_RCVBUF      8
+#define SO_KEEPALIVE   9
+#define SO_RCVTIMEO   20
+#define SO_SNDTIMEO   21
+
+#define SOL_TCP        6
+
+#define SHUT_RD        0
+#define SHUT_WR        1
+#define SHUT_RDWR      2
+
+struct sockaddr_storage {
+    unsigned short ss_family;
+    char           __ss_pad[126];
+};
 
 struct iovec {
     void  *iov_base;

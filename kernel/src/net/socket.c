@@ -47,6 +47,17 @@ typedef struct sock {
 
     uint8_t      ttl;
 
+    int          opt_keepalive;
+    int          opt_reuseaddr;
+    int          opt_broadcast;
+    int          opt_sndbuf;
+    int          opt_rcvbuf;
+    int64_t      opt_rcvtimeo_ms;
+    int64_t      opt_sndtimeo_ms;
+    int          last_error;
+    int          rd_shutdown;
+    int          wr_shutdown;
+
     struct sock *next;
 } sock_t;
 
@@ -168,6 +179,7 @@ int64_t sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, ui
     sock_t *s = vn->fs_data;
     netdev_t *dev = netdev_first();
     if (!dev) return -EINVAL;
+    if (s->wr_shutdown) return -EPIPE;
 
     if (s->type == SOCK_STREAM) {
         if (!s->tcb) return -EINVAL;
@@ -201,6 +213,8 @@ int64_t sock_op_recvfrom(vnode_t *vn, void *buf, size_t len, int nonblock,
                          uint32_t *src_ip, uint16_t *src_port) {
     sock_t *s = vn->fs_data;
     task_t *me = syscall_cur_task();
+
+    if (s->rd_shutdown) return 0;
 
     if (s->type == SOCK_STREAM) {
         if (!s->tcb) return -EINVAL;
@@ -420,6 +434,109 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
     g_socks = s;
     spinlock_release(&g_socks_lock);
     return vn;
+}
+
+#define SOL_SOCKET_K   1
+#define SOL_TCP_K      6
+
+#define SO_REUSEADDR_K   2
+#define SO_TYPE_K        3
+#define SO_ERROR_K       4
+#define SO_BROADCAST_K   6
+#define SO_SNDBUF_K      7
+#define SO_RCVBUF_K      8
+#define SO_KEEPALIVE_K   9
+#define SO_RCVTIMEO_K   20
+#define SO_SNDTIMEO_K   21
+
+#define TCP_NODELAY_K    1
+
+typedef struct { int64_t tv_sec; int64_t tv_usec; } sock_timeval_t;
+
+int64_t sock_op_setopt(vnode_t *vn, int level, int optname,
+                       const void *val, uint32_t len) {
+    sock_t *s = vn->fs_data;
+    if (!s || !val) return -EINVAL;
+
+    if (level == SOL_TCP_K) {
+        if (optname == TCP_NODELAY_K) return 0;
+        return -ENOPROTOOPT;
+    }
+    if (level != SOL_SOCKET_K) return -ENOPROTOOPT;
+
+    if (optname == SO_RCVTIMEO_K || optname == SO_SNDTIMEO_K) {
+        if (len < sizeof(sock_timeval_t)) return -EINVAL;
+        const sock_timeval_t *tv = val;
+        int64_t ms = tv->tv_sec * 1000 + tv->tv_usec / 1000;
+        if (optname == SO_RCVTIMEO_K) s->opt_rcvtimeo_ms = ms;
+        else                          s->opt_sndtimeo_ms = ms;
+        return 0;
+    }
+
+    if (len < sizeof(int)) return -EINVAL;
+    int v = *(const int *)val;
+    switch (optname) {
+        case SO_REUSEADDR_K: s->opt_reuseaddr = v != 0; return 0;
+        case SO_BROADCAST_K: s->opt_broadcast = v != 0; return 0;
+        case SO_KEEPALIVE_K: s->opt_keepalive = v != 0; return 0;
+        case SO_SNDBUF_K:    s->opt_sndbuf = v; return 0;
+        case SO_RCVBUF_K:    s->opt_rcvbuf = v; return 0;
+        default: return -ENOPROTOOPT;
+    }
+}
+
+int64_t sock_op_getopt(vnode_t *vn, int level, int optname,
+                       void *val, uint32_t *len) {
+    sock_t *s = vn->fs_data;
+    if (!s || !val || !len) return -EINVAL;
+
+    if (level == SOL_TCP_K) {
+        if (optname != TCP_NODELAY_K) return -ENOPROTOOPT;
+        if (*len < sizeof(int)) return -EINVAL;
+        *(int *)val = 1;
+        *len = sizeof(int);
+        return 0;
+    }
+    if (level != SOL_SOCKET_K) return -ENOPROTOOPT;
+
+    if (optname == SO_RCVTIMEO_K || optname == SO_SNDTIMEO_K) {
+        if (*len < sizeof(sock_timeval_t)) return -EINVAL;
+        int64_t ms = (optname == SO_RCVTIMEO_K) ? s->opt_rcvtimeo_ms : s->opt_sndtimeo_ms;
+        sock_timeval_t tv = { ms / 1000, (ms % 1000) * 1000 };
+        *(sock_timeval_t *)val = tv;
+        *len = sizeof(sock_timeval_t);
+        return 0;
+    }
+
+    if (*len < sizeof(int)) return -EINVAL;
+    int v;
+    switch (optname) {
+        case SO_TYPE_K:      v = s->type; break;
+        case SO_ERROR_K:     v = s->last_error; s->last_error = 0; break;
+        case SO_REUSEADDR_K: v = s->opt_reuseaddr; break;
+        case SO_BROADCAST_K: v = s->opt_broadcast; break;
+        case SO_KEEPALIVE_K: v = s->opt_keepalive; break;
+        case SO_SNDBUF_K:    v = s->opt_sndbuf ? s->opt_sndbuf : 16384; break;
+        case SO_RCVBUF_K:    v = s->opt_rcvbuf ? s->opt_rcvbuf : 16384; break;
+        default: return -ENOPROTOOPT;
+    }
+    *(int *)val = v;
+    *len = sizeof(int);
+    return 0;
+}
+
+int64_t sock_op_shutdown(vnode_t *vn, int how) {
+    sock_t *s = vn->fs_data;
+    if (!s) return -EINVAL;
+    if (how < 0 || how > 2) return -EINVAL;
+
+    if (how == 0 || how == 2) s->rd_shutdown = 1;
+    if (how == 1 || how == 2) {
+        if (s->wr_shutdown) return 0;
+        s->wr_shutdown = 1;
+        if (s->type == SOCK_STREAM && s->tcb) tcp_close(s->tcb);
+    }
+    return 0;
 }
 
 int64_t sock_op_listen(vnode_t *vn) {

@@ -69,8 +69,17 @@ gid_t   getgid(void);
 #define _POSIX2_VERSION 200809L
 
 long    sysconf(int name);
+int     getpagesize(void);
+pid_t   tcgetpgrp(int fd);
+int     tcsetpgrp(int fd, pid_t pgrp);
 unsigned int alarm(unsigned int seconds);
+int     link(const char *oldpath, const char *newpath);
+int     gethostname(char *name, size_t len);
+int     sethostname(const char *name, size_t len);
+ssize_t pread(int fd, void *buf, size_t count, off_t offset);
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
 char   *getlogin(void);
+char   *getpass(const char *prompt);
 int     getlogin_r(char *buf, size_t len);
 uid_t   geteuid(void);
 gid_t   getegid(void);
@@ -80,6 +89,9 @@ pid_t   fork(void);
 int     execve(const char *path, char *const argv[], char *const envp[]);
 int     execv(const char *path, char *const argv[]);
 int     execvp(const char *file, char *const argv[]);
+int     execl(const char *path, const char *arg0, ...);
+int     execlp(const char *file, const char *arg0, ...);
+int     execle(const char *path, const char *arg0, ...);
 void    _exit(int status) __attribute__((noreturn));
 
 unsigned int sleep(unsigned int sec);

@@ -4,8 +4,13 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
+#define INET_ADDRSTRLEN  16
+#define INET6_ADDRSTRLEN 46
+
 #define INADDR_ANY       0u
+#define INADDR_LOOPBACK  0x7f000001u
 #define INADDR_BROADCAST 0xffffffffu
+#define INADDR_NONE      0xffffffffu
 
 #define IPPROTO_ICMP   1
 #define IPPROTO_TCP    6

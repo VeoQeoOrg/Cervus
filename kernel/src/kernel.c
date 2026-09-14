@@ -27,6 +27,7 @@
 #include "../include/syscall/syscall.h"
 #include "../include/drivers/ps2.h"
 #include "../include/fs/vfs.h"
+#include "../include/drivers/random.h"
 #include "../include/fs/ramfs.h"
 #include "../include/fs/devfs.h"
 #include "../include/fs/procfs.h"
@@ -259,6 +260,7 @@ void kmain(void) {
     serial_writestring("VMM [OK]\n");
     fb_init_backbuffer(global_framebuffer);
     vt_init();
+    random_init();
     vfs_init();
     serial_writestring("VFS [OK]\n");
 

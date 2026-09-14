@@ -55,34 +55,13 @@ static inline int __m_small(double x) {
     return x > -9.007199254740992e15 && x < 9.007199254740992e15;
 }
 
-static inline double floor(double x) {
-    if (!__m_small(x)) return x;
-    int64_t i = (int64_t)x;
-    return (double)(i - (x < (double)i));
-}
-
-static inline double ceil(double x) {
-    if (!__m_small(x)) return x;
-    int64_t i = (int64_t)x;
-    return (double)(i + (x > (double)i));
-}
-
-static inline double round(double x) {
-    if (!__m_small(x)) return x;
-    return (x >= 0.0) ? floor(x + 0.5) : ceil(x - 0.5);
-}
-
-static inline double sqrt(double x) {
-    double result;
-    asm volatile ("sqrtsd %1, %0" : "=x"(result) : "x"(x));
-    return result;
-}
-
-static inline float sqrtf(float x) {
-    float result;
-    asm volatile ("sqrtss %1, %0" : "=x"(result) : "x"(x));
-    return result;
-}
+double floor(double x);
+double ceil(double x);
+double round(double x);
+double sqrt(double x);
+float  sqrtf(float x);
+float  floorf(float x);
+float  ceilf(float x);
 
 static inline double log2(double x) {
     double result;
@@ -163,8 +142,6 @@ float modff(float x, float *ip);
 #define M_PI_4       0.78539816339744830962
 
 static inline float  fabsf(float x)  { return x < 0 ? -x : x; }
-static inline float  floorf(float x) { return (float)floor((double)x); }
-static inline float  ceilf(float x)  { return (float)ceil((double)x); }
 static inline float  cosf(float x)   { return (float)cos((double)x); }
 static inline float  sinf(float x)   { return (float)sin((double)x); }
 static inline long   lrint(double x) { return (long)round(x); }

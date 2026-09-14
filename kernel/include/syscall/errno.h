@@ -53,6 +53,7 @@
 #define EILSEQ        84
 #define EUSERS        87
 #define ENOTSOCK      88
+#define ENOPROTOOPT   92
 #define EOPNOTSUPP    95
 #define EADDRINUSE    98
 #define EISCONN      106

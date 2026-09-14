@@ -128,6 +128,13 @@ extern int64_t sys_fchown    (uint64_t, uint64_t, uint64_t);
 extern int64_t sys_umask     (uint64_t);
 extern int64_t sys_alarm     (uint64_t);
 extern int64_t sys_lstat     (uint64_t, uint64_t);
+extern int64_t sys_pread     (uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_pwrite    (uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_setsockopt(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getsockopt(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_setitimer (uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getitimer (uint64_t, uint64_t);
+extern int64_t sys_sock_shutdown(uint64_t, uint64_t);
 extern int64_t sys_readlink  (uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fb_info   (uint64_t);
 extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -241,7 +248,9 @@ W2(sys_symlink)     W3(sys_readlink)
 W2(sys_chmod)       W3(sys_chown)
 W2(sys_fchmod)      W3(sys_fchown)
 W1(sys_umask)       W1(sys_alarm)
-W2(sys_lstat)
+W2(sys_lstat)       W4(sys_pread)       W4(sys_pwrite)
+W5(sys_setsockopt)  W5(sys_getsockopt)
+W3(sys_setitimer)   W2(sys_getitimer)  W2(sys_sock_shutdown)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W5(sys_setfont)
@@ -365,6 +374,13 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_UMASK]             = _sys_umask,
     [SYS_ALARM]             = _sys_alarm,
     [SYS_LSTAT]             = _sys_lstat,
+    [SYS_PREAD]             = _sys_pread,
+    [SYS_PWRITE]            = _sys_pwrite,
+    [SYS_SETSOCKOPT]        = _sys_setsockopt,
+    [SYS_GETSOCKOPT]        = _sys_getsockopt,
+    [SYS_SETITIMER]         = _sys_setitimer,
+    [SYS_GETITIMER]         = _sys_getitimer,
+    [SYS_SHUTDOWN_SOCK]     = _sys_sock_shutdown,
     [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,

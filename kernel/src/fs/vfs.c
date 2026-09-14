@@ -386,6 +386,26 @@ int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
     return n;
 }
 
+int64_t vfs_pread(vfs_file_t *file, void *buf, size_t len, uint64_t offset) {
+    if (!file || !file->vnode) return -EBADF;
+    if (len == 0) return 0;
+    if ((file->flags & O_ACCMODE) == O_WRONLY) return -EBADF;
+    vnode_type_t t = file->vnode->type;
+    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
+    if (!file->vnode->ops || !file->vnode->ops->read) return -EIO;
+    return file->vnode->ops->read(file->vnode, buf, len, offset);
+}
+
+int64_t vfs_pwrite(vfs_file_t *file, const void *buf, size_t len, uint64_t offset) {
+    if (!file || !file->vnode) return -EBADF;
+    if (len == 0) return 0;
+    if ((file->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
+    vnode_type_t t = file->vnode->type;
+    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
+    if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
+    return file->vnode->ops->write(file->vnode, buf, len, offset);
+}
+
 int64_t vfs_seek(vfs_file_t *file, int64_t offset, int whence) {
     if (!file || !file->vnode) return -EBADF;
     vnode_type_t t = file->vnode->type;

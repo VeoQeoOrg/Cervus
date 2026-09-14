@@ -82,6 +82,8 @@
 #define SYS_UMASK       119
 #define SYS_ALARM       120
 #define SYS_LSTAT       121
+#define SYS_PREAD       122
+#define SYS_PWRITE      123
 
 #define SYS_CERVUS_BASE       512
 
@@ -182,6 +184,11 @@
 #define SYS_THREAD_EXIT       612
 #define SYS_SET_FSBASE        613
 #define SYS_TLS_INFO          614
+#define SYS_SETSOCKOPT        615
+#define SYS_GETSOCKOPT        616
+#define SYS_SETITIMER         617
+#define SYS_GETITIMER         618
+#define SYS_SHUTDOWN_SOCK     619
 
 #define SYSCALL_TABLE_SIZE    640
 

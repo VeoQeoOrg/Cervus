@@ -206,6 +206,59 @@ int64_t sys_listen(uint64_t fd, uint64_t backlog) {
     return r;
 }
 
+int64_t sys_sock_shutdown(uint64_t fd, uint64_t how) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
+    if (!vn) return -EBADF;
+    int64_t r = unix_is_vnode(vn) ? 0 : sock_op_shutdown(vn, (int)how);
+    fd_put(f);
+    return r;
+}
+
+int64_t sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
+                       uint64_t uval, uint64_t optlen) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    if (!uval || optlen == 0 || optlen > 128) return -EINVAL;
+    vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
+    if (!vn) return -EBADF;
+    if (unix_is_vnode(vn)) { fd_put(f); return -ENOPROTOOPT; }
+
+    uint8_t kbuf[128];
+    if (syscall_copy_from_user(kbuf, (const void *)uval, (size_t)optlen) < 0) {
+        fd_put(f);
+        return -EFAULT;
+    }
+    int64_t r = sock_op_setopt(vn, (int)level, (int)optname, kbuf, (uint32_t)optlen);
+    fd_put(f);
+    return r;
+}
+
+int64_t sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
+                       uint64_t uval, uint64_t uoptlen) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    if (!uval || !uoptlen) return -EINVAL;
+
+    uint32_t cap = 0;
+    if (syscall_copy_from_user(&cap, (const void *)uoptlen, sizeof cap) < 0) return -EFAULT;
+    if (cap == 0 || cap > 128) return -EINVAL;
+
+    vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
+    if (!vn) return -EBADF;
+    if (unix_is_vnode(vn)) { fd_put(f); return -ENOPROTOOPT; }
+
+    uint8_t kbuf[128];
+    uint32_t len = cap;
+    int64_t r = sock_op_getopt(vn, (int)level, (int)optname, kbuf, &len);
+    fd_put(f);
+    if (r < 0) return r;
+    if (syscall_copy_to_user((void *)uval, kbuf, len) < 0) return -EFAULT;
+    if (syscall_copy_to_user((void *)uoptlen, &len, sizeof len) < 0) return -EFAULT;
+    return 0;
+}
+
 int64_t sys_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen) {
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;

@@ -27,6 +27,9 @@ vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock);
 int64_t  sock_op_bind(vnode_t *vn, uint32_t ip, uint16_t port);
 int64_t  sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port, int nonblock);
 int64_t  sock_op_listen(vnode_t *vn);
+int64_t  sock_op_shutdown(vnode_t *vn, int how);
+int64_t  sock_op_setopt(vnode_t *vn, int level, int optname, const void *val, uint32_t len);
+int64_t  sock_op_getopt(vnode_t *vn, int level, int optname, void *val, uint32_t *len);
 vnode_t *sock_op_accept(vnode_t *vn, int nonblock, uint32_t *rip, uint16_t *rport);
 int64_t  sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, uint16_t port);
 int64_t  sock_op_recvfrom(vnode_t *vn, void *buf, size_t len, int nonblock,

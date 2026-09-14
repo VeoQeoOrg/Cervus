@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "../../include/fs/devfs.h"
 #include "../../include/fs/vfs.h"
+#include "../../include/drivers/random.h"
 #include "../../include/fs/poll.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
@@ -34,6 +35,8 @@ extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 #define TCSETSW       0x5403
 #define TCSETSF       0x5404
 #define TIOCSNONBLOCK 0x5481
+#define TIOCGPGRP     0x540F
+#define TIOCSPGRP     0x5410
 
 #define T_ICANON  0x0002
 #define T_ECHO    0x0008
@@ -72,6 +75,7 @@ typedef struct {
     task_t  *nonblock_owner;
     task_t  *reader;
     task_t  *raw_owner;
+    uint32_t fg_pgid;
 } vt_tty_t;
 
 static vt_tty_t g_vtty[VT_COUNT];
@@ -341,6 +345,22 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
         return 0;
     }
 
+    if (req == TIOCGPGRP) {
+        if (!arg) return -EFAULT;
+        uint32_t pg = t->fg_pgid;
+        if (!pg) { task_t *me = devfs_cur_task(); pg = me ? me->pgid : 0; }
+        *((int32_t *)arg) = (int32_t)pg;
+        return 0;
+    }
+
+    if (req == TIOCSPGRP) {
+        if (!arg) return -EFAULT;
+        int32_t pg = *((int32_t *)arg);
+        if (pg <= 0) return -EINVAL;
+        t->fg_pgid = (uint32_t)pg;
+        return 0;
+    }
+
     if (req == TCGETS) {
         if (!arg) return -EFAULT;
         memcpy(arg, &t->termios, sizeof(t->termios));
@@ -427,6 +447,27 @@ static const vnode_ops_t zero_ops = {
     .unref  = devfs_unref,
 };
 
+static int64_t random_dev_read(vnode_t *n, void *buf, size_t len, uint64_t off) {
+    (void)n; (void)off;
+    if (len == 0) return 0;
+    random_bytes(buf, len);
+    return (int64_t)len;
+}
+
+static int64_t random_dev_write(vnode_t *n, const void *buf, size_t len, uint64_t off) {
+    (void)n; (void)off;
+    random_add_entropy(buf, len);
+    return (int64_t)len;
+}
+
+static const vnode_ops_t random_ops = {
+    .read   = random_dev_read,
+    .write  = random_dev_write,
+    .stat   = devfs_stat,
+    .ref    = devfs_ref,
+    .unref  = devfs_unref,
+};
+
 #define DEVFS_MAX_ENTRIES 32
 
 typedef struct {
@@ -444,6 +485,8 @@ static vnode_t          g_devroot;
 static vnode_t          g_tty_node;
 static vnode_t          g_null_node;
 static vnode_t          g_zero_node;
+static vnode_t          g_random_node;
+static vnode_t          g_urandom_node;
 
 static uint64_t g_devfs_ino = 100;
 
@@ -526,10 +569,21 @@ vnode_t *devfs_create_root(void) {
     g_zero_node.ops      = &zero_ops;
     g_zero_node.refcount = 1;
 
+    g_random_node.type     = VFS_NODE_CHARDEV;
+    g_random_node.mode     = 0666;
+    g_random_node.ino      = g_devfs_ino++;
+    g_random_node.ops      = &random_ops;
+    g_random_node.refcount = 1;
+
+    g_urandom_node = g_random_node;
+    g_urandom_node.ino = g_devfs_ino++;
+
     devfs_register("tty",  &g_tty_node);
     devfs_register("null", &g_null_node);
     devfs_register("zero", &g_zero_node);
+    devfs_register("random",  &g_random_node);
+    devfs_register("urandom", &g_urandom_node);
 
-    serial_writestring("[devfs] /dev/tty, /dev/null, /dev/zero registered\n");
+    serial_writestring("[devfs] /dev/tty, /dev/null, /dev/zero, /dev/random, /dev/urandom registered\n");
     return &g_devroot;
 }

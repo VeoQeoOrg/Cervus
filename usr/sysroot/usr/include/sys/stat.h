@@ -2,6 +2,7 @@
 #define _SYS_STAT_H
 
 #include <sys/types.h>
+#include <time.h>
 
 #define S_IFMT    0170000
 #define S_IFREG   0100000
@@ -26,6 +27,10 @@ int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);
 int chown(const char *path, uid_t owner, gid_t group);
 
+#define S_ISUID   04000
+#define S_ISGID   02000
+#define S_ISVTX   01000
+
 #define S_IRWXU   00700
 #define S_IRUSR   00400
 #define S_IWUSR   00200
@@ -47,13 +52,18 @@ struct stat {
     gid_t    st_gid;
     off_t    st_size;
     blkcnt_t st_blocks;
-    int64_t  st_atime;
-    int64_t  st_mtime;
-    int64_t  st_ctime;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
     uint64_t st_nlink;
     uint64_t st_dev;
     uint64_t st_blksize;
+    uint64_t st_rdev;
 };
+
+#define st_atime st_atim.tv_sec
+#define st_mtime st_mtim.tv_sec
+#define st_ctime st_ctim.tv_sec
 
 int stat(const char *path, struct stat *out);
 int lstat(const char *path, struct stat *out);

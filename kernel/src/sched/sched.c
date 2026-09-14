@@ -923,22 +923,36 @@ void task_unblock(task_t* t) {
     enqueue_global(t);
 }
 
+static void note_alarm(uint64_t deadline_ns) {
+    if (!deadline_ns) return;
+    uint64_t cur = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_RELAXED);
+    while (deadline_ns < cur) {
+        if (__atomic_compare_exchange_n(&g_earliest_alarm_ns, &cur, deadline_ns,
+                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            break;
+    }
+}
+
+void task_set_itimer(task_t *t, uint64_t value_ns, uint64_t interval_ns,
+                     uint64_t *old_value_ns, uint64_t *old_interval_ns) {
+    if (!t) return;
+    uint64_t now = sched_now_ns();
+
+    if (old_value_ns)
+        *old_value_ns = (t->alarm_at_ns && t->alarm_at_ns > now) ? t->alarm_at_ns - now : 0;
+    if (old_interval_ns)
+        *old_interval_ns = t->alarm_interval_ns;
+
+    t->alarm_interval_ns = value_ns ? interval_ns : 0;
+    t->alarm_at_ns       = value_ns ? now + value_ns : 0;
+    note_alarm(t->alarm_at_ns);
+}
+
 uint64_t task_set_alarm(task_t *t, uint64_t seconds) {
     if (!t) return 0;
-    uint64_t now = sched_now_ns();
-    uint64_t prev = t->alarm_at_ns;
-    uint64_t remaining = (prev && prev > now) ? (prev - now + 999999999ULL) / 1000000000ULL : 0;
-
-    t->alarm_at_ns = seconds ? now + seconds * 1000000000ULL : 0;
-    if (t->alarm_at_ns) {
-        uint64_t cur = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_RELAXED);
-        while (t->alarm_at_ns < cur) {
-            if (__atomic_compare_exchange_n(&g_earliest_alarm_ns, &cur, t->alarm_at_ns,
-                                            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
-                break;
-        }
-    }
-    return remaining;
+    uint64_t old_value = 0;
+    task_set_itimer(t, seconds * 1000000000ULL, 0, &old_value, NULL);
+    return (old_value + 999999999ULL) / 1000000000ULL;
 }
 
 void sched_wakeup_sleepers(uint64_t now_ns) {
@@ -961,7 +975,8 @@ void sched_wakeup_sleepers(uint64_t now_ns) {
         if (!t) continue;
         if (t->alarm_at_ns) {
             if (now_ns >= t->alarm_at_ns && alarm_count < 16) {
-                t->alarm_at_ns = 0;
+                t->alarm_at_ns = t->alarm_interval_ns ? now_ns + t->alarm_interval_ns : 0;
+                if (t->alarm_at_ns && t->alarm_at_ns < next_alarm) next_alarm = t->alarm_at_ns;
                 to_alarm[alarm_count++] = t;
             } else if (t->alarm_at_ns < next_alarm) {
                 next_alarm = t->alarm_at_ns;

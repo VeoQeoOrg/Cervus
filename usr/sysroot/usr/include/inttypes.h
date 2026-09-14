@@ -73,4 +73,19 @@ static inline imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom) {
     return r;
 }
 
+
+#define PRIdMAX  "ld"
+#define PRIiMAX  "li"
+#define PRIuMAX  "lu"
+#define PRIxMAX  "lx"
+#define PRIXMAX  "lX"
+#define PRIoMAX  "lo"
+#define SCNdMAX  "ld"
+#define SCNiMAX  "li"
+#define SCNuMAX  "lu"
+#define SCNxMAX  "lx"
+
+intmax_t  strtoimax(const char *nptr, char **endptr, int base);
+uintmax_t strtoumax(const char *nptr, char **endptr, int base);
+
 #endif

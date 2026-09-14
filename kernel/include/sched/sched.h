@@ -163,6 +163,7 @@ typedef struct task {
 
     uint32_t  umask;
     uint64_t  alarm_at_ns;
+    uint64_t  alarm_interval_ns;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -191,6 +192,8 @@ void task_yield(void);
 void task_sleep_ns(uint64_t ns);
 void task_sleep_ms(uint64_t ms);
 uint64_t task_set_alarm(task_t *t, uint64_t seconds);
+void     task_set_itimer(task_t *t, uint64_t value_ns, uint64_t interval_ns,
+                         uint64_t *old_value_ns, uint64_t *old_interval_ns);
 void sched_note_wakeup(uint64_t deadline_ns);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
