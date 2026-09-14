@@ -9,6 +9,67 @@ configure() { sh builder/configure.sh; }
 
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
 
+
+upload_kernel() {
+  keyfile=${HERD_KEY:-$HOME/cervus-keys/herd.pem}
+  outdir=${HERD_OUT:-$HOME/herd-packs/out}
+  repo=${HERD_GH_REPO:-VeoQeoOrg/herd-packs}
+  ver=${1:-}
+
+  [ -f "$keyfile" ] || {
+    echo "nb upload: no signing key at $keyfile" >&2
+    echo "           only whoever holds it can publish; set HERD_KEY if it lives elsewhere" >&2
+    exit 1
+  }
+  command -v gh >/dev/null 2>&1 || { echo "nb upload: gh is not installed" >&2; exit 1; }
+  gh auth status >/dev/null 2>&1 || { echo "nb upload: gh is not logged in (run: gh auth login)" >&2; exit 1; }
+
+  [ -n "$ver" ] || ver=$(awk -F= '/^VERSION=/ {gsub(/^v/,"",$2); print $2; exit}' builder/mk_iso.sh 2>/dev/null)
+  [ -n "$ver" ] || ver=0.0.2
+
+  configure
+  ninja -j "$JOBS" bin/kernel usr/apps/init.elf
+  [ -f bin/kernel ] || { echo "nb upload: bin/kernel was not built" >&2; exit 1; }
+
+  stage=$(mktemp -d)
+  mkdir -p "$stage/boot"
+  cp bin/kernel "$stage/boot/kernel"
+  cp rootfs/boot/shell.elf "$stage/boot/shell.elf" 2>/dev/null || cp usr/apps/init.elf "$stage/boot/shell.elf"
+
+  mkdir -p "$outdir"
+  tar -C "$stage" -czf "$outdir/kernel-$ver-x86_64.tar.gz" .
+  rm -rf "$stage"
+
+  f="kernel-$ver-x86_64.tar.gz"
+  sz=$(wc -c < "$outdir/$f" | tr -d ' ')
+  sha=$(sha256sum "$outdir/$f" | awk '{print $1}')
+  cat > "$outdir/kernel-$ver-x86_64.manifest" <<MEOF
+name: kernel
+version: $ver
+arch: x86_64
+size: $sz
+sha256: $sha
+file: $f
+depends: libc
+summary: the Cervus kernel and init, for the boot partition
+license: GPL-3.0
+MEOF
+
+  rm -f "$outdir"/kernel-*.manifest.tmp
+  for old in "$outdir"/kernel-*.manifest; do
+    case "$old" in *"kernel-$ver-x86_64.manifest") ;; *) rm -f "$old" ;; esac
+  done
+
+  ( cd "$outdir" && awk 'FNR==1 && NR!=1 {print ""} {print}' ./*.manifest > INDEX )
+  openssl pkeyutl -sign -inkey "$keyfile" -rawin -in "$outdir/INDEX" -out "$outdir/INDEX.sig" || {
+    echo "nb upload: signing failed" >&2; exit 1; }
+
+  echo "publishing kernel $ver to $repo"
+  gh release upload index "$outdir/$f" "$outdir/INDEX" "$outdir/INDEX.sig" \
+     --clobber --repo "$repo" || exit 1
+  echo "done -- 'herd update-kernel' on a Cervus machine will pick it up"
+}
+
 deep_clean() {
   rm -rf obj bin rootfs iso_root data_iso_root demo_iso limine limine-tools \
     edk2-ovmf kernel/linker-scripts .ninja build.ninja builder/.legacy-build
@@ -100,6 +161,10 @@ run)
 flash)
   shift
   flash_iso "${1:-}"
+  ;;
+upload)
+  shift
+  upload_kernel "${1:-}"
   ;;
 clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja

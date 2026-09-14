@@ -11,6 +11,8 @@
 #include <inflate.h>
 #include <ctype.h>
 #include <sys/cervus.h>
+#include <sys/syscall.h>
+#include <pwutil.h>
 #include <cervus_util.h>
 
 static const char USAGE[] =
@@ -20,6 +22,7 @@ static const char USAGE[] =
     "  update            refresh the package index from the repository\n"
     "  search TERM       list packages whose name or summary matches TERM\n"
     "  list              list installed packages\n"
+    "  available         list every package the repository offers\n"
     "  info NAME         show what the index knows about NAME\n"
     "  install NAME...   fetch, verify and install packages and their deps\n"
     "  remove NAME...    remove installed packages\n"
@@ -135,6 +138,31 @@ static const char *ci_strstr(const char *hay, const char *needle)
 }
 
 static void die(const char *m) { fprintf(stderr, "herd: %s\n", m); exit(1); }
+
+static int elevate(const char *action)
+{
+    if (getuid() == 0) return 0;
+
+    uint32_t myuid = (uint32_t)getuid();
+    char uname[64];
+    if (pw_lookup_uid(myuid, uname, sizeof uname, NULL, 0, NULL, 0) != 0)
+        snprintf(uname, sizeof uname, "%u", myuid);
+
+    char prompt[128];
+    snprintf(prompt, sizeof prompt, "[herd %s] password for %s: ", action, uname);
+
+    char pw[256] = {0};
+    if (pw_getpass(prompt, pw, sizeof pw) < 0) return -1;
+
+    long r = syscall3(SYS_SUDO, (uint64_t)(uintptr_t)pw, 0, 0);
+    memset(pw, 0, sizeof pw);
+    if (r != 0) {
+        if (r == -1 || r == -13) fputs("herd: authentication failure\n", stderr);
+        else                     fputs("herd: not permitted (you are not a sudoer)\n", stderr);
+        return -1;
+    }
+    return 0;
+}
 
 static const char *rooted(const char *path, char *buf, size_t cap)
 {
@@ -300,9 +328,16 @@ static char *find_record(const char *index, const char *name)
     return NULL;
 }
 
+static int cmd_update(void);
+
 static char *load_index(void)
 {
     char *idx = read_file(INDEXF, NULL);
+    if (!idx) {
+        puts("no package list yet -- fetching it");
+        if (cmd_update() != 0) die("could not fetch the package list");
+        idx = read_file(INDEXF, NULL);
+    }
     if (!idx) die("no local index; run 'herd update' first");
     return idx;
 }
@@ -461,6 +496,32 @@ static int cmd_search(const char *term)
     }
     free(idx);
     if (!found) printf("no match for '%s'\n", term);
+    return 0;
+}
+
+static int cmd_available(void)
+{
+    char *idx = load_index();
+    const char *p = idx;
+    int n = 0;
+    while (p && *p) {
+        const char *end = strstr(p, "\n\n");
+        size_t reclen = end ? (size_t)(end - p) + 1 : strlen(p);
+        char *rec = malloc(reclen + 1); memcpy(rec, p, reclen); rec[reclen] = 0;
+        char *nm = field(rec, "name");
+        char *ver = field(rec, "version");
+        char *sm = field(rec, "summary");
+        if (nm) {
+            printf("%-14s %-10s %-9s %s\n", nm, ver ? ver : "?",
+                   is_installed(nm) ? "installed" : "", sm ? sm : "");
+            n++;
+        }
+        free(nm); free(ver); free(sm); free(rec);
+        if (!end) break;
+        p = end + 2;
+    }
+    free(idx);
+    printf("\n%d package(s) available\n", n);
     return 0;
 }
 
@@ -822,11 +883,19 @@ static int cmd_update_bootloader(const char *want)
     int rc = install_pkg_to(want, ESPMNT);
     if (rc != 0) { esp_unmount(&e); return rc; }
 
-    if (!strcmp(want, "limine") && path_exists(ESPMNT "/boot/limine/limine-bios-hdd.bin")) {
+    const char *stage_path = NULL;
+    int generic = 0;
+    if (!strcmp(want, "limine")) {
+        stage_path = ESPMNT "/boot/limine/limine-bios-hdd.bin";
+    } else {
+        stage_path = ESPMNT "/boot/grub-bios.img";
+        generic = 1;
+    }
+    if (path_exists(stage_path)) {
         size_t n;
-        char *stage = read_file(ESPMNT "/boot/limine/limine-bios-hdd.bin", &n);
+        char *stage = read_file(stage_path, &n);
         if (stage) {
-            long ir = cervus_disk_bios_install(e.disk, stage, (uint32_t)n, 0);
+            long ir = cervus_disk_bios_install(e.disk, stage, (uint32_t)n, generic);
             free(stage);
             if (ir < 0) fprintf(stderr, "herd: writing the boot sector failed (%ld)\n", ir);
             else        puts("boot sector written");
@@ -863,15 +932,31 @@ int main(int argc, char **argv)
     if (argc < 2) { fputs(USAGE, stderr); return 1; }
 
     const char *cmd = argv[1];
-    if (!strcmp(cmd, "update"))  return cmd_update();
+    if (!strcmp(cmd, "update"))  { if (elevate("update") != 0) return 1; return cmd_update(); }
     if (!strcmp(cmd, "search"))  { if (argc < 3) die("search needs a term"); return cmd_search(argv[2]); }
     if (!strcmp(cmd, "list"))    return cmd_list();
+    if (!strcmp(cmd, "available")) return cmd_available();
     if (!strcmp(cmd, "info"))    { if (argc < 3) die("info needs a name"); return cmd_info(argv[2]); }
-    if (!strcmp(cmd, "install")) { if (argc < 3) die("install needs a name"); load_repo(); return cmd_install(argc - 2, argv + 2); }
-    if (!strcmp(cmd, "remove"))  { if (argc < 3) die("remove needs a name"); return cmd_remove(argc - 2, argv + 2); }
+    if (!strcmp(cmd, "install")) {
+        if (argc < 3) die("install needs a name");
+        if (elevate("install") != 0) return 1;
+        load_repo();
+        return cmd_install(argc - 2, argv + 2);
+    }
+    if (!strcmp(cmd, "remove")) {
+        if (argc < 3) die("remove needs a name");
+        if (elevate("remove") != 0) return 1;
+        return cmd_remove(argc - 2, argv + 2);
+    }
     if (!strcmp(cmd, "boot-status"))       return cmd_boot_status();
-    if (!strcmp(cmd, "update-kernel"))     return cmd_update_kernel();
-    if (!strcmp(cmd, "update-bootloader")) return cmd_update_bootloader(argc > 2 ? argv[2] : NULL);
+    if (!strcmp(cmd, "update-kernel")) {
+        if (elevate("update-kernel") != 0) return 1;
+        return cmd_update_kernel();
+    }
+    if (!strcmp(cmd, "update-bootloader")) {
+        if (elevate("update-bootloader") != 0) return 1;
+        return cmd_update_bootloader(argc > 2 ? argv[2] : NULL);
+    }
 
     fprintf(stderr, "herd: unknown command '%s'\n", cmd);
     fputs(USAGE, stderr);
