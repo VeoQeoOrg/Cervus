@@ -24,12 +24,92 @@ static const char USAGE[] =
     "  remove NAME...    remove installed packages\n"
     "\n"
     "The repository is read from $HERD_REPO or /etc/herd.conf (key repo=),\n"
-    "and the index signature is checked against /etc/herd.pub.\n";
+    "and the index signature is checked against /etc/herd.pub.\n"
+    "\n"
+    "  --progress=STYLE  bar, pacman, hash, dots, percent or none\n"
+    "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n";
 
 #define DBDIR    "/var/lib/herd"
 #define INDEXF   DBDIR "/INDEX"
 #define CONF     "/etc/herd.conf"
 #define PUBKEY   "/etc/herd.pub"
+
+enum { PG_BAR, PG_PACMAN, PG_HASH, PG_DOTS, PG_PERCENT, PG_NONE };
+
+static int  g_style = PG_BAR;
+static int  g_tty;
+static char g_label[64];
+static long g_dots;
+static int  g_active;
+
+static void progress_style(const char *name)
+{
+    if (!name || !*name)            return;
+    if (!strcmp(name, "bar"))       g_style = PG_BAR;
+    else if (!strcmp(name, "pacman"))  g_style = PG_PACMAN;
+    else if (!strcmp(name, "hash"))    g_style = PG_HASH;
+    else if (!strcmp(name, "dots"))    g_style = PG_DOTS;
+    else if (!strcmp(name, "percent")) g_style = PG_PERCENT;
+    else if (!strcmp(name, "none"))    g_style = PG_NONE;
+}
+
+static void progress_begin(const char *label)
+{
+    snprintf(g_label, sizeof g_label, "%s", label ? label : "");
+    g_dots = 0;
+    g_active = 1;
+    if (g_style == PG_NONE || !g_tty) return;
+    if (g_style == PG_DOTS) fprintf(stderr, "%-20s ", g_label);
+}
+
+static void progress_draw(void *ctx, long got, long total)
+{
+    (void)ctx;
+    if (!g_active || g_style == PG_NONE || !g_tty) return;
+
+    if (g_style == PG_DOTS) {
+        long want = total > 0 ? (got * 40 / total) : (got / 65536);
+        while (g_dots < want) { fputc('.', stderr); g_dots++; }
+        return;
+    }
+
+    int pct = total > 0 ? (int)((long long)got * 100 / total) : 0;
+    if (pct > 100) pct = 100;
+
+    if (g_style == PG_PERCENT) {
+        fprintf(stderr, "\r%-20s %3d%%", g_label, pct);
+        return;
+    }
+
+    const int W = 32;
+    int fill = total > 0 ? pct * W / 100 : (int)((got / 32768) % (W + 1));
+
+    fprintf(stderr, "\r%-20s [", g_label);
+    if (g_style == PG_PACMAN) {
+        for (int i = 0; i < W; i++) {
+            if (i < fill - 1)   fputc('-', stderr);
+            else if (i == fill - 1) fputc('C', stderr);
+            else if ((i & 1) == 0)  fputc('o', stderr);
+            else                    fputc(' ', stderr);
+        }
+    } else if (g_style == PG_HASH) {
+        for (int i = 0; i < W; i++) fputc(i < fill ? '#' : ' ', stderr);
+    } else {
+        for (int i = 0; i < W; i++) fputc(i < fill ? '#' : '-', stderr);
+    }
+    if (total > 0) fprintf(stderr, "] %3d%%  %ldK", pct, got / 1024);
+    else           fprintf(stderr, "] %ldK", got / 1024);
+}
+
+static void progress_end(int ok)
+{
+    if (!g_active) return;
+    g_active = 0;
+    if (g_style == PG_NONE || !g_tty) return;
+    if (g_style == PG_DOTS) { fprintf(stderr, " %s\n", ok ? "ok" : "failed"); return; }
+    progress_draw(NULL, 1, 1);
+    fprintf(stderr, "  %s\n", ok ? "ok" : "failed");
+}
 
 static char g_repo[512];
 
@@ -85,7 +165,8 @@ static void load_repo(void)
     if (conf) {
         for (char *line = strtok(conf, "\n"); line; line = strtok(NULL, "\n")) {
             while (*line == ' ' || *line == '\t') line++;
-            if (!strncmp(line, "repo=", 5)) { snprintf(g_repo, sizeof g_repo, "%s", line + 5); break; }
+            if (!strncmp(line, "repo=", 5)) snprintf(g_repo, sizeof g_repo, "%s", line + 5);
+            else if (!strncmp(line, "progress=", 9)) progress_style(line + 9);
         }
         free(conf);
     }
@@ -132,6 +213,7 @@ static char *fetch_url(const char *url, size_t *len_out, int *status_out)
     o.fail_on_error = 1;
     o.silent = 1;
     o.out_status = &status;
+    o.on_progress = progress_draw;
     int rc = http_request(url, fd, &o);
     close(fd);
     if (status == 0 && rc > 0) status = rc;
@@ -291,9 +373,10 @@ static int cmd_update(void)
     snprintf(url, sizeof url, "%s/INDEX", g_repo);
     snprintf(sigurl, sizeof sigurl, "%s/INDEX.sig", g_repo);
 
-    printf("fetching %s\n", url);
+    progress_begin("index");
     size_t ilen; int st = 0;
     char *index = fetch_url(url, &ilen, &st);
+    progress_end(index != NULL);
     if (!index) { fprintf(stderr, "herd: cannot fetch index (status %d)\n", st); return 1; }
 
     if (have_key) {
@@ -410,9 +493,12 @@ static int install_one(const char *idx, const char *name)
     else
         snprintf(url, sizeof url, "%s/%s", g_repo, fname);
 
-    printf("fetching %s\n", url);
+    char plabel[64];
+    snprintf(plabel, sizeof plabel, "%s-%s", name, ver ? ver : "");
+    progress_begin(plabel);
     size_t dlen; int st = 0;
     char *data = fetch_url(url, &dlen, &st);
+    progress_end(data != NULL);
     if (!data) { fprintf(stderr, "herd: download failed (status %d)\n", st); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
 
     if (sizef) {
@@ -523,6 +609,19 @@ static int cmd_remove(int argc, char **argv)
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "herd")) return 0;
+    if (argc < 2) { fputs(USAGE, stderr); return 1; }
+
+    g_tty = isatty(2);
+    {
+        const char *e = getenv("HERD_PROGRESS");
+        if (e) progress_style(e);
+    }
+    int argi = 1;
+    while (argi < argc && !strncmp(argv[argi], "--progress=", 11)) {
+        progress_style(argv[argi] + 11);
+        for (int k = argi; k < argc - 1; k++) argv[k] = argv[k + 1];
+        argc--;
+    }
     if (argc < 2) { fputs(USAGE, stderr); return 1; }
 
     const char *cmd = argv[1];

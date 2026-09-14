@@ -40,6 +40,8 @@ typedef struct {
     int         silent;
     int         progress;
     int        *out_status;
+    void      (*on_progress)(void *ctx, long got, long total);
+    void       *progress_ctx;
     http_cookie_jar *jar;
 } http_opts;
 

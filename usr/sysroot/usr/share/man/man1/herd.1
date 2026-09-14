@@ -2,7 +2,7 @@ NAME
        herd - package manager for Cervus
 
 SYNOPSIS
-       herd update
+       herd [--progress=STYLE] update
        herd search TERM
        herd list
        herd info NAME
@@ -21,6 +21,13 @@ DESCRIPTION
        the signed index carries each package's sha256, 'install' needs
        only match the downloaded tarball against the index to trust it.
 
+OPTIONS
+       --progress=STYLE
+              How to draw download progress: bar (the default), pacman,
+              hash, dots, percent, or none. It can also be set with
+              $HERD_PROGRESS or a progress= line in /etc/herd.conf.
+              Progress is drawn only when stderr is a terminal.
+
 COMMANDS
        update        download and verify the package index
        search TERM   list packages whose name or summary contains TERM
@@ -30,7 +37,7 @@ COMMANDS
        remove NAME   delete the files a package installed
 
 FILES
-       /etc/herd.conf         repo= line giving the repository URL
+       /etc/herd.conf         repo= and optional progress= lines
        /etc/herd.pub          Ed25519 public key, as hex
        /var/lib/herd/INDEX    the last downloaded index
        /var/lib/herd/*.files  the file list of each installed package
