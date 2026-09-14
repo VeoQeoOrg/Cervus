@@ -1133,11 +1133,18 @@ built. So `herd upgrade` updates the operating system the same way it updates
 anything else, and tells you to reboot when it has replaced the kernel or part of
 the base system.
 
-What is packaged today — Git, Lua, GNU make, SQLite, bzip2, zlib, NASM, TCC, and
-Cervus itself:
+What is packaged today — Git, Lua, GNU make, SQLite, bzip2, zlib, NASM, TCC,
+Doom, and Cervus itself:
 
 <div align="center">
   <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">
+</div>
+
+`herd install doom` is the short version of the claim: it pulls in Freedoom, and
+the game draws into the framebuffer and plays its sound through AC'97 or HDA.
+
+<div align="center">
+  <img src="assets/screenshots/doom.png" alt="Doom running on Cervus" width="760px">
 </div>
 
 Packages come from the **[herd-packs](https://github.com/VeoQeoOrg/herd-packs)**
