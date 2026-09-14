@@ -5,12 +5,14 @@ int64_t sys_mkdir(uint64_t path_ptr, uint64_t mode, uint64_t a3,
                   uint64_t a4, uint64_t a5, uint64_t a6)
 {
     (void)a3; (void)a4; (void)a5; (void)a6;
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
     char path[VFS_MAX_PATH];
     int rp = syscall_resolve_path_from_user(path, (const char *)path_ptr, sizeof(path));
     if (rp < 0) return rp;
     int pp = syscall_perm_parent(path, 2);
     if (pp < 0) return pp;
-    int r = vfs_mkdir(path, (uint32_t)mode);
+    int r = vfs_mkdir(path, (uint32_t)(mode & 0777u) & ~(t->umask & 0777u));
     if (r == 0) vfs_sync_all();
     return r;
 }

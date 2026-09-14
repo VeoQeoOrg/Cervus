@@ -160,6 +160,9 @@ typedef struct task {
     uint64_t  tls_filesz;
     uint64_t  tls_memsz;
     uint64_t  tls_align;
+
+    uint32_t  umask;
+    uint64_t  alarm_at_ns;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -187,6 +190,7 @@ void sched_print_stats(void);
 void task_yield(void);
 void task_sleep_ns(uint64_t ns);
 void task_sleep_ms(uint64_t ms);
+uint64_t task_set_alarm(task_t *t, uint64_t seconds);
 void sched_note_wakeup(uint64_t deadline_ns);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);

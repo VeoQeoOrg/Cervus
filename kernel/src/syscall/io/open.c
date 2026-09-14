@@ -28,7 +28,8 @@ int64_t sys_open(uint64_t path_ptr, uint64_t flags, uint64_t mode)
     }
 
     vfs_file_t *file = NULL;
-    int ret = vfs_open(kpath, (int)flags, (uint32_t)mode, &file);
+    uint32_t cmode = (uint32_t)(mode & 0777u) & ~(t->umask & 0777u);
+    int ret = vfs_open(kpath, (int)flags, cmode, &file);
     if (ret < 0) return (int64_t)ret;
 
     int newfd = fd_alloc(t->fd_table, file, 0);

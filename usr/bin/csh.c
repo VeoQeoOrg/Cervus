@@ -1114,6 +1114,7 @@ static int cmd_color(int argc, char **argv);
 static int cmd_cursor(int argc, char **argv);
 static int cmd_layout(int argc, char **argv);
 static int cmd_reload(int argc, char **argv);
+static int cmd_umask(int argc, char **argv);
 
 static void help_shell(void) {
     fputs("\n  " C_CYAN "Shell built-ins" C_RESET "\n", stdout);
@@ -1125,6 +1126,7 @@ static void help_shell(void) {
     fputs("  " C_BOLD "history" C_RESET " [N|-c]       recent commands, or clear them\n", stdout);
     fputs("  " C_BOLD "jobs/fg/bg" C_RESET " [%N]      background jobs\n", stdout);
     fputs("  " C_BOLD "color" C_RESET " / " C_BOLD "cursor" C_RESET "         input colour and cursor shape, saved\n", stdout);
+    fputs("  " C_BOLD "umask" C_RESET " [NNN]          permission bits withheld from new files\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "                 leave the shell\n", stdout);
     fputs("\n  Settings live in ~/.cshrc and /etc/cshrc.\n", stdout);
 }
@@ -1358,6 +1360,7 @@ static int exec_tokens(char **tok, int n) {
     if (strcmp(tok[0], "cursor") == 0)  { int rc = cmd_cursor(n, tok);  rc_set(rc); return rc; }
     if (strcmp(tok[0], "layout") == 0)  { int rc = cmd_layout(n, tok);  rc_set(rc); return rc; }
     if (strcmp(tok[0], "reload") == 0)  { int rc = cmd_reload(n, tok);  rc_set(rc); return rc; }
+    if (strcmp(tok[0], "umask") == 0)   { int rc = cmd_umask(n, tok);   rc_set(rc); return rc; }
     if (strcmp(tok[0], "history") == 0) {
         if (n > 1 && strcmp(tok[1], "-c") == 0) { readline_clear_history(); rc_set(0); return 0; }
         int hc = readline_history_count();
@@ -2170,6 +2173,23 @@ static int cmd_layout(int argc, char **argv) {
 
 static void run_rc_file(const char *path);
 
+static int cmd_umask(int argc, char **argv) {
+    if (argc > 1) {
+        char *end = NULL;
+        long v = strtol(argv[1], &end, 8);
+        if (end == argv[1] || (end && *end) || v < 0 || v > 0777) {
+            fprintf(stderr, "umask: %s: invalid mask\n", argv[1]);
+            return 1;
+        }
+        umask((mode_t)v);
+        return 0;
+    }
+    mode_t cur = umask(0);
+    umask(cur);
+    printf("%04o\n", (unsigned)cur);
+    return 0;
+}
+
 static int cmd_reload(int argc, char **argv) {
     (void)argc; (void)argv;
     g_loading_rc = 1;
@@ -2405,7 +2425,7 @@ static int gather_matches(const char *buf, int pos, char matches[][256],
         }
         const char *builtins[] = {"help","exit","cd","export","setenv","unset","unsetenv",
                                   "alias","unalias","history","clear","color","cursor","set",
-                                  "jobs","fg","bg",NULL};
+                                  "jobs","fg","bg","umask",NULL};
         for (int i = 0; builtins[i] && nmatch < max; i++)
             if (strncmp(builtins[i], word, wlen) == 0) {
                 strncpy(matches[nmatch], builtins[i], 255);

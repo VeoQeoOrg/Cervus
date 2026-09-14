@@ -79,6 +79,10 @@
 #define SYS_READLINK        114
 #define SYS_CHMOD           115
 #define SYS_CHOWN           116
+#define SYS_FCHMOD          117
+#define SYS_FCHOWN          118
+#define SYS_UMASK           119
+#define SYS_ALARM           120
 
 #define SYS_DBG_PRINT       512
 #define SYS_TASK_KILL       515

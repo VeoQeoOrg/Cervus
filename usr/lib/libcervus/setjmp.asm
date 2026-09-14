@@ -5,8 +5,11 @@ section .text
 
 global setjmp
 global longjmp
+global _setjmp
+global _longjmp
 
 setjmp:
+_setjmp:
     mov     [rdi + 0x00], rbx
     mov     [rdi + 0x08], rbp
     mov     [rdi + 0x10], r12
@@ -21,6 +24,7 @@ setjmp:
     ret
 
 longjmp:
+_longjmp:
     mov     rbx, [rdi + 0x00]
     mov     rbp, [rdi + 0x08]
     mov     r12, [rdi + 0x10]

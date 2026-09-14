@@ -2426,8 +2426,19 @@ static int run_builtin(int argc, char **argv, int *is_bi)
     if (!strcmp(c, ".") || !strcmp(c, "source")) return bi_dot(argc, argv);
 
     if (!strcmp(c, "umask")) {
-        if (argc > 1) return 0;
-        printf("0022\n");
+        if (argc > 1) {
+            char *end = NULL;
+            long v = strtol(argv[1], &end, 8);
+            if (end == argv[1] || (end && *end) || v < 0 || v > 0777) {
+                fprintf(stderr, "umask: %s: invalid mask\n", argv[1]);
+                return 1;
+            }
+            umask((mode_t)v);
+            return 0;
+        }
+        mode_t cur = umask(0);
+        umask(cur);
+        printf("%04o\n", (unsigned)cur);
         return 0;
     }
 

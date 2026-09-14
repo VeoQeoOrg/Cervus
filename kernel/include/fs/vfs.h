@@ -16,6 +16,7 @@
 #define O_RDWR      0x002
 #define O_ACCMODE   0x003
 #define O_CREAT     0x040
+#define O_EXCL      0x080
 #define O_TRUNC     0x200
 #define O_APPEND    0x400
 #define O_DIRECTORY 0x10000
@@ -48,6 +49,9 @@ typedef struct {
     int64_t         st_atime;
     int64_t         st_mtime;
     int64_t         st_ctime;
+    uint64_t        st_nlink;
+    uint64_t        st_dev;
+    uint64_t        st_blksize;
 } vfs_stat_t;
 
 typedef struct {
@@ -124,6 +128,23 @@ typedef struct {
     int          fd_flags;
 } fd_entry_t;
 
+#define VFS_LOCK_READ   0
+#define VFS_LOCK_WRITE  1
+#define VFS_LOCK_UNLOCK 2
+
+typedef struct {
+    int      type;
+    uint64_t start;
+    uint64_t end;
+    int      owner;
+} vfs_flock_t;
+
+int  vfs_lock_test(vnode_t *vnode, int type, uint64_t start, uint64_t end,
+                   int owner, vfs_flock_t *conflict);
+int  vfs_lock_set (vnode_t *vnode, int type, uint64_t start, uint64_t end, int owner);
+void vfs_lock_release_owner(int owner);
+void vfs_lock_release_vnode(vnode_t *vnode, int owner);
+
 typedef struct fd_table fd_table_t;
 
 #include "../sched/spinlock.h"
@@ -154,6 +175,8 @@ int     vfs_truncate (const char *path, uint64_t new_size);
 int     vfs_ftruncate(vfs_file_t *file, uint64_t new_size);
 int     vfs_chmod    (const char *path, uint32_t mode);
 int     vfs_chown    (const char *path, uint32_t uid, uint32_t gid);
+int     vfs_fchmod   (vfs_file_t *file, uint32_t mode);
+int     vfs_fchown   (vfs_file_t *file, uint32_t uid, uint32_t gid);
 uint32_t vfs_current_uid(void);
 int     vfs_fsync    (vfs_file_t *file);
 int     vfs_symlink  (const char *target, const char *linkpath);

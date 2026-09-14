@@ -51,6 +51,7 @@ struct __cervus_FILE {
     int    bufmode;
     int    dir;
     size_t buf_len;
+    __cervus_lock_t lock;
 };
 
 int  __cervus_fflush(struct __cervus_FILE *s);

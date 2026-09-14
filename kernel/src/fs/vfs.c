@@ -226,6 +226,10 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
 
     vnode_t *node = NULL;
     int ret = vfs_lookup(path, &node);
+    if (ret == 0 && (flags & O_CREAT) && (flags & O_EXCL)) {
+        vnode_unref(node);
+        return -EEXIST;
+    }
 
     if (ret == -ENOENT && (flags & O_CREAT)) {
         char dirpath[VFS_MAX_PATH];
@@ -362,6 +366,10 @@ static uint32_t mode_type_bits(vnode_type_t t) {
 static void stat_apply_type_bits(vfs_stat_t *out) {
     if ((out->st_mode & 0170000) == 0)
         out->st_mode |= mode_type_bits(out->st_type);
+    if (out->st_nlink == 0)
+        out->st_nlink = (out->st_type == VFS_NODE_DIR) ? 2 : 1;
+    if (out->st_blksize == 0)
+        out->st_blksize = 512;
 }
 
 int vfs_stat(const char *path, vfs_stat_t *out) {
@@ -443,6 +451,25 @@ int vfs_chmod(const char *path, uint32_t mode) {
     node->mode = (node->mode & ~0777u) | (mode & 0777u);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
+    vfs_sync_all();
+    return 0;
+}
+
+int vfs_fchmod(vfs_file_t *file, uint32_t mode) {
+    if (!file || !file->vnode) return -EINVAL;
+    vnode_t *node = file->vnode;
+    node->mode = (node->mode & ~0777u) | (mode & 0777u);
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
+    vfs_sync_all();
+    return 0;
+}
+
+int vfs_fchown(vfs_file_t *file, uint32_t uid, uint32_t gid) {
+    if (!file || !file->vnode) return -EINVAL;
+    vnode_t *node = file->vnode;
+    if (uid != 0xFFFFFFFFu) node->uid = uid;
+    if (gid != 0xFFFFFFFFu) node->gid = gid;
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vfs_sync_all();
     return 0;
 }

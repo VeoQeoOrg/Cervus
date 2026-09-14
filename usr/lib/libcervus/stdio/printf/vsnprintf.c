@@ -394,11 +394,16 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
             }
             case 'o': {
                 uint64_t v;
-                if (is_long >= 2) v = va_arg(ap, unsigned long long);
-                else if (is_long) v = va_arg(ap, unsigned long);
-                else              v = va_arg(ap, unsigned);
+                if (is_long >= 2)   v = va_arg(ap, unsigned long long);
+                else if (is_long)   v = va_arg(ap, unsigned long);
+                else if (is_size_t) v = va_arg(ap, size_t);
+                else                v = va_arg(ap, unsigned);
                 __u64_to_str(v, nb, 8, 0);
+                int numlen = (int)strlen(nb);
+                int pad = width > numlen ? width - numlen : 0;
+                if (!left_align) for (int i = 0; i < pad; i++) __PUT(pad_zero ? "0" : " ", 1);
                 __PUT(nb, strlen(nb));
+                if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }
             case 'p': {

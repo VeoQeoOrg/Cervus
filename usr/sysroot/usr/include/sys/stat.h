@@ -22,6 +22,9 @@
 
 #define UTIME_NOW_SEC ((int64_t)-1)
 int utimes_at(const char *path, int64_t atime, int64_t mtime);
+int fchmod(int fd, mode_t mode);
+int fchown(int fd, uid_t owner, gid_t group);
+int chown(const char *path, uid_t owner, gid_t group);
 
 #define S_IRWXU   00700
 #define S_IRUSR   00400
@@ -47,11 +50,16 @@ struct stat {
     int64_t  st_atime;
     int64_t  st_mtime;
     int64_t  st_ctime;
+    uint64_t st_nlink;
+    uint64_t st_dev;
+    uint64_t st_blksize;
 };
 
 int stat(const char *path, struct stat *out);
+int lstat(const char *path, struct stat *out);
 int fstat(int fd, struct stat *out);
 int mkdir(const char *path, mode_t mode);
 int chmod(const char *path, mode_t mode);
+mode_t umask(mode_t mask);
 
 #endif

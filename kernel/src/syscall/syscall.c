@@ -123,6 +123,10 @@ extern int64_t sys_setsid    (void);
 extern int64_t sys_symlink   (uint64_t, uint64_t);
 extern int64_t sys_chmod     (uint64_t, uint64_t);
 extern int64_t sys_chown     (uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fchmod    (uint64_t, uint64_t);
+extern int64_t sys_fchown    (uint64_t, uint64_t, uint64_t);
+extern int64_t sys_umask     (uint64_t);
+extern int64_t sys_alarm     (uint64_t);
 extern int64_t sys_readlink  (uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fb_info   (uint64_t);
 extern int64_t sys_fb_blit   (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
@@ -234,6 +238,8 @@ W1(sys_getpgid)     W2(sys_setpgid)
 W1(sys_getsid)      W0(sys_setsid)
 W2(sys_symlink)     W3(sys_readlink)
 W2(sys_chmod)       W3(sys_chown)
+W2(sys_fchmod)      W3(sys_fchown)
+W1(sys_umask)       W1(sys_alarm)
 W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W5(sys_setfont)
@@ -352,6 +358,10 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SYMLINK]           = _sys_symlink,
     [SYS_CHMOD]             = _sys_chmod,
     [SYS_CHOWN]             = _sys_chown,
+    [SYS_FCHMOD]            = _sys_fchmod,
+    [SYS_FCHOWN]            = _sys_fchown,
+    [SYS_UMASK]             = _sys_umask,
+    [SYS_ALARM]             = _sys_alarm,
     [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,

@@ -3,9 +3,9 @@
 #include <unistd.h>
 #include <libcervus.h>
 
-static struct __cervus_FILE __stdin_s  = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static struct __cervus_FILE __stdout_s = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static struct __cervus_FILE __stderr_s = { 2, 0, 0, 0, 0, 0, 0, 0, __CBUF_NONE, 0, 0 };
+static struct __cervus_FILE __stdin_s  = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, CERVUS_LOCK_INIT };
+static struct __cervus_FILE __stdout_s = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, CERVUS_LOCK_INIT };
+static struct __cervus_FILE __stderr_s = { 2, 0, 0, 0, 0, 0, 0, 0, __CBUF_NONE, 0, 0, CERVUS_LOCK_INIT };
 
 FILE *stdin  = &__stdin_s;
 FILE *stdout = &__stdout_s;

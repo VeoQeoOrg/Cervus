@@ -14,6 +14,7 @@
 #include "../include/panic/panic.h"
 #include "../include/console/console.h"
 #include "../include/puzzle/puzzle.h"
+#include "../include/signal/signal.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -36,6 +37,7 @@ static spinlock_t pid_lock = SPINLOCK_INIT;
 spinlock_t children_lock = SPINLOCK_INIT;
 
 static volatile uint64_t g_earliest_wakeup_ns = UINT64_MAX;
+static volatile uint64_t g_earliest_alarm_ns  = UINT64_MAX;
 
 void sched_note_wakeup(uint64_t deadline_ns) {
     if (deadline_ns == 0) return;
@@ -210,6 +212,7 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
     t->ppid            = 0;
     t->uid             = UID_ROOT;
     t->gid             = GID_ROOT;
+    t->umask           = 022;
     t->capabilities    = CAP_ALL;
     t->entry           = entry;
     t->arg             = arg;
@@ -249,6 +252,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->sid             = parent->sid;
     t->uid             = parent->uid;
     t->gid             = parent->gid;
+    t->umask           = parent->umask;
     t->ctty            = parent->ctty;
     t->capabilities    = parent->capabilities;
     t->priority        = parent->priority;
@@ -356,6 +360,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->sid             = t->pid;
     t->uid             = uid;
     t->gid             = gid;
+    t->umask           = 022;
     t->capabilities    = cap_initial(uid);
     t->entry           = (void (*)(void*))entry;
     t->arg             = NULL;
@@ -412,6 +417,7 @@ task_t* task_fork(task_t* parent) {
     strncpy(child->name, parent->name, sizeof(child->name)-1);
     child->uid             = parent->uid;
     child->gid             = parent->gid;
+    child->umask           = parent->umask;
     child->ctty            = parent->ctty;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     child->capabilities    = parent->capabilities;
@@ -506,6 +512,8 @@ void task_destroy(task_t* task) {
         task->pagemap = NULL;
     }
 
+    vfs_lock_release_owner((int)task->pid);
+
     if (task->fd_table) {
         fd_table_destroy(task->fd_table);
         task->fd_table = NULL;
@@ -588,6 +596,8 @@ __attribute__((noreturn)) void task_exit(void)
     }
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
+
+    vfs_lock_release_owner((int)me->pid);
 
     if (me->fd_table) {
         fd_table_destroy(me->fd_table);
@@ -913,18 +923,50 @@ void task_unblock(task_t* t) {
     enqueue_global(t);
 }
 
+uint64_t task_set_alarm(task_t *t, uint64_t seconds) {
+    if (!t) return 0;
+    uint64_t now = sched_now_ns();
+    uint64_t prev = t->alarm_at_ns;
+    uint64_t remaining = (prev && prev > now) ? (prev - now + 999999999ULL) / 1000000000ULL : 0;
+
+    t->alarm_at_ns = seconds ? now + seconds * 1000000000ULL : 0;
+    if (t->alarm_at_ns) {
+        uint64_t cur = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_RELAXED);
+        while (t->alarm_at_ns < cur) {
+            if (__atomic_compare_exchange_n(&g_earliest_alarm_ns, &cur, t->alarm_at_ns,
+                                            false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                break;
+        }
+    }
+    return remaining;
+}
+
 void sched_wakeup_sleepers(uint64_t now_ns) {
-    if (now_ns < __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_RELAXED))
+    uint64_t deadline = __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_RELAXED);
+    uint64_t alarm_deadline = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_RELAXED);
+    if (alarm_deadline < deadline) deadline = alarm_deadline;
+    if (now_ns < deadline)
         return;
 
     task_t* to_wake[64];
     int     wake_count = 0;
+    task_t* to_alarm[16];
+    int     alarm_count = 0;
     uint64_t next_earliest = UINT64_MAX;
+    uint64_t next_alarm    = UINT64_MAX;
 
     uint64_t _irqf = spinlock_acquire_irqsave(&pid_lock);
     for (uint32_t i = 1; i < MAX_PIDS; i++) {
         task_t *t = pid_table[i];
         if (!t) continue;
+        if (t->alarm_at_ns) {
+            if (now_ns >= t->alarm_at_ns && alarm_count < 16) {
+                t->alarm_at_ns = 0;
+                to_alarm[alarm_count++] = t;
+            } else if (t->alarm_at_ns < next_alarm) {
+                next_alarm = t->alarm_at_ns;
+            }
+        }
         if (t->state != TASK_BLOCKED) continue;
         if (t->wakeup_time_ns == 0) continue;
         if (now_ns >= t->wakeup_time_ns) {
@@ -942,10 +984,14 @@ void sched_wakeup_sleepers(uint64_t now_ns) {
         }
     }
     __atomic_store_n(&g_earliest_wakeup_ns, next_earliest, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_earliest_alarm_ns,  next_alarm,    __ATOMIC_RELAXED);
     spinlock_release_irqrestore(&pid_lock, _irqf);
 
     for (int i = 0; i < wake_count; i++) {
         enqueue_global(to_wake[i]);
+    }
+    for (int i = 0; i < alarm_count; i++) {
+        signal_send(to_alarm[i], SIGALRM);
     }
 }
 

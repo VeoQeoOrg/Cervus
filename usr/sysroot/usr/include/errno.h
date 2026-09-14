@@ -19,6 +19,7 @@ extern int __cervus_errno;
 #define ENOMEM      12
 #define EACCES      13
 #define EFAULT      14
+#define ENOTBLK     15
 #define EBUSY       16
 #define EEXIST      17
 #define EXDEV       18
@@ -29,6 +30,7 @@ extern int __cervus_errno;
 #define ENFILE      23
 #define EMFILE      24
 #define ENOTTY      25
+#define ETXTBSY     26
 #define EFBIG       27
 #define ENOSPC      28
 #define ESPIPE      29
@@ -37,12 +39,15 @@ extern int __cervus_errno;
 #define EPIPE       32
 #define EDOM        33
 #define ERANGE      34
+#define EDEADLK     35
 #define ENAMETOOLONG 36
+#define ENOLCK      37
 #define ENOSYS      38
 #define ENOTEMPTY   39
 #define ELOOP       40
 #define EOVERFLOW   75
 #define EOPNOTSUPP  95
+#define ENOTSUP     EOPNOTSUPP
 #define EISCONN     106
 #define ETIMEDOUT   110
 #define ECONNREFUSED 111

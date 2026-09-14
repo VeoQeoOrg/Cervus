@@ -32,6 +32,9 @@ struct tm *localtime(const time_t *t);
 long        timezone_offset(void);
 const char *timezone_name(void);
 struct tm *gmtime(const time_t *t);
+struct tm *gmtime_r(const time_t *t, struct tm *out);
+struct tm *localtime_r(const time_t *t, struct tm *out);
+double     difftime(time_t a, time_t b);
 time_t mktime(struct tm *tm);
 
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);

@@ -50,6 +50,30 @@ pid_t   getpid(void);
 pid_t   getppid(void);
 uid_t   getuid(void);
 gid_t   getgid(void);
+#define _SC_ARG_MAX            0
+#define _SC_NGROUPS_MAX        3
+#define _SC_OPEN_MAX           4
+#define _SC_CLK_TCK            2
+#define _SC_PAGESIZE          30
+#define _SC_PAGE_SIZE         _SC_PAGESIZE
+#define _SC_NPROCESSORS_CONF  83
+#define _SC_NPROCESSORS_ONLN  84
+#define _SC_PHYS_PAGES        85
+#define _SC_AVPHYS_PAGES      86
+#define _SC_LINE_MAX          43
+#define _SC_SYMLOOP_MAX      173
+#define _SC_HOST_NAME_MAX    180
+#define _SC_LOGIN_NAME_MAX    71
+
+#define _POSIX_VERSION 200809L
+#define _POSIX2_VERSION 200809L
+
+long    sysconf(int name);
+unsigned int alarm(unsigned int seconds);
+char   *getlogin(void);
+int     getlogin_r(char *buf, size_t len);
+uid_t   geteuid(void);
+gid_t   getegid(void);
 int     setuid(uid_t uid);
 int     setgid(gid_t gid);
 pid_t   fork(void);
