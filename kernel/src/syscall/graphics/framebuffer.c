@@ -3,6 +3,7 @@
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
 #include "../../../include/io/serial.h"
+#include "../../../include/console/console.h"
 #include <string.h>
 
 extern fb_info_t *global_framebuffer;
@@ -108,6 +109,7 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
 int64_t sys_fb_acquire(void)
 {
     vt_fb_acquire(caller_vt());
+    vt_fb_set_owner_task(syscall_cur_task());
     return 0;
 }
 

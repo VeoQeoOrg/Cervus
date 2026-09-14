@@ -79,7 +79,8 @@ static int ensure_grid(int n) {
     return 1;
 }
 
-static int g_fb_owner_vt = -1;
+static int   g_fb_owner_vt = -1;
+static void *g_fb_owner_task;
 
 int vt_fb_owner(void) { return g_fb_owner_vt; }
 
@@ -91,7 +92,19 @@ void vt_fb_acquire(int vt) {
 void vt_fb_release(int vt) {
     if (g_fb_owner_vt != vt) return;
     g_fb_owner_vt = -1;
+    g_fb_owner_task = NULL;
     console_set_offscreen(0);
+}
+
+void vt_fb_set_owner_task(void *task) {
+    g_fb_owner_task = task;
+}
+
+void vt_fb_task_exit(void *task) {
+    if (!task || g_fb_owner_task != task) return;
+    extern void console_force_full_redraw(void);
+    vt_fb_release(g_fb_owner_vt);
+    console_force_full_redraw();
 }
 
 int vt_fb_may_draw(int vt) {

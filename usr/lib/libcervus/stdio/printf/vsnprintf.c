@@ -354,13 +354,18 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
                 int neg = v < 0;
                 uint64_t u = neg ? (uint64_t)(-v) : (uint64_t)v;
                 __u64_to_str(u, nb, 10, 0);
-                int numlen = (int)strlen(nb) + (neg || plus_flag ? 1 : 0);
+                int digits = (int)strlen(nb);
+                if (prec == 0 && u == 0) digits = 0;
+                int zeros = (prec > digits) ? prec - digits : 0;
+                int zpad = pad_zero && prec < 0;
+                int numlen = digits + zeros + (neg || plus_flag ? 1 : 0);
                 int pad = width > numlen ? width - numlen : 0;
-                if (!left_align && !pad_zero) for (int i = 0; i < pad; i++) __PUT(" ", 1);
+                if (!left_align && !zpad) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 if (neg)           __PUT("-", 1);
                 else if (plus_flag) __PUT("+", 1);
-                if (!left_align && pad_zero) for (int i = 0; i < pad; i++) __PUT("0", 1);
-                __PUT(nb, strlen(nb));
+                if (!left_align && zpad) for (int i = 0; i < pad; i++) __PUT("0", 1);
+                for (int i = 0; i < zeros; i++) __PUT("0", 1);
+                __PUT(nb, (size_t)digits);
                 if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }
@@ -371,10 +376,15 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
                 else if (is_size_t) v = va_arg(ap, size_t);
                 else                v = va_arg(ap, unsigned);
                 __u64_to_str(v, nb, 10, 0);
-                int numlen = (int)strlen(nb);
+                int digits = (int)strlen(nb);
+                if (prec == 0 && v == 0) digits = 0;
+                int zeros = (prec > digits) ? prec - digits : 0;
+                int zpad = pad_zero && prec < 0;
+                int numlen = digits + zeros;
                 int pad = width > numlen ? width - numlen : 0;
-                if (!left_align) for (int i = 0; i < pad; i++) __PUT(pad_zero ? "0" : " ", 1);
-                __PUT(nb, strlen(nb));
+                if (!left_align) for (int i = 0; i < pad; i++) __PUT(zpad ? "0" : " ", 1);
+                for (int i = 0; i < zeros; i++) __PUT("0", 1);
+                __PUT(nb, (size_t)digits);
                 if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }
@@ -385,10 +395,15 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
                 else if (is_size_t) v = va_arg(ap, size_t);
                 else                v = va_arg(ap, unsigned);
                 __u64_to_str(v, nb, 16, *fmt == 'X');
-                int numlen = (int)strlen(nb);
+                int digits = (int)strlen(nb);
+                if (prec == 0 && v == 0) digits = 0;
+                int zeros = (prec > digits) ? prec - digits : 0;
+                int zpad = pad_zero && prec < 0;
+                int numlen = digits + zeros;
                 int pad = width > numlen ? width - numlen : 0;
-                if (!left_align) for (int i = 0; i < pad; i++) __PUT(pad_zero ? "0" : " ", 1);
-                __PUT(nb, strlen(nb));
+                if (!left_align) for (int i = 0; i < pad; i++) __PUT(zpad ? "0" : " ", 1);
+                for (int i = 0; i < zeros; i++) __PUT("0", 1);
+                __PUT(nb, (size_t)digits);
                 if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }
@@ -399,10 +414,15 @@ int vsnprintf(char *buf, size_t sz, const char *fmt, va_list ap)
                 else if (is_size_t) v = va_arg(ap, size_t);
                 else                v = va_arg(ap, unsigned);
                 __u64_to_str(v, nb, 8, 0);
-                int numlen = (int)strlen(nb);
+                int digits = (int)strlen(nb);
+                if (prec == 0 && v == 0) digits = 0;
+                int zeros = (prec > digits) ? prec - digits : 0;
+                int zpad = pad_zero && prec < 0;
+                int numlen = digits + zeros;
                 int pad = width > numlen ? width - numlen : 0;
-                if (!left_align) for (int i = 0; i < pad; i++) __PUT(pad_zero ? "0" : " ", 1);
-                __PUT(nb, strlen(nb));
+                if (!left_align) for (int i = 0; i < pad; i++) __PUT(zpad ? "0" : " ", 1);
+                for (int i = 0; i < zeros; i++) __PUT("0", 1);
+                __PUT(nb, (size_t)digits);
                 if (left_align) for (int i = 0; i < pad; i++) __PUT(" ", 1);
                 break;
             }

@@ -52,6 +52,8 @@ void vt_font_changed(void);
 int  vt_fb_owner(void);
 void vt_fb_acquire(int vt);
 void vt_fb_release(int vt);
+void vt_fb_set_owner_task(void *task);
+void vt_fb_task_exit(void *task);
 int  vt_fb_may_draw(int vt);
 
 void tty_vt_init(void);

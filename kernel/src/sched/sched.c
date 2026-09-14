@@ -513,6 +513,7 @@ void task_destroy(task_t* task) {
     }
 
     vfs_lock_release_owner((int)task->pid);
+    vt_fb_task_exit(task);
 
     if (task->fd_table) {
         fd_table_destroy(task->fd_table);
@@ -598,6 +599,7 @@ __attribute__((noreturn)) void task_exit(void)
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
     vfs_lock_release_owner((int)me->pid);
+    vt_fb_task_exit(me);
 
     if (me->fd_table) {
         fd_table_destroy(me->fd_table);
