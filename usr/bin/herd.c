@@ -27,7 +27,9 @@ static const char USAGE[] =
     "and the index signature is checked against /etc/herd.pub.\n"
     "\n"
     "  --progress=STYLE  bar, pacman, hash, dots, percent or none\n"
-    "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n";
+    "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n"
+    "  --root=DIR        install into DIR instead of /, for setting up\n"
+    "                    another system from this one\n";
 
 #define DBDIR    "/var/lib/herd"
 #define INDEXF   DBDIR "/INDEX"
@@ -112,6 +114,7 @@ static void progress_end(int ok)
 }
 
 static char g_repo[512];
+static char g_root[256];
 
 static const char *ci_strstr(const char *hay, const char *needle)
 {
@@ -125,6 +128,13 @@ static const char *ci_strstr(const char *hay, const char *needle)
 }
 
 static void die(const char *m) { fprintf(stderr, "herd: %s\n", m); exit(1); }
+
+static const char *rooted(const char *path, char *buf, size_t cap)
+{
+    if (!g_root[0]) return path;
+    snprintf(buf, cap, "%s%s", g_root, path);
+    return buf;
+}
 
 static int mkpath(const char *path, mode_t mode)
 {
@@ -327,7 +337,7 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
         if (!mode) mode = 0644;
 
         char dst[1088];
-        snprintf(dst, sizeof dst, "/%s", name);
+        snprintf(dst, sizeof dst, "%s/%s", g_root, name);
 
         for (char *q = dst; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
 
@@ -364,7 +374,7 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
 static int is_installed(const char *name)
 {
     char p[512];
-    snprintf(p, sizeof p, DBDIR "/%s.manifest", name);
+    snprintf(p, sizeof p, "%s" DBDIR "/%s.manifest", g_root, name);
     struct stat st;
     return stat(p, &st) == 0;
 }
@@ -449,7 +459,8 @@ static int cmd_search(const char *term)
 
 static int cmd_list(void)
 {
-    DIR *d = opendir(DBDIR);
+    char dbb[512];
+    DIR *d = opendir(rooted(DBDIR, dbb, sizeof dbb));
     if (!d) { printf("no packages installed\n"); return 0; }
     struct dirent *e;
     int n = 0;
@@ -457,7 +468,7 @@ static int cmd_list(void)
         size_t l = strlen(e->d_name);
         if (l > 9 && !strcmp(e->d_name + l - 9, ".manifest")) {
             char name[256]; snprintf(name, sizeof name, "%.*s", (int)(l - 9), e->d_name);
-            char mpath[512]; snprintf(mpath, sizeof mpath, DBDIR "/%s.manifest", name);
+            char mpath[512]; snprintf(mpath, sizeof mpath, "%s" DBDIR "/%s.manifest", g_root, name);
             char *m = read_file(mpath, NULL);
             char *ver = m ? field(m, "version") : NULL;
             printf("%-16s %s\n", name, ver ? ver : "");
@@ -531,8 +542,8 @@ static int install_one(const char *idx, const char *name)
         if (gunzip((const uint8_t *)data, dlen, &tar, &tarlen) != 0) { fprintf(stderr, "herd: cannot decompress %s\n", name); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
     } else { tar = (uint8_t *)data; tarlen = dlen; }
 
-    mkpath(DBDIR, 0755);
-    char flist[512]; snprintf(flist, sizeof flist, DBDIR "/%s.files", name);
+    { char b[512]; mkpath(rooted(DBDIR, b, sizeof b), 0755); }
+    char flist[512]; snprintf(flist, sizeof flist, "%s" DBDIR "/%s.files", g_root, name);
     FILE *ff = fopen(flist, "w");
     if (!ff) { die("cannot record file list"); }
     int rc = extract_tar(tar, tarlen, ff);
@@ -542,7 +553,7 @@ static int install_one(const char *idx, const char *name)
 
     if (rc != 0) { fprintf(stderr, "herd: extraction of %s failed\n", name); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
 
-    char mpath[512]; snprintf(mpath, sizeof mpath, DBDIR "/%s.manifest", name);
+    char mpath[512]; snprintf(mpath, sizeof mpath, "%s" DBDIR "/%s.manifest", g_root, name);
     int mfd = open(mpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (mfd >= 0) { write(mfd, rec, strlen(rec)); close(mfd); }
 
@@ -593,7 +604,7 @@ static int cmd_install(int argc, char **argv)
 static int remove_one(const char *name)
 {
     if (!is_installed(name)) { fprintf(stderr, "herd: %s is not installed\n", name); return 1; }
-    char flist[512]; snprintf(flist, sizeof flist, DBDIR "/%s.files", name);
+    char flist[512]; snprintf(flist, sizeof flist, "%s" DBDIR "/%s.files", g_root, name);
     char *fl = read_file(flist, NULL);
     if (fl) {
 
@@ -604,8 +615,8 @@ static int remove_one(const char *name)
         free(fl);
     }
     char p[512];
-    snprintf(p, sizeof p, DBDIR "/%s.files", name); unlink(p);
-    snprintf(p, sizeof p, DBDIR "/%s.manifest", name); unlink(p);
+    snprintf(p, sizeof p, "%s" DBDIR "/%s.files", g_root, name); unlink(p);
+    snprintf(p, sizeof p, "%s" DBDIR "/%s.manifest", g_root, name); unlink(p);
     printf("removed %s\n", name);
     return 0;
 }
@@ -627,9 +638,15 @@ int main(int argc, char **argv)
         const char *e = getenv("HERD_PROGRESS");
         if (e) progress_style(e);
     }
-    int argi = 1;
-    while (argi < argc && !strncmp(argv[argi], "--progress=", 11)) {
-        progress_style(argv[argi] + 11);
+    for (int argi = 1; argi < argc; ) {
+        if (!strncmp(argv[argi], "--progress=", 11)) {
+            progress_style(argv[argi] + 11);
+        } else if (!strncmp(argv[argi], "--root=", 7)) {
+            snprintf(g_root, sizeof g_root, "%s", argv[argi] + 7);
+            size_t l = strlen(g_root);
+            while (l > 1 && g_root[l - 1] == '/') g_root[--l] = 0;
+            if (!strcmp(g_root, "/")) g_root[0] = 0;
+        } else { argi++; continue; }
         for (int k = argi; k < argc - 1; k++) argv[k] = argv[k + 1];
         argc--;
     }

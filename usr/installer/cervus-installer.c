@@ -1472,6 +1472,8 @@ static int format_with_progress(const char *ui_label, int is_fat32,
     return code ? -code : 0;
 }
 
+static void install_chosen_packages(void);
+
 static int do_install_common(const disk_entry_t *d, const char *part1, const char *part2,
                              const account_cfg_t *acc, bootloader_t bl, fstype_t fs) {
     int rc;
@@ -1668,6 +1670,8 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
         }
     }
 
+    install_chosen_packages();
+
     cervus_disk_umount("/mnt/esp");
     cervus_disk_umount("/mnt/root");
 
@@ -1701,7 +1705,7 @@ static int do_install(const disk_entry_t *d, const layout_t *L, const account_cf
     uint32_t root_size  = (uint32_t)total_sectors - root_start - swap_size;
     uint32_t swap_start = root_start + root_size;
 
-    install_screen_init(9);
+    install_screen_init(10);
     step_begin("Writing partition table");
     cervus_mbr_part_t specs[4];
     memset(specs, 0, sizeof(specs));
@@ -2135,6 +2139,133 @@ static int choose_appearance(void) {
     return 0;
 }
 
+
+#define MAX_PKGS 64
+
+typedef struct {
+    char name[48];
+    char version[24];
+    char summary[96];
+    int  chosen;
+} pkg_entry_t;
+
+static pkg_entry_t g_pkgs[MAX_PKGS];
+static int g_npkgs;
+static int g_pkgs_loaded;
+
+static void info_packages(int row, int col, int w) {
+    int r = row;
+    info_print(&r, col, w, 0, "Extra software");
+    r++;
+    info_print(&r, col, w, 1, "These are optional packages from the Cervus");
+    info_print(&r, col, w, 1, "repository. Nothing here is needed to run the");
+    info_print(&r, col, w, 1, "system; pick what you want and it is fetched");
+    info_print(&r, col, w, 1, "and installed at the end.");
+    r++;
+    info_print(&r, col, w, 1, "  Space   tick or untick the highlighted item");
+    info_print(&r, col, w, 1, "  Enter   continue with what is ticked");
+    info_print(&r, col, w, 1, "  Esc     skip, install nothing extra");
+    r++;
+    info_print(&r, col, w, 1, "You can always add or remove them later with");
+    info_print(&r, col, w, 1, "herd install and herd remove.");
+}
+
+static void load_packages(void) {
+    if (g_pkgs_loaded) return;
+    g_pkgs_loaded = 1;
+    g_npkgs = 0;
+
+    if (system("herd update >/dev/null 2>&1") != 0) return;
+
+    FILE *f = fopen("/var/lib/herd/INDEX", "r");
+    if (!f) return;
+
+    pkg_entry_t cur;
+    memset(&cur, 0, sizeof cur);
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (!line[0]) {
+            if (cur.name[0] && g_npkgs < MAX_PKGS) g_pkgs[g_npkgs++] = cur;
+            memset(&cur, 0, sizeof cur);
+            continue;
+        }
+        if (!strncmp(line, "name: ", 6))
+            snprintf(cur.name, sizeof cur.name, "%s", line + 6);
+        else if (!strncmp(line, "version: ", 9))
+            snprintf(cur.version, sizeof cur.version, "%s", line + 9);
+        else if (!strncmp(line, "summary: ", 9))
+            snprintf(cur.summary, sizeof cur.summary, "%s", line + 9);
+    }
+    if (cur.name[0] && g_npkgs < MAX_PKGS) g_pkgs[g_npkgs++] = cur;
+    fclose(f);
+}
+
+static int choose_packages(void) {
+    load_packages();
+    if (g_npkgs == 0) return 0;
+
+    int sel = 0;
+    for (;;) {
+        term_size_query();
+        int pane_col = g_pane_left_col;
+        int pane_w   = g_pane_left_w;
+        int item_w   = pane_w - 2;
+        hide_cursor();
+        clear_screen();
+        draw_pane_title(2, pane_col, pane_w, "Extra software");
+
+        for (int i = 0; i < g_npkgs; i++) {
+            char row[256];
+            snprintf(row, sizeof row, "[%c] %-10s %-8s %s",
+                     g_pkgs[i].chosen ? '*' : ' ',
+                     g_pkgs[i].name, g_pkgs[i].version, g_pkgs[i].summary);
+            if (item_w > 4 && (int)strlen(row) > item_w - 2) row[item_w - 2] = 0;
+            render_menu_item(5 + i, pane_col, item_w, i == sel, row);
+        }
+
+        int chosen = 0;
+        for (int i = 0; i < g_npkgs; i++) chosen += g_pkgs[i].chosen;
+        go_xy(6 + g_npkgs, pane_col);
+        printf(C_GRAY "  %d selected - Space ticks, Enter continues" C_RESET, chosen);
+
+        draw_vsplit();
+        info_box("Help", info_packages);
+        fflush(stdout);
+
+        int k = read_key();
+        if (k == KEY_UP)        sel = (sel + g_npkgs - 1) % g_npkgs;
+        else if (k == KEY_DOWN) sel = (sel + 1) % g_npkgs;
+        else if (k == ' ')      g_pkgs[sel].chosen = !g_pkgs[sel].chosen;
+        else if (k == '\r' || k == '\n') return 0;
+        else if (k == KEY_ESC)  { for (int i = 0; i < g_npkgs; i++) g_pkgs[i].chosen = 0; return 0; }
+    }
+}
+
+static void install_chosen_packages(void) {
+    int any = 0;
+    for (int i = 0; i < g_npkgs; i++) if (g_pkgs[i].chosen) any = 1;
+    if (!any) return;
+
+    step_begin("Installing extra software");
+    int failed = 0;
+    for (int i = 0; i < g_npkgs; i++) {
+        if (!g_pkgs[i].chosen) continue;
+        char cmd[256], note[96];
+        snprintf(cmd, sizeof cmd,
+                 "herd --root=/mnt/root --progress=none install %s >/dev/null 2>&1",
+                 g_pkgs[i].name);
+        int rc = system(cmd);
+        snprintf(note, sizeof note, "       %s %s", g_pkgs[i].name,
+                 rc == 0 ? C_GREEN "installed" C_RESET : C_RED "failed" C_RESET);
+        log_append(note);
+        install_redraw_log();
+        if (rc != 0) failed = 1;
+    }
+    step_ok(failed ? "extra software (with failures)" : "extra software");
+}
+
 static int choose_bootloader(void) {
     const char *items[] = {
         "Limine  (default - small and fast)",
@@ -2364,7 +2495,7 @@ static int do_install_custom(const disk_entry_t *d, pentry_t *parts, int nparts,
     int bi, ri;
     if (pedit_layout(parts, nparts, d->sectors, specs, &bi, &ri) != 0) return 1;
 
-    install_screen_init(9);
+    install_screen_init(10);
     step_begin("Writing partition table");
     int rc = cervus_disk_partition(d->name, specs, nparts);
     if (rc < 0) { step_fail("partition table", rc); read_key(); return 1; }
@@ -2471,6 +2602,7 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         if (choose_timezone() < 0) continue;
         if (choose_rtc_mode() < 0) continue;
         if (choose_appearance() < 0) continue;
+        if (choose_packages() < 0) continue;
         if (confirm_screen(&disks[picked], &L) != 1) continue;
 
         account_cfg_t acc;
