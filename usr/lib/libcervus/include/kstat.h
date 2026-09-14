@@ -21,6 +21,9 @@ typedef struct {
     uint64_t st_blksize;
 } __cervus_kstat_t;
 
+_Static_assert(sizeof(__cervus_kstat_t) == 88,
+               "__cervus_kstat_t must match the kernel's vfs_stat_t");
+
 static inline void __cervus_stat_from_kernel(struct stat *out, const __cervus_kstat_t *k)
 {
     memset(out, 0, sizeof *out);

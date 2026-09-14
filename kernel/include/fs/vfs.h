@@ -54,6 +54,9 @@ typedef struct {
     uint64_t        st_blksize;
 } vfs_stat_t;
 
+_Static_assert(sizeof(vfs_stat_t) == 88,
+               "vfs_stat_t must match libcervus __cervus_kstat_t");
+
 typedef struct {
     uint64_t    d_ino;
     uint8_t     d_type;
