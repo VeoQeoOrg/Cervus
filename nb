@@ -52,7 +52,7 @@ pack_tree() {
 }
 
 bump_version() {
-  cur=$(cat builder/VERSION 2>/dev/null || echo 0.0.2.0)
+  cur=$(cat builder/VERSION 2>/dev/null || echo 0.0.2)
   case "$cur" in
     *.*.*.*) base=${cur%.*}; build=${cur##*.} ;;
     *)       base=$cur;      build=0 ;;
@@ -68,7 +68,15 @@ publish_system() {
   keyfile=${HERD_KEY:-$HOME/cervus-keys/herd.pem}
   outdir=${HERD_OUT:-$HOME/herd-packs/out}
   repo=${HERD_GH_REPO:-VeoQeoOrg/herd-packs}
-  ver=${1:-}
+  ver=""
+  bump=false
+  for a in "$@"; do
+    case "$a" in
+      --bump) bump=true ;;
+      -*)     echo "nb upload: unknown option $a" >&2; exit 1 ;;
+      *)      ver=$a ;;
+    esac
+  done
 
   [ -f "$keyfile" ] || {
     echo "nb upload: no signing key at $keyfile" >&2
@@ -83,7 +91,8 @@ publish_system() {
   done
 
   if [ -n "$ver" ]; then printf '%s\n' "$ver" > builder/VERSION
-  else ver=$(bump_version); fi
+  elif $bump;   then ver=$(bump_version)
+  else ver=$(cat builder/VERSION 2>/dev/null || echo 0.0.2); fi
   echo "publishing Cervus $ver"
 
   configure
@@ -233,7 +242,7 @@ flash)
   ;;
 upload)
   shift
-  publish_system "${1:-}"
+  publish_system "$@"
   ;;
 clean)
   rm -rf obj bin rootfs iso_root demo_iso .ninja build.ninja

@@ -39,3 +39,15 @@ void *memccpy(void *dst, const void *src, int c, size_t n) {
     }
     return NULL;
 }
+
+char *index(const char *s, int c) { return strchr(s, c); }
+
+char *rindex(const char *s, int c) { return strrchr(s, c); }
+
+int ffs(int i)
+{
+    if (i == 0) return 0;
+    int n = 1;
+    while (!(i & 1)) { i >>= 1; n++; }
+    return n;
+}
