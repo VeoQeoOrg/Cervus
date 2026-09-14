@@ -8,6 +8,9 @@ SYNOPSIS
        herd info NAME
        herd install NAME...
        herd remove NAME...
+       herd boot-status
+       herd update-kernel
+       herd update-bootloader [limine|grub]
 
 DESCRIPTION
        herd installs pre-built packages from a remote repository. A
@@ -35,6 +38,18 @@ COMMANDS
        info NAME     print the index entry for NAME
        install NAME  install NAME and, before it, anything it depends on
        remove NAME   delete the files a package installed
+
+       boot-status   find the boot partition and say which bootloader
+                     is on it and where the kernel lives
+       update-kernel install the 'kernel' package onto the boot
+                     partition, keeping the running kernel as
+                     /boot/kernel.old so a bad one can be backed out
+       update-bootloader [NAME]
+                     reinstall the bootloader already in use, or, with
+                     a name, install a different one. Installing a
+                     second bootloader is not an upgrade - both claim
+                     the same disk and a mistake stops the machine
+                     booting - so it asks before doing it.
 
 FILES
        /etc/herd.conf         repo= and optional progress= lines

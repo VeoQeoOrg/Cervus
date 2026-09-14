@@ -10,6 +10,7 @@
 #include <crypto.h>
 #include <inflate.h>
 #include <ctype.h>
+#include <sys/cervus.h>
 #include <cervus_util.h>
 
 static const char USAGE[] =
@@ -22,6 +23,12 @@ static const char USAGE[] =
     "  info NAME         show what the index knows about NAME\n"
     "  install NAME...   fetch, verify and install packages and their deps\n"
     "  remove NAME...    remove installed packages\n"
+    "\n"
+    "  boot-status              show the boot partition and its bootloader\n"
+    "  update-kernel            replace the kernel on the boot partition,\n"
+    "                           keeping the old one as kernel.old\n"
+    "  update-bootloader [NAME] update the installed bootloader, or install\n"
+    "                           limine or grub (asks first -- see the warning)\n"
     "\n"
     "The repository is read from $HERD_REPO or /etc/herd.conf (key repo=),\n"
     "and the index signature is checked against /etc/herd.pub.\n"
@@ -628,6 +635,209 @@ static int cmd_remove(int argc, char **argv)
     return rc;
 }
 
+
+#define ESPMNT "/mnt/.herd-esp"
+
+typedef struct {
+    char part[32];
+    char disk[32];
+    int  mounted;
+    int  has_limine;
+    int  has_grub;
+    int  has_efi;
+    int  has_kernel;
+} esp_t;
+
+static void esp_unmount(esp_t *e)
+{
+    if (e->mounted) { cervus_disk_umount(ESPMNT); e->mounted = 0; }
+}
+
+static int path_exists(const char *p)
+{
+    struct stat st;
+    return stat(p, &st) == 0;
+}
+
+static int esp_find(esp_t *e, int quiet)
+{
+    memset(e, 0, sizeof *e);
+    cervus_part_info_t parts[32];
+    long n = cervus_disk_list_parts(parts, 32);
+    if (n <= 0) { if (!quiet) fputs("herd: no partitions found\n", stderr); return -1; }
+
+    mkpath(ESPMNT, 0755);
+
+    for (long i = 0; i < n; i++) {
+        if (parts[i].type != 0x0C && parts[i].type != 0x0B && parts[i].type != 0xEF) continue;
+        cervus_disk_umount(ESPMNT);
+        if (cervus_disk_mount(parts[i].part_name, ESPMNT) != 0) continue;
+        if (path_exists(ESPMNT "/boot/kernel")) {
+            snprintf(e->part, sizeof e->part, "%s", parts[i].part_name);
+            snprintf(e->disk, sizeof e->disk, "%s", parts[i].disk_name);
+            e->mounted    = 1;
+            e->has_kernel = 1;
+            e->has_limine = path_exists(ESPMNT "/boot/limine/limine-bios.sys") ||
+                            path_exists(ESPMNT "/limine.conf") ||
+                            path_exists(ESPMNT "/boot/limine.conf");
+            e->has_grub   = path_exists(ESPMNT "/boot/grub/grub.cfg");
+            e->has_efi    = path_exists(ESPMNT "/EFI/BOOT/BOOTX64.EFI");
+            return 0;
+        }
+        cervus_disk_umount(ESPMNT);
+    }
+    if (!quiet) fputs("herd: no Cervus boot partition found (is this a live session?)\n", stderr);
+    return -1;
+}
+
+static const char *esp_loader(const esp_t *e)
+{
+    if (e->has_grub && e->has_limine) return "limine+grub";
+    if (e->has_grub)   return "grub";
+    if (e->has_limine) return "limine";
+    return "unknown";
+}
+
+static int cmd_boot_status(void)
+{
+    esp_t e;
+    if (esp_find(&e, 0) != 0) return 1;
+    printf("boot partition : %s (on %s)\n", e.part, e.disk);
+    printf("bootloader     : %s\n", esp_loader(&e));
+    printf("EFI loader     : %s\n", e.has_efi ? "present" : "absent");
+    printf("kernel         : %s\n", e.has_kernel ? ESPMNT "/boot/kernel" : "missing");
+    esp_unmount(&e);
+    return 0;
+}
+
+static int copy_file(const char *src, const char *dst)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0) { close(in); return -1; }
+    char buf[65536];
+    ssize_t r;
+    int rc = 0;
+    while ((r = read(in, buf, sizeof buf)) > 0)
+        if (write(out, buf, (size_t)r) != r) { rc = -1; break; }
+    if (r < 0) rc = -1;
+    close(in); close(out);
+    return rc;
+}
+
+static int install_pkg_to(const char *name, const char *root)
+{
+    char saved[256];
+    snprintf(saved, sizeof saved, "%s", g_root);
+    snprintf(g_root, sizeof g_root, "%s", root);
+
+    char *idx = load_index();
+    char order[256][64]; int norder = 0;
+    int rc = install_with_deps(idx, name, order, &norder);
+    if (rc == 0)
+        for (int i = 0; i < norder; i++)
+            if ((rc = install_one(idx, order[i])) != 0) break;
+    free(idx);
+
+    snprintf(g_root, sizeof g_root, "%s", saved);
+    return rc;
+}
+
+static int cmd_update_kernel(void)
+{
+    load_repo();
+    esp_t e;
+    if (esp_find(&e, 0) != 0) return 1;
+
+    char *idx = load_index();
+    char *rec = find_record(idx, "kernel");
+    free(idx);
+    if (!rec) { esp_unmount(&e); fputs("herd: the repository has no 'kernel' package\n", stderr); return 1; }
+    free(rec);
+
+    if (path_exists(ESPMNT "/boot/kernel")) {
+        printf("keeping the running kernel as /boot/kernel.old\n");
+        if (copy_file(ESPMNT "/boot/kernel", ESPMNT "/boot/kernel.old") != 0)
+            fputs("herd: warning: could not save a copy of the current kernel\n", stderr);
+    }
+
+    char dbroot[512];
+    snprintf(dbroot, sizeof dbroot, "%s", ESPMNT);
+    int rc = install_pkg_to("kernel", dbroot);
+
+    esp_unmount(&e);
+    if (rc == 0) puts("kernel replaced -- reboot to run it; the previous one is /boot/kernel.old");
+    return rc;
+}
+
+static int ask_yes(const char *question)
+{
+    printf("%s [y/N] ", question);
+    fflush(stdout);
+    char line[16];
+    if (!fgets(line, sizeof line, stdin)) return 0;
+    return line[0] == 'y' || line[0] == 'Y';
+}
+
+static int cmd_update_bootloader(const char *want)
+{
+    load_repo();
+    esp_t e;
+    if (esp_find(&e, 0) != 0) return 1;
+
+    const char *have = esp_loader(&e);
+    printf("installed bootloader: %s\n", have);
+
+    if (!want) want = e.has_grub && !e.has_limine ? "grub" : "limine";
+
+    if (strcmp(want, "limine") && strcmp(want, "grub")) {
+        esp_unmount(&e);
+        fprintf(stderr, "herd: unknown bootloader '%s' (limine or grub)\n", want);
+        return 1;
+    }
+
+    int switching = strcmp(want, have) != 0 && strcmp(have, "limine+grub") != 0;
+    if (switching) {
+        puts("");
+        puts("  This machine boots with a different loader than the one you asked for.");
+        puts("  Installing a second bootloader is not an upgrade: both will claim the");
+        puts("  same disk, and if the new one is wrong about your firmware or your");
+        puts("  partitions the machine stops booting entirely. The old configuration");
+        puts("  is left in place, so recovery means booting removable media.");
+        puts("");
+        if (!ask_yes("  Install it anyway?")) { esp_unmount(&e); puts("nothing done"); return 1; }
+    }
+
+    char *idx = load_index();
+    char *rec = find_record(idx, want);
+    free(idx);
+    if (!rec) {
+        esp_unmount(&e);
+        fprintf(stderr, "herd: the repository has no '%s' package\n", want);
+        return 1;
+    }
+    free(rec);
+
+    int rc = install_pkg_to(want, ESPMNT);
+    if (rc != 0) { esp_unmount(&e); return rc; }
+
+    if (!strcmp(want, "limine") && path_exists(ESPMNT "/boot/limine/limine-bios-hdd.bin")) {
+        size_t n;
+        char *stage = read_file(ESPMNT "/boot/limine/limine-bios-hdd.bin", &n);
+        if (stage) {
+            long ir = cervus_disk_bios_install(e.disk, stage, (uint32_t)n, 0);
+            free(stage);
+            if (ir < 0) fprintf(stderr, "herd: writing the boot sector failed (%ld)\n", ir);
+            else        puts("boot sector written");
+        }
+    }
+
+    esp_unmount(&e);
+    if (rc == 0) puts("bootloader updated -- reboot to use it");
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "herd")) return 0;
@@ -659,6 +869,9 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "info"))    { if (argc < 3) die("info needs a name"); return cmd_info(argv[2]); }
     if (!strcmp(cmd, "install")) { if (argc < 3) die("install needs a name"); load_repo(); return cmd_install(argc - 2, argv + 2); }
     if (!strcmp(cmd, "remove"))  { if (argc < 3) die("remove needs a name"); return cmd_remove(argc - 2, argv + 2); }
+    if (!strcmp(cmd, "boot-status"))       return cmd_boot_status();
+    if (!strcmp(cmd, "update-kernel"))     return cmd_update_kernel();
+    if (!strcmp(cmd, "update-bootloader")) return cmd_update_bootloader(argc > 2 ? argv[2] : NULL);
 
     fprintf(stderr, "herd: unknown command '%s'\n", cmd);
     fputs(USAGE, stderr);
