@@ -13,7 +13,6 @@ static void *xmalloc(size_t n) { void *p = malloc(n); if (!p) fatal("out of memo
 static void *xrealloc(void *q, size_t n) { void *p = realloc(q, n); if (!p) fatal("out of memory"); return p; }
 static char *xstrdup(const char *s) { char *p = xmalloc(strlen(s) + 1); strcpy(p, s); return p; }
 
-/* ---------- values ---------- */
 enum { V_NUM = 1, V_STR = 2, V_STRNUM = 4 };
 typedef struct { double num; char *str; int flags; } Val;
 
@@ -80,7 +79,6 @@ static int to_bool(const Val *v)
 
 static void v_free(Val *v) { if (v->str) { free(v->str); v->str = NULL; } }
 
-/* ---------- lexer ---------- */
 enum {
     T_EOF, T_NUM, T_STR, T_ERE, T_FUNC_NAME, T_NAME, T_BUILTIN, T_FUNC,
     T_BEGIN, T_END, T_IF, T_ELSE, T_WHILE, T_FOR, T_DO, T_BREAK, T_CONTINUE,
@@ -96,9 +94,9 @@ enum {
 
 typedef struct { int type; char *s; double num; } Tok;
 
-static const char *L;         /* cursor */
+static const char *L;
 static Tok cur, ahead; static int have_ahead;
-static int g_prev_type = -1;  /* for regex/division disambiguation */
+static int g_prev_type = -1;
 
 static int allow_regex(void)
 {
@@ -184,7 +182,7 @@ static void lex_raw(Tok *t)
             "match","sprintf","sin","cos","atan2","exp","log","sqrt","int","rand",
             "srand","tolower","toupper","system","close","gensub","fflush",NULL};
         for (int i = 0; builtins[i]; i++) if (!strcmp(buf, builtins[i])) { t->type = T_BUILTIN; t->s = xstrdup(buf); return; }
-        /* function call if immediately followed by '(' with no space */
+
         if (*L == '(') { t->type = T_FUNC_NAME; t->s = xstrdup(buf); return; }
         t->type = T_NAME; t->s = xstrdup(buf); return;
     }
@@ -232,7 +230,6 @@ static Tok *peek(void)
     return &ahead;
 }
 
-/* ---------- AST ---------- */
 enum {
     N_NUM, N_STR, N_ERE, N_VAR, N_FIELD, N_ASSIGN, N_BINOP, N_UNARY, N_POST,
     N_PRE, N_TERN, N_AND, N_OR, N_NOT, N_MATCH, N_IN, N_CALL, N_BUILTIN,
@@ -254,7 +251,6 @@ struct Node {
 static Node *node(int type) { Node *n = xmalloc(sizeof(Node)); memset(n, 0, sizeof(*n)); n->type = type; return n; }
 static void nlist_add(Node *n, Node *e) { n->list = xrealloc(n->list, (size_t)(n->nlist + 1) * sizeof(Node*)); n->list[n->nlist++] = e; }
 
-/* ---------- parser ---------- */
 static Node *parse_expr(void);
 static Node *parse_ternary(void);
 static Node *parse_stmt(void);
@@ -571,7 +567,6 @@ static Node *parse_stmt_list(int stop)
     return b;
 }
 
-/* ---------- program ---------- */
 typedef struct { Node *pat, *pat2; int when; Node *action; int range_active; } Rule;
 static Rule g_rules[256]; static int g_nrules;
 
@@ -627,7 +622,6 @@ static void parse_program_text(const char *src)
     }
 }
 
-/* ---------- runtime storage ---------- */
 typedef struct ArrEnt { char *key; Val val; struct ArrEnt *next; } ArrEnt;
 #define ABK 64
 typedef struct { ArrEnt *b[ABK]; } Arr;
@@ -668,7 +662,6 @@ static void arr_clear(Arr *a)
     for (int i = 0; i < ABK; i++) { ArrEnt *e = a->b[i]; while (e) { ArrEnt *n = e->next; v_free(&e->val); free(e->key); free(e); e = n; } a->b[i] = NULL; }
 }
 
-/* local scope for functions */
 typedef struct Scope { char **names; Cell *cells; int n; struct Scope *prev; } Scope;
 static Scope *g_scope;
 
@@ -676,13 +669,12 @@ static Cell *find_cell(const char *name)
 {
     for (Scope *s = g_scope; s; s = s->prev) {
         for (int i = 0; i < s->n; i++) if (!strcmp(s->names[i], name)) return &s->cells[i];
-        break; /* only innermost function scope (awk has no nested lexical) */
+        break;
     }
     return global_cell(name);
 }
 
-/* ---------- special vars & fields ---------- */
-static char *g_record;               /* $0 */
+static char *g_record;
 static char **g_field; static int g_nf; static int g_field_cap;
 static int g_fields_valid, g_record_valid;
 static long g_nr, g_fnr;
@@ -826,7 +818,6 @@ static void set_record(char *rec)
     free(g_record); g_record = rec; g_record_valid = 1; g_fields_valid = 0;
 }
 
-/* ---------- evaluation ---------- */
 enum { FL_NONE, FL_BREAK, FL_CONTINUE, FL_NEXT, FL_NEXTFILE, FL_EXIT, FL_RETURN };
 static int g_flow;
 static Val g_retval;
@@ -852,7 +843,7 @@ static Cell *lvalue_cell(Node *n)
 
 static char *build_index(Node *n)
 {
-    /* n is N_INDEX */
+
     char *out = xstrdup("");
     for (int i = 0; i < n->nlist; i++) {
         Val v = eval(n->list[i]); char *s = to_str(&v); v_free(&v);
@@ -923,7 +914,7 @@ static Val eval(Node *n)
         case N_NUM: return v_num(n->num);
         case N_STR: return v_str(xstrdup(n->str));
         case N_ERE: {
-            /* bare regex → match against $0 */
+
             const char *rec = get_field(0);
             return v_num(regexec(n->re, rec, 0, NULL, 0) == 0);
         }
@@ -1001,14 +992,13 @@ static Val eval(Node *n)
         case N_BUILTIN: return call_builtin(n);
         case N_CALL: return call_func(n);
         case N_GETLINE: {
-            /* getline [var] [< file] ; simple: from current file not supported deeply */
+
             return v_num(0);
         }
     }
     return v_uninit();
 }
 
-/* ---------- builtins ---------- */
 static char *do_subst(int global, const char *re_src, regex_t *re, const char *repl, const char *src, int *count);
 
 static Val call_builtin(Node *n)
@@ -1047,7 +1037,7 @@ static Val call_builtin(Node *n)
         return v_str(s);
     }
     if (!strcmp(b,"sprintf")) {
-        /* reuse printf formatter */
+
         extern char *awk_sprintf(Node *n);
         return v_str(awk_sprintf(n));
     }
@@ -1062,7 +1052,7 @@ static Val call_builtin(Node *n)
             else { Val sv=A(2); sep=to_str(&sv); v_free(&sv);
                    if(!strcmp(sep," ")) by_ws=1;
                    else if(sep[0]&&!sep[1]) sepc=sep[0];
-                   else if(sep[0]==0){/*empty*/}
+                   else if(sep[0]==0){}
                    else { if(regcomp(&sre,sep,REG_EXTENDED)==0){use_re=1;own_re=1;} } }
         } else { by_ws=1; sep=NULL; }
         int nf=0; const char*p=s;
@@ -1083,7 +1073,7 @@ static Val call_builtin(Node *n)
             const char*st=p; for(;;){ if(*p==sepc||!*p){ snprintf(kbuf,sizeof kbuf,"%d",++nf);
                 char*fld=xmalloc((size_t)(p-st)+1);memcpy(fld,st,(size_t)(p-st));fld[p-st]=0;
                 Val*r=arr_get(c->arr,kbuf,1);v_free(r);*r=v_strnum(fld); if(!*p)break; p++; st=p; } else p++; }
-        } else { /* empty sep: each char */
+        } else {
             while(*p){ snprintf(kbuf,sizeof kbuf,"%d",++nf); char*fld=xmalloc(2);fld[0]=*p++;fld[1]=0;
                 Val*r=arr_get(c->arr,kbuf,1);v_free(r);*r=v_strnum(fld); }
         }
@@ -1096,7 +1086,7 @@ static Val call_builtin(Node *n)
         int own; regex_t *re = dyn_regex(n->list[0], &own);
         Val rv=A(1); char*repl=to_str(&rv); v_free(&rv);
         Node *target = n->nlist>=3 ? n->list[2] : NULL;
-        char *src; 
+        char *src;
         if (target) { Val tv=lval_get(target); src=to_str(&tv); }
         else src = xstrdup(get_field(0));
         int cnt=0; char *res = do_subst(global, NULL, re, repl, src, &cnt);
@@ -1163,7 +1153,6 @@ static char *do_subst(int global, const char *re_src, regex_t *re, const char *r
     return out;
 }
 
-/* ---------- printf ---------- */
 static void format_into(FILE *out, Node *n, int start, char **retbuf);
 
 char *awk_sprintf(Node *n)
@@ -1235,7 +1224,6 @@ static Val call_func(Node *n)
     return r;
 }
 
-/* ---------- statements ---------- */
 static FILE *out_stream(int op, Node *dest)
 {
     if (!dest) return stdout;
@@ -1245,7 +1233,7 @@ static FILE *out_stream(int op, Node *dest)
     else if (!strcmp(name,"/dev/stdout")) f = stdout;
     else if (op=='|') f = popen(name, "w");
     else f = fopen(name, op=='a'?"a":"w");
-    /* NOTE: leaks fd across calls; acceptable for short scripts */
+
     free(name);
     return f ? f : stdout;
 }
@@ -1313,7 +1301,6 @@ static void exec(Node *n)
     }
 }
 
-/* ---------- main loop ---------- */
 static int pat_match(Node *p) { Val v = eval(p); int t = to_bool(&v); v_free(&v); return t; }
 
 static void run_record(void)
@@ -1414,14 +1401,13 @@ int main(int argc, char **argv)
 
     parse_program_text(progtext);
 
-    /* BEGIN */
     for (int r=0;r<g_nrules;r++) if(g_rules[r].when==1){ exec(g_rules[r].action); if(g_flow==FL_EXIT)break; }
 
     int has_main=0, has_end=0;
     for (int r=0;r<g_nrules;r++){ if(g_rules[r].when==0)has_main=1; if(g_rules[r].when==2)has_end=1; }
 
     if (g_flow!=FL_EXIT && (has_main||has_end)) {
-        /* ARGV files or stdin; also handle var=val among files */
+
         int nf=0;
         for (int k=i;k<argc;k++) { if (strchr(argv[k],'=') && (isalpha((unsigned char)argv[k][0])||argv[k][0]=='_')) continue; nf++; }
         if (nf==0) { g_flow=FL_NONE; run_file(stdin,""); }

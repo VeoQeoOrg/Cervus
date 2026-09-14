@@ -116,7 +116,6 @@ static int parse_hex(const char *s, uint8_t *out, int outlen)
     return n;
 }
 
-/* download url into a freshly-malloc'd buffer via a temp file */
 static char *fetch_url(const char *url, size_t *len_out, int *status_out)
 {
     char tmp[128];
@@ -153,9 +152,6 @@ static void hex_of(const uint8_t *b, int n, char *out)
     out[n*2] = 0;
 }
 
-/* ---- index --------------------------------------------------------------- */
-/* A record is a run of "key: value" lines; records are separated by blank
-   lines. field() returns a malloc'd copy of one field within a record. */
 static char *field(const char *rec, const char *key)
 {
     size_t klen = strlen(key);
@@ -177,7 +173,6 @@ static char *field(const char *rec, const char *key)
     return NULL;
 }
 
-/* find the record for NAME in the index text; returns malloc'd record or NULL */
 static char *find_record(const char *index, const char *name)
 {
     const char *p = index;
@@ -202,7 +197,6 @@ static char *load_index(void)
     return idx;
 }
 
-/* ---- ustar extraction ---------------------------------------------------- */
 static unsigned long long oct(const char *s, int n)
 {
     unsigned long long v = 0;
@@ -221,8 +215,6 @@ static void mkparents(const char *path)
         if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
 }
 
-/* extract the ustar image in `tar` (len bytes) rooted at "/", appending each
-   installed path to `files` (a FILE open for writing). returns 0 on success. */
 static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
 {
     size_t off = 0;
@@ -243,7 +235,7 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
 
         char dst[1088];
         snprintf(dst, sizeof dst, "/%s", name);
-        /* collapse any "//" from a leading-slash tarball */
+
         for (char *q = dst; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
 
         if (type == '5') {
@@ -276,7 +268,6 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
     return 0;
 }
 
-/* ---- commands ------------------------------------------------------------ */
 static int is_installed(const char *name)
 {
     char p[512];
@@ -398,7 +389,6 @@ static int cmd_info(const char *name)
     return 0;
 }
 
-/* install a single already-located record; deps handled by caller */
 static int install_one(const char *idx, const char *name)
 {
     if (is_installed(name)) { printf("%s is already installed\n", name); return 0; }
@@ -464,7 +454,6 @@ static int install_one(const char *idx, const char *name)
     return 0;
 }
 
-/* resolve depends recursively, install leaves first; simple cycle guard */
 static int seen_dep(char list[][64], int n, const char *name)
 {
     for (int i = 0; i < n; i++) if (!strcmp(list[i], name)) return 1;
@@ -481,7 +470,7 @@ static int install_with_deps(const char *idx, const char *name, char order[][64]
     free(rec);
     if (dep) {
         for (char *tok = strtok(dep, " ,"); tok; tok = strtok(NULL, " ,")) {
-            if (!strcmp(tok, "libc")) continue;          /* part of the base system */
+            if (!strcmp(tok, "libc")) continue;
             if (install_with_deps(idx, tok, order, norder) != 0) { free(dep); return 1; }
         }
         free(dep);
@@ -510,7 +499,7 @@ static int remove_one(const char *name)
     char flist[512]; snprintf(flist, sizeof flist, DBDIR "/%s.files", name);
     char *fl = read_file(flist, NULL);
     if (fl) {
-        /* unlink files first, then dirs (in reverse) */
+
         char *lines[8192]; int n = 0;
         for (char *line = strtok(fl, "\n"); line && n < 8192; line = strtok(NULL, "\n")) lines[n++] = line;
         for (int i = n - 1; i >= 0; i--) if (lines[i][0] == 'f') unlink(lines[i] + 2);

@@ -509,7 +509,7 @@ static int next_raw(str_t *dst, int *had_nl)
 static int is_last_line(void)
 {
     if (g_separate) {
-        int nl; 
+        int nl;
         if (g_peek_valid) return 0;
         if (read_line(g_cur, &g_peek, &nl) < 0) return 1;
         g_peek_nl = nl; g_peek_valid = 1;
@@ -600,7 +600,7 @@ static int run_stream(void)
                         break;
                     case C_NEXTA: {
                         if (is_last) {
-                            if (!g_quiet) { /* GNU prints pattern then ends */ }
+                            if (!g_quiet) {  }
                         }
                         int nnl;
                         str_t tmp; s_init(&tmp);
