@@ -140,29 +140,14 @@ static const char *path_next_component(const char *src, char *dst, size_t maxlen
     return src;
 }
 
-int vfs_lookup(const char *path, vnode_t **out) {
-    if (!path || !out)  return -EINVAL;
-    if (!g_vfs_ready)   return -EIO;
-    if (path[0] != '/') return -EINVAL;
+#define VFS_SYMLINK_MAX 8
 
-    const char *rel;
-    vfs_mount_t *mnt = find_mount(path, &rel);
-    if (!mnt) {
-        serial_printf("[VFS] lookup '%s': no mount found\n", path);
-        return -ENOENT;
-    }
+static int lookup_path(const char *path, vnode_t **out, bool follow_final, int depth);
 
-    vnode_t *cur = mnt->root;
-    if (!cur) {
-        serial_printf("[VFS] lookup '%s': mount root is NULL!\n", path);
-        return -EIO;
-    }
+static int walk_from(vnode_t *dir, const char *rel, vnode_t **out,
+                     bool follow_final, int depth) {
+    vnode_t *cur = dir;
     vnode_ref(cur);
-
-    if (*rel == '\0') {
-        *out = cur;
-        return 0;
-    }
 
     char comp[VFS_MAX_NAME];
     const char *p = rel;
@@ -186,6 +171,37 @@ int vfs_lookup(const char *path, vnode_t **out) {
             return ret;
         }
 
+        while (*p == '/') p++;
+        bool is_last = (*p == '\0');
+
+        if (next->type == VFS_NODE_SYMLINK && (!is_last || follow_final)) {
+            if (depth >= VFS_SYMLINK_MAX) {
+                vnode_unref(next);
+                vnode_unref(cur);
+                return -ELOOP;
+            }
+            if (!next->ops || !next->ops->readlink) {
+                vnode_unref(next);
+                vnode_unref(cur);
+                return -EIO;
+            }
+
+            char target[VFS_MAX_PATH];
+            int64_t n = next->ops->readlink(next, target, sizeof(target) - 1);
+            vnode_unref(next);
+            if (n < 0) { vnode_unref(cur); return (int)n; }
+            target[n] = '\0';
+
+            vnode_t *resolved = NULL;
+            if (target[0] == '/')
+                ret = lookup_path(target, &resolved, is_last ? follow_final : true, depth + 1);
+            else
+                ret = walk_from(cur, target, &resolved, is_last ? follow_final : true, depth + 1);
+            if (ret < 0) { vnode_unref(cur); return ret; }
+
+            next = resolved;
+        }
+
         vnode_unref(cur);
         cur = next;
 
@@ -199,6 +215,42 @@ int vfs_lookup(const char *path, vnode_t **out) {
 
     *out = cur;
     return 0;
+}
+
+static int lookup_path(const char *path, vnode_t **out, bool follow_final, int depth) {
+    if (!path || !out)  return -EINVAL;
+    if (!g_vfs_ready)   return -EIO;
+    if (path[0] != '/') return -EINVAL;
+    if (depth >= VFS_SYMLINK_MAX) return -ELOOP;
+
+    const char *rel;
+    vfs_mount_t *mnt = find_mount(path, &rel);
+    if (!mnt) {
+        serial_printf("[VFS] lookup '%s': no mount found\n", path);
+        return -ENOENT;
+    }
+
+    vnode_t *root = mnt->root;
+    if (!root) {
+        serial_printf("[VFS] lookup '%s': mount root is NULL!\n", path);
+        return -EIO;
+    }
+
+    if (*rel == '\0') {
+        vnode_ref(root);
+        *out = root;
+        return 0;
+    }
+
+    return walk_from(root, rel, out, follow_final, depth);
+}
+
+int vfs_lookup(const char *path, vnode_t **out) {
+    return lookup_path(path, out, true, 0);
+}
+
+int vfs_lookup_nofollow(const char *path, vnode_t **out) {
+    return lookup_path(path, out, false, 0);
 }
 
 vfs_file_t *vfs_file_alloc(void) {
@@ -372,16 +424,34 @@ static void stat_apply_type_bits(vfs_stat_t *out) {
         out->st_blksize = 512;
 }
 
+static int stat_node(vnode_t *node, vfs_stat_t *out);
+
 int vfs_stat(const char *path, vfs_stat_t *out) {
     if (!path || !out) return -EINVAL;
     vnode_t *node = NULL;
     int ret = vfs_lookup(path, &node);
     if (ret < 0) return ret;
+    ret = stat_node(node, out);
+    vnode_unref(node);
+    return ret;
+}
 
+int vfs_lstat(const char *path, vfs_stat_t *out) {
+    if (!path || !out) return -EINVAL;
+    vnode_t *node = NULL;
+    int ret = vfs_lookup_nofollow(path, &node);
+    if (ret < 0) return ret;
+    ret = stat_node(node, out);
+    vnode_unref(node);
+    return ret;
+}
+
+static int stat_node(vnode_t *node, vfs_stat_t *out) {
+    int ret;
+    memset(out, 0, sizeof(*out));
     if (node->ops && node->ops->stat) {
         ret = node->ops->stat(node, out);
     } else {
-        memset(out, 0, sizeof(*out));
         out->st_ino  = node->ino;
         out->st_type = node->type;
         out->st_mode = node->mode;
@@ -391,28 +461,12 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
         ret = 0;
     }
     if (ret == 0) stat_apply_type_bits(out);
-    vnode_unref(node);
     return ret;
 }
 
 int vfs_fstat(vfs_file_t *file, vfs_stat_t *out) {
     if (!file || !file->vnode || !out) return -EBADF;
-    vnode_t *node = file->vnode;
-    int ret;
-    if (node->ops && node->ops->stat) {
-        ret = node->ops->stat(node, out);
-    } else {
-        memset(out, 0, sizeof(*out));
-        out->st_ino  = node->ino;
-        out->st_type = node->type;
-        out->st_mode = node->mode;
-        out->st_uid  = node->uid;
-        out->st_gid  = node->gid;
-        out->st_size = node->size;
-        ret = 0;
-    }
-    if (ret == 0) stat_apply_type_bits(out);
-    return ret;
+    return stat_node(file->vnode, out);
 }
 
 int64_t vfs_ioctl(vfs_file_t *file, uint64_t req, void *arg) {
@@ -564,7 +618,7 @@ int vfs_symlink(const char *target, const char *linkpath) {
 int64_t vfs_readlink(const char *path, char *buf, size_t bufsiz) {
     if (!path || !buf || bufsiz == 0) return -EINVAL;
     vnode_t *node = NULL;
-    int ret = vfs_lookup(path, &node);
+    int ret = vfs_lookup_nofollow(path, &node);
     if (ret < 0) return ret;
     if (node->type != VFS_NODE_SYMLINK) { vnode_unref(node); return -EINVAL; }
     if (!node->ops || !node->ops->readlink) { vnode_unref(node); return -ENOSYS; }

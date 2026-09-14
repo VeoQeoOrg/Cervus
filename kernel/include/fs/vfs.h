@@ -163,6 +163,7 @@ int     vfs_mount_fs(const char *path, vnode_t *fs_root,
 
 int     vfs_umount (const char *path);
 int     vfs_lookup (const char *path, vnode_t **out);
+int     vfs_lookup_nofollow(const char *path, vnode_t **out);
 
 int     vfs_open   (const char *path, int flags, uint32_t mode, vfs_file_t **out);
 void    vfs_close  (vfs_file_t *file);
@@ -170,6 +171,7 @@ int64_t vfs_read   (vfs_file_t *file, void *buf, size_t len);
 int64_t vfs_write  (vfs_file_t *file, const void *buf, size_t len);
 int64_t vfs_seek   (vfs_file_t *file, int64_t offset, int whence);
 int     vfs_stat   (const char *path, vfs_stat_t *out);
+int     vfs_lstat  (const char *path, vfs_stat_t *out);
 int     vfs_fstat  (vfs_file_t *file, vfs_stat_t *out);
 int     vfs_truncate (const char *path, uint64_t new_size);
 int     vfs_ftruncate(vfs_file_t *file, uint64_t new_size);

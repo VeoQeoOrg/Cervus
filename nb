@@ -5,7 +5,17 @@ cd "$ROOT"
 
 JOBS=$(nproc 2>/dev/null || echo 4)
 
-configure() { sh builder/configure.sh; }
+prune_orphans() {
+  for elf in usr/apps/*.elf usr/bin/*.elf usr/installer/*.elf; do
+    [ -e "$elf" ] || continue
+    src=${elf%.elf}.c
+    [ -e "$src" ] && continue
+    rm -f "$elf" "bin/$(basename "${elf%.elf}")" "rootfs/bin/$(basename "${elf%.elf}")"
+    echo "pruned $(basename "${elf%.elf}") -- its source is gone"
+  done
+}
+
+configure() { prune_orphans; sh builder/configure.sh; }
 
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
 

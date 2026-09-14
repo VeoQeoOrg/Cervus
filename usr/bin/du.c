@@ -27,7 +27,7 @@ static void print_sz(unsigned long long bytes, const char *path)
 static unsigned long long walk(const char *path, int top)
 {
     struct stat st;
-    if (stat(path, &st) < 0) {
+    if (lstat(path, &st) < 0) {
         fprintf(stderr, "du: cannot access '%s'\n", path);
         return 0;
     }

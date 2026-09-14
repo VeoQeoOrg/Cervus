@@ -4,5 +4,5 @@
 
 int lstat(const char *path, struct stat *out)
 {
-    return (int)__cervus_sys_ret(syscall2(SYS_STAT, path, out));
+    return (int)__cervus_sys_ret(syscall2(SYS_LSTAT, path, out));
 }

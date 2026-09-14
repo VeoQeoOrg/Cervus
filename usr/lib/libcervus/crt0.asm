@@ -33,6 +33,7 @@ _start:
 
     mov     edi, [rel __cervus_argc]
     mov     rsi, [rel __cervus_argv]
+    mov     rdx, [rel environ]
     call    main
 
     movsxd  rdi, eax

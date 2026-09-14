@@ -147,7 +147,7 @@ static int list_dir(const char *path, const char *display, const ls_opts_t *o, i
         if (o->l || o->F || o->i) {
             char full[512];
             path_join(path, e->name, full, sizeof(full));
-            if (stat(full, &e->st) == 0) e->has_stat = 1;
+            if (lstat(full, &e->st) == 0) e->has_stat = 1;
         }
     }
     closedir(d);

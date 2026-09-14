@@ -17,7 +17,7 @@ typedef struct {
 static int remove_tree(const char *path, const rm_opts_t *o)
 {
     struct stat st;
-    if (stat(path, &st) != 0) {
+    if (lstat(path, &st) != 0) {
         if (o->force) return 0;
         fprintf(stderr, "rm: cannot remove '%s': No such file or directory\n", path);
         return 1;
