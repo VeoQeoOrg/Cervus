@@ -16,9 +16,11 @@
 #define _IOFBF 0
 #define _IOLBF 1
 #define _IONBF 2
-#ifndef BUFSIZ
-#define BUFSIZ 4096
-#endif
+
+#define FILENAME_MAX 4096
+#define FOPEN_MAX 64
+#define TMP_MAX 10000
+#define L_tmpnam 32
 
 typedef struct __cervus_FILE FILE;
 
@@ -31,6 +33,8 @@ int getchar(void);
 int puts(const char *s);
 int fputs(const char *s, FILE *stream);
 int fputc(int c, FILE *stream);
+int putc(int c, FILE *stream);
+int getc(FILE *stream);
 int fgetc(FILE *stream);
 char *fgets(char *s, int n, FILE *stream);
 int ungetc(int c, FILE *stream);

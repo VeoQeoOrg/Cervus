@@ -214,9 +214,20 @@ static char *fetch_url(const char *url, size_t *len_out, int *status_out)
     o.silent = 1;
     o.out_status = &status;
     o.on_progress = progress_draw;
-    int rc = http_request(url, fd, &o);
+    int rc = -1;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt) {
+            lseek(fd, 0, SEEK_SET);
+            if (ftruncate(fd, 0) != 0) break;
+            sleep(2);
+        }
+        status = 0;
+        rc = http_request(url, fd, &o);
+        if (status == 0 && rc > 0) status = rc;
+        if (rc >= 0 && status >= 200 && status < 300) break;
+        if (status >= 400) break;
+    }
     close(fd);
-    if (status == 0 && rc > 0) status = rc;
     if (status_out) *status_out = status;
     if (rc < 0 || status < 200 || status >= 300) { unlink(tmp); return NULL; }
     size_t len;

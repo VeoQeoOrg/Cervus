@@ -100,6 +100,12 @@ for d in "$SYSROOT"/etc/*/; do
     green "sysroot etc/$name installed"
 done
 
+for f in "$SYSROOT"/etc/*; do
+    [ -f "$f" ] || continue
+    cp "$f" "$RFS/etc/"
+    green "sysroot etc/$(basename "$f") installed"
+done
+
 if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
     mkdir -p "$RFS/etc/ssl/certs"
     cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"
