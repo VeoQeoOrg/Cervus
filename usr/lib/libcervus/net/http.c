@@ -177,13 +177,14 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         char hopauth[256];
         if (parse_url(cururl, &https, host, sizeof host, &port, path, sizeof path,
                       hopauth, sizeof hopauth)) {
-            fprintf(stderr, "http: bad url\n"); return -1;
+            if (!opts->silent) fprintf(stderr, "http: bad url\n");
+            return -1;
         }
 
         if (hopauth[0]) snprintf(urlauth, sizeof urlauth, "%s", hopauth);
 
         in_addr_t ip = inet_resolve(host);
-        if (ip == 0xffffffffu) { fprintf(stderr, "http: cannot resolve %s\n", host); return -1; }
+        if (ip == 0xffffffffu) { if (!opts->silent) fprintf(stderr, "http: cannot resolve %s\n", host); return -1; }
         if (opts->verbose) {
             struct in_addr ia; ia.s_addr = ip;
             fprintf(stderr, "* Connecting to %s (%s) port %d%s\n", host, inet_ntoa(ia), port, https ? " (TLS)" : "");
@@ -193,7 +194,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         if (fd < 0) return -1;
         struct sockaddr_in sa; memset(&sa, 0, sizeof sa);
         sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)port); sa.sin_addr.s_addr = ip;
-        if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { fprintf(stderr, "http: connect failed\n"); close(fd); return -1; }
+        if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { if (!opts->silent) fprintf(stderr, "http: connect failed\n"); close(fd); return -1; }
 
         tls_conn *tc = 0;
         if (https) {

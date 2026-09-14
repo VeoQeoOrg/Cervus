@@ -56,7 +56,7 @@
 - [Userland Utilities](#userland-utilities)
 - [The Text Editor (neo)](#the-text-editor-neo)
 - [The File Manager (cfm)](#the-file-manager-cfm)
-- [On-Device Compiler (tcc)](#on-device-compiler-tcc)
+- [Packages (herd)](#packages-herd)
 - [Cross-Compiling from Linux](#cross-compiling-from-linux-the-x86_64-cervus-toolchain)
 - [The Installer](#the-installer)
 - [Keyboard Reference](#keyboard-reference)
@@ -76,8 +76,8 @@
 **Cervus** is a monolithic operating system for the x86_64 architecture, written
 entirely from scratch in C and a small amount of assembly. Every layer of the system
 lives in this repository: the bootloader integration, the kernel, the C library, the
-shell, the userland utilities, the text editor, the file manager, the on-device C
-compiler, and the disk installer. There is no Linux compatibility layer, no glibc,
+shell, the userland utilities, the text editor, the file manager, the package
+manager, and the disk installer. There is no Linux compatibility layer, no glibc,
 and no BusyBox — every component is native to Cervus.
 
 The project has one guiding goal: a system small enough to be read and understood end
@@ -136,7 +136,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
 | **Resilience** | Process regeneration and kernel fault recovery |
-| **Userland** | `csh` shell, ~70 utilities, `neo` editor (multi-language highlighting + file tree), `cfm` file manager, on-device `tcc` and an `x86_64-cervus` cross toolchain |
+| **Userland** | `csh` shell, ~70 utilities, `neo` editor (multi-language highlighting + file tree), `cfm` file manager, `herd` package manager, and an `x86_64-cervus` cross toolchain |
 | **Terminals** | 12 virtual terminals, per-terminal login, a live debug monitor |
 
 ---
@@ -1095,25 +1095,60 @@ directory is shown at the top and the available key bindings along the bottom
 - **Run programs** — `e` executes the selected program.
 - **Toggle hidden files** — `.` shows or hides dotfiles (hidden by default).
 
+Selecting an image previews it in the right pane, and an animated GIF plays there
+frame by frame — decoded and drawn by the system's own image code, in a text
+console:
+
+<div align="center">
+  <img src="assets/screenshots/cfm-gif.png" alt="cfm playing an animated GIF in its preview pane" width="760px">
+</div>
+
 It restores the terminal on exit through the alternate-screen buffer, so your shell
 history is intact when you quit.
 
 ---
 
-## On-Device Compiler (tcc)
+## Packages (herd)
 
-A port of the **Tiny C Compiler** runs on Cervus itself. Because the headers and
-libraries are staged into the system's sysroot, you can write, compile, and run C
-directly on the machine:
+Cervus installs software with **herd**, its own package manager. The base system
+is deliberately small; anything else — compilers, assemblers, a newer kernel — is
+a package.
+
+<div align="center">
+  <img src="assets/screenshots/herd.png" alt="Installing a package with herd" width="760px">
+</div>
 
 ```sh
-neo hello.c            # write a C program
-tcc hello.c -o hello   # compile and link (outputs an executable, +x)
-./hello                # run it
+herd update              # fetch the package list and check its signature
+herd search c            # find something
+herd install tcc         # install it, and whatever it depends on
+herd list                # what is installed
+herd remove tcc          # take it away again
 ```
 
-This is what makes Cervus *self-hosting* at the userland level: the tools needed to
-build new programs are present on the running system.
+Packages come from the **[herd-packs](https://github.com/VeoQeoOrg/herd-packs)**
+repository, which also documents how to build and submit one. The index is signed
+with Ed25519 and checked against `/etc/herd.pub`; an index that does not verify is
+refused, and each package is then matched against the sha256 in that signed index.
+Add `--progress=pacman` if you want something to watch while it downloads.
+
+Two things a running system cannot replace by hand are handled too:
+
+```sh
+herd boot-status         # which bootloader is installed, and where
+herd update-kernel       # replace the kernel, keeping the old one as kernel.old
+herd update-bootloader   # reinstall the bootloader that is already there
+```
+
+Asking for a *different* bootloader than the installed one stops and warns first:
+two loaders claiming one disk is how a machine stops booting.
+
+The installer offers the same packages as a checklist, so a fresh machine can come
+up with the extras already on it:
+
+<div align="center">
+  <img src="assets/screenshots/installer-packages.png" alt="Choosing extra packages during installation" width="760px">
+</div>
 
 ---
 
@@ -1153,6 +1188,23 @@ It:
 3. Copies the system onto the root partition and installs the bootloader.
 4. Prompts for the **root password** and then creates one or more **user accounts**,
    each optionally granted sudo, seeding each home directory from `/etc/skel`.
+5. Offers the packages from the repository as a checklist, and installs the ticked
+   ones into the new system before unmounting it.
+
+Along the way it asks how the console should look. The colour scheme is applied to
+the installer itself as you move over the list, so what you are looking at is what
+the installed system will look like:
+
+<div align="center">
+  <img src="assets/screenshots/themes.png" alt="Choosing a colour scheme, previewed live" width="760px">
+</div>
+
+The same goes for the font — bitmap and TrueType, at a size you pick, with the screen
+redrawn at the new cell size before you commit:
+
+<div align="center">
+  <img src="assets/screenshots/fonts.png" alt="Choosing a console font, previewed live" width="760px">
+</div>
 
 Passwords are masked as you type, and account data is written with correct
 permissions (`/etc/shadow` as mode 0600). On the next boot the installed system comes
@@ -1199,7 +1251,7 @@ A consolidated list of the keys the system reacts to.
 
 Host requirements: a C compiler (`gcc` or `clang`), `nasm`, `ninja`, `qemu`, and
 `xorriso`. The first build fetches and builds a few dependencies (Limine, the
-freestanding C headers, the compiler runtime, and tcc); these are gated behind stamp
+freestanding C headers, and the compiler runtime); these are gated behind stamp
 files so they run only once.
 
 ```sh
@@ -1269,8 +1321,7 @@ usr/
   apps/           larger / full-screen programs (init, neo, cfm, sysmon, …)
   lib/libcervus/  shared userland helpers (readline, tui, auth)
   installer/      the disk installer
-  sysroot/        headers and libraries staged for the on-device compiler
-  tcc/            the Tiny C Compiler port
+  sysroot/        headers and libraries staged into the installed system
 
 builder/          build configurator (configure.sh) and helper scripts
 assets/           screenshots and images used by this document
