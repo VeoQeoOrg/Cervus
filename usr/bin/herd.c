@@ -380,8 +380,13 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
         unsigned mode = (unsigned)oct(h + 100, 8) & 07777;
         if (!mode) mode = 0644;
 
+        const char *rel = name;
+        while (rel[0] == '.' && rel[1] == '/') rel += 2;
+        while (rel[0] == '/') rel++;
+        if (!rel[0]) { off += (fsize + 511) & ~511ULL; continue; }
+
         char dst[1088];
-        snprintf(dst, sizeof dst, "%s/%s", g_root, name);
+        snprintf(dst, sizeof dst, "%s/%s", g_root, rel);
 
         for (char *q = dst; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
 
@@ -628,6 +633,19 @@ static int cmd_info(const char *name)
     return 0;
 }
 
+static int list_has(const char *list, const char *want)
+{
+    size_t wlen = strlen(want);
+    for (const char *p = list; p && *p; ) {
+        const char *eol = strchr(p, '\n');
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len == wlen && !strncmp(p, want, wlen)) return 1;
+        if (!eol) break;
+        p = eol + 1;
+    }
+    return 0;
+}
+
 static int install_one(const char *idx, const char *name)
 {
     char *rec = find_record(idx, name);
@@ -697,7 +715,7 @@ static int install_one(const char *idx, const char *name)
         char *fresh = read_file(oldlist, NULL);
         for (char *line = strtok(prev, "\n"); line; line = strtok(NULL, "\n")) {
             if (line[0] != 'f' || line[1] != ' ') continue;
-            if (fresh && strstr(fresh, line)) continue;
+            if (fresh && list_has(fresh, line)) continue;
             unlink(line + 2);
         }
         free(fresh);
