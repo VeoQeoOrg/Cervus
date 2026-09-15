@@ -2145,29 +2145,89 @@ static int choose_appearance(void) {
 typedef struct {
     char name[48];
     char version[24];
-    char summary[96];
+    char summary[160];
+    char license[32];
+    char depends[96];
+    long size;
     int  chosen;
 } pkg_entry_t;
 
 static pkg_entry_t g_pkgs[MAX_PKGS];
 static int g_npkgs;
 static int g_pkgs_loaded;
+static int g_pkg_focus = -1;
+
+static void info_wrap(int *row, int col, int w, const char *txt) {
+    int max_len = w - 4;
+    if (max_len < 8) return;
+    const char *p = txt;
+    while (*p) {
+        int take = 0, last_space = -1;
+        while (p[take] && take < max_len) {
+            if (p[take] == ' ') last_space = take;
+            take++;
+        }
+        if (p[take] && last_space > 0) take = last_space;
+        char line[128];
+        int n = take < (int)sizeof line - 1 ? take : (int)sizeof line - 1;
+        memcpy(line, p, (size_t)n);
+        line[n] = 0;
+        info_print(row, col, w, 1, line);
+        p += take;
+        while (*p == ' ') p++;
+    }
+}
+
+static void human_size(long bytes, char *out, size_t n) {
+    if (bytes <= 0)             snprintf(out, n, "unknown");
+    else if (bytes < 1024)      snprintf(out, n, "%ld B", bytes);
+    else if (bytes < 1024*1024) snprintf(out, n, "%ld KB", (bytes + 512) / 1024);
+    else                        snprintf(out, n, "%.1f MB", (double)bytes / (1024.0*1024.0));
+}
 
 static void info_packages(int row, int col, int w) {
     int r = row;
-    info_print(&r, col, w, 0, "Extra software");
-    r++;
-    info_print(&r, col, w, 1, "These are optional packages from the Cervus");
-    info_print(&r, col, w, 1, "repository. Nothing here is needed to run the");
-    info_print(&r, col, w, 1, "system; pick what you want and it is fetched");
-    info_print(&r, col, w, 1, "and installed at the end.");
-    r++;
+
+    if (g_pkg_focus >= 0 && g_pkg_focus < g_npkgs) {
+        const pkg_entry_t *p = &g_pkgs[g_pkg_focus];
+        char head[96], size[32];
+        snprintf(head, sizeof head, "%s %s", p->name, p->version);
+        info_print(&r, col, w, 0, head);
+        r++;
+        info_wrap(&r, col, w, p->summary);
+        r++;
+        human_size(p->size, size, sizeof size);
+        char line[128];
+        snprintf(line, sizeof line, "download   %s", size);
+        info_print(&r, col, w, 1, line);
+        if (p->license[0]) {
+            snprintf(line, sizeof line, "license    %s", p->license);
+            info_print(&r, col, w, 1, line);
+        }
+        if (p->depends[0]) {
+            snprintf(line, sizeof line, "needs      %s", p->depends);
+            info_print(&r, col, w, 1, line);
+        }
+        snprintf(line, sizeof line, "selected   %s", p->chosen ? "yes" : "no");
+        info_print(&r, col, w, 1, line);
+        r++;
+    } else {
+        info_print(&r, col, w, 0, "Extra software");
+        r++;
+        info_wrap(&r, col, w, "These are optional packages from the Cervus "
+                              "repository. Nothing here is needed to run the "
+                              "system; pick what you want and it is fetched "
+                              "and installed at the end.");
+        r++;
+    }
+
     info_print(&r, col, w, 1, "  Space   tick or untick the highlighted item");
+    info_print(&r, col, w, 1, "  /       search by name or description");
     info_print(&r, col, w, 1, "  Enter   continue with what is ticked");
     info_print(&r, col, w, 1, "  Esc     skip, install nothing extra");
     r++;
-    info_print(&r, col, w, 1, "You can always add or remove them later with");
-    info_print(&r, col, w, 1, "herd install and herd remove.");
+    info_wrap(&r, col, w, "You can always add or remove them later with "
+                          "herd install and herd remove.");
 }
 
 static int is_system_package(const char *name) {
@@ -2207,6 +2267,12 @@ static void load_packages(void) {
             snprintf(cur.version, sizeof cur.version, "%s", line + 9);
         else if (!strncmp(line, "summary: ", 9))
             snprintf(cur.summary, sizeof cur.summary, "%s", line + 9);
+        else if (!strncmp(line, "license: ", 9))
+            snprintf(cur.license, sizeof cur.license, "%s", line + 9);
+        else if (!strncmp(line, "depends: ", 9))
+            snprintf(cur.depends, sizeof cur.depends, "%s", line + 9);
+        else if (!strncmp(line, "size: ", 6))
+            cur.size = strtol(line + 6, NULL, 10);
     }
     if (cur.name[0] && !is_system_package(cur.name) && g_npkgs < MAX_PKGS)
         g_pkgs[g_npkgs++] = cur;
@@ -2221,6 +2287,7 @@ static void packages_searching_screen(void) {
     go_xy(5, g_pane_left_col);
     printf(C_GRAY "  searching for packages..." C_RESET);
     draw_vsplit();
+    g_pkg_focus = -1;
     info_box("Help", info_packages);
     fflush(stdout);
 }
@@ -2262,16 +2329,34 @@ static int choose_packages(void) {
         for (int r = 0; r < nshown; r++) {
             int i = shown[r];
             char row[256];
-            snprintf(row, sizeof row, "[%c] %-10s %-8s %s",
+            snprintf(row, sizeof row, "[%c] %-14s %s",
                      g_pkgs[i].chosen ? '*' : ' ',
-                     g_pkgs[i].name, g_pkgs[i].version, g_pkgs[i].summary);
+                     g_pkgs[i].name, g_pkgs[i].version);
             if (item_w > 4 && (int)strlen(row) > item_w - 2) row[item_w - 2] = 0;
             render_menu_item(5 + r, pane_col, item_w, r == sel, row);
         }
 
+        g_pkg_focus = nshown ? shown[sel] : -1;
+
+        int foot = 6 + (nshown ? nshown : 1);
+        if (!g_pane_split && g_pkg_focus >= 0) {
+            const pkg_entry_t *p = &g_pkgs[g_pkg_focus];
+            char size[32];
+            human_size(p->size, size, sizeof size);
+            int r = foot;
+            info_wrap(&r, pane_col, pane_w, p->summary);
+            char line[128];
+            snprintf(line, sizeof line, "%s  %s%s%s", size,
+                     p->license[0] ? p->license : "",
+                     p->license[0] && p->depends[0] ? "  needs " : "",
+                     p->depends[0] ? p->depends : "");
+            info_print(&r, pane_col, pane_w, 1, line);
+            foot = r + 1;
+        }
+
         int chosen = 0;
         for (int i = 0; i < g_npkgs; i++) chosen += g_pkgs[i].chosen;
-        go_xy(6 + (nshown ? nshown : 1), pane_col);
+        go_xy(foot, pane_col);
         if (typing)
             printf(C_GRAY "  /%s" C_RESET, filter);
         else
