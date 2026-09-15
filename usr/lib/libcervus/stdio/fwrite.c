@@ -16,11 +16,17 @@ static size_t raw_write(int fd, const char *p, size_t total)
     return sent;
 }
 
+extern int __cervus_is_memstream(FILE *f);
+extern int __cervus_memstream_write(FILE *f, const char *buf, size_t len);
+
 size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *s)
 {
     if (!s || size == 0 || nmemb == 0) return 0;
     size_t total = size * nmemb;
     const char *src = (const char *)buf;
+
+    if (__cervus_is_memstream(s))
+        return __cervus_memstream_write(s, src, total) < 0 ? 0 : nmemb;
 
     if (s->dir == __CDIR_READ) __cervus_fflush(s);
     __cervus_setup_buf(s);

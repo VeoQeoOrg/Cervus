@@ -23,6 +23,10 @@ typedef struct { int unused; } pthread_condattr_t;
 #define PTHREAD_COND_INITIALIZER { 0 }
 
 typedef struct { volatile int state; } pthread_once_t;
+
+typedef unsigned int pthread_key_t;
+
+#define PTHREAD_KEYS_MAX 64
 #define PTHREAD_ONCE_INIT { 0 }
 
 typedef struct {
@@ -58,6 +62,11 @@ int  pthread_cond_signal(pthread_cond_t *c);
 int  pthread_cond_broadcast(pthread_cond_t *c);
 
 int  pthread_once(pthread_once_t *o, void (*fn)(void));
+
+int   pthread_key_create(pthread_key_t *key, void (*destructor)(void *));
+int   pthread_key_delete(pthread_key_t key);
+void *pthread_getspecific(pthread_key_t key);
+int   pthread_setspecific(pthread_key_t key, const void *value);
 
 int  pthread_rwlock_init(pthread_rwlock_t *l, void *a);
 int  pthread_rwlock_destroy(pthread_rwlock_t *l);

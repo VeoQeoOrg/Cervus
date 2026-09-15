@@ -79,6 +79,7 @@ int    ferror(FILE *stream);
 void   clearerr(FILE *stream);
 int    fileno(FILE *stream);
 
+FILE  *open_memstream(char **bufp, size_t *sizep);
 FILE  *popen(const char *cmd, const char *type);
 int    pclose(FILE *stream);
 

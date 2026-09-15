@@ -17,6 +17,7 @@
 #define O_CLOEXEC    0x80000
 
 #define F_DUPFD      0
+#define F_DUPFD_CLOEXEC 1030
 #define F_GETFD      1
 #define F_SETFD      2
 #define F_GETFL      3
@@ -24,6 +25,13 @@
 #define F_GETLK      5
 #define F_SETLK      6
 #define F_SETLKW     7
+#define F_ADD_SEALS  1033
+#define F_GET_SEALS  1034
+
+#define F_SEAL_SEAL   0x0001
+#define F_SEAL_SHRINK 0x0002
+#define F_SEAL_GROW   0x0004
+#define F_SEAL_WRITE  0x0008
 #define FD_CLOEXEC   1
 
 #define F_RDLCK      0

@@ -1,6 +1,8 @@
 #ifndef _POLL_H
 #define _POLL_H
 
+#include <signal.h>
+
 typedef unsigned long nfds_t;
 
 struct pollfd {
@@ -17,5 +19,9 @@ struct pollfd {
 #define POLLNVAL   0x020
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+
+
+struct timespec;
+int ppoll(struct pollfd *fds, nfds_t n, const struct timespec *to, const sigset_t *mask);
 
 #endif

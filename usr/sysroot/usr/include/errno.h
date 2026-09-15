@@ -50,6 +50,7 @@ extern int __cervus_errno;
 #define ENOTSOCK     88
 #define EDESTADDRREQ 89
 #define EMSGSIZE     90
+#define EPROTO       71
 #define EPROTOTYPE   91
 #define EPROTONOSUPPORT 93
 #define EAFNOSUPPORT 97

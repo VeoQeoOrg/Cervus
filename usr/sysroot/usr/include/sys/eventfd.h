@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define EFD_SEMAPHORE 1
+#define EFD_CLOEXEC  0x80000
 #define EFD_NONBLOCK  0x800
 
 typedef uint64_t eventfd_t;

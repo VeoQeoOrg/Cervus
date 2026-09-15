@@ -5,18 +5,23 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#define AF_UNSPEC    0
 #define AF_UNIX      1
 #define AF_LOCAL     1
-#define AF_UNSPEC    0
 #define AF_INET      2
 #define AF_INET6     10
+
+#define PF_UNSPEC    AF_UNSPEC
 #define PF_UNIX      AF_UNIX
+#define PF_LOCAL     AF_LOCAL
 #define PF_INET      AF_INET
 #define PF_INET6     AF_INET6
 
 #define SOCK_STREAM  1
 #define SOCK_DGRAM   2
 #define SOCK_RAW     3
+#define SOCK_CLOEXEC  0x80000
+#define SOCK_NONBLOCK 0x800
 
 typedef uint32_t socklen_t;
 
@@ -46,6 +51,16 @@ int     recvfd  (int sockfd);
 int socketpair(int domain, int type, int protocol, int fds[2]);
 
 #define SCM_RIGHTS 1
+
+#define MSG_OOB       0x0001
+#define MSG_PEEK      0x0002
+#define MSG_DONTROUTE 0x0004
+#define MSG_TRUNC     0x0020
+#define MSG_DONTWAIT  0x0040
+#define MSG_EOR       0x0080
+#define MSG_WAITALL   0x0100
+#define MSG_NOSIGNAL  0x4000
+#define MSG_CMSG_CLOEXEC 0x40000000
 #define SOL_SOCKET 1
 
 #define SO_REUSEADDR   2
@@ -57,6 +72,13 @@ int socketpair(int domain, int type, int protocol, int fds[2]);
 #define SO_KEEPALIVE   9
 #define SO_RCVTIMEO   20
 #define SO_SNDTIMEO   21
+#define SO_PEERCRED   17
+
+struct ucred {
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+};
 
 #define SOL_TCP        6
 
@@ -69,10 +91,13 @@ struct sockaddr_storage {
     char           __ss_pad[126];
 };
 
+#ifndef _STRUCT_IOVEC_DEFINED
+#define _STRUCT_IOVEC_DEFINED
 struct iovec {
     void  *iov_base;
     size_t iov_len;
 };
+#endif
 
 struct msghdr {
     void         *msg_name;
@@ -96,6 +121,12 @@ struct cmsghdr {
 #define CMSG_FIRSTHDR(m) ((m)->msg_controllen >= sizeof(struct cmsghdr) \
                           ? (struct cmsghdr *)(m)->msg_control : (struct cmsghdr *)0)
 #define CMSG_DATA(c)    ((unsigned char *)((struct cmsghdr *)(c) + 1))
+#define CMSG_NXTHDR(m, c) \
+    (((c) == 0 || CMSG_ALIGN((c)->cmsg_len) + sizeof(struct cmsghdr) > \
+      (size_t)((unsigned char *)(m)->msg_control + (m)->msg_controllen - \
+               (unsigned char *)(c))) \
+     ? (struct cmsghdr *)0 \
+     : (struct cmsghdr *)((unsigned char *)(c) + CMSG_ALIGN((c)->cmsg_len)))
 
 long sendmsg(int fd, const struct msghdr *msg, int flags);
 long recvmsg(int fd, struct msghdr *msg, int flags);

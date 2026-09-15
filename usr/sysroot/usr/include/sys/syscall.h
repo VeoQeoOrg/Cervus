@@ -176,6 +176,7 @@
 #define SYS_SETITIMER       617
 #define SYS_GETITIMER       618
 #define SYS_SHUTDOWN_SOCK   619
+#define SYS_SIGNALFD        620
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
