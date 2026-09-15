@@ -57,6 +57,7 @@
 - [The Text Editor (neo)](#the-text-editor-neo)
 - [The File Manager (cfm)](#the-file-manager-cfm)
 - [Packages (herd)](#packages-herd)
+- [Wayland](#wayland)
 - [Cross-Compiling from Linux](#cross-compiling-from-linux-the-x86_64-cervus-toolchain)
 - [The Installer](#the-installer)
 - [Keyboard Reference](#keyboard-reference)
@@ -1134,7 +1135,7 @@ anything else, and tells you to reboot when it has replaced the kernel or part o
 the base system.
 
 What is packaged today — Git, Lua, GNU make, SQLite, bzip2, zlib, NASM, TCC,
-Doom, and Cervus itself:
+Doom, sl, Wayland, libffi, libxkbcommon, and Cervus itself:
 
 <div align="center">
   <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">
@@ -1171,6 +1172,39 @@ up with the extras already on it:
 <div align="center">
   <img src="assets/screenshots/installer-packages.png" alt="Choosing extra packages during installation" width="760px">
 </div>
+
+---
+
+## Wayland
+
+Cervus runs **Wayland** — the real libwayland, cross-compiled against its own libc
+and libffi, not a reimplementation. `herd install wayland` brings in the client and
+server libraries, `wlcomp`, and `wldemo`.
+
+`wlcomp` is a compositor that speaks `wl_compositor` and `wl_shm` and blits the
+buffers a client commits straight into the framebuffer. It takes the screen only
+while a surface is mapped, so it leaves the console alone until there is something
+to show, and gives it back on Ctrl-C. `wldemo` is a client: it allocates a shared
+buffer with `memfd_create` and `mmap(MAP_SHARED)`, hands the descriptor over the
+socket with `SCM_RIGHTS`, and animates a 320x240 window through it.
+
+```sh
+herd install wayland
+wlcomp wldemo
+```
+
+<div align="center">
+  <img src="assets/screenshots/wayland.png" alt="A Wayland client animating a window on Cervus" width="760px">
+</div>
+
+Getting here needed the socket layer to behave the way a real client library
+expects: `SCM_RIGHTS` descriptor passing, `memfd_create` with `MAP_SHARED`, epoll,
+`signalfd`, `SO_PEERCRED`, and non-blocking unix sockets — libwayland polls and
+then reads with `MSG_DONTWAIT`, and a kernel that blocks on that read stops
+forever.
+
+`libxkbcommon` is packaged as well, for keymaps and keysyms once there is input to
+route.
 
 ---
 
