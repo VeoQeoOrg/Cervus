@@ -91,6 +91,7 @@ typedef struct _win {
     int     keypad;
     int     delay;
     int     clearok;
+    int     leaveok;
     chtype *cells;
 } WINDOW;
 
@@ -117,6 +118,8 @@ int  wtimeout(WINDOW *w, int delay);
 int  timeout(int delay);
 int  halfdelay(int tenths);
 int  scrollok(WINDOW *w, bool_t on);
+int  leaveok(WINDOW *w, bool_t on);
+int  mvcur(int oldy, int oldx, int newy, int newx);
 int  clearok(WINDOW *w, bool_t on);
 
 int  start_color(void);

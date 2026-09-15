@@ -646,10 +646,39 @@ static int list_has(const char *list, const char *want)
     return 0;
 }
 
+static int system_abi(void)
+{
+    char p[512];
+    snprintf(p, sizeof p, "%s/usr/lib/cervus-abi", g_root);
+    char *t = read_file(p, NULL);
+    if (!t) return -1;
+    int v = atoi(t);
+    free(t);
+    return v;
+}
+
+static int abi_ok(const char *rec, const char *name)
+{
+    char *want = field(rec, "abi");
+    if (!want) return 1;
+
+    int have = system_abi();
+    int w = atoi(want);
+    free(want);
+    if (have < 0 || have == w) return 1;
+
+    fprintf(stderr, "herd: %s was built against libc ABI %d, this system is ABI %d\n",
+            name, w, have);
+    fputs("      the package would not run; it has to be rebuilt\n", stderr);
+    return 0;
+}
+
 static int install_one(const char *idx, const char *name)
 {
     char *rec = find_record(idx, name);
     if (!rec) { fprintf(stderr, "herd: no package '%s' in index\n", name); return 1; }
+
+    if (!abi_ok(rec, name)) { free(rec); return 1; }
 
     char *ver = field(rec, "version");
     char *filef = field(rec, "file");

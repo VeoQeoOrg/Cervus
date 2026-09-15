@@ -158,6 +158,14 @@ int curs_set(int v) {
 int keypad(WINDOW *w, bool_t on)  { if (!w) return ERR; w->keypad = on; return OK; }
 int scrollok(WINDOW *w, bool_t on){ if (!w) return ERR; w->scroll = on; return OK; }
 int clearok(WINDOW *w, bool_t on) { if (!w) return ERR; w->clearok = on; return OK; }
+int leaveok(WINDOW *w, bool_t on)  { if (!w) return ERR; w->leaveok = on; return OK; }
+
+int mvcur(int oldy, int oldx, int newy, int newx) {
+    (void)oldy; (void)oldx;
+    printf("\x1b[%d;%dH", newy + 1, newx + 1);
+    fflush(stdout);
+    return OK;
+}
 int nodelay(WINDOW *w, bool_t on) { if (!w) return ERR; w->delay = on ? 0 : -1; return OK; }
 int wtimeout(WINDOW *w, int d)    { if (!w) return ERR; w->delay = d; return OK; }
 int timeout(int d)                { return wtimeout(stdscr, d); }
@@ -456,8 +464,9 @@ int doupdate(void) {
         }
     }
     fputs("\x1b[0m", stdout);
-    if (stdscr) printf("\x1b[%d;%dH", stdscr->y + stdscr->cury + 1,
-                                      stdscr->x + stdscr->curx + 1);
+    if (stdscr && !stdscr->leaveok)
+        printf("\x1b[%d;%dH", stdscr->y + stdscr->cury + 1,
+                               stdscr->x + stdscr->curx + 1);
     if (g_cursor_vis) fputs("\x1b[?25h", stdout);
     fflush(stdout);
     return OK;

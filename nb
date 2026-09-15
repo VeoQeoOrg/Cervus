@@ -20,6 +20,10 @@ configure() { prune_orphans; sh builder/configure.sh; }
 usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
 
 
+cervus_abi() {
+  awk '/^#define CERVUS_ABI/ {print $3}' usr/sysroot/usr/include/sys/abi.h 2>/dev/null || echo 1
+}
+
 herd_manifest() {
   outdir=$1; name=$2; ver=$3; deps=$4; summary=$5; license=$6
   f="$name-$ver-x86_64.tar.gz"
@@ -33,6 +37,7 @@ size: $sz
 sha256: $sha
 file: $f
 depends: $deps
+abi: $(cervus_abi)
 summary: $summary
 license: $license
 MEOF

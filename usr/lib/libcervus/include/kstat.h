@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/abi.h>
 
 typedef struct {
     uint64_t st_ino;

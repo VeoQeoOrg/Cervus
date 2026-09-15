@@ -228,7 +228,7 @@ printf 'build obj/libcervus/pthread_tramp.o: asm_bare usr/lib/libcervus/pthread/
 printf 'build %s: asm_bare usr/lib/libcervus/crt0.asm\n' "$CRT0"
 printf 'build %s: ar%s obj/libcervus/setjmp.o obj/libcervus/pthread_tramp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
 printf 'rule stub_lib\n  command = rm -f \$out && ar rcs \$out\n  description = AR        \$out\n\n'
-for stub in libm libdl libpthread librt libc; do
+for stub in libm libdl libpthread librt libc libncurses libcurses libtinfo; do
     printf 'build %s/%s.a: stub_lib | %s\n\n' "$SYSLIB" "$stub" "$LIBCERVUS_A"
 done
 
@@ -274,7 +274,7 @@ printf 'build bin/kernel: link_kernel%s | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
 printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s builder/VERSION builder/mk_initramfs.sh | %s %s %s\n\n' \
-    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a" "$LIMINE_STAMP"
+    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a $SYSLIB/libncurses.a $SYSLIB/libcurses.a $SYSLIB/libtinfo.a" "$LIMINE_STAMP"
 
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh builder/VERSION | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"

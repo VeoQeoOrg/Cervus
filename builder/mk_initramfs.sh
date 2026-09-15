@@ -163,6 +163,12 @@ copy_boot limine/BOOTX64.EFI         "$RFS/boot/BOOTX64.EFI"           optional
 copy_boot limine/BOOTIA32.EFI        "$RFS/boot/BOOTIA32.EFI"          optional
 copy_boot "$WALLPAPER"               "$RFS/boot/wallpaper.png"         optional
 
+ABI=$(awk '/^#define CERVUS_ABI/ {print $3}' usr/sysroot/usr/include/sys/abi.h 2>/dev/null)
+[ -n "$ABI" ] || ABI=1
+mkdir -p "$RFS/usr/lib"
+printf '%s\n' "$ABI" > "$RFS/usr/lib/cervus-abi"
+green "libc ABI $ABI"
+
 register_pkg() {
     name=$1; summary=$2; shift 2
     db="$RFS/var/lib/herd"
@@ -181,6 +187,7 @@ version: $SYSVER
 arch: x86_64
 file: $name-$SYSVER-x86_64.tar.gz
 depends: libc
+abi: $ABI
 summary: $summary
 license: GPL-3.0
 PKGEOF
