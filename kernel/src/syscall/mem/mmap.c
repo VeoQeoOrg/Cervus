@@ -21,6 +21,8 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
         if (!file || !file->vnode) return (int64_t)MAP_FAILED;
         if (memfd_is(file->vnode)) {
             backing = file->vnode;
+            if (task_map_track(t, backing) < 0) { fd_put(file); return (int64_t)MAP_FAILED; }
+            fd_put(file);
         } else {
             if (flags & MAP_SHARED) { fd_put(file); return (int64_t)MAP_FAILED; }
             filebacked = file;
@@ -54,6 +56,7 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     uint64_t vf = VMM_PRESENT | VMM_USER;
     if (prot & PROT_WRITE) vf |= VMM_WRITE;
     if (!(prot & PROT_EXEC)) vf |= VMM_NOEXEC;
+    if (backing) vf |= VMM_SHARED;
 
     for (size_t i = 0; i < pages; i++) {
         uintptr_t phys;

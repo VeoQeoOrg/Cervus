@@ -164,6 +164,8 @@ typedef struct task {
     uint32_t  umask;
     uint64_t  alarm_at_ns;
     uint64_t  alarm_interval_ns;
+
+    struct task_mapping *mappings;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -189,6 +191,10 @@ void sched_init(void);
 void sched_reschedule(void);
 void sched_print_stats(void);
 void task_yield(void);
+
+struct vnode;
+int  task_map_track(task_t *t, struct vnode *vn);
+void task_map_drop_all(task_t *t);
 void task_sleep_ns(uint64_t ns);
 void task_sleep_ms(uint64_t ms);
 uint64_t task_set_alarm(task_t *t, uint64_t seconds);

@@ -514,6 +514,7 @@ void task_destroy(task_t* task) {
 
     vfs_lock_release_owner((int)task->pid);
     vt_fb_task_exit(task);
+    task_map_drop_all(task);
 
     if (task->fd_table) {
         fd_table_destroy(task->fd_table);
@@ -600,6 +601,7 @@ __attribute__((noreturn)) void task_exit(void)
 
     vfs_lock_release_owner((int)me->pid);
     vt_fb_task_exit(me);
+    task_map_drop_all(me);
 
     if (me->fd_table) {
         fd_table_destroy(me->fd_table);
@@ -884,6 +886,38 @@ void sched_reschedule(void) {
     process_deferred_free();
 
     asm volatile("sti");
+}
+
+typedef struct task_mapping {
+    struct task_mapping *next;
+    vnode_t             *vn;
+} task_mapping_t;
+
+int task_map_track(task_t *t, vnode_t *vn)
+{
+    if (!t || !vn) return -1;
+    for (task_mapping_t *m = t->mappings; m; m = m->next)
+        if (m->vn == vn) return 0;
+    task_mapping_t *m = kmalloc(sizeof *m);
+    if (!m) return -1;
+    vnode_ref(vn);
+    m->vn = vn;
+    m->next = t->mappings;
+    t->mappings = m;
+    return 0;
+}
+
+void task_map_drop_all(task_t *t)
+{
+    if (!t) return;
+    task_mapping_t *m = t->mappings;
+    t->mappings = NULL;
+    while (m) {
+        task_mapping_t *next = m->next;
+        vnode_unref(m->vn);
+        kfree(m);
+        m = next;
+    }
 }
 
 void task_yield(void) {
