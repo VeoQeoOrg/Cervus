@@ -36,3 +36,29 @@ int mkstemp(char *template)
     __cervus_errno = EEXIST;
     return -1;
 }
+
+char *mktemp(char *template)
+{
+    if (!template) { __cervus_errno = EINVAL; return template; }
+    size_t len = strlen(template);
+    if (len < 6) { __cervus_errno = EINVAL; template[0] = 0; return template; }
+    char *suf = template + len - 6;
+    for (int i = 0; i < 6; i++) {
+        if (suf[i] != 'X') { __cervus_errno = EINVAL; template[0] = 0; return template; }
+    }
+    static uint64_t __mktemp_seq = 0;
+    uint64_t pid = (uint64_t)getpid();
+    for (int attempt = 0; attempt < 100; attempt++) {
+        uint64_t seed = (cervus_uptime_ns() ^ (pid << 24)) + (__mktemp_seq++);
+        const char *alpha = "0123456789abcdefghijklmnopqrstuvwxyz";
+        for (int i = 0; i < 6; i++) {
+            suf[i] = alpha[seed % 36];
+            seed /= 36;
+        }
+        struct stat st;
+        if (stat(template, &st) != 0) return template;
+    }
+    __cervus_errno = EEXIST;
+    template[0] = 0;
+    return template;
+}
