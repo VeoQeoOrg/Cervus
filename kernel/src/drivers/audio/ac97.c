@@ -85,14 +85,18 @@ static void po_reset(void) {
     }
 }
 
+static void ac97_resync_if_starved(void) {
+    if (!g_ac97.running) return;
+    if (!(po_r16(PO_SR) & SR_DCH)) return;
+
+    po_w8(PO_CR, (uint8_t)(po_r8(PO_CR) & ~CR_RPBM));
+    po_w16(PO_SR, SR_CLEAR);
+    g_ac97.head    = (uint8_t)((po_r8(PO_CIV) + 1) % AC97_NBUF);
+    g_ac97.running = 0;
+}
+
 static void ac97_ensure_running(void) {
-    if (g_ac97.running) {
-        if (po_r16(PO_SR) & SR_DCH) {
-            po_w16(PO_SR, SR_CLEAR);
-            po_w8(PO_CR, po_r8(PO_CR) | CR_RPBM);
-        }
-        return;
-    }
+    if (g_ac97.running) return;
     po_w16(PO_SR, SR_CLEAR);
     po_w8(PO_CR, CR_RPBM);
     g_ac97.running = 1;
@@ -120,6 +124,7 @@ long ac97_write(const void *pcm, size_t bytes) {
 
     const uint8_t *src = pcm;
     size_t off = 0;
+    ac97_resync_if_starved();
     while (off < bytes) {
         uint8_t civ = po_r8(PO_CIV);
         uint8_t head = g_ac97.head;
@@ -127,6 +132,7 @@ long ac97_write(const void *pcm, size_t bytes) {
         if (inflight >= AC97_NBUF - 1) {
             ac97_ensure_running();
             task_sleep_ms(2);
+            ac97_resync_if_starved();
             continue;
         }
 

@@ -146,7 +146,10 @@ void vt_switch(int n) {
 
     int owns = (g_fb_owner_vt == n);
     console_set_offscreen(owns);
-    if (!owns) {
+    if (owns) {
+        fb_clear(global_framebuffer, 0);
+        fb_flush(global_framebuffer);
+    } else {
         console_redraw_grid();
         fb_flush(global_framebuffer);
     }
