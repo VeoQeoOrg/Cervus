@@ -38,6 +38,7 @@ sha256: $sha
 file: $f
 depends: $deps
 abi: $(cervus_abi)
+built: $(date -u +%Y-%m-%d)
 summary: $summary
 license: $license
 MEOF

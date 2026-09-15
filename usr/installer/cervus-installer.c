@@ -2170,6 +2170,15 @@ static void info_packages(int row, int col, int w) {
     info_print(&r, col, w, 1, "herd install and herd remove.");
 }
 
+static int is_system_package(const char *name) {
+    static const char *sys[] = {
+        "kernel", "cervus-base", "cervus-libc", "cervus-media", "cervus-system",
+        "limine", "grub", NULL
+    };
+    for (int i = 0; sys[i]; i++) if (!strcmp(name, sys[i])) return 1;
+    return 0;
+}
+
 static void load_packages(void) {
     if (g_pkgs_loaded) return;
     g_pkgs_loaded = 1;
@@ -2187,7 +2196,8 @@ static void load_packages(void) {
         char *nl = strchr(line, '\n');
         if (nl) *nl = 0;
         if (!line[0]) {
-            if (cur.name[0] && g_npkgs < MAX_PKGS) g_pkgs[g_npkgs++] = cur;
+            if (cur.name[0] && !is_system_package(cur.name) && g_npkgs < MAX_PKGS)
+                g_pkgs[g_npkgs++] = cur;
             memset(&cur, 0, sizeof cur);
             continue;
         }
@@ -2198,15 +2208,38 @@ static void load_packages(void) {
         else if (!strncmp(line, "summary: ", 9))
             snprintf(cur.summary, sizeof cur.summary, "%s", line + 9);
     }
-    if (cur.name[0] && g_npkgs < MAX_PKGS) g_pkgs[g_npkgs++] = cur;
+    if (cur.name[0] && !is_system_package(cur.name) && g_npkgs < MAX_PKGS)
+        g_pkgs[g_npkgs++] = cur;
     fclose(f);
 }
 
+static void packages_searching_screen(void) {
+    term_size_query();
+    hide_cursor();
+    clear_screen();
+    draw_pane_title(2, g_pane_left_col, g_pane_left_w, "Extra software");
+    go_xy(5, g_pane_left_col);
+    printf(C_GRAY "  searching for packages..." C_RESET);
+    draw_vsplit();
+    info_box("Help", info_packages);
+    fflush(stdout);
+}
+
+static int pkg_matches(const pkg_entry_t *p, const char *needle) {
+    if (!needle[0]) return 1;
+    return strcasestr(p->name, needle) != NULL ||
+           strcasestr(p->summary, needle) != NULL;
+}
+
 static int choose_packages(void) {
+    packages_searching_screen();
     load_packages();
     if (g_npkgs == 0) return 0;
 
-    int sel = 0;
+    char filter[64] = {0};
+    int  typing = 0;
+    int  sel = 0;
+
     for (;;) {
         term_size_query();
         int pane_col = g_pane_left_col;
@@ -2216,31 +2249,82 @@ static int choose_packages(void) {
         clear_screen();
         draw_pane_title(2, pane_col, pane_w, "Extra software");
 
-        for (int i = 0; i < g_npkgs; i++) {
+        int shown[MAX_PKGS], nshown = 0;
+        for (int i = 0; i < g_npkgs; i++)
+            if (pkg_matches(&g_pkgs[i], filter)) shown[nshown++] = i;
+
+        if (nshown == 0) {
+            go_xy(5, pane_col);
+            printf(C_GRAY "  nothing matches '%s'" C_RESET, filter);
+        }
+        if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
+
+        for (int r = 0; r < nshown; r++) {
+            int i = shown[r];
             char row[256];
             snprintf(row, sizeof row, "[%c] %-10s %-8s %s",
                      g_pkgs[i].chosen ? '*' : ' ',
                      g_pkgs[i].name, g_pkgs[i].version, g_pkgs[i].summary);
             if (item_w > 4 && (int)strlen(row) > item_w - 2) row[item_w - 2] = 0;
-            render_menu_item(5 + i, pane_col, item_w, i == sel, row);
+            render_menu_item(5 + r, pane_col, item_w, r == sel, row);
         }
 
         int chosen = 0;
         for (int i = 0; i < g_npkgs; i++) chosen += g_pkgs[i].chosen;
-        go_xy(6 + g_npkgs, pane_col);
-        printf(C_GRAY "  %d selected - Space ticks, Enter continues" C_RESET, chosen);
+        go_xy(6 + (nshown ? nshown : 1), pane_col);
+        if (typing)
+            printf(C_GRAY "  /%s" C_RESET, filter);
+        else
+            printf(C_GRAY "  %d selected - Space ticks, / searches, Enter continues" C_RESET,
+                   chosen);
 
         draw_vsplit();
         info_box("Help", info_packages);
         fflush(stdout);
 
         int k = read_key();
-        if (k == KEY_UP)        sel = (sel + g_npkgs - 1) % g_npkgs;
-        else if (k == KEY_DOWN) sel = (sel + 1) % g_npkgs;
-        else if (k == ' ')      g_pkgs[sel].chosen = !g_pkgs[sel].chosen;
+
+        if (typing) {
+            size_t fl = strlen(filter);
+            if (k == '\r' || k == '\n') { typing = 0; }
+            else if (k == KEY_ESC)        { typing = 0; filter[0] = 0; }
+            else if (k == 127 || k == 8)  { if (fl) filter[fl - 1] = 0; }
+            else if (k >= 32 && k < 127 && fl + 1 < sizeof filter) {
+                filter[fl] = (char)k;
+                filter[fl + 1] = 0;
+                sel = 0;
+            }
+            continue;
+        }
+
+        if (k == KEY_UP)        sel = nshown ? (sel + nshown - 1) % nshown : 0;
+        else if (k == KEY_DOWN) sel = nshown ? (sel + 1) % nshown : 0;
+        else if (k == '/')      { typing = 1; filter[0] = 0; sel = 0; }
+        else if (k == ' ')      { if (nshown) g_pkgs[shown[sel]].chosen = !g_pkgs[shown[sel]].chosen; }
         else if (k == '\r' || k == '\n') return 0;
         else if (k == KEY_ESC)  { for (int i = 0; i < g_npkgs; i++) g_pkgs[i].chosen = 0; return 0; }
     }
+}
+
+static void pkg_bar(const char *name, int pct, int done, int ok) {
+    char bar[64];
+    int width = 24;
+    int fill = pct * width / 100;
+    int n = 0;
+    bar[n++] = '[';
+    for (int i = 0; i < width; i++) bar[n++] = i < fill ? '#' : ' ';
+    bar[n++] = ']';
+    bar[n] = 0;
+
+    char note[160];
+    if (done)
+        snprintf(note, sizeof note, "       %-12s %s %s", name, bar,
+                 ok ? C_GREEN "installed" C_RESET : C_RED "failed" C_RESET);
+    else
+        snprintf(note, sizeof note, "       %-12s %s %3d%%", name, bar, pct);
+
+    log_replace_last(note);
+    install_redraw_log();
 }
 
 static void install_chosen_packages(void) {
@@ -2250,19 +2334,36 @@ static void install_chosen_packages(void) {
 
     step_begin("Installing extra software");
     int failed = 0;
+
     for (int i = 0; i < g_npkgs; i++) {
         if (!g_pkgs[i].chosen) continue;
-        char cmd[256], note[96];
+
+        char cmd[256];
         snprintf(cmd, sizeof cmd,
-                 "herd --root=/mnt/root --progress=none install %s >/dev/null 2>&1",
+                 "herd --root=/mnt/root --progress=plain -y install %s 2>/dev/null",
                  g_pkgs[i].name);
-        int rc = system(cmd);
-        snprintf(note, sizeof note, "       %s %s", g_pkgs[i].name,
-                 rc == 0 ? C_GREEN "installed" C_RESET : C_RED "failed" C_RESET);
-        log_append(note);
-        install_redraw_log();
+
+        log_append("");
+        pkg_bar(g_pkgs[i].name, 0, 0, 0);
+
+        FILE *p = popen(cmd, "r");
+        if (!p) { pkg_bar(g_pkgs[i].name, 0, 1, 0); failed = 1; continue; }
+
+        char line[256];
+        int last = -1;
+        while (fgets(line, sizeof line, p)) {
+            if (line[0] != 'P' || line[1] != ' ') continue;
+            int pct = atoi(line + 2);
+            if (pct == last) continue;
+            last = pct;
+            pkg_bar(g_pkgs[i].name, pct, 0, 0);
+        }
+
+        int rc = pclose(p);
+        pkg_bar(g_pkgs[i].name, 100, 1, rc == 0);
         if (rc != 0) failed = 1;
     }
+
     step_ok(failed ? "extra software (with failures)" : "extra software");
 }
 
@@ -2603,13 +2704,14 @@ static int do_main_install_flow(disk_entry_t *disks, int n_disks) {
         if (choose_rtc_mode() < 0) continue;
         if (choose_appearance() < 0) continue;
         if (choose_packages() < 0) continue;
+
+        int bl = choose_bootloader();
+        if (bl < 0) continue;
+
         if (confirm_screen(&disks[picked], &L) != 1) continue;
 
         account_cfg_t acc;
         if (account_setup_screen(&acc) != 1) continue;
-
-        int bl = choose_bootloader();
-        if (bl < 0) continue;
 
         do_install(&disks[picked], &L, &acc, (bootloader_t)bl, L.fs);
         return EXIT_CANCEL;

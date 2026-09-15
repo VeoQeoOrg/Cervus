@@ -37,7 +37,7 @@ static const char USAGE[] =
     "The repository is read from $HERD_REPO or /etc/herd.conf (key repo=),\n"
     "and the index signature is checked against /etc/herd.pub.\n"
     "\n"
-    "  --progress=STYLE  bar, pacman, hash, dots, percent or none\n"
+    "  --progress=STYLE  bar, pacman, hash, dots, percent, plain or none\n"
     "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n"
     "  --root=DIR        install into DIR instead of /, for setting up\n"
     "                    another system from this one\n"
@@ -48,7 +48,7 @@ static const char USAGE[] =
 #define CONF     "/etc/herd.conf"
 #define PUBKEY   "/etc/herd.pub"
 
-enum { PG_BAR, PG_PACMAN, PG_HASH, PG_DOTS, PG_PERCENT, PG_NONE };
+enum { PG_BAR, PG_PACMAN, PG_HASH, PG_DOTS, PG_PERCENT, PG_PLAIN, PG_NONE };
 
 static int  g_style = PG_BAR;
 static int  g_tty;
@@ -64,6 +64,7 @@ static void progress_style(const char *name)
     else if (!strcmp(name, "hash"))    g_style = PG_HASH;
     else if (!strcmp(name, "dots"))    g_style = PG_DOTS;
     else if (!strcmp(name, "percent")) g_style = PG_PERCENT;
+    else if (!strcmp(name, "plain"))   g_style = PG_PLAIN;
     else if (!strcmp(name, "none"))    g_style = PG_NONE;
 }
 
@@ -72,6 +73,11 @@ static void progress_begin(const char *label)
     snprintf(g_label, sizeof g_label, "%s", label ? label : "");
     g_dots = 0;
     g_active = 1;
+    if (g_style == PG_PLAIN) {
+        printf("BEGIN %s\n", g_label);
+        fflush(stdout);
+        return;
+    }
     if (g_style == PG_NONE || !g_tty) return;
     if (g_style == PG_DOTS) fprintf(stderr, "%-20s ", g_label);
 }
@@ -79,7 +85,19 @@ static void progress_begin(const char *label)
 static void progress_draw(void *ctx, long got, long total)
 {
     (void)ctx;
-    if (!g_active || g_style == PG_NONE || !g_tty) return;
+    if (!g_active || g_style == PG_NONE) return;
+    if (g_style == PG_PLAIN) {
+        static long last;
+        int pct = total > 0 ? (int)((long long)got * 100 / total) : 0;
+        if (pct > 100) pct = 100;
+        if (got < last || pct == 100 || got - last >= 16384) {
+            printf("P %d\n", pct);
+            fflush(stdout);
+            last = got;
+        }
+        return;
+    }
+    if (!g_tty) return;
 
     if (g_style == PG_DOTS) {
         long want = total > 0 ? (got * 40 / total) : (got / 65536);
@@ -119,6 +137,11 @@ static void progress_end(int ok)
 {
     if (!g_active) return;
     g_active = 0;
+    if (g_style == PG_PLAIN) {
+        printf("END %s\n", ok ? "ok" : "failed");
+        fflush(stdout);
+        return;
+    }
     if (g_style == PG_NONE || !g_tty) return;
     if (g_style == PG_DOTS) { fprintf(stderr, " %s\n", ok ? "ok" : "failed"); return; }
     progress_draw(NULL, 1, 1);
@@ -582,12 +605,13 @@ static int cmd_available(void)
         char *nm = field(rec, "name");
         char *ver = field(rec, "version");
         char *sm = field(rec, "summary");
+        char *dt = field(rec, "built");
         if (nm) {
-            printf("%-14s %-10s %-9s %s\n", nm, ver ? ver : "?",
-                   is_installed(nm) ? "installed" : "", sm ? sm : "");
+            printf("%-14s %-10s %-11s %-9s %s\n", nm, ver ? ver : "?",
+                   dt ? dt : "", is_installed(nm) ? "installed" : "", sm ? sm : "");
             n++;
         }
-        free(nm); free(ver); free(sm); free(rec);
+        free(nm); free(ver); free(sm); free(dt); free(rec);
         if (!end) break;
         p = end + 2;
     }
