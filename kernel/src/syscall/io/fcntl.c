@@ -3,10 +3,13 @@
 #include "../../../include/signal/signal.h"
 
 #define F_DUPFD 0
+#define F_DUPFD_CLOEXEC 1030
 #define F_GETFD 1
 #define F_SETFD 2
 #define F_GETFL 3
 #define F_SETFL 4
+
+extern void unix_set_nonblock(vnode_t *vn, int on);
 #define F_GETLK 5
 #define F_SETLK 6
 #define F_SETLKW 7
@@ -106,13 +109,23 @@ int64_t sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
     if (!f) return -EBADF;
     int64_t r;
     switch (cmd) {
-        case F_DUPFD: r = (int64_t)fd_alloc(t->fd_table, f, (int)arg);
-                      if (r >= 0) __atomic_fetch_add(&f->refcount, 1, __ATOMIC_RELAXED);
-                      break;
+        case F_DUPFD:
+        case F_DUPFD_CLOEXEC:
+            r = (int64_t)fd_alloc(t->fd_table, f, (int)arg);
+            if (r >= 0) {
+                __atomic_fetch_add(&f->refcount, 1, __ATOMIC_RELAXED);
+                if (cmd == F_DUPFD_CLOEXEC)
+                    fd_set_flags(t->fd_table, (int)r, FD_CLOEXEC);
+            }
+            break;
         case F_GETFD: r = (int64_t)fd_get_flags(t->fd_table, (int)fd); break;
         case F_SETFD: r = (int64_t)fd_set_flags(t->fd_table, (int)fd, (int)arg); break;
         case F_GETFL: r = (int64_t)f->flags; break;
-        case F_SETFL: f->flags = (f->flags & O_ACCMODE) | ((int)arg & ~O_ACCMODE); r = 0; break;
+        case F_SETFL:
+            f->flags = (f->flags & O_ACCMODE) | ((int)arg & ~O_ACCMODE);
+            unix_set_nonblock(f->vnode, (f->flags & O_NONBLOCK) ? 1 : 0);
+            r = 0;
+            break;
         case F_GETLK:
         case F_SETLK:
         case F_SETLKW: r = fcntl_lock(t, f, cmd, arg); break;

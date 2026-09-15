@@ -6,6 +6,8 @@
 #define SCM_RIGHTS  1
 #define SOL_SOCKET  1
 
+#define MSG_DONTWAIT 0x40
+
 #define MSG_IOV_MAX 8
 #define MSG_FDS_MAX 8
 
@@ -33,6 +35,8 @@ struct k_cmsghdr {
 extern int64_t unix_send_fd(vnode_t *vn, vfs_file_t *file);
 extern vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock);
 extern int     unix_is_socket(const vnode_t *vn);
+extern int64_t unix_read_nb(vnode_t *vn, void *buf, size_t len, int nonblock);
+extern int64_t unix_write_nb(vnode_t *vn, const void *buf, size_t len, int nonblock);
 
 static int cmsg_space(int nfds)
 {
@@ -42,12 +46,14 @@ static int cmsg_space(int nfds)
 
 int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
 {
-    (void)flags;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
     vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
     if (!sock || !sock->vnode) return -EBADF;
+
+    int nonblock = ((flags & MSG_DONTWAIT) || (sock->flags & O_NONBLOCK)) ? 1 : 0;
+    int is_unix  = unix_is_socket(sock->vnode);
 
     struct k_msghdr msg;
     if (syscall_copy_from_user(&msg, (void *)msg_ptr, sizeof msg) < 0) return -EFAULT;
@@ -89,7 +95,8 @@ int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
     for (size_t i = 0; i < msg.msg_iovlen; i++) {
         if (!iov[i].iov_len) continue;
         if (!syscall_uptr_validate(iov[i].iov_base, iov[i].iov_len)) return -EFAULT;
-        int64_t w = vfs_write(sock, iov[i].iov_base, iov[i].iov_len);
+        int64_t w = is_unix ? unix_write_nb(sock->vnode, iov[i].iov_base, iov[i].iov_len, nonblock)
+                            : vfs_write(sock, iov[i].iov_base, iov[i].iov_len);
         if (w < 0) return total ? total : w;
         total += w;
         if ((size_t)w < iov[i].iov_len) break;
@@ -99,20 +106,21 @@ int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
 
 int64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
 {
-    (void)flags;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
     vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
     if (!sock || !sock->vnode) return -EBADF;
 
+    int nonblock = ((flags & MSG_DONTWAIT) || (sock->flags & O_NONBLOCK)) ? 1 : 0;
+    int is_unix  = unix_is_socket(sock->vnode);
+
     struct k_msghdr msg;
     if (syscall_copy_from_user(&msg, (void *)msg_ptr, sizeof msg) < 0) return -EFAULT;
     if (msg.msg_iovlen > MSG_IOV_MAX) return -EINVAL;
 
     size_t got_control = 0;
-    if (msg.msg_control && msg.msg_controllen >= (size_t)cmsg_space(1) &&
-        unix_is_socket(sock->vnode)) {
+    if (msg.msg_control && msg.msg_controllen >= (size_t)cmsg_space(1) && is_unix) {
         int fds[MSG_FDS_MAX];
         int nfds = 0;
         size_t room = (msg.msg_controllen - sizeof(struct k_cmsghdr)) / sizeof(int);
@@ -152,8 +160,12 @@ int64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
     for (size_t i = 0; i < msg.msg_iovlen; i++) {
         if (!iov[i].iov_len) continue;
         if (!syscall_uptr_validate(iov[i].iov_base, iov[i].iov_len)) return -EFAULT;
-        int64_t r = vfs_read(sock, iov[i].iov_base, iov[i].iov_len);
-        if (r < 0) return total ? total : r;
+        int64_t r = is_unix ? unix_read_nb(sock->vnode, iov[i].iov_base, iov[i].iov_len, nonblock)
+                            : vfs_read(sock, iov[i].iov_base, iov[i].iov_len);
+        if (r < 0) {
+            if (total) break;
+            return r;
+        }
         total += r;
         if ((size_t)r < iov[i].iov_len) break;
     }

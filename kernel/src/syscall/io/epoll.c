@@ -180,6 +180,7 @@ int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_time
             int want = (int)(snapshot[i].events & (POLLIN | POLLOUT | POLLPRI));
             if (!want) want = POLLIN;
             int got  = vfs_poll_file(file, want);
+            fd_put(file);
             got &= (want | POLLERR | POLLHUP | POLLNVAL);
             if (got > 0) {
                 out[n].events = (uint32_t)got;

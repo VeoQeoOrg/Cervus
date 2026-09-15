@@ -1,6 +1,7 @@
 #include "../../include/net/socket.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/fs/poll.h"
+#include "../../include/io/serial.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/syscall/syscall_internal.h"
@@ -22,6 +23,16 @@ typedef struct unix_sock {
 
     struct unix_sock *peer;
     int      peer_gone;
+
+    uint32_t owner_pid;
+    uint32_t owner_uid;
+    uint32_t owner_gid;
+
+    int      nonblock;
+
+    uint32_t peer_pid;
+    uint32_t peer_uid;
+    uint32_t peer_gid;
 
     vnode_t *accept_q[UNIX_ACCEPTQ];
     int      aqh, aqt, aqc;
@@ -52,6 +63,10 @@ static vnode_t *unix_make(int type, unix_sock_t **out) {
     if (!s) return NULL;
     s->type = type;
     s->state = U_UNBOUND;
+    {
+        task_t *t = syscall_cur_task();
+        if (t) { s->owner_pid = t->pid; s->owner_uid = t->uid; s->owner_gid = t->gid; }
+    }
     vnode_t *vn = calloc(1, sizeof(*vn));
     if (!vn) { free(s); return NULL; }
     vn->type = VFS_NODE_CHARDEV;
@@ -82,6 +97,9 @@ int unix_make_pair(vnode_t **a_out, vnode_t **b_out) {
     uint64_t f = spinlock_acquire_irqsave(&g_ulock);
     sa->peer = sb;
     sb->peer = sa;
+    sa->peer_pid = sb->peer_pid = sa->owner_pid;
+    sa->peer_uid = sb->peer_uid = sa->owner_uid;
+    sa->peer_gid = sb->peer_gid = sa->owner_gid;
     sa->state = U_CONNECTED;
     sb->state = U_CONNECTED;
     spinlock_release_irqrestore(&g_ulock, f);
@@ -131,6 +149,13 @@ int64_t unix_op_connect(vnode_t *vn, const char *path) {
     c->peer = srv;
     c->state = U_CONNECTED;
 
+    srv->peer_pid = c->owner_pid;
+    srv->peer_uid = c->owner_uid;
+    srv->peer_gid = c->owner_gid;
+    c->peer_pid   = l->owner_pid;
+    c->peer_uid   = l->owner_uid;
+    c->peer_gid   = l->owner_gid;
+
     l->accept_q[l->aqt] = svn;
     l->aqt = (l->aqt + 1) % UNIX_ACCEPTQ;
     l->aqc++;
@@ -162,8 +187,7 @@ vnode_t *unix_op_accept(vnode_t *vn, int nonblock) {
     }
 }
 
-static int64_t unix_read_op(vnode_t *vn, void *buf, size_t len, uint64_t off) {
-    (void)off;
+int64_t unix_read_nb(vnode_t *vn, void *buf, size_t len, int nonblock) {
     unix_sock_t *s = vn->fs_data;
     task_t *me = syscall_cur_task();
     uint8_t *dst = buf;
@@ -179,6 +203,7 @@ static int64_t unix_read_op(vnode_t *vn, void *buf, size_t len, uint64_t off) {
             return (int64_t)n;
         }
         if (s->peer_gone) { spinlock_release_irqrestore(&g_ulock, f); return 0; }
+        if (nonblock || s->nonblock) { spinlock_release_irqrestore(&g_ulock, f); return -EAGAIN; }
         if (me && me->pending_kill) { spinlock_release_irqrestore(&g_ulock, f); return -EINTR; }
         if (me) { s->reader = me; me->runnable = false; me->state = TASK_BLOCKED; }
         spinlock_release_irqrestore(&g_ulock, f);
@@ -186,8 +211,7 @@ static int64_t unix_read_op(vnode_t *vn, void *buf, size_t len, uint64_t off) {
     }
 }
 
-static int64_t unix_write_op(vnode_t *vn, const void *buf, size_t len, uint64_t off) {
-    (void)off;
+int64_t unix_write_nb(vnode_t *vn, const void *buf, size_t len, int nonblock) {
     unix_sock_t *s = vn->fs_data;
     task_t *me = syscall_cur_task();
     const uint8_t *src = buf;
@@ -200,6 +224,7 @@ static int64_t unix_write_op(vnode_t *vn, const void *buf, size_t len, uint64_t 
         if (space == 0) {
             if (me && me->pending_kill) { spinlock_release_irqrestore(&g_ulock, f); return done ? (int64_t)done : -EINTR; }
             if (done > 0) { spinlock_release_irqrestore(&g_ulock, f); return (int64_t)done; }
+            if (nonblock || s->nonblock) { spinlock_release_irqrestore(&g_ulock, f); return -EAGAIN; }
             spinlock_release_irqrestore(&g_ulock, f);
             task_sleep_ms(2);
             continue;
@@ -251,6 +276,25 @@ vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock) {
         spinlock_release_irqrestore(&g_ulock, f);
         if (me) sched_reschedule(); else task_yield();
     }
+}
+
+static int64_t unix_read_op(vnode_t *vn, void *buf, size_t len, uint64_t off) {
+    (void)off;
+    return unix_read_nb(vn, buf, len, 0);
+}
+
+static int64_t unix_write_op(vnode_t *vn, const void *buf, size_t len, uint64_t off) {
+    (void)off;
+    return unix_write_nb(vn, buf, len, 0);
+}
+
+void unix_set_nonblock(vnode_t *vn, int on) {
+    if (!vn || vn->ops != &unix_vnode_ops) return;
+    unix_sock_t *s = vn->fs_data;
+    if (!s) return;
+    uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+    s->nonblock = on ? 1 : 0;
+    spinlock_release_irqrestore(&g_ulock, f);
 }
 
 static int unix_poll_op(vnode_t *vn, int events) {
@@ -318,3 +362,15 @@ static const vnode_ops_t unix_vnode_ops = {
     .unref = unix_unref_op,
     .poll  = unix_poll_op,
 };
+
+int unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gid)
+{
+    if (!vn || vn->ops != &unix_vnode_ops) return -EINVAL;
+    unix_sock_t *s = vn->fs_data;
+    if (!s || s->state != U_CONNECTED) return -ENOTCONN;
+
+    if (pid) *pid = s->peer_pid;
+    if (uid) *uid = s->peer_uid;
+    if (gid) *gid = s->peer_gid;
+    return 0;
+}

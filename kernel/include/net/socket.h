@@ -17,6 +17,7 @@ int      sock_is_vnode(const vnode_t *vn);
 
 vnode_t *unix_new_vnode(int type);
 int      unix_is_vnode(const vnode_t *vn);
+int      unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gid);
 int64_t  unix_op_bind(vnode_t *vn, const char *path);
 int64_t  unix_op_connect(vnode_t *vn, const char *path);
 int64_t  unix_op_listen(vnode_t *vn);

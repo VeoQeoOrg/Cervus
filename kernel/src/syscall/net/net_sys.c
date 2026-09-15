@@ -1,5 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/fs/vfs.h"
+#include "../../../include/io/serial.h"
 #include "../../../include/net/socket.h"
 #include "../../../include/net/net.h"
 #include "../../../include/net/netdev.h"
@@ -247,11 +248,23 @@ int64_t sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
 
     vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
     if (!vn) return -EBADF;
-    if (unix_is_vnode(vn)) { fd_put(f); return -ENOPROTOOPT; }
 
     uint8_t kbuf[128];
     uint32_t len = cap;
-    int64_t r = sock_op_getopt(vn, (int)level, (int)optname, kbuf, &len);
+    int64_t r;
+
+    if (unix_is_vnode(vn)) {
+        if (level != 1 || optname != 17) { fd_put(f); return -ENOPROTOOPT; }
+        struct { uint32_t pid, uid, gid; } cr = { 0, 0, 0 };
+        r = unix_peer_cred(vn, &cr.pid, &cr.uid, &cr.gid);
+        if (r == 0) {
+            if (cap < sizeof cr) { fd_put(f); return -EINVAL; }
+            memcpy(kbuf, &cr, sizeof cr);
+            len = (uint32_t)sizeof cr;
+        }
+    } else {
+        r = sock_op_getopt(vn, (int)level, (int)optname, kbuf, &len);
+    }
     fd_put(f);
     if (r < 0) return r;
     if (syscall_copy_to_user((void *)uval, kbuf, len) < 0) return -EFAULT;
