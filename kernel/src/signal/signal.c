@@ -29,8 +29,11 @@ static __attribute__((noreturn)) void signal_terminate(task_t *t, int sig) {
     task_exit();
 }
 
+extern int signalfd_deliver(uint32_t pid, int sig);
+
 void signal_send(task_t *t, int sig) {
     if (!t || sig <= 0 || sig >= NSIG) return;
+    if (sig != SIGKILL && signalfd_deliver(t->pid, sig)) return;
     t->sig_pending |= (1ULL << sig);
     if (sig == SIGKILL) t->pending_kill = true;
     if (t->state == TASK_BLOCKED &&

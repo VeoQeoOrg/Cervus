@@ -57,6 +57,7 @@
 #define EOPNOTSUPP    95
 #define EADDRINUSE    98
 #define EISCONN      106
+#define ENOTCONN     107
 #define ECONNREFUSED 111
 #define ETIMEDOUT    110
 #define EALREADY     114

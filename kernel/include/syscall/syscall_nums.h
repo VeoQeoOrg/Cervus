@@ -189,6 +189,7 @@
 #define SYS_SETITIMER         617
 #define SYS_GETITIMER         618
 #define SYS_SHUTDOWN_SOCK     619
+#define SYS_SIGNALFD          620
 
 #define SYSCALL_TABLE_SIZE    640
 
