@@ -503,8 +503,10 @@ static void note_reboot(const char *flist_path)
     for (char *line = strtok(fl, "\n"); line; line = strtok(NULL, "\n")) {
         if (line[0] != 'f') continue;
         const char *path = line + 2;
-        if (!strncmp(path, "/boot/", 6) || !strncmp(path, "/bin/", 5) ||
-            !strncmp(path, "/usr/lib/", 9)) { hit = 1; break; }
+        size_t n = strlen(path);
+        int shared = n > 3 && !strcmp(path + n - 3, ".so");
+        if (!strncmp(path, "/boot/", 6) || !strncmp(path, "/lib/", 5) ||
+            (!strncmp(path, "/usr/lib/", 9) && shared)) { hit = 1; break; }
     }
     free(fl);
     if (!hit) return;
