@@ -274,11 +274,20 @@ static void spawn_shell(int vt) {
     if (vt == 0) vt0_spawn_ns = cervus_uptime_ns();
 }
 
+static void make_runtime_dirs(void) {
+    mode_t old = umask(0);
+    mkdir("/run", 01777);
+    mkdir("/run/user", 01777);
+    mkdir("/tmp", 01777);
+    umask(old);
+}
+
 int main(void) {
     for (int i = 0; i < NVT; i++) vt_pid[i] = 0;
 
     boot_stage("start");
     boot_setup();
+    make_runtime_dirs();
     term_cooked();
 
     restore_console_font();
