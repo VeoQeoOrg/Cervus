@@ -103,7 +103,9 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
             return -EFAULT;
     }
 
-    if (!fd_get(t->fd_table, args.fd) && op != EPOLL_CTL_DEL) return -EBADF;
+    vfs_file_t *target = fd_get(t->fd_table, args.fd);
+    if (target) fd_put(target);
+    else if (op != EPOLL_CTL_DEL) return -EBADF;
 
     uint64_t f = spinlock_acquire_irqsave(&ep->lock);
     int64_t rc = 0;
