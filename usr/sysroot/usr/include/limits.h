@@ -1,5 +1,7 @@
 #ifndef _LIMITS_H
 #define _LIMITS_H
+
+#define MB_LEN_MAX 4
 #ifdef __cplusplus
 extern "C" {
 #endif
