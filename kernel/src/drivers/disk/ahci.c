@@ -806,6 +806,9 @@ static int ahci_probe(pci_device_t *pd) {
     cmd |= PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
     pci_config_write16(pd->segment, pd->bus, pd->device, pd->function, PCI_COMMAND, cmd);
 
+    extern void kernel_substage(const char *name);
+    kernel_substage("ahci: mapping registers");
+
     uint64_t hhdm = pmm_get_hhdm_offset();
     uint64_t bar_phys = bar5->base & ~0xFFFULL;
     uint64_t bar_size = (bar5->size + 0xFFF) & ~0xFFFULL;
@@ -821,6 +824,8 @@ static int ahci_probe(pci_device_t *pd) {
         return -EIO;
     }
 
+    kernel_substage("ahci: first register read");
+
     volatile uint8_t *abar =
         (volatile uint8_t *)(uintptr_t)(bar5->base + hhdm);
 
@@ -830,6 +835,8 @@ static int ahci_probe(pci_device_t *pd) {
     g_hba.dev  = pd->device;  g_hba.func = pd->function;
 
     hba_w32(abar, HBA_GHC, hba_r32(abar, HBA_GHC) | GHC_AE);
+
+    kernel_substage("ahci: firmware handoff");
 
     if (hba_r32(abar, HBA_CAP2) & CAP2_BOH) {
         uint32_t bohc = hba_r32(abar, HBA_BOHC);
@@ -860,6 +867,8 @@ static int ahci_probe(pci_device_t *pd) {
     serial_printf("[ahci] HBA at BAR5=0x%llx, cap=0x%x, pi=0x%x, slots=%u, s64a=%u\n",
                   (unsigned long long)bar5->base,
                   g_hba.cap, g_hba.pi, (unsigned)g_hba.ncs, (unsigned)g_hba.s64a);
+
+    kernel_substage("ahci: probing ports");
 
     g_hba_present = 1;
     g_hba.port_count = 0;
