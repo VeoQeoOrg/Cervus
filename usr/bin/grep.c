@@ -154,7 +154,7 @@ static int grep_path(const char *path, const char *pat,
         fprintf(stderr, "grep: '%s': no such file or directory\n", path);
         return 1;
     }
-    if (st.st_type == DT_DIR) {
+    if (S_ISDIR(st.st_mode)) {
         if (!o->recursive) { fprintf(stderr, "grep: '%s': is a directory (use -r)\n", path); return 1; }
         return grep_dir(path, pat, o, any);
     }

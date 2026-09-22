@@ -72,7 +72,7 @@ int main(int argc, char **argv)
         char resolved[512];
         snprintf(resolved, sizeof(resolved), "%s", argv[i]);
         struct stat st;
-        if (stat(resolved, &st) == 0 && st.st_type == DT_DIR) {
+        if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
             fprintf(stderr, "hexdump: %s: is a directory\n", argv[i]);
             rc = 1; continue;
         }

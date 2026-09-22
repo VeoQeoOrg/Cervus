@@ -12,6 +12,25 @@ int abs(int x);
 double fabs(double x);
 double pow(double base, double exp);
 double pow10(int n);
+#define FP_NAN       0
+#define FP_INFINITE  1
+#define FP_ZERO      2
+#define FP_SUBNORMAL 3
+#define FP_NORMAL    4
+
+int __fpclassifyd(double x);
+int __fpclassifyf(float x);
+
+#define fpclassify(x) (sizeof(x) == sizeof(float) ? __fpclassifyf((float)(x)) \
+                                                  : __fpclassifyd((double)(x)))
+#define isfinite(x)   (fpclassify(x) > FP_INFINITE)
+#define isnormal(x)   (fpclassify(x) == FP_NORMAL)
+#define signbit(x)    (sizeof(x) == sizeof(float) ? __signbitf((float)(x)) \
+                                                  : __signbitd((double)(x)))
+
+int __signbitd(double x);
+int __signbitf(float x);
+
 int isinf(double x);
 int isnan(double x);
 double sin(double x);

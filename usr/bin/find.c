@@ -227,11 +227,11 @@ static void do_find(find_ctx_t *ctx, const char *path, int depth)
 
     struct stat st;
     if (stat(path, &st) != 0) return;
-    uint8_t d_type = (st.st_type == DT_DIR) ? DT_DIR
-                   : (st.st_type == DT_LNK) ? DT_LNK
-                   : (st.st_type == DT_BLK) ? DT_BLK
-                   : (st.st_type == DT_CHR) ? DT_CHR
-                   : (st.st_type == DT_FIFO) ? DT_FIFO
+    uint8_t d_type = S_ISDIR(st.st_mode)  ? DT_DIR
+                   : S_ISLNK(st.st_mode)  ? DT_LNK
+                   : S_ISBLK(st.st_mode)  ? DT_BLK
+                   : S_ISCHR(st.st_mode)  ? DT_CHR
+                   : S_ISFIFO(st.st_mode) ? DT_FIFO
                    : DT_REG;
 
     int in_range = (depth >= ctx->mindepth);

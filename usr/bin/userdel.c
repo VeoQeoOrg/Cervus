@@ -52,7 +52,7 @@ static void rmtree(const char *path)
 {
     struct stat st;
     if (stat(path, &st) != 0) return;
-    if (st.st_type == DT_DIR) {
+    if (S_ISDIR(st.st_mode)) {
         DIR *d = opendir(path);
         if (d) {
             struct dirent *e;

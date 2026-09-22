@@ -21,8 +21,8 @@ static int file_test(char op, const char *path)
     if (op == 'e') return stat(path, &st) == 0;
     if (stat(path, &st) != 0) return 0;
     switch (op) {
-        case 'f': return st.st_type == DT_REG;
-        case 'd': return st.st_type == DT_DIR;
+        case 'f': return S_ISREG(st.st_mode);
+        case 'd': return S_ISDIR(st.st_mode);
         case 's': return st.st_size > 0;
         case 'r': case 'w': case 'x': return 1;
         default:  return 0;
