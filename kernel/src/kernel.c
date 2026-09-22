@@ -331,9 +331,12 @@ void kmain(void) {
     }
 
     printf("Cervus/x86_64 kernel booting\n");
-    printf("framebuffer: %dx%d %d bpp\n",
-           global_framebuffer->width, global_framebuffer->height,
-           global_framebuffer->bpp);
+    if (global_framebuffer)
+        printf("framebuffer: %dx%d %d bpp\n",
+               global_framebuffer->width, global_framebuffer->height,
+               global_framebuffer->bpp);
+    else
+        printf("framebuffer: none, console on the serial port\n");
     pmm_print_stats();
     printf("hhdm offset 0x%llx, %d memory map entries\n",
            (unsigned long long)boot_info()->hhdm_offset,

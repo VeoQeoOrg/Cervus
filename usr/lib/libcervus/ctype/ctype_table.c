@@ -1,6 +1,6 @@
 #include <ctype.h>
 
-static const char TABLE[257] = {
+const char _ctype_[257] = {
     0,
     _C, _C, _C, _C, _C, _C, _C, _C,
     _C, _C | _S, _C | _S, _C | _S, _C | _S, _C | _S, _C, _C,
@@ -20,4 +20,4 @@ static const char TABLE[257] = {
     _L, _L, _L, _P, _P, _P, _P, _C,
 };
 
-const char *__ctype_ptr__ = TABLE + 1;
+const char *__ctype_ptr__ = _ctype_ + 1;

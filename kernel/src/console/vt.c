@@ -304,9 +304,10 @@ void vt_theme_changed(const uint32_t old_pal[16], uint32_t old_fg, uint32_t old_
     }
 
     console_save_state(&g_vts[g_active].state);
-    fb_fill_rect(global_framebuffer, 0, 0,
-                 global_framebuffer->width, global_framebuffer->height,
-                 console_theme_bg());
+    if (global_framebuffer)
+        fb_fill_rect(global_framebuffer, 0, 0,
+                     global_framebuffer->width, global_framebuffer->height,
+                     console_theme_bg());
     console_redraw_grid();
     fb_flush(global_framebuffer);
     spinlock_release_irqrestore(&g_lock, f);

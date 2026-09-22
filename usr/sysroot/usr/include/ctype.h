@@ -10,6 +10,7 @@
 #define _X 0100
 #define _B 0200
 
+extern const char _ctype_[257];
 extern const char *__ctype_ptr__;
 
 int isdigit(int c);

@@ -90,6 +90,7 @@ int bga_set_mode(uint32_t width, uint32_t height) {
     uint16_t vw = bga_read(VBE_IDX_VIRT_WIDTH);
     if (vw < width) vw = (uint16_t)width;
 
+    if (!global_framebuffer) return -1;
     if (g_vram) global_framebuffer->address = (void *)g_vram;
     global_framebuffer->width  = width;
     global_framebuffer->height = height;
