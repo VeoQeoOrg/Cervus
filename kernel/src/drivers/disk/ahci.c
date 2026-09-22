@@ -18,6 +18,12 @@
 #define HBA_CAP2       0x24
 #define HBA_BOHC       0x28
 
+#define CAP2_BOH       (1u << 0)
+
+#define BOHC_BOS       (1u << 0)
+#define BOHC_OOS       (1u << 1)
+#define BOHC_BB        (1u << 4)
+
 #define GHC_HR         (1u << 0)
 #define GHC_IE         (1u << 1)
 #define GHC_AE         (1u << 31)
@@ -822,6 +828,24 @@ static int ahci_probe(pci_device_t *pd) {
     g_hba.abar = abar;
     g_hba.seg  = pd->segment; g_hba.bus = pd->bus;
     g_hba.dev  = pd->device;  g_hba.func = pd->function;
+
+    hba_w32(abar, HBA_GHC, hba_r32(abar, HBA_GHC) | GHC_AE);
+
+    if (hba_r32(abar, HBA_CAP2) & CAP2_BOH) {
+        uint32_t bohc = hba_r32(abar, HBA_BOHC);
+        if (bohc & BOHC_BOS) {
+            serial_writestring("[ahci] asking the firmware to hand the controller over\n");
+            hba_w32(abar, HBA_BOHC, bohc | BOHC_OOS);
+            for (int t = 0; t < 20000; t++) {
+                bohc = hba_r32(abar, HBA_BOHC);
+                if (!(bohc & BOHC_BOS)) break;
+                for (int k = 0; k < 64; k++) io_pause();
+            }
+            for (int t = 0; t < 20000 && (hba_r32(abar, HBA_BOHC) & BOHC_BB); t++)
+                for (int k = 0; k < 64; k++) io_pause();
+            serial_printf("[ahci] handoff done, bohc=0x%x\n", hba_r32(abar, HBA_BOHC));
+        }
+    }
 
     uint32_t ghc = hba_r32(abar, HBA_GHC);
     ghc |= GHC_AE;

@@ -71,6 +71,53 @@ static int panic_try_own(void) {
                                        0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED);
 }
 
+extern const struct { uint64_t addr; const char *name; } ksyms[];
+extern const unsigned long ksyms_count;
+
+static const char *ksym_lookup(uint64_t addr, uint64_t *off_out) {
+    const char *best = NULL;
+    uint64_t    base = 0;
+    for (unsigned long i = 0; i < ksyms_count; i++) {
+        if (ksyms[i].addr > addr) break;
+        best = ksyms[i].name;
+        base = ksyms[i].addr;
+    }
+    if (!best) return NULL;
+    if (addr - base > 0x20000) return NULL;
+    if (off_out) *off_out = addr - base;
+    return best;
+}
+
+static int frame_readable(const uint64_t *p) {
+    uint64_t a = (uint64_t)p;
+    if (a < 0xffff800000000000ULL) return 0;
+    if (a & 7) return 0;
+    return 1;
+}
+
+static void panic_print_frame(const char *tag, uint64_t addr) {
+    uint64_t off = 0;
+    const char *name = ksym_lookup(addr, &off);
+    fb_puts_col(tag, COL_GRAY);
+    fb_puts(" ");
+    fb_puthex(addr);
+    if (name) {
+        fb_puts("  ");
+        fb_puts_col(name, COL_CYAN);
+        fb_puts("+");
+        fb_puthex(off);
+    }
+    fb_puts("\n");
+}
+
+static void serial_print_frame(const char *tag, uint64_t addr) {
+    uint64_t off = 0;
+    const char *name = ksym_lookup(addr, &off);
+    if (name) serial_printf("%s 0x%llx  %s+0x%llx\n", tag,
+                            (unsigned long long)addr, name, (unsigned long long)off);
+    else      serial_printf("%s 0x%llx\n", tag, (unsigned long long)addr);
+}
+
 static void halt_other_cpus(void) {
     asm volatile("cli");
     lapic_send_nmi_to_all_but_self();
@@ -100,7 +147,7 @@ static void draw_panic_screen(const char *msg, struct int_frame_t *regs) {
     fb_puts_col(msg, COL_YELLOW);
     fb_nl(); fb_nl();
 
-    if (regs) {
+    {
         percpu_t *pc = get_percpu();
         task_t   *t  = pc ? (task_t *)pc->current_task : NULL;
         uint32_t  cpu = panic_cpu_index();
@@ -116,6 +163,21 @@ static void draw_panic_screen(const char *msg, struct int_frame_t *regs) {
         }
         fb_nl();
 
+        if (!regs) {
+            fb_puts_col(" Backtrace \n", COL_YELLOW);
+            uint64_t *rbp0 = (uint64_t *)__builtin_frame_address(0);
+            for (int depth = 0; depth < 8 && frame_readable(rbp0); depth++) {
+                uint64_t ret = rbp0[1];
+                if (!ret) break;
+                panic_print_frame("by", ret);
+                uint64_t *next = (uint64_t *)rbp0[0];
+                if (next <= rbp0) break;
+                rbp0 = next;
+            }
+            fb_nl();
+        }
+
+        if (regs) {
         fb_puts_col(" Register Dump \n", COL_YELLOW);
 
         fb_puts_col("RIP: ", COL_GRAY); fb_puthex(regs->rip);
@@ -154,6 +216,21 @@ static void draw_panic_screen(const char *msg, struct int_frame_t *regs) {
 
         fb_puts_col("ERR: ", COL_GRAY); fb_puthex(regs->error);
         fb_puts("   INT: "); fb_putdec(regs->interrupt); fb_puts("\n");
+        fb_nl();
+
+        fb_puts_col(" Backtrace \n", COL_YELLOW);
+        panic_print_frame("at", regs->rip);
+
+        uint64_t *rbp = (uint64_t *)regs->rbp;
+        for (int depth = 0; depth < 6 && frame_readable(rbp); depth++) {
+            uint64_t ret = rbp[1];
+            if (!ret) break;
+            panic_print_frame("by", ret);
+            uint64_t *next = (uint64_t *)rbp[0];
+            if (next <= rbp) break;
+            rbp = next;
+            }
+    }
     }
 
     fb_nl();
@@ -197,6 +274,24 @@ static void serial_panic_dump(const char *msg, struct int_frame_t *regs) {
         serial_printf("  ERR=0x%016llx  INT=%llu\n",     regs->error, regs->interrupt);
     }
     serial_printf("========================================\n");
+    {
+        serial_printf("\nBacktrace:\n");
+        uint64_t *rbp;
+        if (regs) {
+            serial_print_frame("at", regs->rip);
+            rbp = (uint64_t *)regs->rbp;
+        } else {
+            rbp = (uint64_t *)__builtin_frame_address(0);
+        }
+        for (int depth = 0; depth < 12 && frame_readable(rbp); depth++) {
+            uint64_t ret = rbp[1];
+            if (!ret) break;
+            serial_print_frame("by", ret);
+            uint64_t *next = (uint64_t *)rbp[0];
+            if (next <= rbp) break;
+            rbp = next;
+        }
+    }
     serial_printf("System halted.\n\n");
 }
 

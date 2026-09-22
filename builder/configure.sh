@@ -17,7 +17,7 @@ KERNEL_BASE="-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding \
 -fno-stack-protector -fno-stack-check -fno-lto -fno-PIC \
 -ffunction-sections -fdata-sections \
 -m64 -march=x86-64 -mabi=sysv -mcmodel=kernel \
--mno-red-zone -fcf-protection=none"
+-mno-red-zone -fcf-protection=none -fno-omit-frame-pointer"
 KERNEL_CORE="$KERNEL_BASE -mgeneral-regs-only -mno-sse -mno-sse2 -mno-mmx -mno-3dnow"
 KERNEL_SSE="$KERNEL_BASE -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
 KERNEL_CPP="-I kernel/src -I libc/include \
@@ -180,6 +180,10 @@ rule link_kernel
   command = ld -m elf_x86_64 -nostdlib -static -z max-page-size=0x1000 --gc-sections -T $LINKER_SCRIPT -o \$out \$in
   description = LINK      \$out
 
+rule ksyms
+  command = builder/mk_ksyms.sh \$in \$out
+  description = KSYMS     \$out
+
 rule bootstrap
   command = builder/bootstrap.sh \$step && mkdir -p $STAMPS && touch \$out
   description = BOOTSTRAP \$step
@@ -270,7 +274,10 @@ for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o
     esac
     KOBJS="$KOBJS $obj"
 done
-printf 'build bin/kernel: link_kernel%s | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
+printf 'build bin/kernel.stage1: link_kernel%s | %s\n' "$KOBJS" "$LINKER_SCRIPT"
+printf 'build obj/kernel/ksyms.c: ksyms bin/kernel.stage1 | builder/mk_ksyms.sh\n'
+printf 'build obj/kernel/ksyms.o: cc_core obj/kernel/ksyms.c || %s\n' "$DEPS_STAMP"
+printf 'build bin/kernel: link_kernel%s obj/kernel/ksyms.o | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
 printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s builder/VERSION builder/mk_initramfs.sh | %s %s %s\n\n' \
