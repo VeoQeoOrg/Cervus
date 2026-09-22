@@ -5,7 +5,7 @@
 
 #define MB2_LOADER_MAGIC 0x36d76289u
 #define HHDM             0xffff800000000000ULL
-#define RSV_MAX          16
+#define RSV_MAX          32
 
 extern void    kmain(void);
 extern uint8_t mb_pml4[];
@@ -19,8 +19,11 @@ static uint64_t rd64(const void *p) { return *(const uint64_t *)p; }
 static uint64_t g_rsv_lo[RSV_MAX], g_rsv_hi[RSV_MAX];
 static int      g_nrsv;
 
+static int g_rsv_lost;
+
 static void rsv_add(uint64_t base, uint64_t len) {
-    if (len == 0 || g_nrsv >= RSV_MAX) return;
+    if (len == 0) return;
+    if (g_nrsv >= RSV_MAX) { g_rsv_lost = 1; return; }
     uint64_t lo = base & ~0xFFFULL;
     uint64_t hi = (base + len + 0xFFF) & ~0xFFFULL;
     int i = g_nrsv;
@@ -43,6 +46,8 @@ static void mmap_add_usable(boot_info_t *bi, uint64_t b, uint64_t e) {
 }
 
 static void mmap_add_carved(boot_info_t *bi, uint64_t b, uint64_t e) {
+    if (g_rsv_lost) return;
+
     uint64_t cur = b;
     for (int i = 0; i < g_nrsv; i++) {
         uint64_t rb = g_rsv_lo[i] > b ? g_rsv_lo[i] : b;
@@ -105,6 +110,9 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
         }
     }
 
+    if (g_rsv_lost)
+        serial_writestring("[mb2] too many reserved ranges: dropping usable memory to stay safe\n");
+
     if (mmap_tag) {
         uint32_t size = rd32(mmap_tag + 4);
         uint32_t esz  = rd32(mmap_tag + 8);
@@ -127,6 +135,8 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
             }
             e += esz;
         }
+        if (e + esz <= mmap_tag + size)
+            serial_writestring("[mb2] memory map is longer than BOOT_MMAP_MAX\n");
     }
 
     bi->cpu_count = 1;

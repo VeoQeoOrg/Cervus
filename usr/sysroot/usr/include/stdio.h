@@ -48,6 +48,10 @@ int ungetc(int c, FILE *stream);
 int setvbuf(FILE *stream, char *buf, int mode, size_t size);
 void setbuf(FILE *stream, char *buf);
 FILE *freopen(const char *path, const char *mode, FILE *stream);
+typedef long fpos_t;
+
+int fgetpos(FILE *stream, fpos_t *pos);
+int fsetpos(FILE *stream, const fpos_t *pos);
 int fseeko(FILE *stream, off_t off, int whence);
 off_t ftello(FILE *stream);
 

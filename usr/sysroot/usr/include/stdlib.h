@@ -77,9 +77,9 @@ void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
 
 int system(const char *cmd);
 
-int    mkstemp(char *template);
-char  *mktemp(char *template);
-char  *mkdtemp(char *template);
+int    mkstemp(char *pattern);
+char  *mktemp(char *pattern);
+char  *mkdtemp(char *pattern);
 char  *realpath(const char *path, char *resolved);
 
 #endif
