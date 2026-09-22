@@ -1,5 +1,8 @@
 #ifndef _CTYPE_H
 #define _CTYPE_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define _U 01
 #define _L 02
@@ -28,4 +31,7 @@ int isblank(int c);
 int toupper(int c);
 int tolower(int c);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _NETDB_H
 #define _NETDB_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -77,4 +80,7 @@ int  getnameinfo(const struct sockaddr *sa, socklen_t salen,
                  char *host, socklen_t hostlen,
                  char *serv, socklen_t servlen, int flags);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

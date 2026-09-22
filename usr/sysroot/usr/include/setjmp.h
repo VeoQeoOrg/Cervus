@@ -1,5 +1,8 @@
 #ifndef _SETJMP_H
 #define _SETJMP_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef long jmp_buf[8];
 
@@ -13,4 +16,7 @@ void _longjmp(jmp_buf env, int val) __attribute__((noreturn));
 #define sigsetjmp(env, savesigs) setjmp(env)
 #define siglongjmp(env, val)     longjmp(env, val)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

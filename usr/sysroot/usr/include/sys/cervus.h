@@ -1,5 +1,8 @@
 #ifndef _SYS_CERVUS_H
 #define _SYS_CERVUS_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -289,4 +292,7 @@ int      cervus_audio_set_volume(int pct);
 int      cervus_audio_set_mute(int mute);
 int      cervus_audio_set_output(int idx);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

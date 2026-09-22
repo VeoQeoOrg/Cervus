@@ -1,5 +1,8 @@
 #ifndef _REGEX_H
 #define _REGEX_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 
@@ -44,4 +47,7 @@ int    regexec(const regex_t *preg, const char *string, size_t nmatch,
 void   regfree(regex_t *preg);
 size_t regerror(int errcode, const regex_t *preg, char *errbuf, size_t buflen);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

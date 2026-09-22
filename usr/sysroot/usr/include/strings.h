@@ -1,5 +1,8 @@
 #ifndef _STRINGS_H
 #define _STRINGS_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 
@@ -9,4 +12,7 @@ char *index(const char *s, int c);
 char *rindex(const char *s, int c);
 int  ffs(int i);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

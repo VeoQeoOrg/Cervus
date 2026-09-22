@@ -1,5 +1,8 @@
 #ifndef _SYS_FUTEX_H
 #define _SYS_FUTEX_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -10,4 +13,7 @@ void futex_lock(volatile uint32_t *lock);
 void futex_unlock(volatile uint32_t *lock);
 int  futex_trylock(volatile uint32_t *lock);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

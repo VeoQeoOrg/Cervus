@@ -1,5 +1,8 @@
 #ifndef _SYSLOG_H
 #define _SYSLOG_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdarg.h>
 
@@ -52,4 +55,7 @@ int  setlogmask(int mask);
 void syslog(int priority, const char *format, ...);
 void vsyslog(int priority, const char *format, va_list ap);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

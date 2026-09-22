@@ -1,5 +1,8 @@
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -74,4 +77,7 @@ int  pthread_rwlock_rdlock(pthread_rwlock_t *l);
 int  pthread_rwlock_wrlock(pthread_rwlock_t *l);
 int  pthread_rwlock_unlock(pthread_rwlock_t *l);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _NETINET_TCP_H
 #define _NETINET_TCP_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define TCP_NODELAY      1
 #define TCP_MAXSEG       2
@@ -7,4 +10,7 @@
 #define TCP_KEEPINTVL    5
 #define TCP_KEEPCNT      6
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _CERVUS_UTIL_H
 #define _CERVUS_UTIL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <string.h>
@@ -221,4 +224,7 @@ static inline void util_write_stderr(const char *s)
     write(2, s, strlen(s));
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

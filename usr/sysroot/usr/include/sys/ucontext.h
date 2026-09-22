@@ -1,5 +1,8 @@
 #ifndef _SYS_UCONTEXT_H
 #define _SYS_UCONTEXT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <signal.h>
@@ -64,4 +67,7 @@ typedef struct ucontext {
     sigset_t         uc_sigmask;
 } ucontext_t;
 
+#ifdef __cplusplus
+}
+#endif
 #endif

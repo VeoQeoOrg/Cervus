@@ -1,5 +1,8 @@
 #ifndef _CERVUS_CRYPTO_H
 #define _CERVUS_CRYPTO_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -102,4 +105,7 @@ void sha1_update(sha1_ctx *c, const void *data, size_t n);
 void sha1_final(sha1_ctx *c, uint8_t out[20]);
 void sha1(const void *data, size_t n, uint8_t out[20]);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

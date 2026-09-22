@@ -1,5 +1,8 @@
 #ifndef _SYS_SIGNALFD_H
 #define _SYS_SIGNALFD_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <signal.h>
@@ -30,4 +33,7 @@ struct signalfd_siginfo {
 
 int signalfd(int fd, const sigset_t *mask, int flags);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

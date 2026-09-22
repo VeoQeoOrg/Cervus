@@ -1,5 +1,8 @@
 #ifndef _SYS_TIMERFD_H
 #define _SYS_TIMERFD_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <time.h>
 
@@ -18,4 +21,7 @@ int timerfd_create(int clockid, int flags);
 int timerfd_settime(int fd, int flags, const struct itimerspec *new_value,
                     struct itimerspec *old_value);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _SYS_FILE_H
 #define _SYS_FILE_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define LOCK_SH 1
 #define LOCK_EX 2
@@ -8,4 +11,7 @@
 
 int flock(int fd, int operation);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

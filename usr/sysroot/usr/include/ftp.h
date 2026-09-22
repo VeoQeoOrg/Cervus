@@ -1,5 +1,8 @@
 #ifndef _CERVUS_FTP_H
 #define _CERVUS_FTP_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -27,4 +30,7 @@ void ftp_quit(ftp_session *s);
 
 int  ftp_fetch(const char *url, int out_fd, int verbose);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

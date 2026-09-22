@@ -1,5 +1,8 @@
 #ifndef _DIRENT_H
 #define _DIRENT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/types.h>
 
@@ -30,4 +33,7 @@ int            closedir(DIR *dirp);
 void           rewinddir(DIR *dirp);
 int            dirfd(DIR *dirp);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _PWD_H
 #define _PWD_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/types.h>
 
@@ -19,4 +22,7 @@ void           setpwent(void);
 struct passwd *getpwent(void);
 void           endpwent(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

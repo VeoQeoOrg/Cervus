@@ -1,5 +1,8 @@
 #ifndef _SYS_SEM_H
 #define _SYS_SEM_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <sys/ipc.h>
@@ -19,4 +22,7 @@ int semget(key_t key, int nsems, int semflg);
 int semop(int semid, struct sembuf *sops, size_t nsops);
 int semctl(int semid, int semnum, int cmd, ...);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

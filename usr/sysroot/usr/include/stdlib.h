@@ -1,5 +1,8 @@
 #ifndef _STDLIB_H
 #define _STDLIB_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct { int quot, rem; } div_t;
 typedef struct { long quot, rem; } ldiv_t;
@@ -82,4 +85,7 @@ char  *mktemp(char *pattern);
 char  *mkdtemp(char *pattern);
 char  *realpath(const char *path, char *resolved);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

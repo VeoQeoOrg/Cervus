@@ -1,5 +1,8 @@
 #ifndef _CURSES_H
 #define _CURSES_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stdarg.h>
@@ -205,4 +208,7 @@ int napms(int ms);
 int beep(void);
 int flash(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

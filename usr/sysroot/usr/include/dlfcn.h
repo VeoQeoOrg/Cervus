@@ -1,5 +1,8 @@
 #ifndef _DLFCN_H
 #define _DLFCN_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define RTLD_LAZY   0x0001
 #define RTLD_NOW    0x0002
@@ -16,4 +19,7 @@ int   dlclose(void *handle);
 void *dlsym(void *handle, const char *name);
 char *dlerror(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

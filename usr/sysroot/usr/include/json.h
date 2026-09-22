@@ -1,5 +1,8 @@
 #ifndef _CERVUS_JSON_H
 #define _CERVUS_JSON_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -55,4 +58,7 @@ int         json_remove(json_t *obj, const char *key);
 char       *json_dump(const json_t *v, int indent);
 int         json_dump_file(const json_t *v, const char *path, int indent);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

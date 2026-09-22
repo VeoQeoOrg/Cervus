@@ -1,5 +1,8 @@
 #ifndef _WCHAR_H
 #define _WCHAR_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdarg.h>
@@ -35,4 +38,7 @@ int      mblen(const char *s, size_t n);
 wint_t   btowc(int c);
 int      wctob(wint_t c);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

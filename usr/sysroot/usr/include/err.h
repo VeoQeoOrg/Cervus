@@ -1,5 +1,8 @@
 #ifndef _ERR_H
 #define _ERR_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdarg.h>
 
@@ -12,4 +15,7 @@ void verrx(int eval, const char *fmt, va_list ap) __attribute__((noreturn));
 void vwarn(const char *fmt, va_list ap);
 void vwarnx(const char *fmt, va_list ap);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

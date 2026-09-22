@@ -1,5 +1,8 @@
 #ifndef _INTTYPES_H
 #define _INTTYPES_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -88,4 +91,7 @@ static inline imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom) {
 intmax_t  strtoimax(const char *nptr, char **endptr, int base);
 uintmax_t strtoumax(const char *nptr, char **endptr, int base);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

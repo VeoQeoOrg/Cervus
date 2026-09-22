@@ -1,5 +1,8 @@
 #ifndef _STDDEF_H
 #define _STDDEF_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef NULL
 #define NULL ((void*)0)
@@ -15,4 +18,7 @@ typedef int           wchar_t;
 
 #define offsetof(t, m) __builtin_offsetof(t, m)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

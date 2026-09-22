@@ -1,5 +1,8 @@
 #ifndef _CERVUS_X509_H
 #define _CERVUS_X509_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -45,4 +48,7 @@ int x509_store_load_pem(x509_store *st, uint8_t *pembuf, size_t pemlen);
 int x509_verify_chain(const x509_cert *chain, int n, const x509_store *st,
                       const char *host, int64_t now, char *err, size_t errlen);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

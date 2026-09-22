@@ -1,5 +1,8 @@
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -131,4 +134,7 @@ struct cmsghdr {
 long sendmsg(int fd, const struct msghdr *msg, int flags);
 long recvmsg(int fd, struct msghdr *msg, int flags);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

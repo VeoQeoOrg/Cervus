@@ -1,5 +1,8 @@
 #ifndef _SYS_NETCFG_H
 #define _SYS_NETCFG_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -22,4 +25,7 @@ typedef struct {
 int netif_get(int index, net_ifcfg_t *out);
 int netif_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, uint32_t dns);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

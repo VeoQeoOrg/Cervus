@@ -1,5 +1,8 @@
 #ifndef _READLINE_H
 #define _READLINE_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define RL_MAX_COMPLETIONS 256
 
@@ -25,4 +28,7 @@ void  readline_set_completion(rl_complete_fn cb);
 void  readline_set_suggest(rl_suggest_fn cb);
 void  readline_set_input_color(const char *seq);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

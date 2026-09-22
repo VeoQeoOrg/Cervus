@@ -1,5 +1,8 @@
 #ifndef _TIME_H
 #define _TIME_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <sys/types.h>
@@ -49,4 +52,7 @@ int clock_gettime(int clk, struct timespec *tp);
 
 static inline long difftime_l(time_t a, time_t b) { return (long)(a - b); }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

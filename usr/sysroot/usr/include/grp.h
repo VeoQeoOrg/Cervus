@@ -1,5 +1,8 @@
 #ifndef _GRP_H
 #define _GRP_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/types.h>
 #include <stddef.h>
@@ -21,4 +24,7 @@ int           initgroups(const char *user, gid_t group);
 int           setgroups(size_t size, const gid_t *list);
 int           getgroups(int size, gid_t *list);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

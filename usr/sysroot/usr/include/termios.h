@@ -1,5 +1,8 @@
 #ifndef _TERMIOS_H
 #define _TERMIOS_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <sys/types.h>
@@ -142,4 +145,7 @@ int     cfsetispeed(struct termios *t, speed_t s);
 int     cfsetospeed(struct termios *t, speed_t s);
 int     cfsetspeed(struct termios *t, speed_t s);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

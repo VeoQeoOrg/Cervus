@@ -1,5 +1,8 @@
 #ifndef _CERVUS_TLS_H
 #define _CERVUS_TLS_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 
@@ -13,4 +16,7 @@ int        tls_read(tls_conn *c, void *buf, size_t len);
 void       tls_free(tls_conn *c);
 const char *tls_error(tls_conn *c);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

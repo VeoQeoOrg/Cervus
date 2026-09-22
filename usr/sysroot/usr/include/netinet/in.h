@@ -1,5 +1,8 @@
 #ifndef _NETINET_IN_H
 #define _NETINET_IN_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <sys/socket.h>
@@ -52,4 +55,7 @@ static inline uint32_t htonl(uint32_t x) {
 }
 static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

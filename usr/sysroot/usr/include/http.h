@@ -1,5 +1,8 @@
 #ifndef _CERVUS_HTTP_H
 #define _CERVUS_HTTP_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define HTTP_MAX_HEADERS 32
 #define HTTP_MAX_COOKIES 64
@@ -48,4 +51,7 @@ typedef struct {
 int http_request(const char *url, int out_fd, const http_opts *opts);
 int http_fetch(const char *url, int out_fd, int insecure, int head_only, int verbose);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

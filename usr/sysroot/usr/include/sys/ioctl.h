@@ -1,5 +1,8 @@
 #ifndef _SYS_IOCTL_H
 #define _SYS_IOCTL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <sys/syscall.h>
@@ -35,4 +38,7 @@ struct cursor_pos {
 
 int ioctl(int fd, unsigned long request, ...);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _SYS_TYPES_H
 #define _SYS_TYPES_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -22,4 +25,7 @@ typedef uint64_t fsfilcnt_t;
 typedef uint64_t blksize_t;
 typedef int64_t  time_t;
 
+#ifdef __cplusplus
+}
+#endif
 #endif

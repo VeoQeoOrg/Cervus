@@ -1,5 +1,8 @@
 #ifndef _CERVUS_IMAGE_H
 #define _CERVUS_IMAGE_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -34,4 +37,7 @@ void gif_free(gif_anim_t *a);
 
 image_t image_scale(const image_t *src, int dw, int dh);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

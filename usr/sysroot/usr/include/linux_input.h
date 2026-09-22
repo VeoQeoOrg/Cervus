@@ -1,5 +1,8 @@
 #ifndef _LINUX_INPUT_H
 #define _LINUX_INPUT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -24,4 +27,7 @@ struct input_event {
     int32_t  value;
 } __attribute__((packed));
 
+#ifdef __cplusplus
+}
+#endif
 #endif

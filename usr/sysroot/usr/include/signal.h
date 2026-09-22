@@ -1,5 +1,8 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -166,4 +169,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 #define SIG_UNBLOCK  1
 #define SIG_SETMASK  2
 
+#ifdef __cplusplus
+}
+#endif
 #endif

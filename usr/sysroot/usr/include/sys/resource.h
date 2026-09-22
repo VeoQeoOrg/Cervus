@@ -1,5 +1,8 @@
 #ifndef _SYS_RESOURCE_H
 #define _SYS_RESOURCE_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/time.h>
 
@@ -27,4 +30,7 @@ struct rusage {
 
 int getrusage(int who, struct rusage *usage);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

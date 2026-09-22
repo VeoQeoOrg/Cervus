@@ -1,5 +1,8 @@
 #ifndef _SYS_SHM_H
 #define _SYS_SHM_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <sys/ipc.h>
@@ -11,4 +14,7 @@ void *shmat(int shmid, const void *shmaddr, int shmflg);
 int   shmdt(const void *shmaddr);
 int   shmctl(int shmid, int cmd, void *buf);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

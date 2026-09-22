@@ -1,5 +1,8 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 extern int __cervus_errno;
 #define errno __cervus_errno
@@ -126,4 +129,7 @@ extern int __cervus_errno;
 #define EOWNERDEAD   130
 #define ENOTRECOVERABLE 131
 
+#ifdef __cplusplus
+}
+#endif
 #endif

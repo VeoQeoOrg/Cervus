@@ -1,5 +1,8 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <sys/types.h>
@@ -135,4 +138,7 @@ extern int   optopt;
 extern int   opterr;
 int          getopt(int argc, char *const argv[], const char *optstring);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

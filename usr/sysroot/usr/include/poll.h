@@ -1,5 +1,8 @@
 #ifndef _POLL_H
 #define _POLL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <signal.h>
 
@@ -24,4 +27,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 struct timespec;
 int ppoll(struct pollfd *fds, nfds_t n, const struct timespec *to, const sigset_t *mask);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

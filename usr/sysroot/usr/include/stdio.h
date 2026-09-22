@@ -1,5 +1,8 @@
 #ifndef _STDIO_H
 #define _STDIO_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 #include <stdarg.h>
@@ -97,4 +100,7 @@ int  rename(const char *oldp, const char *newp);
 int  remove(const char *path);
 char *tmpnam(char *buf);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

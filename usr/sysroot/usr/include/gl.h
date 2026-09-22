@@ -1,5 +1,8 @@
 #ifndef _CERVUS_GL_H
 #define _CERVUS_GL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 
 #include <stdint.h>
@@ -119,4 +122,7 @@ void  glResetDirty(void);
 const int *glDirtySpanMin(void);
 const int *glDirtySpanMax(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

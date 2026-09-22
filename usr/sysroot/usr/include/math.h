@@ -1,5 +1,8 @@
 #ifndef _MATH_H
 #define _MATH_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -174,4 +177,7 @@ static inline long   lrintf(float x) { return (long)round((double)x); }
 
 #define IS_POWER_OF_TWO(x) ((x) != 0 && (((x) & ((x) - 1)) == 0))
 
+#ifdef __cplusplus
+}
+#endif
 #endif

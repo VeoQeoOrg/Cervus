@@ -1,5 +1,8 @@
 #ifndef _LIMITS_H
 #define _LIMITS_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define CHAR_BIT    8
 #define SCHAR_MIN   (-128)
@@ -27,4 +30,7 @@
 #define PATH_MAX    512
 #define NAME_MAX    255
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _SYS_SYSCALL_H
 #define _SYS_SYSCALL_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 
@@ -201,4 +204,7 @@ __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 #define syscall5(n,a,b,c,d,e)   __syscall6((n), (uint64_t)(a), (uint64_t)(b), (uint64_t)(c), (uint64_t)(d), (uint64_t)(e), 0)
 #define syscall6(n,a,b,c,d,e,f) __syscall6((n), (uint64_t)(a), (uint64_t)(b), (uint64_t)(c), (uint64_t)(d), (uint64_t)(e), (uint64_t)(f))
 
+#ifdef __cplusplus
+}
+#endif
 #endif

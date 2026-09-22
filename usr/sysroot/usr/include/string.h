@@ -1,5 +1,8 @@
 #ifndef _STRING_H
 #define _STRING_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stddef.h>
 
@@ -44,4 +47,7 @@ size_t  strlcat(char *dst, const char *src, size_t size);
 char   *strerror(int errnum);
 char   *strsignal(int sig);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

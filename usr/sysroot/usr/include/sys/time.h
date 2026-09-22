@@ -1,5 +1,8 @@
 #ifndef _SYS_TIME_H
 #define _SYS_TIME_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <sys/types.h>
 #include <time.h>
@@ -30,4 +33,7 @@ struct itimerval {
 int setitimer(int which, const struct itimerval *new_value, struct itimerval *old_value);
 int getitimer(int which, struct itimerval *curr_value);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,8 @@
 #ifndef _ASSERT_H
 #define _ASSERT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifdef NDEBUG
 #define assert(cond) ((void)0)
@@ -13,4 +16,7 @@ void __cervus_assert_fail(const char *expr, const char *file, int line, const ch
 
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif
