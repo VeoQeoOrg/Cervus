@@ -55,14 +55,20 @@ fi
     printf 'set gfxmode=%s,1600x900,1366x768,1024x768,800x600,auto\n' "${CERVUS_GRUB_GFXMODE:-1280x1024}"
     printf 'set gfxpayload=keep\n'
     printf 'terminal_output gfxterm\n\n'
-    printf 'menuentry "%s %s (multiboot2)" {\n' "$IMAGE" "$VERSION"
-    printf '    insmod all_video\n'
-    printf '    set gfxpayload=keep\n'
-    printf '    multiboot2 /boot/kernel\n'
-    [ "$has_elf" = true ]       && printf '    module2 /boot/shell.elf init\n'
-    [ "$has_initramfs" = true ] && printf '    module2 /boot/initramfs.tar initramfs\n'
-    printf '    boot\n'
-    printf '}\n'
+    for entry in "1280x1024x32,1024x768x32,800x600x32,keep|" \
+                 "1024x768x32,800x600x32| (1024x768)" \
+                 "800x600x32| (800x600)"; do
+        payload=${entry%%|*}
+        label=${entry#*|}
+        printf 'menuentry "%s %s (multiboot2)%s" {\n' "$IMAGE" "$VERSION" "$label"
+        printf '    insmod all_video\n'
+        printf '    set gfxpayload=%s\n' "$payload"
+        printf '    multiboot2 /boot/kernel\n'
+        [ "$has_elf" = true ]       && printf '    module2 /boot/shell.elf init\n'
+        [ "$has_initramfs" = true ] && printf '    module2 /boot/initramfs.tar initramfs\n'
+        printf '    boot\n'
+        printf '}\n'
+    done
 } > grub_root/boot/grub/grub.cfg
 
 ts=$(date +%Y%m%d_%H%M%S)

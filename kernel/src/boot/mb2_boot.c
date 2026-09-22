@@ -78,21 +78,36 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
     rsv_add(0x100000, (uint64_t)(uintptr_t)kernel_lma_end - 0x100000);
     rsv_add((uint64_t)info_phys, total);
 
-    for (const uint8_t *p = info + 8; p + 8 <= end; p += (rd32(p + 4) + 7u) & ~7u) {
+    for (const uint8_t *p = info + 8; p + 8 <= end; ) {
         uint32_t type = rd32(p);
+        uint32_t tlen = rd32(p + 4);
         if (type == 0) break;
+        if (tlen < 8 || p + tlen > end) {
+            serial_printf("[mb2] tag %u has a length of %u, stopping the walk\n",
+                          type, tlen);
+            break;
+        }
         const uint8_t *d = p + 8;
         switch (type) {
         case 6:
             mmap_tag = p;
             break;
-        case 8:
+        case 8: {
+            uint8_t bpp  = d[20];
+            uint8_t kind = d[21];
+            if (kind != 1 || bpp != 32) {
+                serial_printf("[mb2] refusing framebuffer: type=%u bpp=%u "
+                              "(need a 32-bit linear RGB mode)\n",
+                              (unsigned)kind, (unsigned)bpp);
+                break;
+            }
             bi->fb.addr   = rd64(d) + HHDM;
             bi->fb.pitch  = rd32(d + 8);
             bi->fb.width  = rd32(d + 12);
             bi->fb.height = rd32(d + 16);
-            bi->fb.bpp    = d[20];
+            bi->fb.bpp    = bpp;
             break;
+        }
         case 3:
             if (bi->module_count < BOOT_MOD_MAX) {
                 uint32_t ms = rd32(d), me = rd32(d + 4);
@@ -108,6 +123,7 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
             if (!bi->rsdp_addr) bi->rsdp_addr = (uint64_t)(uintptr_t)d;
             break;
         }
+        p += (tlen + 7u) & ~7u;
     }
 
     if (g_rsv_lost)

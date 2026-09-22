@@ -249,7 +249,18 @@ void kmain(void) {
     s_fb.height  = boot_info()->fb.height;
     s_fb.pitch   = boot_info()->fb.pitch;
     s_fb.bpp     = boot_info()->fb.bpp;
-    global_framebuffer = &s_fb;
+
+    if (!s_fb.address || !s_fb.width || !s_fb.height || s_fb.bpp != 32 ||
+        s_fb.pitch < s_fb.width * 4) {
+        serial_printf("[boot] no usable framebuffer (addr=0x%llx %llux%llu pitch=%llu bpp=%u), "
+                      "the console stays on the serial port\n",
+                      (unsigned long long)(uintptr_t)s_fb.address,
+                      (unsigned long long)s_fb.width, (unsigned long long)s_fb.height,
+                      (unsigned long long)s_fb.pitch, (unsigned)s_fb.bpp);
+        global_framebuffer = NULL;
+    } else {
+        global_framebuffer = &s_fb;
+    }
 
     pmm_init(boot_info());
     slab_init();
@@ -258,7 +269,7 @@ void kmain(void) {
     serial_writestring("Paging [OK]\n");
     vmm_init();
     serial_writestring("VMM [OK]\n");
-    fb_init_backbuffer(global_framebuffer);
+    if (global_framebuffer) fb_init_backbuffer(global_framebuffer);
     vt_init();
     random_init();
     vfs_init();
