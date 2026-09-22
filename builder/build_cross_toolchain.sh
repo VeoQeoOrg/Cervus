@@ -75,9 +75,10 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
     cd "$BUILD/gcc"
     "$SRC/$GCC/configure" --target=$TARGET --prefix="$PREFIX" \
         --with-sysroot="$SYSROOT" --disable-nls --disable-werror \
-        --enable-languages=c --disable-multilib --disable-shared \
+        --enable-languages=c,c++ --disable-multilib --disable-shared \
         --disable-threads --disable-libssp --disable-libgomp \
         --disable-libatomic --disable-libquadmath --disable-libvtv \
+        --disable-libstdcxx-pch --disable-libstdcxx-verbose --disable-tls \
         CXX="g++ -std=gnu++17" CXXFLAGS_FOR_BUILD="-std=gnu++17 -O2" \
         >config.log 2>&1
     say "building gcc (all-gcc, $JOBS jobs)"
@@ -86,6 +87,10 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
     say "building libgcc"
     make -j"$JOBS" all-target-libgcc >>build.log 2>&1
     make install-target-libgcc >>build.log 2>&1
+
+    say "building libstdc++"
+    make -j"$JOBS" all-target-libstdc++-v3 >>build.log 2>&1
+    make install-target-libstdc++-v3 >>build.log 2>&1
 
     find "$PREFIX/lib/gcc/$TARGET" -type d -name include-fixed -exec \
         sh -c 'rm -f "$1"/stdio.h "$1"/stddef.h' _ {} \;
