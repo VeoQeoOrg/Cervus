@@ -1,27 +1,45 @@
 #include <dlfcn.h>
 #include <stddef.h>
 
+typedef struct {
+    void *(*open)(const char *path, int flags);
+    void *(*sym)(void *handle, const char *name);
+    int   (*close)(void *handle);
+} __cervus_dl_ops_t;
+
+__cervus_dl_ops_t *__cervus_dl_ops;
+
 static const char *g_err;
 
 void *dlopen(const char *file, int mode)
 {
-    (void)file; (void)mode;
-    g_err = "Cervus links statically; there is no dynamic loader yet";
-    return NULL;
+    if (!__cervus_dl_ops) {
+        g_err = "this program is linked statically; there is no loader to call";
+        return NULL;
+    }
+    void *h = __cervus_dl_ops->open(file, mode);
+    if (!h) g_err = "cannot load that library";
+    return h;
 }
 
 int dlclose(void *handle)
 {
-    (void)handle;
-    g_err = "Cervus links statically; there is no dynamic loader yet";
-    return -1;
+    if (!__cervus_dl_ops) {
+        g_err = "this program is linked statically; there is no loader to call";
+        return -1;
+    }
+    return __cervus_dl_ops->close(handle);
 }
 
 void *dlsym(void *handle, const char *name)
 {
-    (void)handle; (void)name;
-    g_err = "Cervus links statically; there is no dynamic loader yet";
-    return NULL;
+    if (!__cervus_dl_ops) {
+        g_err = "this program is linked statically; there is no loader to call";
+        return NULL;
+    }
+    void *p = __cervus_dl_ops->sym(handle, name);
+    if (!p) g_err = "no such symbol";
+    return p;
 }
 
 char *dlerror(void)

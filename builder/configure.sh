@@ -148,6 +148,12 @@ rule cc_lib
   depfile = \$out.d
   deps = gcc
 
+rule cc_lib_pic
+  command = gcc $LIBCERVUS_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(pic)   \$in
+  depfile = \$out.d
+  deps = gcc
+
 rule cc_lib_opt
   command = gcc $LIBCERVUS_CFLAGS_OPT -MMD -MF \$out.d -c \$in -o \$out
   description = CC(lib*)  \$in
@@ -216,6 +222,7 @@ build $CINDER_STAMP: bootstrap
 EOF
 
 LIB_OBJS=""
+PIC_OBJS=""
 for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     obj=$(obj_for "$src" libcervus)
     case "$src" in
@@ -224,6 +231,10 @@ for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     esac
     printf 'build %s: %s %s\n' "$obj" "$rule" "$src"
     LIB_OBJS="$LIB_OBJS $obj"
+
+    picobj=$(printf '%s' "$obj" | sed 's|^obj/libcervus/|obj/libcervus_pic/|')
+    printf 'build %s: cc_lib_pic %s\n' "$picobj" "$src"
+    PIC_OBJS="$PIC_OBJS $picobj"
 done
 printf 'build obj/ldso/ld_start.o: asm_bare usr/ldso/ld_start.asm\n'
 printf 'build usr/ldso/ld-cervus.elf: cc_ldso obj/ldso/ld_start.o usr/ldso/ld-cervus.c\n\n'
@@ -231,6 +242,7 @@ printf 'build obj/libcervus/setjmp.o: asm_bare usr/lib/libcervus/setjmp.asm\n'
 printf 'build obj/libcervus/pthread_tramp.o: asm_bare usr/lib/libcervus/pthread/trampoline.asm\n'
 printf 'build %s: asm_bare usr/lib/libcervus/crt0.asm\n' "$CRT0"
 printf 'build %s: ar%s obj/libcervus/setjmp.o obj/libcervus/pthread_tramp.o\n\n' "$LIBCERVUS_A" "$LIB_OBJS"
+printf 'build %s/libcervus_pic.a: ar%s obj/libcervus/setjmp.o obj/libcervus/pthread_tramp.o\n\n' "$SYSLIB" "$PIC_OBJS"
 printf 'rule stub_lib\n  command = rm -f \$out && ar rcs \$out\n  description = AR        \$out\n\n'
 for stub in libm libdl libpthread librt libc libncurses libcurses libtinfo; do
     printf 'build %s/%s.a: stub_lib | %s\n\n' "$SYSLIB" "$stub" "$LIBCERVUS_A"

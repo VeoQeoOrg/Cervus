@@ -370,6 +370,56 @@ static void load_needed(object_t *o)
     }
 }
 
+typedef struct {
+    void *(*open)(const char *path, int flags);
+    void *(*sym)(void *handle, const char *name);
+    int   (*close)(void *handle);
+} dl_ops_t;
+
+static void *ld_dlopen(const char *path, int flags)
+{
+    (void)flags;
+    if (!path) return &g_objs[0];
+
+    for (int i = 0; i < g_nobjs; i++)
+        if (g_objs[i].name && ld_streq(g_objs[i].name, path)) return &g_objs[i];
+
+    if (g_nobjs >= MAX_OBJECTS) return 0;
+
+    int first = g_nobjs;
+    object_t *o = &g_objs[g_nobjs++];
+    dyn_t *dyn = NULL;
+    o->name = path;
+    o->base = map_library(path, &dyn);
+    o->dyn  = dyn;
+    scan_dynamic(o);
+    load_needed(o);
+
+    for (int i = g_nobjs - 1; i >= first; i--) apply_relocations(&g_objs[i]);
+    return o;
+}
+
+static void *ld_dlsym(void *handle, const char *name)
+{
+    if (!name) return 0;
+    if (!handle) {
+        uintptr_t a = resolve(name, 0);
+        return (void *)a;
+    }
+    object_t *o = handle;
+    sym_t *s = lookup_in(o, name);
+    if (!s) return 0;
+    return (void *)(o->base + s->st_value);
+}
+
+static int ld_dlclose(void *handle)
+{
+    (void)handle;
+    return 0;
+}
+
+static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose };
+
 uintptr_t ld_start_c(uint64_t *sp)
 {
     uint64_t argc = sp[0];
@@ -414,6 +464,9 @@ uintptr_t ld_start_c(uint64_t *sp)
         load_needed(&g_objs[0]);
 
         for (int i = g_nobjs - 1; i >= 0; i--) apply_relocations(&g_objs[i]);
+
+        uintptr_t slot = resolve("__cervus_dl_ops", 0);
+        if (slot) *(dl_ops_t **)slot = &g_dl_ops;
     }
 
     (void)interp_base;
