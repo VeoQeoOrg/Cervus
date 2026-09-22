@@ -23,6 +23,26 @@
 #define ID_ENCODER   3
 #define ID_PLANE     4
 
+#define PROP_ACTIVE      10
+#define PROP_MODE_ID     11
+#define PROP_CRTC_ID     12
+#define PROP_FB_ID       13
+#define PROP_CRTC_X      14
+#define PROP_CRTC_Y      15
+#define PROP_CRTC_W      16
+#define PROP_CRTC_H      17
+#define PROP_SRC_X       18
+#define PROP_SRC_Y       19
+#define PROP_SRC_W       20
+#define PROP_SRC_H       21
+#define PROP_TYPE        22
+#define PROP_DPMS        23
+#define PROP_IN_FORMATS  24
+
+#define PLANE_TYPE_PRIMARY 1
+
+#define DRM_MAX_BLOBS 8
+
 #define DUMB_OFFSET_BASE 0x100000000ULL
 #define DUMB_OFFSET_STEP 0x10000000ULL
 
@@ -49,6 +69,7 @@ typedef struct {
 typedef struct {
     int      valid;
     uint32_t fb_id;
+    uint32_t mode_blob;
     struct drm_mode_modeinfo mode;
 } drm_crtc_t;
 
@@ -68,6 +89,16 @@ static spinlock_t g_drm_lock = SPINLOCK_INIT;
 static vnode_t    g_card_node;
 static int        g_master;
 static int        g_scanout_on;
+
+typedef struct {
+    int      used;
+    uint32_t id;
+    uint32_t length;
+    uint8_t *data;
+} drm_blob_t;
+
+static drm_blob_t g_blobs[DRM_MAX_BLOBS];
+static uint32_t   g_next_blob_id = 1;
 
 static struct drm_event_vblank g_events[DRM_EVENT_QUEUE];
 static int g_ev_head, g_ev_tail, g_ev_count;
@@ -523,10 +554,254 @@ static int64_t ioctl_getplane(struct drm_mode_get_plane *p)
     return 0;
 }
 
+
+
+static drm_blob_t *blob_by_id(uint32_t id)
+{
+    for (int i = 0; i < DRM_MAX_BLOBS; i++)
+        if (g_blobs[i].used && g_blobs[i].id == id) return &g_blobs[i];
+    return NULL;
+}
+
+static int64_t ioctl_create_blob(struct drm_mode_create_blob *c)
+{
+    if (!c->length || c->length > 4096) return -EINVAL;
+    int slot = -1;
+    for (int i = 0; i < DRM_MAX_BLOBS; i++)
+        if (!g_blobs[i].used) { slot = i; break; }
+    if (slot < 0) return -ENOSPC;
+
+    uint8_t *buf = malloc(c->length);
+    if (!buf) return -ENOMEM;
+    if (syscall_copy_from_user(buf, (const void *)c->data, c->length) < 0) {
+        free(buf);
+        return -EFAULT;
+    }
+    g_blobs[slot].used   = 1;
+    g_blobs[slot].id     = g_next_blob_id++;
+    g_blobs[slot].length = c->length;
+    g_blobs[slot].data   = buf;
+    c->blob_id = g_blobs[slot].id;
+    return 0;
+}
+
+static int64_t ioctl_destroy_blob(struct drm_mode_destroy_blob *d)
+{
+    drm_blob_t *b = blob_by_id(d->blob_id);
+    if (!b) return -ENOENT;
+    free(b->data);
+    b->data = NULL;
+    b->used = 0;
+    return 0;
+}
+
+static int64_t ioctl_getblob(struct drm_mode_get_blob *g)
+{
+    drm_blob_t *b = blob_by_id(g->blob_id);
+    if (!b) return -ENOENT;
+    if (g->data && g->length >= b->length) {
+        if (syscall_copy_to_user((void *)g->data, b->data, b->length) < 0) return -EFAULT;
+    }
+    g->length = b->length;
+    return 0;
+}
+
+typedef struct {
+    uint32_t    id;
+    const char *name;
+    uint32_t    flags;
+} drm_prop_desc_t;
+
+static const drm_prop_desc_t CRTC_PROPS[] = {
+    { PROP_ACTIVE,  "ACTIVE",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_MODE_ID, "MODE_ID", DRM_MODE_PROP_BLOB  | DRM_MODE_PROP_ATOMIC },
+};
+
+static const drm_prop_desc_t CONN_PROPS[] = {
+    { PROP_CRTC_ID, "CRTC_ID", DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
+    { PROP_DPMS,    "DPMS",    DRM_MODE_PROP_ENUM },
+};
+
+static const drm_prop_desc_t PLANE_PROPS[] = {
+    { PROP_TYPE,   "type",   DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE },
+    { PROP_FB_ID,  "FB_ID",  DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
+    { PROP_CRTC_ID,"CRTC_ID",DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
+    { PROP_CRTC_X, "CRTC_X", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_CRTC_Y, "CRTC_Y", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_CRTC_W, "CRTC_W", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_CRTC_H, "CRTC_H", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_SRC_X,  "SRC_X",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_SRC_Y,  "SRC_Y",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_SRC_W,  "SRC_W",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { PROP_SRC_H,  "SRC_H",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+};
+
+static const drm_prop_desc_t *props_of(uint32_t obj_id, int *count)
+{
+    switch (obj_id) {
+        case ID_CRTC:      *count = (int)(sizeof CRTC_PROPS  / sizeof CRTC_PROPS[0]);  return CRTC_PROPS;
+        case ID_CONNECTOR: *count = (int)(sizeof CONN_PROPS  / sizeof CONN_PROPS[0]);  return CONN_PROPS;
+        case ID_PLANE:     *count = (int)(sizeof PLANE_PROPS / sizeof PLANE_PROPS[0]); return PLANE_PROPS;
+        default:           *count = 0;                                                 return NULL;
+    }
+}
+
+static uint64_t prop_value(uint32_t obj_id, uint32_t prop_id)
+{
+    if (obj_id == ID_CRTC) {
+        if (prop_id == PROP_ACTIVE)  return g_crtc.valid ? 1 : 0;
+        if (prop_id == PROP_MODE_ID) return g_crtc.mode_blob;
+    }
+    if (obj_id == ID_CONNECTOR && prop_id == PROP_CRTC_ID)
+        return g_crtc.valid ? ID_CRTC : 0;
+    if (obj_id == ID_PLANE) {
+        switch (prop_id) {
+            case PROP_TYPE:    return PLANE_TYPE_PRIMARY;
+            case PROP_FB_ID:   return g_crtc.valid ? g_crtc.fb_id : 0;
+            case PROP_CRTC_ID: return g_crtc.valid ? ID_CRTC : 0;
+            case PROP_CRTC_W:  return fb_width();
+            case PROP_CRTC_H:  return fb_height();
+            case PROP_SRC_W:   return (uint64_t)fb_width()  << 16;
+            case PROP_SRC_H:   return (uint64_t)fb_height() << 16;
+            default:           return 0;
+        }
+    }
+    return 0;
+}
+
+static int64_t ioctl_getprop(struct drm_mode_get_property *g)
+{
+    const uint32_t objs[] = { ID_CRTC, ID_CONNECTOR, ID_PLANE };
+    for (unsigned o = 0; o < sizeof objs / sizeof objs[0]; o++) {
+        int n = 0;
+        const drm_prop_desc_t *list = props_of(objs[o], &n);
+        for (int i = 0; i < n; i++) {
+            if (list[i].id != g->prop_id) continue;
+            g->flags = list[i].flags;
+            memset(g->name, 0, sizeof g->name);
+            strncpy(g->name, list[i].name, sizeof g->name - 1);
+            g->count_values     = 0;
+            g->count_enum_blobs = 0;
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+static int64_t apply_prop(uint32_t obj_id, uint32_t prop_id, uint64_t value,
+                          uint32_t *want_fb, int *want_active, int *saw_mode)
+{
+    if (obj_id == ID_CRTC) {
+        if (prop_id == PROP_ACTIVE) { *want_active = value ? 1 : 0; return 0; }
+        if (prop_id == PROP_MODE_ID) {
+            if (value == 0) { *want_active = 0; return 0; }
+            drm_blob_t *b = blob_by_id((uint32_t)value);
+            if (!b || b->length < sizeof(struct drm_mode_modeinfo)) return -EINVAL;
+            struct drm_mode_modeinfo m;
+            memcpy(&m, b->data, sizeof m);
+            if (m.hdisplay != fb_width() || m.vdisplay != fb_height()) return -EINVAL;
+            g_crtc.mode      = m;
+            g_crtc.mode_blob = (uint32_t)value;
+            *saw_mode = 1;
+            return 0;
+        }
+        return 0;
+    }
+    if (obj_id == ID_CONNECTOR) return 0;
+    if (obj_id == ID_PLANE) {
+        if (prop_id == PROP_FB_ID) { *want_fb = (uint32_t)value; return 0; }
+        return 0;
+    }
+    return -ENOENT;
+}
+
 static int64_t ioctl_obj_getprops(struct drm_mode_obj_get_properties *o)
 {
-    (void)o;
-    o->count_props = 0;
+    int n = 0;
+    const drm_prop_desc_t *list = props_of(o->obj_id, &n);
+    if (!list) { o->count_props = 0; return 0; }
+
+    if (o->props_ptr && o->prop_values_ptr && (int)o->count_props >= n) {
+        uint32_t ids[16];
+        uint64_t vals[16];
+        for (int i = 0; i < n; i++) {
+            ids[i]  = list[i].id;
+            vals[i] = prop_value(o->obj_id, list[i].id);
+        }
+        if (syscall_copy_to_user((void *)o->props_ptr, ids,
+                                 (size_t)n * sizeof(uint32_t)) < 0) return -EFAULT;
+        if (syscall_copy_to_user((void *)o->prop_values_ptr, vals,
+                                 (size_t)n * sizeof(uint64_t)) < 0) return -EFAULT;
+    }
+    o->count_props = (uint32_t)n;
+    return 0;
+}
+
+static int64_t ioctl_atomic(struct drm_mode_atomic *a)
+{
+    if (a->flags & ~(DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_NONBLOCK |
+                     DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT))
+        return -EINVAL;
+    if (a->count_objs == 0 || a->count_objs > 8) return -EINVAL;
+
+    uint32_t objs[8], nprops[8];
+    if (syscall_copy_from_user(objs, (const void *)a->objs_ptr,
+                               a->count_objs * sizeof(uint32_t)) < 0) return -EFAULT;
+    if (syscall_copy_from_user(nprops, (const void *)a->count_props_ptr,
+                               a->count_objs * sizeof(uint32_t)) < 0) return -EFAULT;
+
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < a->count_objs; i++) total += nprops[i];
+    if (total == 0 || total > 64) return -EINVAL;
+
+    uint32_t pids[64];
+    uint64_t pvals[64];
+    if (syscall_copy_from_user(pids, (const void *)a->props_ptr,
+                               total * sizeof(uint32_t)) < 0) return -EFAULT;
+    if (syscall_copy_from_user(pvals, (const void *)a->prop_values_ptr,
+                               total * sizeof(uint64_t)) < 0) return -EFAULT;
+
+    uint32_t want_fb = g_crtc.valid ? g_crtc.fb_id : 0;
+    int want_active  = g_crtc.valid;
+    int saw_mode     = 0;
+
+    struct drm_mode_modeinfo saved_mode = g_crtc.mode;
+    uint32_t saved_blob = g_crtc.mode_blob;
+
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < a->count_objs; i++) {
+        for (uint32_t j = 0; j < nprops[i]; j++, k++) {
+            int64_t r = apply_prop(objs[i], pids[k], pvals[k],
+                                   &want_fb, &want_active, &saw_mode);
+            if (r < 0) {
+                g_crtc.mode = saved_mode;
+                g_crtc.mode_blob = saved_blob;
+                return r;
+            }
+        }
+    }
+
+    if (a->flags & DRM_MODE_ATOMIC_TEST_ONLY) {
+        g_crtc.mode = saved_mode;
+        g_crtc.mode_blob = saved_blob;
+        return 0;
+    }
+
+    if (!want_active || want_fb == 0) {
+        drm_stop_scanout();
+        return 0;
+    }
+
+    if (!fb_by_id(want_fb)) return -ENOENT;
+    if (!saw_mode && !g_crtc.valid) return -EINVAL;
+
+    int r = scanout(want_fb);
+    if (r < 0) return r;
+    g_crtc.valid = 1;
+    g_crtc.fb_id = want_fb;
+
+    if (a->flags & DRM_MODE_PAGE_FLIP_EVENT)
+        queue_flip_event(ID_CRTC, a->user_data);
     return 0;
 }
 
@@ -543,6 +818,7 @@ static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
             struct drm_set_client_cap *c = arg;
             if (c->capability == DRM_CLIENT_CAP_UNIVERSAL_PLANES) return 0;
             if (c->capability == DRM_CLIENT_CAP_ASPECT_RATIO)     return 0;
+            if (c->capability == DRM_CLIENT_CAP_ATOMIC)           return 0;
             return -EINVAL;
         }
         case DRM_IOCTL_SET_VERSION:    return 0;
@@ -563,6 +839,11 @@ static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
         case DRM_IOCTL_MODE_GETPLANERESOURCES: return ioctl_getplaneres(arg);
         case DRM_IOCTL_MODE_GETPLANE:     return ioctl_getplane(arg);
         case DRM_IOCTL_MODE_OBJ_GETPROPERTIES: return ioctl_obj_getprops(arg);
+        case DRM_IOCTL_MODE_GETPROPERTY:   return ioctl_getprop(arg);
+        case DRM_IOCTL_MODE_GETPROPBLOB:   return ioctl_getblob(arg);
+        case DRM_IOCTL_MODE_CREATEPROPBLOB:  return ioctl_create_blob(arg);
+        case DRM_IOCTL_MODE_DESTROYPROPBLOB: return ioctl_destroy_blob(arg);
+        case DRM_IOCTL_MODE_ATOMIC:        return ioctl_atomic(arg);
         default:                          return -ENOTTY;
     }
 }

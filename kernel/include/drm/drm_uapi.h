@@ -271,6 +271,39 @@ struct drm_mode_get_property {
     uint32_t count_enum_blobs;
 };
 
+struct drm_mode_create_blob {
+    uint64_t data;
+    uint32_t length;
+    uint32_t blob_id;
+};
+
+struct drm_mode_destroy_blob {
+    uint32_t blob_id;
+};
+
+struct drm_mode_atomic {
+    uint32_t flags;
+    uint32_t count_objs;
+    uint64_t objs_ptr;
+    uint64_t count_props_ptr;
+    uint64_t props_ptr;
+    uint64_t prop_values_ptr;
+    uint64_t reserved;
+    uint64_t user_data;
+};
+
+#define DRM_MODE_ATOMIC_TEST_ONLY   0x0100
+#define DRM_MODE_ATOMIC_NONBLOCK    0x0200
+#define DRM_MODE_ATOMIC_ALLOW_MODESET 0x0400
+
+#define DRM_MODE_PROP_PENDING   (1 << 0)
+#define DRM_MODE_PROP_RANGE     (1 << 1)
+#define DRM_MODE_PROP_IMMUTABLE (1 << 2)
+#define DRM_MODE_PROP_ENUM      (1 << 3)
+#define DRM_MODE_PROP_BLOB      (1 << 4)
+#define DRM_MODE_PROP_OBJECT    (1 << 6)
+#define DRM_MODE_PROP_ATOMIC    0x80000000
+
 struct drm_mode_get_blob {
     uint32_t blob_id;
     uint32_t length;
@@ -332,6 +365,9 @@ struct drm_event_vblank {
 #define DRM_IOCTL_MODE_SETPLANE      DRM_IOWR(0xB7, struct drm_mode_set_plane)
 #define DRM_IOCTL_MODE_ADDFB2        DRM_IOWR(0xB8, struct drm_mode_fb_cmd2)
 #define DRM_IOCTL_MODE_OBJ_GETPROPERTIES DRM_IOWR(0xB9, struct drm_mode_obj_get_properties)
+#define DRM_IOCTL_MODE_ATOMIC        DRM_IOWR(0xBC, struct drm_mode_atomic)
+#define DRM_IOCTL_MODE_CREATEPROPBLOB  DRM_IOWR(0xBD, struct drm_mode_create_blob)
+#define DRM_IOCTL_MODE_DESTROYPROPBLOB DRM_IOWR(0xBE, struct drm_mode_destroy_blob)
 
 _Static_assert(sizeof(struct drm_version) == 64, "drm_version");
 _Static_assert(sizeof(struct drm_mode_card_res) == 64, "drm_mode_card_res");
@@ -348,5 +384,7 @@ _Static_assert(sizeof(struct drm_event_vblank) == 32, "drm_event_vblank");
 _Static_assert(sizeof(struct drm_mode_get_property) == 64, "drm_mode_get_property");
 _Static_assert(sizeof(struct drm_mode_obj_get_properties) == 32, "drm_mode_obj_get_properties");
 _Static_assert(sizeof(struct drm_mode_get_plane) == 32, "drm_mode_get_plane");
+_Static_assert(sizeof(struct drm_mode_atomic) == 56, "drm_mode_atomic");
+_Static_assert(sizeof(struct drm_mode_create_blob) == 16, "drm_mode_create_blob");
 
 #endif
