@@ -14,7 +14,9 @@ typedef unsigned long size_t;
 typedef long          ssize_t;
 #endif
 typedef long          ptrdiff_t;
+#ifndef __cplusplus
 typedef int           wchar_t;
+#endif
 
 #define offsetof(t, m) __builtin_offsetof(t, m)
 

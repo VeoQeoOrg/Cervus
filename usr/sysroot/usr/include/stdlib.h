@@ -17,12 +17,11 @@ lldiv_t lldiv(long long num, long long den);
 
 #define MB_CUR_MAX 1
 
-typedef __WCHAR_TYPE__ __cervus_wchar_t;
 int    mblen(const char *s, size_t n);
-int    mbtowc(__cervus_wchar_t *pwc, const char *s, size_t n);
-int    wctomb(char *s, __cervus_wchar_t wc);
-size_t mbstowcs(__cervus_wchar_t *dst, const char *src, size_t n);
-size_t wcstombs(char *dst, const __cervus_wchar_t *src, size_t n);
+int    mbtowc(wchar_t *pwc, const char *s, size_t n);
+int    wctomb(char *s, wchar_t wc);
+size_t mbstowcs(wchar_t *dst, const char *src, size_t n);
+size_t wcstombs(char *dst, const wchar_t *src, size_t n);
 
 
 #define EXIT_SUCCESS 0
