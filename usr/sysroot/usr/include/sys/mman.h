@@ -5,6 +5,24 @@ extern "C" {
 #endif
 
 #include <stddef.h>
+
+#define MADV_NORMAL     0
+#define MADV_RANDOM     1
+#define MADV_SEQUENTIAL 2
+#define MADV_WILLNEED   3
+#define MADV_DONTNEED   4
+#define MADV_FREE       8
+
+#define POSIX_MADV_NORMAL     MADV_NORMAL
+#define POSIX_MADV_RANDOM     MADV_RANDOM
+#define POSIX_MADV_SEQUENTIAL MADV_SEQUENTIAL
+#define POSIX_MADV_WILLNEED   MADV_WILLNEED
+#define POSIX_MADV_DONTNEED   MADV_DONTNEED
+
+int madvise(void *addr, size_t len, int advice);
+int posix_madvise(void *addr, size_t len, int advice);
+
+#include <stddef.h>
 #include <sys/types.h>
 
 #define PROT_NONE   0x0
