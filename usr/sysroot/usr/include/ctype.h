@@ -28,6 +28,8 @@ int ispunct(int c);
 int isxdigit(int c);
 int iscntrl(int c);
 int isblank(int c);
+int isascii(int c);
+int toascii(int c);
 int toupper(int c);
 int tolower(int c);
 

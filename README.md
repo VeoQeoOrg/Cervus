@@ -1206,25 +1206,45 @@ forever.
 `libxkbcommon` is packaged as well, for keymaps and keysyms once there is input to
 route.
 
+### Mode setting (DRM/KMS)
+
+`/dev/dri/card0` answers the mode-setting ioctls that libdrm issues, with the
+same ABI Linux uses, so an unmodified libdrm talks to it. One CRTC drives one
+connector at the framebuffer's own resolution; a client allocates a dumb buffer,
+maps it, hangs a framebuffer object on it and either sets the CRTC or flips
+pages, getting a completion event back. Object properties, property blobs and
+the atomic commit are there too, which is the path every current compositor
+takes.
+
+### Loading code at runtime
+
+`dlopen`, `dlsym` and `dlclose` load a shared object, resolve what it needs and
+hand back its symbols. The loader at `/lib/ld-cervus.elf` does the work and
+passes a table of those calls to any program that asks for it; a program linked
+statically gets a plain error rather than a crash. Position independent
+executables and shared libraries link against `libcervus_pic.a`.
+
 ---
 
 ## Cross-Compiling from Linux (the x86_64-cervus toolchain)
 
 For larger programs — and for building real software with a full optimizing compiler
 — Cervus ships a **hosted cross toolchain**. `builder/build_cross_toolchain.sh` builds
-**GCC + binutils + libgcc** on a Linux host, targeting `x86_64-cervus` against the
+**GCC + binutils + libgcc + libstdc++** on a Linux host, targeting `x86_64-cervus` against the
 in-tree sysroot:
 
 ```sh
 sh builder/build_cross_toolchain.sh          # build once (into usr/cross/tools)
 export PATH="$PWD/usr/cross/tools/bin:$PATH"
 x86_64-cervus-gcc hello.c -o hello           # produces a static Cervus binary
+x86_64-cervus-g++ hello.cc -o hello          # C++ works too, with libstdc++
 ```
 
 The toolchain knows about Cervus: it finds the system headers, links `crt0` +
 `libcervus` + `libgcc`, defaults to a static non-PIE executable at the right load
 address, and predefines `__cervus__` — so an ordinary `#include <stdio.h>` program
-just compiles. The resulting binary runs directly on Cervus:
+just compiles. C++ is there as well -- `std::string`, `std::vector` and the
+algorithms all link and run. The resulting binary runs directly on Cervus:
 
 <p align="center">
   <img src="assets/screenshots/cross-toolchain.png" alt="A program built with x86_64-cervus-gcc running on Cervus" width="760px">
