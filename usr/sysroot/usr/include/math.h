@@ -60,6 +60,7 @@ double ceil(double x);
 double round(double x);
 double sqrt(double x);
 float  sqrtf(float x);
+float  fabsf(float x);
 float  floorf(float x);
 float  ceilf(float x);
 
@@ -101,6 +102,8 @@ float log2f(float x);
 float log10f(float x);
 float log1pf(float x);
 float expm1f(float x);
+float sinf(float x);
+float cosf(float x);
 float tanf(float x);
 float asinf(float x);
 float acosf(float x);
@@ -141,9 +144,6 @@ float modff(float x, float *ip);
 #define M_PI_2       1.57079632679489661923
 #define M_PI_4       0.78539816339744830962
 
-static inline float  fabsf(float x)  { return x < 0 ? -x : x; }
-static inline float  cosf(float x)   { return (float)cos((double)x); }
-static inline float  sinf(float x)   { return (float)sin((double)x); }
 static inline long   lrint(double x) { return (long)round(x); }
 static inline long   lrintf(float x) { return (long)round((double)x); }
 

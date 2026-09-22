@@ -126,6 +126,8 @@ float log2f(float x)                { return (float)log2((double)x); }
 float log10f(float x)               { return (float)log10((double)x); }
 float log1pf(float x)               { return (float)log1p((double)x); }
 float expm1f(float x)               { return (float)expm1((double)x); }
+float sinf(float x)                 { return (float)sin((double)x); }
+float cosf(float x)                 { return (float)cos((double)x); }
 float tanf(float x)                 { return (float)tan((double)x); }
 float asinf(float x)                { return (float)asin((double)x); }
 float acosf(float x)                { return (float)acos((double)x); }
@@ -159,3 +161,5 @@ float modff(float x, float *ip)
     *ip = (float)i;
     return (float)f;
 }
+
+float fabsf(float x)                { return x < 0 ? -x : x; }
