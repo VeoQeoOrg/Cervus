@@ -1,6 +1,17 @@
 #ifndef _CTYPE_H
 #define _CTYPE_H
 
+#define _U 01
+#define _L 02
+#define _N 04
+#define _S 010
+#define _P 020
+#define _C 040
+#define _X 0100
+#define _B 0200
+
+extern const char *__ctype_ptr__;
+
 int isdigit(int c);
 int isalpha(int c);
 int isalnum(int c);
