@@ -103,6 +103,8 @@ void vt_fb_set_owner_task(void *task) {
 void vt_fb_task_exit(void *task) {
     if (!task || g_fb_owner_task != task) return;
     extern void console_force_full_redraw(void);
+    extern void drm_forget_scanout(void);
+    drm_forget_scanout();
     vt_fb_release(g_fb_owner_vt);
     console_force_full_redraw();
 }

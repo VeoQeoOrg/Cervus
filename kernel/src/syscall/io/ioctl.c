@@ -2,7 +2,7 @@
 #include "../../../include/fs/vfs.h"
 #include <string.h>
 
-#define IOCTL_KBUF_MAX 128
+#define IOCTL_KBUF_MAX 256
 
 #define TIOCGWINSZ    0x5413
 #define TIOCGCURSOR   0x5480
@@ -16,13 +16,20 @@
 
 #define IOCTL_TERMIOS_SIZE 48
 
+#define IOC_DIR(c)   (((c) >> 30) & 0x3u)
+#define IOC_SIZE(c)  (((c) >> 16) & 0x3fffu)
+#define IOC_WRITE    1u
+#define IOC_READ     2u
+
 static size_t ioctl_out_size(uint64_t request)
 {
     switch (request) {
         case TIOCGWINSZ:  return 8;
         case TIOCGCURSOR: return 8;
         case TCGETS:      return IOCTL_TERMIOS_SIZE;
-        default:          return 0;
+        default:
+            if (IOC_DIR(request) & IOC_READ) return IOC_SIZE(request);
+            return 0;
     }
 }
 
@@ -35,7 +42,9 @@ static size_t ioctl_in_size(uint64_t request)
         case TIOCSWINSZ:  return 8;
         case TIOCSNONBLOCK: return sizeof(int);
 	case SIOCSTTL:    return sizeof(int);
-        default:          return 0;
+        default:
+            if (IOC_DIR(request) & IOC_WRITE) return IOC_SIZE(request);
+            return 0;
     }
 }
 
@@ -49,6 +58,8 @@ int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr)
     size_t out_sz = ioctl_out_size(request);
     size_t in_sz  = ioctl_in_size(request);
     int64_t r;
+
+    if (out_sz > IOCTL_KBUF_MAX || in_sz > IOCTL_KBUF_MAX) { fd_put(f); return -EINVAL; }
 
     if (arg_ptr) {
         size_t validate_sz = out_sz > in_sz ? out_sz : in_sz;

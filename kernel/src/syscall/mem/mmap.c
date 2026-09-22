@@ -14,6 +14,7 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     if (!t || !t->is_userspace) return (int64_t)MAP_FAILED;
 
     vnode_t *backing = NULL;
+    vnode_t *devmap = NULL;
     vfs_file_t *filebacked = NULL;
     if (!(flags & MAP_ANONYMOUS)) {
         if (!t->fd_table) return (int64_t)MAP_FAILED;
@@ -22,6 +23,10 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
         if (memfd_is(file->vnode)) {
             backing = file->vnode;
             if (task_map_track(t, backing) < 0) { fd_put(file); return (int64_t)MAP_FAILED; }
+            fd_put(file);
+        } else if (file->vnode->ops && file->vnode->ops->mmap_page) {
+            devmap = file->vnode;
+            if (task_map_track(t, devmap) < 0) { fd_put(file); return (int64_t)MAP_FAILED; }
             fd_put(file);
         } else {
             if (flags & MAP_SHARED) { fd_put(file); return (int64_t)MAP_FAILED; }
@@ -56,13 +61,18 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     uint64_t vf = VMM_PRESENT | VMM_USER;
     if (prot & PROT_WRITE) vf |= VMM_WRITE;
     if (!(prot & PROT_EXEC)) vf |= VMM_NOEXEC;
-    if (backing) vf |= VMM_SHARED;
+    if (backing || devmap) vf |= VMM_SHARED;
 
     for (size_t i = 0; i < pages; i++) {
         uintptr_t phys;
         if (backing) {
             size_t index = (size_t)((offset >> 12) + i);
             if (memfd_page_phys(backing, index, &phys) < 0) {
+                for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
+                return (int64_t)MAP_FAILED;
+            }
+        } else if (devmap) {
+            if (devmap->ops->mmap_page(devmap, offset + (uint64_t)i * 0x1000, &phys) < 0) {
                 for (size_t j = 0; j < i; j++) vmm_unmap_page(t->pagemap, addr + j * 0x1000);
                 return (int64_t)MAP_FAILED;
             }

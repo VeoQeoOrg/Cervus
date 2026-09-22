@@ -90,6 +90,7 @@ typedef struct vnode_ops {
     int     (*symlink) (vnode_t *dir, const char *name, const char *target);
     int64_t (*readlink)(vnode_t *node, char *buf, size_t bufsiz);
     int     (*poll)    (vnode_t *node, int events);
+    int     (*mmap_page)(vnode_t *node, uint64_t offset, uintptr_t *phys_out);
 } vnode_ops_t;
 
 struct vnode {

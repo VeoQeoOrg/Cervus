@@ -280,6 +280,8 @@ void kmain(void) {
     vnode_t *devroot = devfs_create_root();
     vfs_mount("/dev", devroot);
     vfs_set_mount_info("/dev", "devfs", "devfs");
+    extern void drm_init(void);
+    drm_init();
     serial_writestring("devfs [OK]\n");
 
     vnode_t *procroot = procfs_create_root();

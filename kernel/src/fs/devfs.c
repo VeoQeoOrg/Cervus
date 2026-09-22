@@ -482,6 +482,17 @@ typedef struct {
 
 static devfs_dir_data_t g_devdir;
 static vnode_t          g_devroot;
+
+#define DEVFS_MAX_SUBDIRS 4
+
+typedef struct {
+    char             name[VFS_MAX_NAME];
+    vnode_t          node;
+    devfs_dir_data_t dir;
+} devfs_subdir_t;
+
+static devfs_subdir_t g_subdirs[DEVFS_MAX_SUBDIRS];
+static int            g_nsubdirs;
 static vnode_t          g_tty_node;
 static vnode_t          g_null_node;
 static vnode_t          g_zero_node;
@@ -490,12 +501,17 @@ static vnode_t          g_urandom_node;
 
 static uint64_t g_devfs_ino = 100;
 
+static devfs_dir_data_t *dir_data_of(vnode_t *dir) {
+    if (dir && dir->fs_data) return (devfs_dir_data_t *)dir->fs_data;
+    return &g_devdir;
+}
+
 static int devfs_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
-    (void)dir;
-    for (int i = 0; i < g_devdir.count; i++) {
-        if (strcmp(g_devdir.entries[i].name, name) == 0) {
-            vnode_ref(g_devdir.entries[i].node);
-            *out = g_devdir.entries[i].node;
+    devfs_dir_data_t *d = dir_data_of(dir);
+    for (int i = 0; i < d->count; i++) {
+        if (strcmp(d->entries[i].name, name) == 0) {
+            vnode_ref(d->entries[i].node);
+            *out = d->entries[i].node;
             return 0;
         }
     }
@@ -503,9 +519,9 @@ static int devfs_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
 }
 
 static int devfs_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
-    (void)dir;
-    if ((int64_t)index >= g_devdir.count) return -ENOENT;
-    devfs_entry_t *e = &g_devdir.entries[index];
+    devfs_dir_data_t *d = dir_data_of(dir);
+    if ((int64_t)index >= d->count) return -ENOENT;
+    devfs_entry_t *e = &d->entries[index];
     out->d_ino  = e->node->ino;
     out->d_type = (uint8_t)e->node->type;
     strncpy(out->d_name, e->name, VFS_MAX_NAME - 1);
@@ -521,18 +537,43 @@ static const vnode_ops_t devfs_dir_ops = {
     .unref   = devfs_unref,
 };
 
-void devfs_register(const char *name, vnode_t *node) {
-    for (int i = 0; i < g_devdir.count; i++) {
-        if (strcmp(g_devdir.entries[i].name, name) == 0) {
-            g_devdir.entries[i].node = node;
+static void dir_add(devfs_dir_data_t *d, const char *name, vnode_t *node) {
+    for (int i = 0; i < d->count; i++) {
+        if (strcmp(d->entries[i].name, name) == 0) {
+            d->entries[i].node = node;
             return;
         }
     }
-    if (g_devdir.count >= DEVFS_MAX_ENTRIES) return;
-    devfs_entry_t *e = &g_devdir.entries[g_devdir.count++];
+    if (d->count >= DEVFS_MAX_ENTRIES) return;
+    devfs_entry_t *e = &d->entries[d->count++];
     strncpy(e->name, name, VFS_MAX_NAME - 1);
     e->name[VFS_MAX_NAME - 1] = '\0';
     e->node = node;
+}
+
+void devfs_register(const char *name, vnode_t *node) {
+    dir_add(&g_devdir, name, node);
+}
+
+void devfs_register_in(const char *dirname, const char *name, vnode_t *node) {
+    devfs_subdir_t *sd = NULL;
+    for (int i = 0; i < g_nsubdirs; i++) {
+        if (strcmp(g_subdirs[i].name, dirname) == 0) { sd = &g_subdirs[i]; break; }
+    }
+    if (!sd) {
+        if (g_nsubdirs >= DEVFS_MAX_SUBDIRS) return;
+        sd = &g_subdirs[g_nsubdirs++];
+        memset(sd, 0, sizeof(*sd));
+        strncpy(sd->name, dirname, VFS_MAX_NAME - 1);
+        sd->node.type     = VFS_NODE_DIR;
+        sd->node.mode     = 0755;
+        sd->node.ino      = g_devfs_ino++;
+        sd->node.ops      = &devfs_dir_ops;
+        sd->node.fs_data  = &sd->dir;
+        sd->node.refcount = 1;
+        dir_add(&g_devdir, sd->name, &sd->node);
+    }
+    dir_add(&sd->dir, name, node);
 }
 
 vnode_t *devfs_create_root(void) {
