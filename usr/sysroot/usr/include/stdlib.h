@@ -14,6 +14,7 @@ ldiv_t  ldiv(long num, long den);
 lldiv_t lldiv(long long num, long long den);
 
 #include <stddef.h>
+#include <alloca.h>
 
 #define MB_CUR_MAX 1
 
@@ -35,6 +36,8 @@ size_t wcstombs(char *dst, const wchar_t *src, size_t n);
 void *malloc(size_t n);
 void *calloc(size_t nmemb, size_t size);
 void *realloc(void *p, size_t n);
+int   posix_memalign(void **out, size_t align, size_t n);
+void *aligned_alloc(size_t align, size_t n);
 void  free(void *p);
 
 void  exit(int status) __attribute__((noreturn));
