@@ -99,12 +99,21 @@ int64_t clock_realtime_sec(void)
 
 int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
 {
-    (void)id;
     if (!ts_ptr) return -EINVAL;
 
     cervus_timespec_t ts;
 
-    if (id == 1) {
+    if (id == 2 || id == 3) {
+        task_t *t = syscall_cur_task();
+        if (!t) return -EINVAL;
+        uint64_t ns = t->total_runtime;
+        uint64_t now = sched_now_ns();
+        if (t->run_start_ns && now > t->run_start_ns) ns += now - t->run_start_ns;
+        ts.tv_sec  = (int64_t)(ns / 1000000000ULL);
+        ts.tv_nsec = (int64_t)(ns % 1000000000ULL);
+    } else if (id != 0 && id != 1 && id != 4 && id != 5 && id != 6 && id != 7) {
+        return -EINVAL;
+    } else if (id != 0 && id != 5) {
         uint64_t ns   = sched_now_ns();
         ts.tv_sec     = (int64_t)(ns / 1000000000ULL);
         ts.tv_nsec    = (int64_t)(ns % 1000000000ULL);

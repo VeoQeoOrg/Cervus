@@ -6,7 +6,7 @@
 
 typedef struct { int64_t tv_sec; int64_t tv_nsec; } __cervus_ts_raw_t;
 
-int clock_gettime(int clk, struct timespec *tp)
+int clock_gettime(clockid_t clk, struct timespec *tp)
 {
     if (!tp) { __cervus_errno = EINVAL; return -1; }
     __cervus_ts_raw_t ts = {0, 0};
