@@ -414,6 +414,13 @@ manages controller quirks, decodes scancodes through a shared **keymap layer**
 The mouse driver supports IntelliMouse mode with a scroll wheel. Function-key chords
 (`Ctrl+Alt+F1`…`F12`) are intercepted here and routed to the virtual-terminal layer.
 
+Both devices, and the USB keyboard and mouse, also appear as Linux **evdev**
+devices, `/dev/input/event0` (keyboard) and `/dev/input/event1` (mouse). They
+return 24-byte `input_event` records with Linux key codes and answer the
+`EVIOCG*` ioctls, so libinput and anything written against evdev work unchanged.
+Every open file reads from its own position, starting from the moment it was
+opened, so several readers each see every event.
+
 ### USB stack
 
 Cervus supports three host-controller interfaces — **xHCI** (USB 3), **EHCI**
@@ -1134,8 +1141,10 @@ built. So `herd upgrade` updates the operating system the same way it updates
 anything else, and tells you to reboot when it has replaced the kernel or part of
 the base system.
 
-What is packaged today — Git, Lua, GNU make, SQLite, bzip2, zlib, NASM, TCC,
-Doom, sl, Wayland, libffi, libxkbcommon, and Cervus itself:
+What is packaged today — GCC and binutils, Git, Lua, GNU make, SQLite, bzip2,
+zlib, NASM, TCC, Doom, sl, Wayland and Weston with the libraries under them
+(libinput, libevdev, mtdev, libdrm, pixman, libdisplay-info, libseat,
+libxkbcommon, libffi), and Cervus itself:
 
 <div align="center">
   <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">
@@ -1203,8 +1212,37 @@ expects: `SCM_RIGHTS` descriptor passing, `memfd_create` with `MAP_SHARED`, epol
 then reads with `MSG_DONTWAIT`, and a kernel that blocks on that read stops
 forever.
 
-`libxkbcommon` is packaged as well, for keymaps and keysyms once there is input to
-route.
+### Weston
+
+The reference compositor runs too. `herd install weston` brings Weston 16 with
+its DRM backend, the pixman software renderer and the kiosk shell, and pulls in
+everything it stands on: libinput, libevdev, mtdev, libdrm, pixman,
+libdisplay-info, libseat and libxkbcommon with its keyboard layouts.
+
+```sh
+herd install weston
+startweston -- weston-simple-shm
+```
+
+`startweston` prepares the runtime directory and starts Weston on
+`/dev/dri/card0`. The program after `--` is launched as a client, and Weston
+exits when it does; Esc closes `weston-simple-shm` and brings the console back.
+
+<div align="center">
+  <img src="assets/screenshots/weston.png" alt="weston-simple-shm running under Weston on Cervus" width="760px">
+</div>
+
+The ports carry small patches: libevdev, libinput and libdrm learn that
+`__cervus__` uses the Linux ioctl encoding and input headers, and Weston builds
+without cairo (which only its desktop shell and demo clients need) and exports
+the C library to the modules it loads. Beyond that they see the interfaces they
+would see on Linux. Input goes
+through the evdev devices (`/dev/input/event0` and `event1`), libinput finds
+them through `libudev-cervus`, a small libudev written for Cervus that describes
+what is in `/dev/dri` and `/dev/input`, and libseat opens them directly with its
+`noop` backend. Weston's modules are shared objects loaded with `dlopen`, and the
+libraries are shared as well, resolved by `/lib/ld-cervus.elf` through their
+`RUNPATH` and `LD_LIBRARY_PATH`.
 
 ### Mode setting (DRM/KMS)
 
@@ -1249,6 +1287,25 @@ algorithms all link and run. The resulting binary runs directly on Cervus:
 <p align="center">
   <img src="assets/screenshots/cross-toolchain.png" alt="A program built with x86_64-cervus-gcc running on Cervus" width="760px">
 </p>
+
+Shared libraries and dynamically linked programs come out of the same compiler:
+`-shared` builds a library without the startup code or the C library in it, and
+`-pie` builds a program that `/lib/ld-cervus.elf` loads, linked against the
+position-independent C library and exporting it to whatever libraries it loads.
+Everything else stays static. `-pthread` is accepted, and C++ exceptions,
+static constructors and destructors work in both kinds of program.
+
+### Compiling on Cervus itself
+
+The same compiler is packaged to run *on* Cervus. `herd install gcc` brings
+GCC 15.2 for C and C++, with libstdc++, and pulls in binutils 2.47 for the
+assembler and linker:
+
+```sh
+herd install gcc
+gcc -O2 demo.c -o demo -lm && ./demo
+g++ -O2 -std=c++17 demo.cpp -o demo && ./demo
+```
 
 ---
 
