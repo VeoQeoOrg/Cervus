@@ -29,6 +29,7 @@ typedef struct {
 typedef struct {
     epoll_watch_t watched[EPOLL_MAX_WATCHED];
     spinlock_t    lock;
+    volatile int  scanning;
 } epoll_set_t;
 
 extern int vfs_poll_file(vfs_file_t *file, int events);
@@ -42,8 +43,30 @@ static void epoll_unref(vnode_t *n)
 
 static int epoll_poll(vnode_t *n, int events)
 {
-    (void)n; (void)events;
-    return 0;
+    epoll_set_t *ep = (epoll_set_t *)n->fs_data;
+    task_t *t = syscall_cur_task();
+    if (!ep || !t || !t->fd_table || !(events & POLLIN)) return 0;
+    if (__atomic_exchange_n(&ep->scanning, 1, __ATOMIC_ACQUIRE)) return 0;
+
+    epoll_watch_t snapshot[EPOLL_MAX_WATCHED];
+    uint64_t f = spinlock_acquire_irqsave(&ep->lock);
+    memcpy(snapshot, ep->watched, sizeof snapshot);
+    spinlock_release_irqrestore(&ep->lock, f);
+
+    int ready = 0;
+    for (int i = 0; i < EPOLL_MAX_WATCHED && !ready; i++) {
+        if (!snapshot[i].used) continue;
+        vfs_file_t *file = fd_get(t->fd_table, snapshot[i].fd);
+        if (!file) continue;
+        int want = (int)(snapshot[i].events & (POLLIN | POLLOUT | POLLPRI));
+        if (!want) want = POLLIN;
+        int got = vfs_poll_file(file, want);
+        fd_put(file);
+        if (got & (want | POLLERR | POLLHUP)) ready = 1;
+    }
+
+    __atomic_store_n(&ep->scanning, 0, __ATOMIC_RELEASE);
+    return ready ? POLLIN : 0;
 }
 
 static const vnode_ops_t EPOLL_OPS = {
