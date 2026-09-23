@@ -31,9 +31,17 @@ static __attribute__((noreturn)) void signal_terminate(task_t *t, int sig) {
 
 extern int signalfd_deliver(uint32_t pid, int sig);
 
+static int signal_ignored(task_t *t, int sig) {
+    uint64_t h = t->sig_handler[sig];
+    if (h == SIG_IGN_ADDR) return 1;
+    return h == SIG_DFL_ADDR && sig_default_ignore(sig);
+}
+
 void signal_send(task_t *t, int sig) {
     if (!t || sig <= 0 || sig >= NSIG) return;
     if (sig != SIGKILL && signalfd_deliver(t->pid, sig)) return;
+    if (sig != SIGKILL && sig != SIGCONT && !(t->sig_blocked & (1ULL << sig)) && signal_ignored(t, sig))
+        return;
     t->sig_pending |= (1ULL << sig);
     if (sig == SIGKILL) t->pending_kill = true;
     if (t->state == TASK_BLOCKED &&

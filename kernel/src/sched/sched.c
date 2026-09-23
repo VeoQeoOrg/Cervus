@@ -614,6 +614,10 @@ __attribute__((noreturn)) void task_exit(void)
 
     task_wakeup_waiters(me->pid);
 
+    task_t *parent = task_find_by_pid(me->ppid);
+    if (parent && parent != me && parent->state != TASK_ZOMBIE && parent->state != TASK_DEAD)
+        signal_send(parent, SIGCHLD);
+
     sched_reschedule();
 
     kernel_panic("task_exit: returned from sched_reschedule (should never happen)");
