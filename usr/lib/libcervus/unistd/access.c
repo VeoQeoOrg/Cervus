@@ -10,7 +10,7 @@ int access(const char *path, int mode)
     if (!path) { __cervus_errno = EFAULT; return -1; }
 
     __cervus_kstat_t k;
-    long r = syscall2(SYS_STAT, (unsigned long)path, (unsigned long)&k);
+    long r = __cervus_kstat(__CERVUS_KSTAT_PATH, (uint64_t)path, &k);
     if (r < 0 && r > -4096) { __cervus_errno = (int)-r; return -1; }
     if (mode == F_OK) return 0;
 

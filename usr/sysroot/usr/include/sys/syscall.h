@@ -87,6 +87,7 @@ extern "C" {
 #define SYS_UMASK           119
 #define SYS_ALARM           120
 #define SYS_LSTAT           121
+#define SYS_KSTAT            34
 #define SYS_PREAD           122
 #define SYS_PWRITE          123
 
@@ -186,10 +187,10 @@ __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
            uint64_t a4, uint64_t a5, uint64_t a6)
 {
     int64_t ret;
-    register uint64_t r10 asm("r10") = a4;
-    register uint64_t r8  asm("r8")  = a5;
-    register uint64_t r9  asm("r9")  = a6;
-    asm volatile ("syscall"
+    register uint64_t r10 __asm__("r10") = a4;
+    register uint64_t r8  __asm__("r8")  = a5;
+    register uint64_t r9  __asm__("r9")  = a6;
+    __asm__ __volatile__ ("syscall"
                   : "=a"(ret)
                   : "0"(nr), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
                   : "rcx", "r11", "memory");

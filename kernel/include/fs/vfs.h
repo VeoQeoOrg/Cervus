@@ -52,10 +52,19 @@ typedef struct {
     uint64_t        st_nlink;
     uint64_t        st_dev;
     uint64_t        st_blksize;
+    uint64_t        st_rdev;
 } vfs_stat_t;
 
-_Static_assert(sizeof(vfs_stat_t) == 88,
+#define VFS_STAT_V1_SIZE 88
+
+_Static_assert(sizeof(vfs_stat_t) == 96,
                "vfs_stat_t must match libcervus __cervus_kstat_t");
+
+static inline uint64_t vfs_makedev(uint32_t major, uint32_t minor)
+{
+    return ((uint64_t)(major & 0xfffff000u) << 32) | ((uint64_t)(major & 0xfffu) << 8) |
+           ((uint64_t)(minor & 0xffffff00u) << 12) | (uint64_t)(minor & 0xffu);
+}
 
 typedef struct {
     uint64_t    d_ino;
@@ -112,6 +121,7 @@ struct vnode {
     void               *fs_data;
     volatile int        refcount;
     vfs_mount_t        *mounted;
+    uint64_t            rdev;
 };
 
 struct vfs_mount {

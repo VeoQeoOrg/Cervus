@@ -55,6 +55,7 @@ extern int64_t sys_close      (uint64_t fd);
 extern int64_t sys_seek       (uint64_t fd, uint64_t offset, uint64_t whence);
 extern int64_t sys_stat       (uint64_t path_ptr, uint64_t stat_ptr);
 extern int64_t sys_fstat      (uint64_t fd, uint64_t stat_ptr);
+extern int64_t sys_kstat      (uint64_t kind, uint64_t arg, uint64_t stat_ptr);
 extern int64_t sys_ioctl      (uint64_t fd, uint64_t request, uint64_t arg_ptr);
 extern int64_t sys_dup        (uint64_t fd);
 extern int64_t sys_dup2       (uint64_t oldfd, uint64_t newfd);
@@ -221,6 +222,7 @@ W3(sys_read)        W3(sys_write)
 W3(sys_open)        W1(sys_close)
 W3(sys_seek)        W2(sys_stat)
 W2(sys_fstat)       W1(sys_dup)
+W3(sys_kstat)
 W2(sys_dup2)        W1(sys_pipe)
 W3(sys_fcntl)
 W3(sys_ioctl)
@@ -309,6 +311,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SEEK]              = _sys_seek,
     [SYS_STAT]              = _sys_stat,
     [SYS_FSTAT]             = _sys_fstat,
+    [SYS_KSTAT]             = _sys_kstat,
     [SYS_IOCTL]             = _sys_ioctl,
     [SYS_DUP]               = _sys_dup,
     [SYS_DUP2]              = _sys_dup2,

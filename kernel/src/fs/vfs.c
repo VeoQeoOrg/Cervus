@@ -511,7 +511,11 @@ static int stat_node(vnode_t *node, vfs_stat_t *out) {
         out->st_size = node->size;
         ret = 0;
     }
-    if (ret == 0) stat_apply_type_bits(out);
+    if (ret == 0) {
+        stat_apply_type_bits(out);
+        if (node->type == VFS_NODE_CHARDEV || node->type == VFS_NODE_BLKDEV)
+            out->st_rdev = node->rdev;
+    }
     return ret;
 }
 

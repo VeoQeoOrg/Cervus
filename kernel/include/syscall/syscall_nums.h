@@ -35,6 +35,7 @@
 #define SYS_FCNTL        31
 #define SYS_READDIR      32
 #define SYS_GETDENTS     33
+#define SYS_KSTAT        34
 
 #define SYS_MMAP         40
 #define SYS_MUNMAP       41

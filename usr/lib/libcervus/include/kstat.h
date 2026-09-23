@@ -5,6 +5,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/abi.h>
+#include <sys/syscall.h>
+#include <errno.h>
 
 typedef struct {
     uint64_t st_ino;
@@ -20,9 +22,10 @@ typedef struct {
     uint64_t st_nlink;
     uint64_t st_dev;
     uint64_t st_blksize;
+    uint64_t st_rdev;
 } __cervus_kstat_t;
 
-_Static_assert(sizeof(__cervus_kstat_t) == 88,
+_Static_assert(sizeof(__cervus_kstat_t) == 96,
                "__cervus_kstat_t must match the kernel's vfs_stat_t");
 
 static inline void __cervus_stat_from_kernel(struct stat *out, const __cervus_kstat_t *k)
@@ -38,9 +41,24 @@ static inline void __cervus_stat_from_kernel(struct stat *out, const __cervus_ks
     out->st_nlink   = k->st_nlink;
     out->st_dev     = k->st_dev;
     out->st_blksize = k->st_blksize;
+    out->st_rdev    = k->st_rdev;
     out->st_atim.tv_sec = k->k_atime;
     out->st_mtim.tv_sec = k->k_mtime;
     out->st_ctim.tv_sec = k->k_ctime;
+}
+
+#define __CERVUS_KSTAT_PATH     0
+#define __CERVUS_KSTAT_NOFOLLOW 1
+#define __CERVUS_KSTAT_FD       2
+
+static inline long __cervus_kstat(long kind, uint64_t arg, __cervus_kstat_t *k)
+{
+    long r = (long)syscall3(SYS_KSTAT, kind, arg, k);
+    if (r != -ENOSYS) return r;
+    memset(k, 0, sizeof *k);
+    long nr = kind == __CERVUS_KSTAT_FD ? SYS_FSTAT
+            : kind == __CERVUS_KSTAT_NOFOLLOW ? SYS_LSTAT : SYS_STAT;
+    return (long)syscall2(nr, arg, k);
 }
 
 #endif

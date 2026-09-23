@@ -551,7 +551,19 @@ static void dir_add(devfs_dir_data_t *d, const char *name, vnode_t *node) {
     e->node = node;
 }
 
+static uint32_t g_dyn_char_minor;
+static uint32_t g_dyn_blk_minor;
+
+static void assign_rdev(vnode_t *node) {
+    if (!node || node->rdev) return;
+    if (node->type == VFS_NODE_CHARDEV)
+        node->rdev = vfs_makedev(240, __atomic_fetch_add(&g_dyn_char_minor, 1, __ATOMIC_RELAXED));
+    else if (node->type == VFS_NODE_BLKDEV)
+        node->rdev = vfs_makedev(254, __atomic_fetch_add(&g_dyn_blk_minor, 1, __ATOMIC_RELAXED));
+}
+
 void devfs_register(const char *name, vnode_t *node) {
+    assign_rdev(node);
     dir_add(&g_devdir, name, node);
 }
 
@@ -573,6 +585,7 @@ void devfs_register_in(const char *dirname, const char *name, vnode_t *node) {
         sd->node.refcount = 1;
         dir_add(&g_devdir, sd->name, &sd->node);
     }
+    assign_rdev(node);
     dir_add(&sd->dir, name, node);
 }
 
@@ -618,6 +631,12 @@ vnode_t *devfs_create_root(void) {
 
     g_urandom_node = g_random_node;
     g_urandom_node.ino = g_devfs_ino++;
+
+    g_tty_node.rdev     = vfs_makedev(5, 0);
+    g_null_node.rdev    = vfs_makedev(1, 3);
+    g_zero_node.rdev    = vfs_makedev(1, 5);
+    g_random_node.rdev  = vfs_makedev(1, 8);
+    g_urandom_node.rdev = vfs_makedev(1, 9);
 
     devfs_register("tty",  &g_tty_node);
     devfs_register("null", &g_null_node);

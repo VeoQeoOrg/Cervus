@@ -6,7 +6,7 @@
 int fstat(int fd, struct stat *out)
 {
     __cervus_kstat_t k;
-    long r = __cervus_sys_ret(syscall2(SYS_FSTAT, fd, &k));
+    long r = __cervus_sys_ret(__cervus_kstat(__CERVUS_KSTAT_FD, (uint64_t)(long)fd, &k));
     if (r != 0) return (int)r;
     __cervus_stat_from_kernel(out, &k);
     return 0;

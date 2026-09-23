@@ -403,11 +403,11 @@ static vnode_t g_mouse_node = {
 };
 static vnode_t g_ev_kbd_node = {
     .type = VFS_NODE_CHARDEV, .mode = 0660, .ops = &EV_OPS,
-    .fs_data = &g_ev_kbd, .refcount = 1, .ino = 13 * 256 + 64,
+    .fs_data = &g_ev_kbd, .refcount = 1, .ino = 13 * 256 + 64, .rdev = 13 * 256 + 64,
 };
 static vnode_t g_ev_mouse_node = {
     .type = VFS_NODE_CHARDEV, .mode = 0660, .ops = &EV_OPS,
-    .fs_data = &g_ev_mouse, .refcount = 1, .ino = 13 * 256 + 65,
+    .fs_data = &g_ev_mouse, .refcount = 1, .ino = 13 * 256 + 65, .rdev = 13 * 256 + 65,
 };
 
 void evdev_init(void)

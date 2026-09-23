@@ -12,5 +12,5 @@ int64_t sys_fstat(uint64_t fd, uint64_t stat_ptr)
     int r = vfs_fstat(f, &st);
     fd_put(f);
     if (r < 0) return (int64_t)r;
-    return syscall_copy_to_user((void *)stat_ptr, &st, sizeof(st));
+    return syscall_copy_to_user((void *)stat_ptr, &st, VFS_STAT_V1_SIZE);
 }
