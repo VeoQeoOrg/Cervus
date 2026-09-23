@@ -129,6 +129,9 @@ extern int __cervus_errno;
 #define EOWNERDEAD   130
 #define ENOTRECOVERABLE 131
 
+extern char *program_invocation_name;
+extern char *program_invocation_short_name;
+
 #ifdef __cplusplus
 }
 #endif
