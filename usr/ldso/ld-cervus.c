@@ -16,6 +16,7 @@ typedef unsigned long      size_t;
 #define AT_ENTRY   9
 
 #define PT_LOAD    1
+#define PT_PHDR    6
 #define PT_DYNAMIC 2
 
 #define DT_NULL    0
@@ -34,6 +35,7 @@ typedef unsigned long      size_t;
 #define DT_FINI    13
 #define DT_SONAME  14
 #define DT_RPATH   15
+#define DT_RUNPATH 29
 #define DT_JMPREL  23
 #define DT_INIT_ARRAY 25
 #define DT_FINI_ARRAY 26
@@ -48,6 +50,7 @@ typedef unsigned long      size_t;
 #define R_X86_64_RELATIVE  8
 
 #define SHN_UNDEF 0
+#define STB_WEAK  2
 
 #define O_RDONLY 0
 #define PROT_READ  1
@@ -101,10 +104,11 @@ typedef struct {
 #define ELF64_R_SYM(i)  ((uint32_t)((i) >> 32))
 #define ELF64_R_TYPE(i) ((uint32_t)(i))
 
-#define MAX_OBJECTS 24
+#define MAX_OBJECTS 64
 
 typedef struct {
     const char *name;
+    const char *path;
     uintptr_t   base;
     dyn_t      *dyn;
     const char *strtab;
@@ -116,6 +120,8 @@ typedef struct {
 
 static object_t g_objs[MAX_OBJECTS];
 static int      g_nobjs;
+static const char *g_library_path;
+static const char *g_fail;
 
 static long sys1(long n, long a) {
     long r;
@@ -223,6 +229,11 @@ static uintptr_t resolve(const char *name, object_t *skip) {
     return 0;
 }
 
+static void unresolved_call(void)
+{
+    ld_die("a function that no loaded library provides was called", NULL);
+}
+
 static void apply_relocations(object_t *o)
 {
     rela_t  *rela = NULL, *jmprel = NULL;
@@ -262,9 +273,22 @@ static void apply_relocations(object_t *o)
                 sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
                 if (own && own->st_shndx != SHN_UNDEF) val = o->base + own->st_value;
             }
-            if (!val) ld_die("undefined symbol", nm);
+            if (!val && type == R_X86_64_JUMP_SLOT) {
+                sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
+                if (!own || (own->st_info >> 4) != STB_WEAK) val = (uintptr_t)unresolved_call;
+            } else if (!val) {
+                sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
+                if (!own || (own->st_info >> 4) != STB_WEAK) ld_die("undefined symbol", nm);
+            }
 
             switch (type) {
+                case R_X86_64_COPY: {
+                    sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
+                    const unsigned char *src = (const unsigned char *)val;
+                    unsigned char *dst = (unsigned char *)slot;
+                    for (uint64_t b = 0; own && src && b < own->st_size; b++) dst[b] = src[b];
+                    break;
+                }
                 case R_X86_64_64:
                     *slot = val + (uint64_t)r->r_addend;
                     break;
@@ -280,46 +304,101 @@ static void apply_relocations(object_t *o)
     o->relocated = 1;
 }
 
-static uintptr_t map_library(const char *path, dyn_t **dyn_out)
+static long try_open(char *full, size_t cap, const char *dir, size_t dirlen, const char *name)
 {
-    static const char *const DIRS[] = { "/lib/", "/usr/lib/", "" };
-    char full[256];
-    long fd = -1;
+    size_t n = 0;
+    for (size_t i = 0; i < dirlen && n + 1 < cap; i++) full[n++] = dir[i];
+    if (n && full[n - 1] != '/' && n + 1 < cap) full[n++] = '/';
+    for (const char *p = name; *p && n + 1 < cap; p++) full[n++] = *p;
+    full[n] = 0;
+    return sys3(SYS_OPEN, (long)full, O_RDONLY, 0);
+}
 
-    for (size_t d = 0; d < sizeof DIRS / sizeof DIRS[0]; d++) {
-        size_t n = 0;
-        const char *p = DIRS[d];
-        while (*p && n + 1 < sizeof full) full[n++] = *p++;
-        p = path;
-        while (*p && n + 1 < sizeof full) full[n++] = *p++;
-        full[n] = 0;
-        fd = sys3(SYS_OPEN, (long)full, O_RDONLY, 0);
-        if (fd >= 0) break;
+static long search_list(char *full, size_t cap, const char *list, const char *name,
+                        const char *origin, size_t originlen)
+{
+    while (list && *list) {
+        const char *end = list;
+        while (*end && *end != ':') end++;
+        size_t len = (size_t)(end - list);
+        if (len >= 7 && list[0] == '$' && list[1] == 'O' && list[2] == 'R' && list[3] == 'I' &&
+            list[4] == 'G' && list[5] == 'I' && list[6] == 'N') {
+            if (origin) {
+                char dir[256];
+                size_t n = 0;
+                for (size_t i = 0; i < originlen && n + 1 < sizeof dir; i++) dir[n++] = origin[i];
+                for (size_t i = 7; i < len && n + 1 < sizeof dir; i++) dir[n++] = list[i];
+                long fd = try_open(full, cap, dir, n, name);
+                if (fd >= 0) return fd;
+            }
+        } else if (len) {
+            long fd = try_open(full, cap, list, len, name);
+            if (fd >= 0) return fd;
+        }
+        list = *end ? end + 1 : end;
     }
-    if (fd < 0) ld_die("cannot find library", path);
+    return -1;
+}
+
+static long find_library(char *full, size_t cap, const char *name, const object_t *req)
+{
+    int has_slash = 0;
+    for (const char *p = name; *p; p++) if (*p == '/') has_slash = 1;
+    if (has_slash) {
+        ld_copy(full, name, cap);
+        return sys3(SYS_OPEN, (long)full, O_RDONLY, 0);
+    }
+
+    long fd = search_list(full, cap, g_library_path, name, NULL, 0);
+    if (fd >= 0) return fd;
+
+    if (req && req->dyn && req->strtab) {
+        const char *runpath = NULL, *rpath = NULL;
+        for (dyn_t *d = req->dyn; d->d_tag != DT_NULL; d++) {
+            if (d->d_tag == DT_RUNPATH) runpath = req->strtab + d->d_val;
+            else if (d->d_tag == DT_RPATH) rpath = req->strtab + d->d_val;
+        }
+        const char *origin = NULL;
+        size_t originlen = 0;
+        if (req->path) {
+            for (const char *p = req->path; *p; p++) if (*p == '/') originlen = (size_t)(p - req->path);
+            if (originlen) origin = req->path;
+        }
+        fd = search_list(full, cap, runpath ? runpath : rpath, name, origin, originlen);
+        if (fd >= 0) return fd;
+    }
+
+    return search_list(full, cap, "/lib:/usr/lib", name, NULL, 0);
+}
+
+static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *req, char *full, size_t cap)
+{
+    long fd = find_library(full, cap, path, req);
+    if (fd < 0) { g_fail = "cannot find library"; return 0; }
 
     ehdr_t eh;
-    if (sys3(SYS_READ, fd, (long)&eh, sizeof eh) != (long)sizeof eh)
-        ld_die("short read on", path);
+    if (sys3(SYS_READ, fd, (long)&eh, sizeof eh) != (long)sizeof eh ||
+        eh.e_ident[0] != 0x7F || eh.e_ident[1] != 'E' || eh.e_ident[2] != 'L' || eh.e_ident[3] != 'F')
+        { g_fail = "not an ELF file"; sys1(SYS_CLOSE, fd); return 0; }
 
     uintptr_t lo = ~(uintptr_t)0, hi = 0;
     phdr_t ph;
     for (int i = 0; i < eh.e_phnum; i++) {
         sys3(SYS_SEEK, fd, (long)(eh.e_phoff + (uint64_t)eh.e_phentsize * i), 0);
         if (sys3(SYS_READ, fd, (long)&ph, sizeof ph) != (long)sizeof ph)
-            ld_die("short phdr in", path);
+            { g_fail = "short phdr in"; sys1(SYS_CLOSE, fd); return 0; }
         if (ph.p_type != PT_LOAD) continue;
         if (ph.p_vaddr < lo) lo = ph.p_vaddr;
         if (ph.p_vaddr + ph.p_memsz > hi) hi = ph.p_vaddr + ph.p_memsz;
     }
-    if (lo > hi) ld_die("no loadable segments in", path);
+    if (lo > hi) { g_fail = "no loadable segments in"; sys1(SYS_CLOSE, fd); return 0; }
 
     lo &= ~(uintptr_t)0xFFF;
     size_t span = (hi - lo + 0xFFF) & ~(uintptr_t)0xFFF;
 
     long area = sys6(SYS_MMAP, 0, (long)span, PROT_READ | PROT_WRITE | PROT_EXEC,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (area <= 0) ld_die("out of memory mapping", path);
+    if (area <= 0) { g_fail = "out of memory mapping"; sys1(SYS_CLOSE, fd); return 0; }
 
     uintptr_t base = (uintptr_t)area - lo;
 
@@ -330,8 +409,13 @@ static uintptr_t map_library(const char *path, dyn_t **dyn_out)
         if (ph.p_type != PT_LOAD) continue;
         if (ph.p_filesz) {
             sys3(SYS_SEEK, fd, (long)ph.p_offset, 0);
-            long got = sys3(SYS_READ, fd, (long)(base + ph.p_vaddr), (long)ph.p_filesz);
-            if (got != (long)ph.p_filesz) ld_die("short segment read in", path);
+            uint64_t done = 0;
+            while (done < ph.p_filesz) {
+                long got = sys3(SYS_READ, fd, (long)(base + ph.p_vaddr + done), (long)(ph.p_filesz - done));
+                if (got <= 0) break;
+                done += (uint64_t)got;
+            }
+            if (done != ph.p_filesz) { g_fail = "short segment read in"; sys1(SYS_CLOSE, fd); return 0; }
         }
         char *zero = (char *)(base + ph.p_vaddr + ph.p_filesz);
         for (uint64_t z = ph.p_filesz; z < ph.p_memsz; z++) *zero++ = 0;
@@ -355,14 +439,17 @@ static void load_needed(object_t *o)
         if (g_nobjs >= MAX_OBJECTS) ld_die("too many libraries", name);
 
         static char names[MAX_OBJECTS][64];
+        static char paths[MAX_OBJECTS][256];
         ld_copy(names[g_nobjs], name, sizeof names[0]);
 
         dyn_t *ndyn = NULL;
-        uintptr_t base = map_library(names[g_nobjs], &ndyn);
+        uintptr_t base = map_library(names[g_nobjs], &ndyn, o, paths[g_nobjs], sizeof paths[0]);
+        if (!base) ld_die(g_fail, names[g_nobjs]);
         if (!ndyn) ld_die("library has no dynamic section", names[g_nobjs]);
 
         object_t *no = &g_objs[g_nobjs++];
         no->name = names[g_nobjs - 1];
+        no->path = paths[g_nobjs - 1];
         no->base = base;
         no->dyn  = ndyn;
         no->relocated = 0;
@@ -421,10 +508,15 @@ static void *ld_dlopen(const char *path, int flags)
     if (g_nobjs >= MAX_OBJECTS) return 0;
 
     int first = g_nobjs;
-    object_t *o = &g_objs[g_nobjs++];
+    static char dl_paths[MAX_OBJECTS][256];
     dyn_t *dyn = NULL;
+    uintptr_t base = map_library(path, &dyn, &g_objs[0], dl_paths[g_nobjs], sizeof dl_paths[0]);
+    if (!base || !dyn) return 0;
+    object_t *o = &g_objs[g_nobjs];
     o->name = path;
-    o->base = map_library(path, &dyn);
+    o->path = dl_paths[g_nobjs];
+    g_nobjs++;
+    o->base = base;
     o->dyn  = dyn;
     scan_dynamic(o);
     load_needed(o);
@@ -461,6 +553,15 @@ uintptr_t ld_start_c(uint64_t *sp)
     char **argv = (char **)(sp + 1);
     char **envp = argv + argc + 1;
 
+    for (char **e = envp; *e; e++) {
+        const char *v = *e;
+        if (v[0] == 'L' && v[1] == 'D' && v[2] == '_' && v[3] == 'L' && v[4] == 'I' &&
+            v[5] == 'B' && v[6] == 'R' && v[7] == 'A' && v[8] == 'R' && v[9] == 'Y' &&
+            v[10] == '_' && v[11] == 'P' && v[12] == 'A' && v[13] == 'T' && v[14] == 'H' &&
+            v[15] == '=')
+            g_library_path = v + 16;
+    }
+
     uint64_t *auxv = (uint64_t *)envp;
     while (*auxv) auxv++;
     auxv++;
@@ -485,7 +586,11 @@ uintptr_t ld_start_c(uint64_t *sp)
     dyn_t *exec_dyn = NULL;
     for (uint64_t i = 0; i < phnum; i++) {
         phdr_t *p = (phdr_t *)(phdr + i * phent);
-        if (p->p_type == PT_DYNAMIC) exec_dyn = (dyn_t *)p->p_vaddr;
+        if (p->p_type == PT_PHDR) exec_base = phdr - p->p_vaddr;
+    }
+    for (uint64_t i = 0; i < phnum; i++) {
+        phdr_t *p = (phdr_t *)(phdr + i * phent);
+        if (p->p_type == PT_DYNAMIC) exec_dyn = (dyn_t *)(exec_base + p->p_vaddr);
     }
 
     if (!exec_dyn) return entry;
