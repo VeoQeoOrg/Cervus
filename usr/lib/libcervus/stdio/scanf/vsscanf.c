@@ -109,7 +109,16 @@ int vsscanf(const char *str, const char *fmt, va_list ap)
             char set[256];
             memset(set, 0, sizeof(set));
             if (*f == ']') { set[(unsigned char)']'] = 1; f++; }
-            while (*f && *f != ']') { set[(unsigned char)*f] = 1; f++; }
+            while (*f && *f != ']') {
+                unsigned char lo = (unsigned char)*f;
+                if (f[1] == '-' && f[2] && f[2] != ']' && (unsigned char)f[2] >= lo) {
+                    for (unsigned c = lo; c <= (unsigned char)f[2]; c++) set[c] = 1;
+                    f += 3;
+                } else {
+                    set[lo] = 1;
+                    f++;
+                }
+            }
             if (*f == ']') f++;
             int w = has_width ? width : 0x7FFFFFFF;
             char *out = suppress ? NULL : va_arg(ap, char *);
