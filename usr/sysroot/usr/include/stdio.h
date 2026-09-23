@@ -89,6 +89,21 @@ void   clearerr(FILE *stream);
 int    fileno(FILE *stream);
 
 FILE  *open_memstream(char **bufp, size_t *sizep);
+FILE  *fmemopen(void *buf, size_t size, const char *mode);
+
+typedef ssize_t cookie_read_function_t(void *cookie, char *buf, size_t size);
+typedef ssize_t cookie_write_function_t(void *cookie, const char *buf, size_t size);
+typedef int     cookie_seek_function_t(void *cookie, off64_t *offset, int whence);
+typedef int     cookie_close_function_t(void *cookie);
+
+typedef struct {
+    cookie_read_function_t  *read;
+    cookie_write_function_t *write;
+    cookie_seek_function_t  *seek;
+    cookie_close_function_t *close;
+} cookie_io_functions_t;
+
+FILE  *fopencookie(void *cookie, const char *mode, cookie_io_functions_t funcs);
 FILE  *popen(const char *cmd, const char *type);
 int    pclose(FILE *stream);
 

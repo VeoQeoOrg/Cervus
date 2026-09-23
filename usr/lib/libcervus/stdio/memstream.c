@@ -9,19 +9,9 @@ typedef struct {
     size_t  *sizep;
     char    *data;
     size_t   len;
+    size_t   pos;
     size_t   cap;
 } memstream_t;
-
-#define MEMSTREAM_MAX 16
-static memstream_t *g_streams[MEMSTREAM_MAX];
-
-static memstream_t *stream_of(FILE *f)
-{
-    if (!f) return 0;
-    int slot = f->fd;
-    if (slot < -MEMSTREAM_MAX || slot > -1) return 0;
-    return g_streams[-slot - 1];
-}
 
 static int grow(memstream_t *m, size_t need)
 {
@@ -30,64 +20,84 @@ static int grow(memstream_t *m, size_t need)
     while (cap < need) cap *= 2;
     char *nd = realloc(m->data, cap);
     if (!nd) return -1;
-    memset(nd + m->len, 0, cap - m->len);
+    memset(nd + m->cap, 0, cap - m->cap);
     m->data = nd;
     m->cap  = cap;
     return 0;
 }
 
-int __cervus_memstream_write(FILE *f, const char *buf, size_t len)
+static void publish(memstream_t *m)
 {
-    memstream_t *m = stream_of(f);
-    if (!m) return -1;
-    if (grow(m, m->len + len + 1) < 0) return -1;
-    memcpy(m->data + m->len, buf, len);
-    m->len += len;
-    m->data[m->len] = '\0';
     *m->bufp  = m->data;
-    *m->sizep = m->len;
-    return (int)len;
+    *m->sizep = m->pos < m->len ? m->pos : m->len;
+}
+
+static ssize_t ms_write(void *c, const char *buf, size_t n)
+{
+    memstream_t *m = c;
+    if (grow(m, m->pos + n + 1) < 0) {
+        __cervus_errno = ENOMEM;
+        return -1;
+    }
+    memcpy(m->data + m->pos, buf, n);
+    m->pos += n;
+    if (m->pos > m->len) m->len = m->pos;
+    m->data[m->len] = '\0';
+    publish(m);
+    return (ssize_t)n;
+}
+
+static int ms_seek(void *c, off64_t *off, int whence)
+{
+    memstream_t *m = c;
+    off64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (off64_t)m->pos
+                 : whence == SEEK_END ? (off64_t)m->len : -1;
+    off64_t np = base + *off;
+    if (base < 0 || np < 0) {
+        __cervus_errno = EINVAL;
+        return -1;
+    }
+    if (grow(m, (size_t)np + 1) < 0) {
+        __cervus_errno = ENOMEM;
+        return -1;
+    }
+    m->pos = (size_t)np;
+    publish(m);
+    *off = np;
+    return 0;
+}
+
+static int ms_close(void *c)
+{
+    memstream_t *m = c;
+    publish(m);
+    free(m);
+    return 0;
 }
 
 FILE *open_memstream(char **bufp, size_t *sizep)
 {
-    if (!bufp || !sizep) { __cervus_errno = EINVAL; return 0; }
-
-    int slot = -1;
-    for (int i = 0; i < MEMSTREAM_MAX; i++) if (!g_streams[i]) { slot = i; break; }
-    if (slot < 0) { __cervus_errno = EMFILE; return 0; }
-
+    if (!bufp || !sizep) {
+        __cervus_errno = EINVAL;
+        return NULL;
+    }
     memstream_t *m = calloc(1, sizeof *m);
-    if (!m) { __cervus_errno = ENOMEM; return 0; }
+    if (!m) return NULL;
     m->bufp  = bufp;
     m->sizep = sizep;
-    if (grow(m, 1) < 0) { free(m); __cervus_errno = ENOMEM; return 0; }
-    m->data[0] = '\0';
-    *bufp  = m->data;
-    *sizep = 0;
-
-    FILE *f = calloc(1, sizeof *f);
-    if (!f) { free(m->data); free(m); __cervus_errno = ENOMEM; return 0; }
-    f->fd      = -(slot + 1);
+    if (grow(m, 1) < 0) {
+        free(m);
+        __cervus_errno = ENOMEM;
+        return NULL;
+    }
+    publish(m);
+    cookie_io_functions_t io = { .write = ms_write, .seek = ms_seek, .close = ms_close };
+    FILE *f = fopencookie(m, "w", io);
+    if (!f) {
+        free(m->data);
+        free(m);
+        return NULL;
+    }
     f->bufmode = __CBUF_NONE;
-    g_streams[slot] = m;
     return f;
-}
-
-int __cervus_memstream_close(FILE *f)
-{
-    memstream_t *m = stream_of(f);
-    if (!m) return -1;
-    int slot = -f->fd - 1;
-    *m->bufp  = m->data;
-    *m->sizep = m->len;
-    g_streams[slot] = 0;
-    free(m);
-    free(f);
-    return 0;
-}
-
-int __cervus_is_memstream(FILE *f)
-{
-    return stream_of(f) != 0;
 }

@@ -20,7 +20,7 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *s)
 
     if (s->bufmode == __CBUF_NONE) {
         while (got < total) {
-            ssize_t r = read(s->fd, out + got, total - got);
+            ssize_t r = __cervus_io_read(s, out + got, total - got);
             if (r < 0) { s->err = 1; break; }
             if (r == 0) { s->eof = 1; break; }
             got += (size_t)r;
@@ -34,7 +34,7 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *s)
         if (avail == 0) {
             size_t want = total - got;
             if (want >= BUFSIZ) {
-                ssize_t r = read(s->fd, out + got, want);
+                ssize_t r = __cervus_io_read(s, out + got, want);
                 if (r < 0) { s->err = 1; break; }
                 if (r == 0) { s->eof = 1; break; }
                 got += (size_t)r;

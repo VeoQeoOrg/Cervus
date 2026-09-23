@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <dirent.h>
+#include <sys/types.h>
 
 #define CERVUS_PATH_MAX 512
 
@@ -39,6 +40,13 @@ extern __cervus_lock_t __cervus_heap_lock;
 #define __CDIR_READ  1
 #define __CDIR_WRITE 2
 
+typedef struct {
+    ssize_t (*read)(void *cookie, char *buf, size_t n);
+    ssize_t (*write)(void *cookie, const char *buf, size_t n);
+    int     (*seek)(void *cookie, off_t *pos, int whence);
+    int     (*close)(void *cookie);
+} __cervus_io_funcs_t;
+
 struct __cervus_FILE {
     int    fd;
     int    eof;
@@ -52,7 +60,16 @@ struct __cervus_FILE {
     int    dir;
     size_t buf_len;
     __cervus_lock_t lock;
+    int    has_io;
+    void  *cookie;
+    __cervus_io_funcs_t io;
 };
+
+ssize_t __cervus_io_read(struct __cervus_FILE *s, void *buf, size_t n);
+ssize_t __cervus_io_write(struct __cervus_FILE *s, const void *buf, size_t n);
+off_t   __cervus_io_seek(struct __cervus_FILE *s, off_t off, int whence);
+int     __cervus_io_close(struct __cervus_FILE *s);
+size_t  __cervus_io_write_all(struct __cervus_FILE *s, const char *p, size_t total);
 
 int  __cervus_fflush(struct __cervus_FILE *s);
 void __cervus_stream_register(struct __cervus_FILE *s);

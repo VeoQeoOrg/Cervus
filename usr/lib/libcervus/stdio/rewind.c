@@ -7,7 +7,7 @@ void rewind(FILE *f)
     if (!f) return;
     __cervus_fflush(f);
     f->unget = 0;
-    lseek(f->fd, 0, SEEK_SET);
+    __cervus_io_seek(f, 0, SEEK_SET);
     f->eof = 0;
     f->err = 0;
 }

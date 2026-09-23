@@ -11,7 +11,7 @@ int fseek(FILE *s, long off, int whence)
     if (__cervus_fflush(s) == EOF) return -1;
     s->unget = 0;
 
-    off_t r = lseek(s->fd, (off_t)off, whence);
+    off_t r = __cervus_io_seek(s, (off_t)off, whence);
     if (r == (off_t)-1) { s->err = 1; return -1; }
     s->eof = 0;
     return 0;
