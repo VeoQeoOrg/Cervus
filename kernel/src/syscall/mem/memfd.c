@@ -177,7 +177,7 @@ static const vnode_ops_t MEMFD_OPS = {
 
 int64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags, uint64_t unused)
 {
-    (void)flags; (void)unused;
+    (void)unused;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
@@ -208,5 +208,6 @@ int64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags, uint64_t unused)
 
     int fd = fd_alloc(t->fd_table, file, 0);
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (flags & 1) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }

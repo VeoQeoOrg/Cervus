@@ -60,7 +60,7 @@ static epoll_set_t *epoll_from_fd(task_t *t, int fd)
 
 int64_t sys_epoll_create(uint64_t flags, uint64_t a, uint64_t b)
 {
-    (void)flags; (void)a; (void)b;
+    (void)a; (void)b;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
@@ -81,6 +81,7 @@ int64_t sys_epoll_create(uint64_t flags, uint64_t a, uint64_t b)
 
     int fd = fd_alloc(t->fd_table, file, 0);
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (flags & 0x80000) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }
 

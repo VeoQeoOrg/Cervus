@@ -24,6 +24,7 @@ int posix_madvise(void *addr, size_t len, int advice);
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <sys/mman_shared.h>
 
 #define PROT_NONE   0x0
 #define PROT_READ   0x1
