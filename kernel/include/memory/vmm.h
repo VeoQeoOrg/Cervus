@@ -42,6 +42,7 @@ vmm_pagemap_t* vmm_clone_pagemap(vmm_pagemap_t* src);
 uint64_t vmm_count_user_pages(vmm_pagemap_t* map);
 void vmm_free_pagemap(vmm_pagemap_t* map);
 void vmm_sync_kernel_mappings(vmm_pagemap_t* map);
+bool vmm_prepare_kernel_range(uintptr_t virt, size_t size);
 bool vmm_remap_range_wc(vmm_pagemap_t* map, uintptr_t virt_base, size_t pages);
 void vmm_test(void);
 

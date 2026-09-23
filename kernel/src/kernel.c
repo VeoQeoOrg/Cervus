@@ -15,6 +15,7 @@
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
 #include "../include/memory/paging.h"
+#include "../include/memory/vmalloc.h"
 #include "../include/acpi/acpi.h"
 #include "../include/apic/apic.h"
 #include "../include/io/ports.h"
@@ -268,6 +269,7 @@ void kmain(void) {
     paging_init();
     serial_writestring("Paging [OK]\n");
     vmm_init();
+    vmalloc_init();
     serial_writestring("VMM [OK]\n");
     if (global_framebuffer) fb_init_backbuffer(global_framebuffer);
     vt_init();

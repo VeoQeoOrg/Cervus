@@ -9,6 +9,7 @@
 #define MAX_CPUS 256
 
 #define MAX_TLB_ADDRESSES 32
+#define TLB_FLUSH_ALL     ((size_t)-1)
 
 typedef struct {
     volatile bool pending;

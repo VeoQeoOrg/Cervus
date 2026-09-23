@@ -170,7 +170,7 @@ void ipi_reschedule_single(uint32_t target_lapic_id) {
 }
 
 void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
-    if (count > MAX_TLB_ADDRESSES) count = MAX_TLB_ADDRESSES;
+    if (count > MAX_TLB_ADDRESSES || !addrs) count = TLB_FLUSH_ALL;
 
     uint32_t   my_lapic = lapic_get_id();
     smp_info_t* info    = smp_get_info();
@@ -180,8 +180,9 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
         if (target_lapic == my_lapic) continue;
 
         tlb_shootdown_t* q = &tlb_shootdown_queue[target_lapic];
+        if (q->pending && q->count == TLB_FLUSH_ALL) continue;
         q->count = count;
-        for (size_t j = 0; j < count; j++)
+        for (size_t j = 0; count != TLB_FLUSH_ALL && j < count; j++)
             q->addresses[j] = addrs[j];
         __atomic_store_n(&q->pending, true, __ATOMIC_RELEASE);
     }
@@ -199,7 +200,8 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
 
-    serial_printf("TLB shootdown broadcast sent for %zu addresses\n", count);
+    if (count == TLB_FLUSH_ALL) serial_printf("TLB shootdown broadcast sent: full flush\n");
+    else serial_printf("TLB shootdown broadcast sent for %zu addresses\n", count);
 }
 
 void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {

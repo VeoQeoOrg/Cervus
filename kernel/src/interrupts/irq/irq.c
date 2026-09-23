@@ -161,7 +161,12 @@ DEFINE_IRQ(IPI_TLB_SHOOTDOWN, ipi_tlb_shootdown_handler)
     uint32_t id = lapic_get_id();
     tlb_shootdown_t* q = &tlb_shootdown_queue[id];
 
-    if (q->pending) {
+    if (q->pending && q->count == TLB_FLUSH_ALL) {
+        uint64_t cr3;
+        asm volatile ("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) :: "memory");
+        q->pending = false;
+        q->count = 0;
+    } else if (q->pending) {
         for (size_t i = 0; i < q->count; i++) {
             uintptr_t addr = q->addresses[i];
             if (addr != 0) {

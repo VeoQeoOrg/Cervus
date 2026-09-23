@@ -43,6 +43,8 @@ uint64_t vmm_count_user_pages(vmm_pagemap_t* map) {
     return pages;
 }
 
+static uint64_t g_pte_mask = ~0ULL;
+
 static vmm_pte_t* alloc_table(void) {
     void* page = pmm_alloc_zero(1);
     if (!page) {
@@ -109,7 +111,7 @@ bool vmm_map_page(vmm_pagemap_t* map, uintptr_t virt, uintptr_t phys, uint64_t f
     if (!pd) return false;
     vmm_pte_t* pt   = get_table(pd,        pd_i,   flags);
     if (!pt) return false;
-    pt[pt_i] = (phys & PTE_PHYS_MASK) | (flags | VMM_PRESENT);
+    pt[pt_i] = ((phys & PTE_PHYS_MASK) | flags | VMM_PRESENT) & g_pte_mask;
 
     asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
     invlpg((void*)virt);
@@ -427,7 +429,25 @@ static void pat_setup_wc(void) {
     serial_printf("VMM: PAT programmed (entry 5 = WC), value=0x%llx\n", pat);
 }
 
+static void nx_setup(void) {
+    uint32_t a, b, c, d;
+    asm volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000000u));
+    if (a >= 0x80000001u) {
+        asm volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000001u));
+        if (d & (1u << 20)) {
+            uint32_t lo, hi;
+            asm volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000080u));
+            lo |= 1u << 11;
+            asm volatile ("wrmsr" :: "c"(0xC0000080u), "a"(lo), "d"(hi));
+            return;
+        }
+    }
+    g_pte_mask = ~VMM_NOEXEC;
+    serial_printf("VMM: CPU has no NX, mappings stay executable\n");
+}
+
 void vmm_init(void) {
+    nx_setup();
     uintptr_t cr3;
     asm volatile ("mov %%cr3, %0" : "=r"(cr3));
     kernel_pagemap.pml4 = (vmm_pte_t*)pmm_phys_to_virt(cr3);
@@ -497,6 +517,14 @@ void vmm_sync_kernel_mappings(vmm_pagemap_t* map) {
     for (size_t i = 256; i < 512; i++) {
         map->pml4[i] = kernel_pagemap.pml4[i];
     }
+}
+
+bool vmm_prepare_kernel_range(uintptr_t virt, size_t size) {
+    for (uintptr_t v = virt; v < virt + size; v += 0x40000000ULL) {
+        vmm_pte_t* pdpt = get_table(kernel_pagemap.pml4, (v >> 39) & MASK, 0);
+        if (!pdpt || !get_table(pdpt, (v >> 30) & MASK, 0)) return false;
+    }
+    return true;
 }
 
 void vmm_test(void) {

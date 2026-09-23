@@ -1,4 +1,5 @@
 #include "../../include/memory/pmm.h"
+#include "../../include/memory/vmalloc.h"
 #include "../../include/io/serial.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/smp/percpu.h"
@@ -569,7 +570,9 @@ void *kmalloc(size_t size) {
         size_t pages = (size + sizeof(large_hdr_t) + PAGE_SIZE - 1) / PAGE_SIZE;
         slab_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
-        large_hdr_t *hdr = (large_hdr_t *)SLAB_PAGE_ALLOC(pages);
+        large_hdr_t *hdr = NULL;
+        if (pages >= VMALLOC_MIN_PAGES) hdr = (large_hdr_t *)vmalloc_pages(pages);
+        if (!hdr) hdr = (large_hdr_t *)SLAB_PAGE_ALLOC(pages);
         if (!hdr) return NULL;
         hdr->magic = LARGE_ALLOC_MAGIC;
         hdr->pages = (uint64_t)pages;
@@ -618,7 +621,8 @@ void kfree(void *ptr) {
         large_hdr_t *hdr = (large_hdr_t *)ptr - 1;
         size_t pages = (size_t)hdr->pages;
         hdr->magic = 0;
-        SLAB_PAGE_FREE(hdr, pages);
+        if (vmalloc_owns(hdr)) vfree_pages(hdr, pages);
+        else SLAB_PAGE_FREE(hdr, pages);
         return;
     }
 
