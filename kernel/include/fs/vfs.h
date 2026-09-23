@@ -71,6 +71,8 @@ int     vfs_set_times(const char *path, int64_t atime, int64_t mtime);
 typedef struct vnode     vnode_t;
 typedef struct vfs_mount vfs_mount_t;
 
+struct vfs_file;
+
 typedef struct vnode_ops {
     int64_t (*read)    (vnode_t *node, void *buf, size_t len, uint64_t offset);
     int64_t (*write)   (vnode_t *node, const void *buf, size_t len, uint64_t offset);
@@ -91,6 +93,9 @@ typedef struct vnode_ops {
     int64_t (*readlink)(vnode_t *node, char *buf, size_t bufsiz);
     int     (*poll)    (vnode_t *node, int events);
     int     (*mmap_page)(vnode_t *node, uint64_t offset, uintptr_t *phys_out);
+    void    (*open_file)(vnode_t *node, struct vfs_file *file);
+    int64_t (*read_file)(struct vfs_file *file, void *buf, size_t len);
+    int     (*poll_file)(struct vfs_file *file, int events);
 } vnode_ops_t;
 
 struct vnode {
@@ -120,7 +125,7 @@ struct vfs_mount {
     void      (*sync)(void *fs_priv);
 };
 
-typedef struct {
+typedef struct vfs_file {
     vnode_t         *vnode;
     uint64_t         offset;
     int              flags;
@@ -190,6 +195,7 @@ int     vfs_fsync    (vfs_file_t *file);
 int     vfs_symlink  (const char *target, const char *linkpath);
 int64_t vfs_readlink (const char *path, char *buf, size_t bufsiz);
 int64_t vfs_ioctl  (vfs_file_t *file, uint64_t req, void *arg);
+int     vfs_io_nonblock(void);
 int     vfs_readdir(vfs_file_t *file, vfs_dirent_t *out);
 int     vfs_mkdir  (const char *path, uint32_t mode);
 

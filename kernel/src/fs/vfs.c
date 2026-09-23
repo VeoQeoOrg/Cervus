@@ -3,6 +3,7 @@
 #include "../../include/smp/percpu.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/io/serial.h"
+#include "../../include/syscall/syscall_internal.h"
 #include <string.h>
 
 uint32_t vfs_current_uid(void) {
@@ -354,6 +355,8 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         file->offset = 0;
     }
 
+    if (node->ops && node->ops->open_file) node->ops->open_file(node, file);
+
     *out = file;
     return 0;
 }
@@ -362,14 +365,40 @@ void vfs_close(vfs_file_t *file) {
     vfs_file_free(file);
 }
 
+int vfs_io_nonblock(void) {
+    task_t *t = syscall_cur_task();
+    return t ? t->io_nonblock : 0;
+}
+
+static int io_enter(vfs_file_t *file) {
+    task_t *t = syscall_cur_task();
+    if (!t) return 0;
+    int saved = t->io_nonblock;
+    t->io_nonblock = (file->flags & O_NONBLOCK) ? 1 : 0;
+    return saved;
+}
+
+static void io_leave(int saved) {
+    task_t *t = syscall_cur_task();
+    if (t) t->io_nonblock = saved;
+}
+
 int64_t vfs_read(vfs_file_t *file, void *buf, size_t len) {
     if (!file || !file->vnode) return -EBADF;
     if (len == 0) return 0;
     if ((file->flags & O_ACCMODE) == O_WRONLY) return -EBADF;
-    if (!file->vnode->ops || !file->vnode->ops->read) return -EIO;
+    const vnode_ops_t *ops = file->vnode->ops;
+    if (!ops || (!ops->read && !ops->read_file)) return -EIO;
 
-    int64_t n = file->vnode->ops->read(file->vnode, buf, len, file->offset);
-    if (n > 0) file->offset += (uint64_t)n;
+    int saved = io_enter(file);
+    int64_t n;
+    if (ops->read_file) {
+        n = ops->read_file(file, buf, len);
+    } else {
+        n = ops->read(file->vnode, buf, len, file->offset);
+        if (n > 0) file->offset += (uint64_t)n;
+    }
+    io_leave(saved);
     return n;
 }
 
@@ -381,7 +410,9 @@ int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
 
     if (file->flags & O_APPEND) file->offset = file->vnode->size;
 
+    int saved = io_enter(file);
     int64_t n = file->vnode->ops->write(file->vnode, buf, len, file->offset);
+    io_leave(saved);
     if (n > 0) file->offset += (uint64_t)n;
     return n;
 }

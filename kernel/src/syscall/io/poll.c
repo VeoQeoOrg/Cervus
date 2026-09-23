@@ -16,6 +16,8 @@ extern uint64_t sched_now_ns(void);
 
 int vfs_poll_file(vfs_file_t *file, int events) {
     if (!file || !file->vnode) return POLLNVAL;
+    if (file->vnode->ops && file->vnode->ops->poll_file)
+        return file->vnode->ops->poll_file(file, events);
     if (file->vnode->ops && file->vnode->ops->poll)
         return file->vnode->ops->poll(file->vnode, events);
     return events & (POLLIN | POLLOUT);
@@ -36,7 +38,9 @@ static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ms) {
             if (pf[i].fd < 0) continue;
             vfs_file_t *file = (me && me->fd_table) ? fd_get(me->fd_table, pf[i].fd) : NULL;
             if (!file) { pf[i].revents = POLLNVAL; ready++; continue; }
-            int rev = vnode_poll(file->vnode, pf[i].events);
+            int rev = (file->vnode && file->vnode->ops && file->vnode->ops->poll_file)
+                    ? file->vnode->ops->poll_file(file, pf[i].events)
+                    : vnode_poll(file->vnode, pf[i].events);
             fd_put(file);
             rev &= (pf[i].events | POLLERR | POLLHUP | POLLNVAL);
             if (rev) { pf[i].revents = (short)rev; ready++; }

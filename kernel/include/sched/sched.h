@@ -166,6 +166,7 @@ typedef struct task {
     uint64_t  alarm_interval_ns;
 
     struct task_mapping *mappings;
+    int io_nonblock;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
