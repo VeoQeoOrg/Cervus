@@ -15,7 +15,7 @@ static exit_fn_t *g_fns = g_static;
 static int        g_cnt;
 static int        g_cap = 64;
 
-void *__dso_handle = &__dso_handle;
+__attribute__((weak)) void *__dso_handle = &__dso_handle;
 
 int __cervus_exit_push(void (*fn)(void *), void *arg, void *dso, int plain)
 {

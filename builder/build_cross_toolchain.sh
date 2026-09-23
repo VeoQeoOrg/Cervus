@@ -48,7 +48,7 @@ insert_before "$SRC/$GCC/gcc/config.gcc" "x86_64-*-cervus" \
     "x86_64-*-cervus*)\n\ttm_file=\"\${tm_file} i386/unix.h i386/att.h elfos.h newlib-stdint.h i386/i386elf.h i386/x86-64.h cervus.h\"\n\tgas=yes\n\tgnu_ld=yes\n\tuse_gcc_stdint=wrap\n\tdefault_use_cxa_atexit=yes\n\textra_options=\"\${extra_options} cervus.opt\"\n\t;;"
 insert_before "$SRC/$GCC/libgcc/config.host" "x86_64-*-cervus" \
     "x86_64-*-elf* | x86_64-*-rtems" \
-    "x86_64-*-cervus*)\n\ttmake_file=\"\$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic\"\n\t;;"
+    "x86_64-*-cervus*)\n\ttmake_file=\"\$tmake_file i386/t-crtstuff t-crtstuff-pic t-libgcc-pic\"\n\textra_parts=\"\$extra_parts crtbegin.o crtend.o crtbeginS.o crtendS.o\"\n\t;;"
 cp "$ROOT/builder/cross/cervus.h" "$SRC/$GCC/gcc/config/cervus.h"
 cp "$ROOT/builder/cross/cervus.opt" "$ROOT/builder/cross/cervus.opt.urls" "$SRC/$GCC/gcc/config/"
 say "gcc target wired (cervus.h + libgcc/config.host)"
@@ -80,6 +80,7 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
         --disable-threads --disable-libssp --disable-libgomp \
         --disable-libatomic --disable-libquadmath --disable-libvtv \
         --disable-libstdcxx-pch --disable-libstdcxx-verbose --disable-tls --with-newlib \
+        --enable-initfini-array CFLAGS_FOR_TARGET="-g -O2 -fPIC" CXXFLAGS_FOR_TARGET="-g -O2 -fPIC" \
         CXX="g++ -std=gnu++17" CXXFLAGS_FOR_BUILD="-std=gnu++17 -O2" \
         >config.log 2>&1
     say "building gcc (all-gcc, $JOBS jobs)"

@@ -5,10 +5,10 @@
 #define LIB_SPEC "%{!shared:--start-group %{pie:-lcervus_pic;:-lcervus} -lgcc --end-group}"
 
 #undef STARTFILE_SPEC
-#define STARTFILE_SPEC "%{!shared:crt0.o%s}"
+#define STARTFILE_SPEC "%{!shared:crt0.o%s} %{shared|pie:crtbeginS.o%s;:crtbegin.o%s}"
 
 #undef ENDFILE_SPEC
-#define ENDFILE_SPEC ""
+#define ENDFILE_SPEC "%{shared|pie:crtendS.o%s;:crtend.o%s}"
 
 #undef LINK_SPEC
 #define LINK_SPEC "%{shared:-shared --hash-style=sysv;pie:--export-dynamic --hash-style=sysv -dynamic-linker /lib/ld-cervus.elf;:-static %{!Ttext-segment*:%{!Wl,-Ttext-segment*:-Ttext-segment=0x401000}}}"
