@@ -386,6 +386,25 @@ static void mkparents(const char *path)
         if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
 }
 
+
+static int copy_file(const char *src, const char *dst, unsigned mode)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out < 0) { close(in); return -1; }
+    char buf[65536];
+    ssize_t n;
+    int rc = 0;
+    while ((n = read(in, buf, sizeof buf)) > 0) {
+        if (write(out, buf, (size_t)n) != n) { rc = -1; break; }
+    }
+    if (n < 0) rc = -1;
+    close(in);
+    close(out);
+    return rc;
+}
+
 static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
 {
     size_t off = 0;
@@ -432,6 +451,19 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
             }
             close(fd);
             fprintf(files, "f %s\n", dst);
+        } else if (type == '1') {
+            char linkname[101];
+            snprintf(linkname, sizeof linkname, "%.100s", h + 157);
+            const char *lrel = linkname;
+            while (lrel[0] == '.' && lrel[1] == '/') lrel += 2;
+            while (lrel[0] == '/') lrel++;
+            char src[1088];
+            snprintf(src, sizeof src, "%s/%s", g_root, lrel);
+            for (char *q = src; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
+            mkparents(dst);
+            unlink(dst);
+            if (copy_file(src, dst, mode) == 0) fprintf(files, "f %s\n", dst);
+            else fprintf(stderr, "herd: cannot link %s to %s\n", dst, src);
         } else if (type == '2') {
             char linkname[101];
             snprintf(linkname, sizeof linkname, "%.100s", h + 157);
@@ -1029,22 +1061,6 @@ static int cmd_boot_status(void)
     return 0;
 }
 
-static int copy_file(const char *src, const char *dst)
-{
-    int in = open(src, O_RDONLY);
-    if (in < 0) return -1;
-    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (out < 0) { close(in); return -1; }
-    char buf[65536];
-    ssize_t r;
-    int rc = 0;
-    while ((r = read(in, buf, sizeof buf)) > 0)
-        if (write(out, buf, (size_t)r) != r) { rc = -1; break; }
-    if (r < 0) rc = -1;
-    close(in); close(out);
-    return rc;
-}
-
 static int install_pkg_to(const char *name, const char *root)
 {
     char saved[256];
@@ -1075,7 +1091,7 @@ static int cmd_update_kernel(void)
 
     if (path_exists(ESPMNT "/boot/kernel")) {
         printf("keeping the running kernel as /boot/kernel.old\n");
-        if (copy_file(ESPMNT "/boot/kernel", ESPMNT "/boot/kernel.old") != 0)
+        if (copy_file(ESPMNT "/boot/kernel", ESPMNT "/boot/kernel.old", 0644) != 0)
             fputs("herd: warning: could not save a copy of the current kernel\n", stderr);
     }
 
