@@ -6,10 +6,9 @@ int fseek(FILE *s, long off, int whence)
 {
     if (!s) return -1;
 
-    if (s->dir == __CDIR_READ && whence == SEEK_CUR)
-        off -= (long)(s->buf_len - s->buf_pos);
+    if (whence == SEEK_CUR && s->unget) off -= 1;
 
-    __cervus_fflush(s);
+    if (__cervus_fflush(s) == EOF) return -1;
     s->unget = 0;
 
     off_t r = lseek(s->fd, (off_t)off, whence);
