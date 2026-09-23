@@ -7,7 +7,7 @@ int   optind = 1;
 int   optopt = 0;
 int   opterr = 1;
 
-static int __opt_subidx = 1;
+int __cervus_optpos = 1;
 
 int getopt(int argc, char *const argv[], const char *optstring)
 {
@@ -26,10 +26,10 @@ int getopt(int argc, char *const argv[], const char *optstring)
         return -1;
     }
 
-    char ch = cur[__opt_subidx];
+    char ch = cur[__cervus_optpos];
     if (ch == '\0') {
         optind++;
-        __opt_subidx = 1;
+        __cervus_optpos = 1;
         return getopt(argc, argv, optstring);
     }
 
@@ -41,25 +41,32 @@ int getopt(int argc, char *const argv[], const char *optstring)
             const char *prog = argv[0] ? argv[0] : "?";
             fprintf(stderr, "%s: invalid option -- '%c'\n", prog, ch);
         }
-        __opt_subidx++;
-        if (cur[__opt_subidx] == '\0') {
+        __cervus_optpos++;
+        if (cur[__cervus_optpos] == '\0') {
             optind++;
-            __opt_subidx = 1;
+            __cervus_optpos = 1;
         }
         return '?';
     }
 
+    if (pp[1] == ':' && pp[2] == ':') {
+        if (cur[__cervus_optpos + 1] != '\0') optarg = &cur[__cervus_optpos + 1];
+        optind++;
+        __cervus_optpos = 1;
+        return ch;
+    }
+
     if (pp[1] == ':') {
-        if (cur[__opt_subidx + 1] != '\0') {
-            optarg = &cur[__opt_subidx + 1];
+        if (cur[__cervus_optpos + 1] != '\0') {
+            optarg = &cur[__cervus_optpos + 1];
             optind++;
-            __opt_subidx = 1;
+            __cervus_optpos = 1;
             return ch;
         }
         if (optind + 1 >= argc) {
             optopt = ch;
             optind++;
-            __opt_subidx = 1;
+            __cervus_optpos = 1;
             if (opterr && !colon_mode) {
                 const char *prog = argv[0] ? argv[0] : "?";
                 fprintf(stderr, "%s: option requires an argument -- '%c'\n", prog, ch);
@@ -68,14 +75,14 @@ int getopt(int argc, char *const argv[], const char *optstring)
         }
         optarg = argv[optind + 1];
         optind += 2;
-        __opt_subidx = 1;
+        __cervus_optpos = 1;
         return ch;
     }
 
-    __opt_subidx++;
-    if (cur[__opt_subidx] == '\0') {
+    __cervus_optpos++;
+    if (cur[__cervus_optpos] == '\0') {
         optind++;
-        __opt_subidx = 1;
+        __cervus_optpos = 1;
     }
     return ch;
 }
