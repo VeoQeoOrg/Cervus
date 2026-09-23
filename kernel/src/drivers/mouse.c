@@ -36,6 +36,7 @@ static mouse_scroll_t wheel_to_scroll(int32_t wheel) {
 }
 
 extern void input_report_motion(int dx, int dy, int buttons, int prev_buttons);
+extern void input_report_wheel(int dz);
 
 void mouse_inject_rel(int32_t dx, int32_t dy,
                       bool btn_left, bool btn_right, bool btn_middle,
@@ -45,6 +46,7 @@ void mouse_inject_rel(int32_t dx, int32_t dy,
              | (g_mouse.btn_middle ? 4 : 0);
     int now  = (btn_left ? 1 : 0) | (btn_right ? 2 : 0) | (btn_middle ? 4 : 0);
     input_report_motion(dx, dy, now, prev);
+    input_report_wheel(wheel);
     g_mouse.x += dx;
     g_mouse.y += dy;
     mouse_clamp();
@@ -58,9 +60,16 @@ void mouse_inject_abs(int32_t x, int32_t y,
                       bool btn_left, bool btn_right, bool btn_middle,
                       int32_t wheel) {
     mouse_ensure_init();
+    int32_t ox = g_mouse.x, oy = g_mouse.y;
+    int prev = (g_mouse.btn_left ? 1 : 0) | (g_mouse.btn_right ? 2 : 0)
+             | (g_mouse.btn_middle ? 4 : 0);
+    int now  = (btn_left ? 1 : 0) | (btn_right ? 2 : 0) | (btn_middle ? 4 : 0);
     g_mouse.x = x;
     g_mouse.y = y;
     mouse_clamp();
+    if (g_mouse.x != ox || g_mouse.y != oy || now != prev)
+        input_report_motion(g_mouse.x - ox, g_mouse.y - oy, now, prev);
+    input_report_wheel(wheel);
     g_mouse.btn_left   = btn_left;
     g_mouse.btn_right  = btn_right;
     g_mouse.btn_middle = btn_middle;

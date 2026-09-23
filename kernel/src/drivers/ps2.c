@@ -206,6 +206,13 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
 
     if (sc == 0xE0) { e0_prefix = true; lapic_eoi(); return; }
 
+    {
+        extern int  input_set1_to_linux(int scancode, int extended);
+        extern void input_report_linux_key(int keycode, int pressed);
+        int lk = input_set1_to_linux(key, e0_prefix ? 1 : 0);
+        if (lk) input_report_linux_key(lk, released ? 0 : 1);
+    }
+
     if (e0_prefix) {
         e0_prefix = false;
         if (!released) {
