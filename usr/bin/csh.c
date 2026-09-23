@@ -1860,7 +1860,7 @@ static int run_script(void) {
             exit(code);
         }
 
-        exec_tokens(tok, n);
+        run_command_line(raw);
         line_idx++;
     }
     return g_last_rc;
