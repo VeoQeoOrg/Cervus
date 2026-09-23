@@ -306,7 +306,7 @@ printf 'build grubiso: phony %s/grubiso.stamp\n\n' "$BUILDDIR"
 printf 'build kernel: phony bin/kernel\n'
 printf 'build libcervus: phony %s\n' "$LIBCERVUS_A"
 printf 'build apps: phony%s\n' "$ALL_ELFS"
-printf 'default initramfs.tar\n'
+printf 'default initramfs.tar %s/libcervus_pic.a\n' "$SYSLIB"
 } > "$N"
 
 echo "Wrote $N"
