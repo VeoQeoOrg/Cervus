@@ -164,6 +164,7 @@ int sigaddset(sigset_t *set, int sig);
 int sigdelset(sigset_t *set, int sig);
 int sigismember(const sigset_t *set, int sig);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int pthread_sigmask(int how, const sigset_t *set, sigset_t *old);
 
 #define SIG_BLOCK    0
 #define SIG_UNBLOCK  1

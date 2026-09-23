@@ -46,8 +46,12 @@ size_t  strlcpy(char *dst, const char *src, size_t size);
 size_t  strlcat(char *dst, const char *src, size_t size);
 char   *strerror(int errnum);
 char   *strsignal(int sig);
+int     strverscmp(const char *a, const char *b);
 
 #ifdef __cplusplus
 }
 #endif
+
+#include <strings.h>
+
 #endif
