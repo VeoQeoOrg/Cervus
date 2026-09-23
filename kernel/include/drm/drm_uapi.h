@@ -302,6 +302,13 @@ struct drm_mode_atomic {
 #define DRM_MODE_PROP_ENUM      (1 << 3)
 #define DRM_MODE_PROP_BLOB      (1 << 4)
 #define DRM_MODE_PROP_OBJECT    (1 << 6)
+#define DRM_MODE_PROP_SIGNED_RANGE (2 << 6)
+#define DRM_PROP_NAME_LEN       32
+
+struct drm_mode_property_enum {
+    uint64_t value;
+    char     name[DRM_PROP_NAME_LEN];
+};
 #define DRM_MODE_PROP_ATOMIC    0x80000000
 
 struct drm_mode_get_blob {

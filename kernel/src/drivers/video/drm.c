@@ -607,33 +607,46 @@ static int64_t ioctl_getblob(struct drm_mode_get_blob *g)
 }
 
 typedef struct {
-    uint32_t    id;
-    const char *name;
-    uint32_t    flags;
+    uint32_t           id;
+    const char        *name;
+    uint32_t           flags;
+    int64_t            min;
+    int64_t            max;
+    const char *const *enums;
+    uint32_t           nenums;
+    uint32_t           obj_type;
 } drm_prop_desc_t;
 
+static const char *const PLANE_TYPE_NAMES[] = { "Overlay", "Primary", "Cursor" };
+static const char *const DPMS_NAMES[]       = { "On", "Standby", "Suspend", "Off" };
+
+#define P_RANGE(i, n, lo, hi) { .id = (i), .name = (n), .flags = DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC, .min = (lo), .max = (hi) }
+#define P_SRANGE(i, n)        { .id = (i), .name = (n), .flags = DRM_MODE_PROP_SIGNED_RANGE | DRM_MODE_PROP_ATOMIC, .min = INT32_MIN, .max = INT32_MAX }
+#define P_OBJ(i, n, t)        { .id = (i), .name = (n), .flags = DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC, .obj_type = (t) }
+
 static const drm_prop_desc_t CRTC_PROPS[] = {
-    { PROP_ACTIVE,  "ACTIVE",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_MODE_ID, "MODE_ID", DRM_MODE_PROP_BLOB  | DRM_MODE_PROP_ATOMIC },
+    P_RANGE(PROP_ACTIVE, "ACTIVE", 0, 1),
+    { .id = PROP_MODE_ID, .name = "MODE_ID", .flags = DRM_MODE_PROP_BLOB | DRM_MODE_PROP_ATOMIC },
 };
 
 static const drm_prop_desc_t CONN_PROPS[] = {
-    { PROP_CRTC_ID, "CRTC_ID", DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
-    { PROP_DPMS,    "DPMS",    DRM_MODE_PROP_ENUM },
+    P_OBJ(PROP_CRTC_ID, "CRTC_ID", DRM_MODE_OBJECT_CRTC),
+    { .id = PROP_DPMS, .name = "DPMS", .flags = DRM_MODE_PROP_ENUM, .enums = DPMS_NAMES, .nenums = 4 },
 };
 
 static const drm_prop_desc_t PLANE_PROPS[] = {
-    { PROP_TYPE,   "type",   DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE },
-    { PROP_FB_ID,  "FB_ID",  DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
-    { PROP_CRTC_ID,"CRTC_ID",DRM_MODE_PROP_OBJECT | DRM_MODE_PROP_ATOMIC },
-    { PROP_CRTC_X, "CRTC_X", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_CRTC_Y, "CRTC_Y", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_CRTC_W, "CRTC_W", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_CRTC_H, "CRTC_H", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_SRC_X,  "SRC_X",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_SRC_Y,  "SRC_Y",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_SRC_W,  "SRC_W",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
-    { PROP_SRC_H,  "SRC_H",  DRM_MODE_PROP_RANGE | DRM_MODE_PROP_ATOMIC },
+    { .id = PROP_TYPE, .name = "type", .flags = DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE,
+      .enums = PLANE_TYPE_NAMES, .nenums = 3 },
+    P_OBJ(PROP_FB_ID,   "FB_ID",   DRM_MODE_OBJECT_FB),
+    P_OBJ(PROP_CRTC_ID, "CRTC_ID", DRM_MODE_OBJECT_CRTC),
+    P_SRANGE(PROP_CRTC_X, "CRTC_X"),
+    P_SRANGE(PROP_CRTC_Y, "CRTC_Y"),
+    P_RANGE(PROP_CRTC_W, "CRTC_W", 0, INT32_MAX),
+    P_RANGE(PROP_CRTC_H, "CRTC_H", 0, INT32_MAX),
+    P_RANGE(PROP_SRC_X,  "SRC_X",  0, UINT32_MAX),
+    P_RANGE(PROP_SRC_Y,  "SRC_Y",  0, UINT32_MAX),
+    P_RANGE(PROP_SRC_W,  "SRC_W",  0, UINT32_MAX),
+    P_RANGE(PROP_SRC_H,  "SRC_H",  0, UINT32_MAX),
 };
 
 static const drm_prop_desc_t *props_of(uint32_t obj_id, int *count)
@@ -672,20 +685,50 @@ static uint64_t prop_value(uint32_t obj_id, uint32_t prop_id)
 static int64_t ioctl_getprop(struct drm_mode_get_property *g)
 {
     const uint32_t objs[] = { ID_CRTC, ID_CONNECTOR, ID_PLANE };
-    for (unsigned o = 0; o < sizeof objs / sizeof objs[0]; o++) {
+    const drm_prop_desc_t *d = NULL;
+    for (unsigned o = 0; o < sizeof objs / sizeof objs[0] && !d; o++) {
         int n = 0;
         const drm_prop_desc_t *list = props_of(objs[o], &n);
-        for (int i = 0; i < n; i++) {
-            if (list[i].id != g->prop_id) continue;
-            g->flags = list[i].flags;
-            memset(g->name, 0, sizeof g->name);
-            strncpy(g->name, list[i].name, sizeof g->name - 1);
-            g->count_values     = 0;
-            g->count_enum_blobs = 0;
-            return 0;
+        for (int i = 0; i < n; i++)
+            if (list[i].id == g->prop_id) { d = &list[i]; break; }
+    }
+    if (!d) return -ENOENT;
+
+    uint64_t values[8];
+    uint32_t nvalues = 0, nenums = 0;
+    if (d->flags & (DRM_MODE_PROP_RANGE | DRM_MODE_PROP_SIGNED_RANGE)) {
+        values[0] = (uint64_t)d->min;
+        values[1] = (uint64_t)d->max;
+        nvalues = 2;
+    } else if (d->flags & DRM_MODE_PROP_ENUM) {
+        for (uint32_t i = 0; i < d->nenums && i < 8; i++) values[i] = i;
+        nvalues = nenums = d->nenums;
+    } else if (d->flags & DRM_MODE_PROP_OBJECT) {
+        values[0] = d->obj_type;
+        nvalues = 1;
+    }
+
+    if (nvalues && g->values_ptr && g->count_values >= nvalues) {
+        if (syscall_copy_to_user((void *)g->values_ptr, values, nvalues * sizeof values[0]) < 0)
+            return -EFAULT;
+    }
+    if (nenums && g->enum_blob_ptr && g->count_enum_blobs >= nenums) {
+        for (uint32_t i = 0; i < nenums; i++) {
+            struct drm_mode_property_enum e;
+            memset(&e, 0, sizeof e);
+            e.value = i;
+            strncpy(e.name, d->enums[i], sizeof e.name - 1);
+            if (syscall_copy_to_user((void *)(g->enum_blob_ptr + i * sizeof e), &e, sizeof e) < 0)
+                return -EFAULT;
         }
     }
-    return -ENOENT;
+
+    g->flags = d->flags;
+    memset(g->name, 0, sizeof g->name);
+    strncpy(g->name, d->name, sizeof g->name - 1);
+    g->count_values     = nvalues;
+    g->count_enum_blobs = nenums;
+    return 0;
 }
 
 static int64_t apply_prop(uint32_t obj_id, uint32_t prop_id, uint64_t value,
@@ -878,6 +921,7 @@ void drm_init(void)
     g_card_node.type     = VFS_NODE_CHARDEV;
     g_card_node.mode     = 0666;
     g_card_node.ino      = 700;
+    g_card_node.rdev     = vfs_makedev(226, 0);
     g_card_node.ops      = &drm_ops;
     g_card_node.refcount = 1;
 
