@@ -111,6 +111,7 @@ typedef struct {
     sym_t      *symtab;
     uint32_t   *hash;
     int         relocated;
+    int         inited;
 } object_t;
 
 static object_t g_objs[MAX_OBJECTS];
@@ -374,7 +375,40 @@ typedef struct {
     void *(*open)(const char *path, int flags);
     void *(*sym)(void *handle, const char *name);
     int   (*close)(void *handle);
+    void  (*init)(int argc, char **argv, char **envp);
 } dl_ops_t;
+
+typedef void (*init_fn_t)(int, char **, char **);
+
+static int    g_argc;
+static char **g_argv;
+static char **g_envp;
+
+static void run_init(object_t *o)
+{
+    if (o->inited) return;
+    o->inited = 1;
+    uintptr_t init = 0, arr = 0;
+    uint64_t arrsz = 0;
+    for (dyn_t *d = o->dyn; d && d->d_tag != DT_NULL; d++) {
+        if (d->d_tag == DT_INIT)            init  = o->base + d->d_val;
+        else if (d->d_tag == DT_INIT_ARRAY) arr   = o->base + d->d_val;
+        else if (d->d_tag == DT_INIT_ARRAYSZ) arrsz = d->d_val;
+    }
+    if (init) ((init_fn_t)init)(g_argc, g_argv, g_envp);
+    for (uint64_t i = 0; arr && i < arrsz / sizeof(uintptr_t); i++) {
+        uintptr_t fn = ((uintptr_t *)arr)[i];
+        if (fn && fn != (uintptr_t)-1) ((init_fn_t)fn)(g_argc, g_argv, g_envp);
+    }
+}
+
+static void ld_init_libs(int argc, char **argv, char **envp)
+{
+    g_argc = argc;
+    g_argv = argv;
+    g_envp = envp;
+    for (int i = g_nobjs - 1; i >= 1; i--) run_init(&g_objs[i]);
+}
 
 static void *ld_dlopen(const char *path, int flags)
 {
@@ -396,6 +430,7 @@ static void *ld_dlopen(const char *path, int flags)
     load_needed(o);
 
     for (int i = g_nobjs - 1; i >= first; i--) apply_relocations(&g_objs[i]);
+    for (int i = g_nobjs - 1; i >= first; i--) run_init(&g_objs[i]);
     return o;
 }
 
@@ -418,7 +453,7 @@ static int ld_dlclose(void *handle)
     return 0;
 }
 
-static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose };
+static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose, ld_init_libs };
 
 uintptr_t ld_start_c(uint64_t *sp)
 {
@@ -460,6 +495,7 @@ uintptr_t ld_start_c(uint64_t *sp)
         g_objs[0].base = exec_base;
         g_objs[0].dyn  = exec_dyn;
         g_nobjs = 1;
+        g_objs[0].inited = 1;
         scan_dynamic(&g_objs[0]);
         load_needed(&g_objs[0]);
 

@@ -17,6 +17,9 @@ lldiv_t lldiv(long long num, long long den);
 
 #define MB_CUR_MAX 1
 
+int  __cxa_atexit(void (*fn)(void *), void *arg, void *dso);
+void __cxa_finalize(void *dso);
+
 int    mblen(const char *s, size_t n);
 int    mbtowc(wchar_t *pwc, const char *s, size_t n);
 int    wctomb(char *s, wchar_t wc);

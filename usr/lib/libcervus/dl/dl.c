@@ -1,11 +1,6 @@
 #include <dlfcn.h>
 #include <stddef.h>
-
-typedef struct {
-    void *(*open)(const char *path, int flags);
-    void *(*sym)(void *handle, const char *name);
-    int   (*close)(void *handle);
-} __cervus_dl_ops_t;
+#include <libcervus.h>
 
 __cervus_dl_ops_t *__cervus_dl_ops;
 

@@ -99,9 +99,18 @@ static inline __mblock_t *__cervus_mb_prev(__mblock_t *b) {
     return (__mblock_t *)((char *)b - b->prev_size);
 }
 
-extern void (*__cervus_atexit_fns[])(void);
-extern int   __cervus_atexit_cnt;
-extern int   __cervus_atexit_max;
+int  __cervus_exit_push(void (*fn)(void *), void *arg, void *dso, int plain);
+void __cervus_run_exit_fns(void *dso);
+
+typedef struct {
+    void *(*open)(const char *path, int flags);
+    void *(*sym)(void *handle, const char *name);
+    int   (*close)(void *handle);
+    void  (*init)(int argc, char **argv, char **envp);
+} __cervus_dl_ops_t;
+
+extern __cervus_dl_ops_t *__cervus_dl_ops;
+void __cervus_run_init(int argc, char **argv, char **envp);
 
 int __cervus_is_leap(int y);
 extern const int __cervus_days_in_mon[2][12];
