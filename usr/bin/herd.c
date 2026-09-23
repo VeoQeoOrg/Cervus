@@ -233,7 +233,8 @@ static void load_repo(void)
     size_t n;
     char *conf = read_file(CONF, &n);
     if (conf) {
-        for (char *line = strtok(conf, "\n"); line; line = strtok(NULL, "\n")) {
+        char *sv0 = NULL;
+        for (char *line = strtok_r(conf, "\n", &sv0); line; line = strtok_r(NULL, "\n", &sv0)) {
             while (*line == ' ' || *line == '\t') line++;
             if (!strncmp(line, "repo=", 5)) snprintf(g_repo, sizeof g_repo, "%s", line + 5);
             else if (!strncmp(line, "progress=", 9)) progress_style(line + 9);
@@ -500,13 +501,11 @@ static void note_reboot(const char *flist_path)
     char *fl = read_file(flist_path, NULL);
     if (!fl) return;
     int hit = 0;
-    for (char *line = strtok(fl, "\n"); line; line = strtok(NULL, "\n")) {
+    char *sv1 = NULL;
+    for (char *line = strtok_r(fl, "\n", &sv1); line; line = strtok_r(NULL, "\n", &sv1)) {
         if (line[0] != 'f') continue;
         const char *path = line + 2;
-        size_t n = strlen(path);
-        int shared = n > 3 && !strcmp(path + n - 3, ".so");
-        if (!strncmp(path, "/boot/", 6) || !strncmp(path, "/lib/", 5) ||
-            (!strncmp(path, "/usr/lib/", 9) && shared)) { hit = 1; break; }
+        if (!strncmp(path, "/boot/", 6) || !strncmp(path, "/lib/", 5)) { hit = 1; break; }
     }
     free(fl);
     if (!hit) return;
@@ -768,7 +767,8 @@ static int install_one(const char *idx, const char *name)
 
     if (prev) {
         char *fresh = read_file(oldlist, NULL);
-        for (char *line = strtok(prev, "\n"); line; line = strtok(NULL, "\n")) {
+        char *sv2 = NULL;
+        for (char *line = strtok_r(prev, "\n", &sv2); line; line = strtok_r(NULL, "\n", &sv2)) {
             if (line[0] != 'f' || line[1] != ' ') continue;
             if (fresh && list_has(fresh, line)) continue;
             unlink(line + 2);
@@ -814,7 +814,8 @@ static int plan_install(const char *idx, const char *name, char order[][64], int
     char *dep = field(rec, "depends");
     free(rec);
     if (dep) {
-        for (char *tok = strtok(dep, " ,"); tok; tok = strtok(NULL, " ,")) {
+        char *sv3 = NULL;
+        for (char *tok = strtok_r(dep, " ,", &sv3); tok; tok = strtok_r(NULL, " ,", &sv3)) {
             if (!strcmp(tok, "libc")) continue;
             if (plan_install(idx, tok, order, norder, 0) != 0) { free(dep); return 1; }
         }
@@ -926,7 +927,8 @@ static int remove_files(const char *name)
     if (fl) {
 
         char *lines[8192]; int n = 0;
-        for (char *line = strtok(fl, "\n"); line && n < 8192; line = strtok(NULL, "\n")) lines[n++] = line;
+        char *sv4 = NULL;
+        for (char *line = strtok_r(fl, "\n", &sv4); line && n < 8192; line = strtok_r(NULL, "\n", &sv4)) lines[n++] = line;
         for (int i = n - 1; i >= 0; i--) if (lines[i][0] == 'f') unlink(lines[i] + 2);
         for (int i = n - 1; i >= 0; i--) if (lines[i][0] == 'd') rmdir(lines[i] + 2);
         free(fl);
