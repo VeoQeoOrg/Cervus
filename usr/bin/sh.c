@@ -1688,6 +1688,8 @@ static void expand_into(sbuf *out, const char *w, int flags, svec *fields)
     const char *p = w;
     int heredoc = (flags & EXP_HEREDOC) != 0;
     int dq = heredoc;
+    const char *dq_start = NULL;
+    int started_before_dq = 0;
 
     while (*p) {
         char c = *p;
@@ -1699,8 +1701,17 @@ static void expand_into(sbuf *out, const char *w, int flags, svec *fields)
             continue;
         }
         if (c == '"' && !heredoc) {
+            if (!dq) {
+                dq_start = p + 1;
+                started_before_dq = started;
+                started = 1;
+            } else if (dq_start && p - dq_start == 2 && dq_start[0] == '$' && dq_start[1] == '@' &&
+                       g_argv.n == 0) {
+                started = started_before_dq;
+            } else {
+                started = 1;
+            }
             dq = !dq;
-            started = 1;
             p++;
             continue;
         }
