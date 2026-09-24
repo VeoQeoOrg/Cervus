@@ -1095,6 +1095,13 @@ static int read_dir_entries(const char *path, dent_t *out, int max) {
         memcpy(out[count].d_name, de->d_name, l);
         out[count].d_name[l] = 0;
         out[count].d_type = de->d_type;
+        if (out[count].d_type == DT_UNKNOWN) {
+            char full[512];
+            struct stat st;
+            snprintf(full, sizeof full, "%s/%s", path, out[count].d_name);
+            if (stat(full, &st) == 0)
+                out[count].d_type = S_ISDIR(st.st_mode) ? DT_DIR : S_ISREG(st.st_mode) ? DT_REG : DT_UNKNOWN;
+        }
         count++;
     }
     closedir(d);
@@ -1115,7 +1122,7 @@ static int count_tree(const char *src_dir) {
     int total = 0;
     for (int i = 0; i < n; i++) {
         if (should_skip_entry(entries[i].d_name)) continue;
-        if (entries[i].d_type == 1) {
+        if (entries[i].d_type == DT_DIR) {
             char sp[512];
             path_join(src_dir, entries[i].d_name, sp, sizeof(sp));
             total += count_tree(sp);
@@ -1138,7 +1145,7 @@ static void copy_tree(const char *src_dir, const char *dst_dir) {
         char sp[512], dp[512];
         path_join(src_dir, entries[i].d_name, sp, sizeof(sp));
         path_join(dst_dir, entries[i].d_name, dp, sizeof(dp));
-        if (entries[i].d_type == 1) {
+        if (entries[i].d_type == DT_DIR) {
             ensure_dir(dp);
             copy_tree(sp, dp);
         } else {
@@ -1416,7 +1423,7 @@ static void apply_accounts(const account_cfg_t *a) {
         static dent_t skel[MAX_ENTRIES];
         int ns = read_dir_entries("/etc/skel", skel, MAX_ENTRIES);
         for (int j = 0; j < ns; j++) {
-            if (skel[j].d_type != 0) continue;
+            if (skel[j].d_type != DT_REG) continue;
             char sp[256], dp[320];
             path_join("/etc/skel", skel[j].d_name, sp, sizeof(sp));
             path_join(home, skel[j].d_name, dp, sizeof(dp));
@@ -1552,14 +1559,15 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
     const char *rdirs[] = {
         "/mnt/root/bin", "/mnt/root/apps", "/mnt/root/etc",
         "/mnt/root/home", "/mnt/root/tmp", "/mnt/root/var",
-        "/mnt/root/usr", NULL
+        "/mnt/root/usr", "/mnt/root/lib", NULL
     };
     for (int i = 0; rdirs[i]; i++) ensure_dir(rdirs[i]);
     mkdir("/mnt/root/root", 0700);
 
-    int total_files = count_tree("/bin") + count_tree("/apps");
+    int total_files = count_tree("/bin") + count_tree("/apps") + count_tree("/lib");
     struct stat ust0;
     if (stat("/usr", &ust0) == 0) total_files += count_tree("/usr");
+    if (stat("/var/lib/herd", &ust0) == 0) total_files += count_tree("/var/lib/herd");
     if (total_files < 1) total_files = 1;
     g_substep_done  = 0;
     g_substep_total = total_files;
@@ -1567,6 +1575,7 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
 
     copy_tree("/bin",  "/mnt/root/bin");
     copy_tree("/apps", "/mnt/root/apps");
+    copy_tree("/lib",  "/mnt/root/lib");
     struct stat ust;
     if (stat("/usr", &ust) == 0) copy_tree("/usr", "/mnt/root/usr");
     struct stat est;
@@ -1581,11 +1590,11 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
             int is_txt = (nl >= 4 && strcmp(nm + nl - 4, ".txt") == 0);
             char sp[256], dp[256];
             path_join("/etc", nm, sp, sizeof(sp));
-            if (etc_entries[i].d_type == 0) {
+            if (etc_entries[i].d_type == DT_REG) {
                 if (is_txt) path_join("/mnt/root/home", nm, dp, sizeof(dp));
                 else        path_join("/mnt/root/etc",  nm, dp, sizeof(dp));
                 copy_one_file(sp, dp);
-            } else if (etc_entries[i].d_type == 1) {
+            } else if (etc_entries[i].d_type == DT_DIR) {
                 path_join("/mnt/root/etc", nm, dp, sizeof(dp));
                 copy_tree(sp, dp);
             }
@@ -1593,6 +1602,12 @@ static int do_install_common(const disk_entry_t *d, const char *part1, const cha
     }
     struct stat hst;
     if (stat("/home", &hst) == 0) copy_tree("/home", "/mnt/root/home");
+    if (stat("/var/lib/herd", &hst) == 0) {
+        ensure_dir("/mnt/root/var/lib");
+        ensure_dir("/mnt/root/var/lib/herd");
+        copy_tree("/var/lib/herd", "/mnt/root/var/lib/herd");
+        unlink("/mnt/root/var/lib/herd/reboot-required");
+    }
     step_ok("root populated");
 
     step_begin("Configuring accounts");
@@ -1958,7 +1973,7 @@ static void scan_font_dir(const char *dir, int depth) {
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         if (de->d_name[0] == '.') continue;
-        if (de->d_type == 1) {
+        if (de->d_type == DT_DIR) {
             if (depth > 0) {
                 char sub[256];
                 snprintf(sub, sizeof sub, "%s/%s", dir, de->d_name);
