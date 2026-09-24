@@ -116,7 +116,7 @@ publish_system() {
 
   pack_tree "$outdir" kernel       "$ver" /boot
   pack_tree "$outdir" cervus-base  "$ver" /bin /apps /usr/share/man
-  pack_tree "$outdir" cervus-libc  "$ver" /usr/lib /usr/include
+  pack_tree "$outdir" cervus-libc  "$ver" /lib /usr/lib /usr/include
   pack_tree "$outdir" cervus-media "$ver" /usr/share/fonts /usr/share/consolefonts /usr/share/media
 
   meta=$(mktemp -d); mkdir -p "$meta/var/lib/herd"
@@ -132,7 +132,7 @@ publish_system() {
   herd_manifest "$outdir" cervus-base  "$ver" libc \
       "the Cervus command line: every utility in /bin and /apps" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-libc  "$ver" libc \
-      "the Cervus C library, its headers and crt0" GPL-3.0 "$sysbuilt"
+      "the Cervus C library, static and shared, the dynamic loader, headers and crt0" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-media "$ver" libc \
       "console and TrueType fonts, wallpapers and sounds" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-system "$ver" "cervus-base cervus-libc cervus-media kernel" \

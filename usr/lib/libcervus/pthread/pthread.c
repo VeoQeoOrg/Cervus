@@ -24,7 +24,6 @@ struct __pthread {
 
 #define DEFAULT_STACK (256 * 1024)
 
-static __thread struct __pthread *g_self;
 static struct __pthread g_main;
 
 static void futex_wait(volatile int *addr, int val)
@@ -39,13 +38,11 @@ static void futex_wake(volatile int *addr, int n)
 
 void __cervus_thread_entry(struct __pthread *th)
 {
-    void *tp = __cervus_tls_alloc();
-    if (tp) __cervus_tls_set(tp);
-    th->tls = tp;
-    g_self = th;
+    __cervus_tls_set(th->tls);
     th->tid = (int)getpid();
     void *r = th->fn(th->arg);
 
+    __cervus_pthread_key_cleanup();
     th->retval = r;
     __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
     futex_wake(&th->done, 1);
@@ -76,9 +73,13 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     struct __pthread *th = calloc(1, sizeof(*th));
     if (!th) return EAGAIN;
 
+    th->tls = __cervus_tls_alloc();
+    if (!th->tls) { free(th); return EAGAIN; }
+    ((void **)th->tls)[__CERVUS_TCB_SELF] = th;
+
     void *stk = mmap(NULL, ssz, PROT_READ | PROT_WRITE,
                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (stk == MAP_FAILED) { free(th); return EAGAIN; }
+    if (stk == MAP_FAILED) { __cervus_tls_free(th->tls); free(th); return EAGAIN; }
 
     th->fn = fn;
     th->arg = arg;
@@ -96,6 +97,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
                         (uint64_t)(uintptr_t)sp, 0);
     if (tid < 0) {
         munmap(stk, ssz);
+        __cervus_tls_free(th->tls);
         free(th);
         return EAGAIN;
     }
@@ -131,6 +133,7 @@ int pthread_detach(pthread_t th)
 void pthread_exit(void *retval)
 {
     struct __pthread *th = pthread_self();
+    __cervus_pthread_key_cleanup();
     if (th) {
         th->retval = retval;
         __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
@@ -142,8 +145,14 @@ void pthread_exit(void *retval)
 
 pthread_t pthread_self(void)
 {
-    if (!g_self) { g_main.tid = (int)getpid(); g_self = &g_main; }
-    return g_self;
+    void **tcb = __cervus_tcb();
+    struct __pthread *self = tcb[__CERVUS_TCB_SELF];
+    if (!self) {
+        g_main.tid = (int)getpid();
+        self = &g_main;
+        tcb[__CERVUS_TCB_SELF] = self;
+    }
+    return self;
 }
 int pthread_equal(pthread_t a, pthread_t b) { return a == b; }
 

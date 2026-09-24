@@ -12,7 +12,7 @@
 #define RL_LINE_MAX  4096
 #define RL_HIST_MAX  1024
 
-static char        g_history[RL_HIST_MAX][RL_LINE_MAX];
+static char       *g_history[RL_HIST_MAX];
 static int         g_hist_count = 0, g_hist_head = 0;
 static char        g_hist_path[1024];
 static int         g_hist_file_set = 0;
@@ -172,21 +172,31 @@ static void hist_save_entry(const char *l) {
     close(fd);
 }
 
+static void hist_push(const char *l) {
+    int idx = (g_hist_head + g_hist_count) % RL_HIST_MAX;
+    char *copy = strndup(l, RL_LINE_MAX - 1);
+    if (!copy) return;
+    free(g_history[idx]);
+    g_history[idx] = copy;
+    if (g_hist_count < RL_HIST_MAX) g_hist_count++;
+    else g_hist_head = (g_hist_head + 1) % RL_HIST_MAX;
+}
+
 void readline_add_history(const char *l) {
     if (!l || !l[0]) return;
     if (g_hist_count > 0) {
         int last = (g_hist_head + g_hist_count - 1) % RL_HIST_MAX;
         if (strcmp(g_history[last], l) == 0) return;
     }
-    int idx = (g_hist_head + g_hist_count) % RL_HIST_MAX;
-    strncpy(g_history[idx], l, RL_LINE_MAX - 1);
-    g_history[idx][RL_LINE_MAX - 1] = '\0';
-    if (g_hist_count < RL_HIST_MAX) g_hist_count++;
-    else g_hist_head = (g_hist_head + 1) % RL_HIST_MAX;
+    hist_push(l);
     hist_save_entry(l);
 }
 
 void readline_clear_history(void) {
+    for (int i = 0; i < RL_HIST_MAX; i++) {
+        free(g_history[i]);
+        g_history[i] = NULL;
+    }
     g_hist_count = 0;
     g_hist_head = 0;
     if (g_hist_file_set) {
@@ -210,11 +220,7 @@ void readline_set_history_file(const char *path) {
         if (ch == '\n' || li >= RL_LINE_MAX - 1) {
             line[li] = '\0';
             if (li > 0) {
-                int idx = (g_hist_head + g_hist_count) % RL_HIST_MAX;
-                strncpy(g_history[idx], line, RL_LINE_MAX - 1);
-                g_history[idx][RL_LINE_MAX - 1] = '\0';
-                if (g_hist_count < RL_HIST_MAX) g_hist_count++;
-                else g_hist_head = (g_hist_head + 1) % RL_HIST_MAX;
+                hist_push(line);
             }
             li = 0;
         } else {

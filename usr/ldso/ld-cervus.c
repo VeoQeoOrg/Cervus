@@ -221,11 +221,6 @@ static uintptr_t resolve(const char *name, object_t *skip) {
         sym_t *s = lookup_in(&g_objs[i], name);
         if (s) return g_objs[i].base + s->st_value;
     }
-    for (int i = 0; i < g_nobjs; i++) {
-        if (&g_objs[i] != skip) continue;
-        sym_t *s = lookup_in(&g_objs[i], name);
-        if (s) return g_objs[i].base + s->st_value;
-    }
     return 0;
 }
 
@@ -268,7 +263,7 @@ static void apply_relocations(object_t *o)
 
             const char *nm = (o->symtab && o->strtab)
                            ? o->strtab + o->symtab[si].st_name : "";
-            uintptr_t val = resolve(nm, o);
+            uintptr_t val = resolve(nm, type == R_X86_64_COPY ? o : NULL);
             if (!val) {
                 sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
                 if (own && own->st_shndx != SHN_UNDEF) val = o->base + own->st_value;

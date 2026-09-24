@@ -5,15 +5,7 @@
 
 extern uintptr_t __stack_chk_guard;
 
-typedef void (*init_fn_t)(int, char **, char **);
-typedef void (*fini_fn_t)(void);
-
-extern init_fn_t __preinit_array_start[] __attribute__((visibility("hidden")));
-extern init_fn_t __preinit_array_end[]   __attribute__((visibility("hidden")));
-extern init_fn_t __init_array_start[]    __attribute__((visibility("hidden")));
-extern init_fn_t __init_array_end[]      __attribute__((visibility("hidden")));
-extern fini_fn_t __fini_array_start[]    __attribute__((visibility("hidden")));
-extern fini_fn_t __fini_array_end[]      __attribute__((visibility("hidden")));
+static __cervus_image_t g_image;
 
 char *program_invocation_name = "";
 char *program_invocation_short_name = "";
@@ -21,12 +13,14 @@ char *program_invocation_short_name = "";
 static void run_fini(void *unused)
 {
     (void)unused;
-    size_t n = (size_t)(__fini_array_end - __fini_array_start);
-    while (n-- > 0) __fini_array_start[n]();
+    size_t n = (size_t)(g_image.fini_end - g_image.fini_start);
+    while (n-- > 0) g_image.fini_start[n]();
 }
 
-void __cervus_run_init(int argc, char **argv, char **envp)
+void __cervus_run_init(int argc, char **argv, char **envp, const __cervus_image_t *img)
 {
+    if (img) g_image = *img;
+
     uintptr_t guard;
     int saved_errno = __cervus_errno;
     if (getrandom(&guard, sizeof guard, 0) == (ssize_t)sizeof guard) {
@@ -47,8 +41,8 @@ void __cervus_run_init(int argc, char **argv, char **envp)
     if (__cervus_dl_ops && __cervus_dl_ops->init)
         __cervus_dl_ops->init(argc, argv, envp);
 
-    size_t n = (size_t)(__preinit_array_end - __preinit_array_start);
-    for (size_t i = 0; i < n; i++) __preinit_array_start[i](argc, argv, envp);
-    n = (size_t)(__init_array_end - __init_array_start);
-    for (size_t i = 0; i < n; i++) __init_array_start[i](argc, argv, envp);
+    size_t n = (size_t)(g_image.preinit_end - g_image.preinit_start);
+    for (size_t i = 0; i < n; i++) g_image.preinit_start[i](argc, argv, envp);
+    n = (size_t)(g_image.init_end - g_image.init_start);
+    for (size_t i = 0; i < n; i++) g_image.init_start[i](argc, argv, envp);
 }

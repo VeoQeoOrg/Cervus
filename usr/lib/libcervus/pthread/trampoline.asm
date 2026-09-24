@@ -6,7 +6,7 @@ __cervus_thread_trampoline:
     pop  rdi
     xor  rbp, rbp
     and  rsp, -16
-    call __cervus_thread_entry
+    call __cervus_thread_entry wrt ..plt
 .hang:
     hlt
     jmp .hang

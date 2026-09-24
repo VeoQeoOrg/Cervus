@@ -197,7 +197,7 @@ PKGEOF
 }
 
 register_pkg cervus-base  "the Cervus command line: every utility in /bin and /apps" libc /bin /apps /usr/share/man
-register_pkg cervus-libc  "the Cervus C library, its headers and crt0"               libc /usr/lib /usr/include
+register_pkg cervus-libc  "the Cervus C library, static and shared, the dynamic loader, headers and crt0" libc /lib /usr/lib /usr/include
 register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        libc /usr/share/fonts /usr/share/consolefonts /usr/share/media
 register_pkg kernel       "the Cervus kernel and init, for the boot partition"       libc /boot
 register_pkg cervus-system "all of Cervus: kernel, command line, library and assets" \

@@ -25,6 +25,17 @@ int    __cervus_tls_set(void *tp);
 void   __cervus_tls_free(void *tp);
 void   __cervus_tls_init(void);
 
+#define __CERVUS_TCB_SELF 2
+#define __CERVUS_TCB_KEYS 3
+
+static inline void **__cervus_tcb(void) {
+    void **tp;
+    __asm__ ("mov %%fs:0, %0" : "=r"(tp));
+    return tp;
+}
+
+void __cervus_pthread_key_cleanup(void);
+
 void __cervus_lock(__cervus_lock_t *l);
 void __cervus_unlock(__cervus_lock_t *l);
 extern __cervus_lock_t __cervus_heap_lock;
@@ -127,7 +138,16 @@ typedef struct {
 } __cervus_dl_ops_t;
 
 extern __cervus_dl_ops_t *__cervus_dl_ops;
-void __cervus_run_init(int argc, char **argv, char **envp);
+typedef struct {
+    void (**preinit_start)(int, char **, char **);
+    void (**preinit_end)(int, char **, char **);
+    void (**init_start)(int, char **, char **);
+    void (**init_end)(int, char **, char **);
+    void (**fini_start)(void);
+    void (**fini_end)(void);
+} __cervus_image_t;
+
+void __cervus_run_init(int argc, char **argv, char **envp, const __cervus_image_t *img);
 
 int __cervus_is_leap(int y);
 extern const int __cervus_days_in_mon[2][12];

@@ -2,7 +2,7 @@
 #define TARGET_CERVUS 1
 
 #undef LIB_SPEC
-#define LIB_SPEC "%{!shared:--start-group %{pie:-lcervus_pic;:-lcervus} -lgcc --end-group}"
+#define LIB_SPEC "%{shared:-lc;:--start-group %{pie:-lc;:-lcervus} -lgcc --end-group}"
 
 #undef STARTFILE_SPEC
 #define STARTFILE_SPEC "%{!shared:crt0.o%s} %{shared|pie:crtbeginS.o%s;:crtbegin.o%s}"
