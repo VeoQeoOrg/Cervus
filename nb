@@ -26,6 +26,7 @@ cervus_abi() {
 
 herd_manifest() {
   outdir=$1; name=$2; ver=$3; deps=$4; summary=$5; license=$6
+  built=${7:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
   f="$name-$ver-x86_64.tar.gz"
   sz=$(wc -c < "$outdir/$f" | tr -d ' ')
   sha=$(sha256sum "$outdir/$f" | awk '{print $1}')
@@ -38,7 +39,7 @@ sha256: $sha
 file: $f
 depends: $deps
 abi: $(cervus_abi)
-built: $(date -u +%Y-%m-%d)
+built: $built
 summary: $summary
 license: $license
 MEOF
@@ -124,16 +125,18 @@ publish_system() {
       -czf "$outdir/cervus-system-$ver-x86_64.tar.gz" .
   rm -rf "$meta"
 
+  sysbuilt=$(sed -n 's/^built: //p' rootfs/var/lib/herd/cervus-system.manifest 2>/dev/null)
+  [ -n "$sysbuilt" ] || sysbuilt=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   herd_manifest "$outdir" kernel       "$ver" libc \
-      "the Cervus kernel and init, for the boot partition" GPL-3.0
+      "the Cervus kernel and init, for the boot partition" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-base  "$ver" libc \
-      "the Cervus command line: every utility in /bin and /apps" GPL-3.0
+      "the Cervus command line: every utility in /bin and /apps" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-libc  "$ver" libc \
-      "the Cervus C library, its headers and crt0" GPL-3.0
+      "the Cervus C library, its headers and crt0" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-media "$ver" libc \
-      "console and TrueType fonts, wallpapers and sounds" GPL-3.0
+      "console and TrueType fonts, wallpapers and sounds" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-system "$ver" "cervus-base cervus-libc cervus-media kernel" \
-      "all of Cervus: kernel, command line, library and assets" GPL-3.0
+      "all of Cervus: kernel, command line, library and assets" GPL-3.0 "$sysbuilt"
 
   ( cd "$outdir" && awk 'FNR==1 && NR!=1 {print ""} {print}' ./*.manifest > INDEX )
   openssl pkeyutl -sign -inkey "$keyfile" -rawin -in "$outdir/INDEX" -out "$outdir/INDEX.sig" || {
@@ -149,6 +152,12 @@ publish_system() {
       sleep 3
     done
     echo "  $f"
+  done
+
+  keep=$(awk '/^file:/ {print $2}' "$outdir/INDEX"; echo INDEX; echo INDEX.sig)
+  for a in $(gh release view index --repo "$repo" --json assets --jq '.assets[].name'); do
+    printf '%s\n' "$keep" | grep -qxF "$a" && continue
+    gh release delete-asset index "$a" --repo "$repo" --yes >/dev/null 2>&1 && echo "  removed $a"
   done
 
   echo "published Cervus $ver -- 'herd upgrade' on a Cervus machine picks it up"

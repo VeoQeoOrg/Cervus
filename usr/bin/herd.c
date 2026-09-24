@@ -10,6 +10,7 @@
 #include <crypto.h>
 #include <inflate.h>
 #include <ctype.h>
+#include <time.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <pwutil.h>
@@ -22,6 +23,8 @@ static const char USAGE[] =
     "  update            refresh the package index from the repository\n"
     "  search TERM       list packages whose name or summary matches TERM\n"
     "  list              list installed packages\n"
+    "  status            show the system version, when it was last updated,\n"
+    "                    and whether a reboot is pending\n"
     "  available         list every package the repository offers\n"
     "  info NAME         show what the index knows about NAME\n"
     "  install NAME...   fetch, verify and install packages and their deps\n"
@@ -484,15 +487,20 @@ static int is_installed(const char *name)
     return stat(p, &st) == 0;
 }
 
-static char *installed_version(const char *name)
+static char *installed_field(const char *name, const char *key)
 {
     char p[512];
     snprintf(p, sizeof p, "%s" DBDIR "/%s.manifest", g_root, name);
     char *m = read_file(p, NULL);
     if (!m) return NULL;
-    char *v = field(m, "version");
+    char *v = field(m, key);
     free(m);
     return v;
+}
+
+static char *installed_version(const char *name)
+{
+    return installed_field(name, "version");
 }
 
 static int version_cmp(const char *a, const char *b)
@@ -513,6 +521,124 @@ static int version_cmp(const char *a, const char *b)
 
 static int g_assume_yes;
 static int g_reboot_needed;
+
+static void built_key(const char *s, char out[15])
+{
+    int n = 0;
+    for (; s && *s && n < 14; s++)
+        if (isdigit((unsigned char)*s)) out[n++] = *s;
+    while (n < 14) out[n++] = '0';
+    out[14] = 0;
+}
+
+static int is_newer(const char *have_ver, const char *have_built,
+                    const char *want_ver, const char *want_built)
+{
+    int c = version_cmp(have_ver, want_ver);
+    if (c != 0) return c < 0;
+    if (!want_built) return 0;
+    char a[15], b[15];
+    built_key(have_built, a);
+    built_key(want_built, b);
+    return strcmp(a, b) < 0;
+}
+
+static void fmt_stamp(const char *s, char *out, size_t cap)
+{
+    char k[15];
+    built_key(s, k);
+    if (!s || !*s) { snprintf(out, cap, "unknown"); return; }
+    if (!strcmp(k + 8, "000000"))
+        snprintf(out, cap, "%.4s-%.2s-%.2s", k, k + 4, k + 6);
+    else
+        snprintf(out, cap, "%.4s-%.2s-%.2s %.2s:%.2s UTC", k, k + 4, k + 6, k + 8, k + 10);
+}
+
+static long long days_from_civil(int y, int m, int d)
+{
+    y -= m <= 2;
+    long long era = (y >= 0 ? y : y - 399) / 400;
+    long long yoe = y - era * 400;
+    long long doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+static long long stamp_seconds(const char *s)
+{
+    char k[15];
+    built_key(s, k);
+    int y, mo, d, h, mi, se;
+    if (sscanf(k, "%4d%2d%2d%2d%2d%2d", &y, &mo, &d, &h, &mi, &se) != 6 || y < 1970) return -1;
+    return days_from_civil(y, mo, d) * 86400LL + h * 3600 + mi * 60 + se;
+}
+
+static void now_stamp(char *out, size_t cap)
+{
+    time_t t = time(NULL);
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &tm);
+}
+
+static void describe_age(const char *stamp, char *out, size_t cap)
+{
+    long long then = stamp_seconds(stamp);
+    long long now = (long long)time(NULL);
+    out[0] = 0;
+    if (then < 0 || now < then) return;
+    long long d = (now - then) / 86400;
+    if (d == 0)      snprintf(out, cap, " (today)");
+    else if (d == 1) snprintf(out, cap, " (yesterday)");
+    else             snprintf(out, cap, " (%lld days ago)", d);
+}
+
+static int is_system_pkg(const char *name)
+{
+    return !strcmp(name, "kernel") || !strcmp(name, "cervus-base") ||
+           !strcmp(name, "cervus-libc") || !strcmp(name, "cervus-media") ||
+           !strcmp(name, "cervus-system");
+}
+
+static int reboot_pending(void)
+{
+    char flag[512];
+    snprintf(flag, sizeof flag, "%s" DBDIR "/reboot-required", g_root);
+    struct stat st;
+    return stat(flag, &st) == 0;
+}
+
+static void print_system_status(void)
+{
+    char *ver = installed_field("cervus-system", "version");
+    char *built = installed_field("cervus-system", "built");
+    if (!ver) { ver = installed_field("cervus-base", "version"); built = installed_field("cervus-base", "built"); }
+    char b[64], age[32];
+    fmt_stamp(built, b, sizeof b);
+    printf("system:        Cervus %s, built %s\n", ver ? ver : "?", b);
+
+    char path[512];
+    snprintf(path, sizeof path, "%s" DBDIR "/system-updated", g_root);
+    char *upd = read_file(path, NULL);
+    if (upd) {
+        char *nl = strchr(upd, '\n');
+        if (nl) *nl = 0;
+        fmt_stamp(upd, b, sizeof b);
+        describe_age(upd, age, sizeof age);
+        printf("last updated:  %s%s\n", b, age);
+    } else {
+        printf("last updated:  never -- still the system as it was installed\n");
+    }
+    if (reboot_pending())
+        printf("reboot:        REQUIRED -- the last system update runs after a reboot\n");
+    free(ver); free(built); free(upd);
+}
+
+static void warn_reboot_pending(void)
+{
+    if (reboot_pending())
+        fprintf(stderr, "herd: the system was updated and is waiting for a reboot\n");
+}
 
 static int confirm(const char *question)
 {
@@ -597,6 +723,30 @@ static int cmd_update(void)
     if (idx && strncmp(idx, "name:", 5) == 0) n++;
     free(idx);
     printf("index updated: %d package(s)\n", n);
+
+    int pending = 0;
+    char *idx2 = read_file(INDEXF, NULL);
+    char dbb[512];
+    DIR *d = idx2 ? opendir(rooted(DBDIR, dbb, sizeof dbb)) : NULL;
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            if (l <= 9 || strcmp(e->d_name + l - 9, ".manifest") != 0) continue;
+            char name[256]; snprintf(name, sizeof name, "%.*s", (int)(l - 9), e->d_name);
+            char *rec = find_record(idx2, name);
+            if (!rec) continue;
+            char *hv = installed_version(name), *hb = installed_field(name, "built");
+            char *wv = field(rec, "version"), *wb = field(rec, "built");
+            if (is_newer(hv, hb, wv, wb)) pending++;
+            free(hv); free(hb); free(wv); free(wb); free(rec);
+        }
+        closedir(d);
+    }
+    free(idx2);
+    print_system_status();
+    if (pending) printf("updates:       %d available -- run 'herd upgrade'\n", pending);
+    else         printf("updates:       none, everything is up to date\n");
     return 0;
 }
 
@@ -667,8 +817,11 @@ static int cmd_list(void)
             char mpath[512]; snprintf(mpath, sizeof mpath, "%s" DBDIR "/%s.manifest", g_root, name);
             char *m = read_file(mpath, NULL);
             char *ver = m ? field(m, "version") : NULL;
-            printf("%-16s %s\n", name, ver ? ver : "");
-            free(ver); free(m);
+            char *bt = m ? field(m, "built") : NULL;
+            char when[64];
+            fmt_stamp(bt, when, sizeof when);
+            printf("%-16s %-12s %s\n", name, ver ? ver : "", bt ? when : "");
+            free(ver); free(bt); free(m);
             n++;
         }
     }
@@ -816,6 +969,18 @@ static int install_one(const char *idx, const char *name)
     if (mfd >= 0) { write(mfd, rec, strlen(rec)); close(mfd); }
 
     note_reboot(flist);
+    if (is_system_pkg(name)) {
+        g_reboot_needed = 1;
+        char flag[512];
+        snprintf(flag, sizeof flag, "%s" DBDIR "/reboot-required", g_root);
+        int fd = open(flag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) close(fd);
+        char stamp[32], sp[512];
+        now_stamp(stamp, sizeof stamp);
+        snprintf(sp, sizeof sp, "%s" DBDIR "/system-updated", g_root);
+        int sfd = open(sp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (sfd >= 0) { write(sfd, stamp, strlen(stamp)); write(sfd, "\n", 1); close(sfd); }
+    }
     printf("installed %s %s\n", name, ver ? ver : "");
     free(rec); free(ver); free(filef); free(shaf); free(sizef);
     return 0;
@@ -837,9 +1002,11 @@ static int plan_install(const char *idx, const char *name, char order[][64], int
 
     if (is_installed(name)) {
         char *have = installed_version(name);
+        char *have_built = installed_field(name, "built");
         char *want = field(rec, "version");
-        int newer = allow_upgrade && version_cmp(have, want) < 0;
-        free(have); free(want);
+        char *want_built = field(rec, "built");
+        int newer = allow_upgrade && is_newer(have, have_built, want, want_built);
+        free(have); free(have_built); free(want); free(want_built);
         if (!newer) { free(rec); return 0; }
     }
 
@@ -849,7 +1016,7 @@ static int plan_install(const char *idx, const char *name, char order[][64], int
         char *sv3 = NULL;
         for (char *tok = strtok_r(dep, " ,", &sv3); tok; tok = strtok_r(NULL, " ,", &sv3)) {
             if (!strcmp(tok, "libc")) continue;
-            if (plan_install(idx, tok, order, norder, 0) != 0) { free(dep); return 1; }
+            if (plan_install(idx, tok, order, norder, is_system_pkg(tok)) != 0) { free(dep); return 1; }
         }
         free(dep);
     }
@@ -867,8 +1034,21 @@ static int apply_plan(const char *idx, char order[][64], int norder)
         }
         if (install_one(idx, order[i]) != 0) return 1;
     }
-    if (g_reboot_needed)
-        puts("\nthis touched the kernel or the base system -- reboot to run the new one");
+    if (g_reboot_needed) {
+        puts("\nthe system was updated -- a reboot is required to run it");
+        if (!g_root[0] && !g_assume_yes && isatty(0)) {
+            printf("Reboot now? [Y/n] ");
+            fflush(stdout);
+            char line[16] = {0};
+            if (fgets(line, sizeof line, stdin) && (line[0] == '\n' || line[0] == 'y' || line[0] == 'Y')) {
+                sync();
+                puts("rebooting...");
+                if (cervus_reboot() < 0) fputs("herd: reboot failed -- run 'reboot'\n", stderr);
+            } else {
+                puts("run 'reboot' when you are ready; herd will remind you until then");
+            }
+        }
+    }
     return 0;
 }
 
@@ -941,9 +1121,16 @@ static int cmd_upgrade(int argc, char **argv)
         char *have = installed_version(order[i]);
         char *rec = find_record(idx, order[i]);
         char *want = rec ? field(rec, "version") : NULL;
-        if (have) printf("  %-14s %s -> %s\n", order[i], have, want ? want : "?");
-        else      printf("  %-14s %s (new)\n", order[i], want ? want : "?");
-        free(have); free(want); free(rec);
+        char *wb = rec ? field(rec, "built") : NULL;
+        char when[64];
+        fmt_stamp(wb, when, sizeof when);
+        if (have && want && version_cmp(have, want) == 0)
+            printf("  %-16s %s, rebuilt %s\n", order[i], have, when);
+        else if (have)
+            printf("  %-16s %s -> %s (%s)\n", order[i], have, want ? want : "?", when);
+        else
+            printf("  %-16s %s (new)\n", order[i], want ? want : "?");
+        free(have); free(want); free(rec); free(wb);
     }
     if (!confirm("Go ahead?")) { puts("nothing done"); free(idx); return 1; }
 
@@ -1206,9 +1393,12 @@ int main(int argc, char **argv)
     if (argc < 2) { fputs(USAGE, stderr); return 1; }
 
     const char *cmd = argv[1];
+    if (!strcmp(cmd, "update") || !strcmp(cmd, "install") || !strcmp(cmd, "upgrade"))
+        warn_reboot_pending();
     if (!strcmp(cmd, "update"))  { if (elevate("update") != 0) return 1; return cmd_update(); }
     if (!strcmp(cmd, "search"))  { if (argc < 3) die("search needs a term"); return cmd_search(argv[2]); }
     if (!strcmp(cmd, "list"))    return cmd_list();
+    if (!strcmp(cmd, "status"))  { print_system_status(); return 0; }
     if (!strcmp(cmd, "available")) return cmd_available();
     if (!strcmp(cmd, "info"))    { if (argc < 3) die("info needs a name"); return cmd_info(argv[2]); }
     if (!strcmp(cmd, "install")) {

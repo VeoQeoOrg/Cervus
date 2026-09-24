@@ -28,6 +28,7 @@ int     dup(int fd);
 int     dup2(int oldfd, int newfd);
 int     pipe(int fds[2]);
 int     pipe2(int fds[2], int flags);
+void    sync(void);
 int     dup3(int oldfd, int newfd, int flags);
 int     unlink(const char *path);
 int     rmdir(const char *path);

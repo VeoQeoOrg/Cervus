@@ -169,8 +169,10 @@ mkdir -p "$RFS/usr/lib"
 printf '%s\n' "$ABI" > "$RFS/usr/lib/cervus-abi"
 green "libc ABI $ABI"
 
+SYSBUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
 register_pkg() {
-    name=$1; summary=$2; shift 2
+    name=$1; summary=$2; deps=$3; shift 3
     db="$RFS/var/lib/herd"
     mkdir -p "$db"
     : > "$db/$name.files"
@@ -186,17 +188,21 @@ name: $name
 version: $SYSVER
 arch: x86_64
 file: $name-$SYSVER-x86_64.tar.gz
-depends: libc
+depends: $deps
 abi: $ABI
+built: $SYSBUILT
 summary: $summary
 license: GPL-3.0
 PKGEOF
 }
 
-register_pkg cervus-base  "the Cervus command line: every utility in /bin and /apps" /bin /apps /usr/share/man
-register_pkg cervus-libc  "the Cervus C library, its headers and crt0"               /usr/lib /usr/include
-register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        /usr/share/fonts /usr/share/consolefonts /usr/share/media
-register_pkg kernel       "the Cervus kernel and init, for the boot partition"       /boot
+register_pkg cervus-base  "the Cervus command line: every utility in /bin and /apps" libc /bin /apps /usr/share/man
+register_pkg cervus-libc  "the Cervus C library, its headers and crt0"               libc /usr/lib /usr/include
+register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        libc /usr/share/fonts /usr/share/consolefonts /usr/share/media
+register_pkg kernel       "the Cervus kernel and init, for the boot partition"       libc /boot
+register_pkg cervus-system "all of Cervus: kernel, command line, library and assets" \
+    "cervus-base cervus-libc cervus-media kernel"
+printf 'Cervus %s\n' "$SYSVER" > "$RFS/var/lib/herd/system-release"
 green "registered the base system with herd as $SYSVER"
 
 green "packing $TAR"
