@@ -2,47 +2,56 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <cervus_util.h>
 
 extern char **environ;
 
 static const char USAGE[] =
-    "Usage: env [-i] [name=value ...] [name]\nPrint the environment, or look up NAME.\n\n  -i   start with empty environment (do not inherit)\n";
+    "Usage: env [-i] [-u name] [name=value ...] [command [argument ...]]\n"
+    "Run COMMAND in a changed environment, or print the environment.\n\n"
+    "  -i        start with an empty environment\n"
+    "  -u name   remove NAME from the environment\n";
 
-static void usage(void) { fputs(USAGE, stderr); }
+static char *g_empty[1];
 
 int main(int argc, char **argv)
 {
-    if (cervus_check_help_version(argc, argv, USAGE, "env")) return 0;
-    argc = cervus_end_of_options(argc, argv);
-    int keep = 1;
+    for (int i = 1; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
+        if (!strcmp(argv[i], "--")) break;
+        if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-?")) { fputs(USAGE, stdout); return 0; }
+        if (!strcmp(argv[i], "--version")) { puts("env (" CERVUS_VERSION_STR ")"); return 0; }
+    }
 
     int opt;
-    while ((opt = getopt(argc, argv, "i")) != -1) {
+    while ((opt = getopt(argc, argv, "iu:")) != -1) {
         switch (opt) {
-            case 'i': keep = 0; break;
-            default: usage(); return 1;
+            case 'i': environ = g_empty; break;
+            case 'u': unsetenv(optarg); break;
+            default: fputs(USAGE, stderr); return 125;
         }
+    }
+    if (optind < argc && !strcmp(argv[optind], "-")) {
+        environ = g_empty;
+        optind++;
     }
 
     while (optind < argc && strchr(argv[optind], '=')) {
-        putenv(argv[optind]);
+        if (putenv(argv[optind]) != 0) {
+            fprintf(stderr, "env: cannot set %s: %s\n", argv[optind], strerror(errno));
+            return 125;
+        }
         optind++;
     }
 
     if (optind < argc) {
-        const char *name = argv[optind];
-        const char *val = getenv(name);
-        if (val) { puts(val); return 0; }
-        fprintf(stderr, "env: variable not set: %s\n", name);
-        return 1;
+        execvp(argv[optind], argv + optind);
+        int err = errno;
+        fprintf(stderr, "env: %s: %s\n", argv[optind], strerror(err));
+        return err == ENOENT ? 127 : 126;
     }
 
-    if (keep && environ) {
-        int found = 0;
-        for (char **e = environ; *e; e++) { puts(*e); found++; }
-        if (!found)
-            fputs(C_GRAY "(no environment variables set)" C_RESET "\n", stdout);
-    }
+    if (environ)
+        for (char **e = environ; *e; e++) puts(*e);
     return 0;
 }
