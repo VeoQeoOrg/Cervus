@@ -78,12 +78,24 @@ static __inline__ double atof(const char *s)
     return strtod(s, (char **)0);
 }
 
+#ifndef __CERVUS_LOCALE_T
+#define __CERVUS_LOCALE_T
+typedef struct __cervus_locale *locale_t;
+#endif
+double      strtod_l(const char *s, char **end, locale_t loc);
+float       strtof_l(const char *s, char **end, locale_t loc);
+long double strtold_l(const char *s, char **end, locale_t loc);
+
 int      abs(int x);
 long     labs(long x);
 long long llabs(long long x);
 
 int      rand(void);
 void     srand(unsigned int seed);
+long     random(void);
+void     srandom(unsigned int seed);
+char    *initstate(unsigned int seed, char *state, size_t n);
+char    *setstate(char *state);
 
 char    *getenv(const char *name);
 int      putenv(char *str);

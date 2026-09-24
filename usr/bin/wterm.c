@@ -38,7 +38,7 @@ static void nb(int fd) { long fl = fcntl(fd, F_GETFL, 0); fcntl(fd, F_SETFL, fl 
 static int host_mode(int port) {
     const char *shell = getenv("SHELL"); if (!shell || !shell[0]) shell = "/bin/csh";
     int master, slave;
-    if (openpty(&master, &slave)) { printf("wterm: openpty failed\n"); return 1; }
+    if (openpty(&master, &slave, NULL, NULL, NULL)) { printf("wterm: openpty failed\n"); return 1; }
     { struct winsize ws; if (ioctl(1, TIOCGWINSZ, &ws) == 0) ioctl(master, TIOCSWINSZ, &ws); }
 
     pid_t pid = fork();

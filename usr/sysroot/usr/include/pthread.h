@@ -17,9 +17,18 @@ typedef struct {
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 
-typedef struct { volatile int state; int type; } pthread_mutex_t;
-typedef struct { int type; } pthread_mutexattr_t;
-#define PTHREAD_MUTEX_INITIALIZER { 0, 0 }
+typedef struct { volatile int state; int type; void *volatile owner; int count; } pthread_mutex_t;
+typedef struct { int type; int pshared; } pthread_mutexattr_t;
+#define PTHREAD_MUTEX_INITIALIZER { 0, 0, 0, 0 }
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP { 0, 1, 0, 0 }
+
+#define PTHREAD_MUTEX_NORMAL     0
+#define PTHREAD_MUTEX_RECURSIVE  1
+#define PTHREAD_MUTEX_ERRORCHECK 2
+#define PTHREAD_MUTEX_DEFAULT    PTHREAD_MUTEX_NORMAL
+
+#define PTHREAD_PROCESS_PRIVATE 0
+#define PTHREAD_PROCESS_SHARED  1
 
 typedef struct { volatile int seq; } pthread_cond_t;
 typedef struct { int unused; } pthread_condattr_t;
@@ -52,6 +61,12 @@ int  pthread_attr_setstacksize(pthread_attr_t *a, size_t sz);
 int  pthread_attr_getstacksize(const pthread_attr_t *a, size_t *sz);
 int  pthread_attr_setdetachstate(pthread_attr_t *a, int state);
 
+int  pthread_mutexattr_init(pthread_mutexattr_t *a);
+int  pthread_mutexattr_destroy(pthread_mutexattr_t *a);
+int  pthread_mutexattr_settype(pthread_mutexattr_t *a, int type);
+int  pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *type);
+int  pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared);
+int  pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared);
 int  pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a);
 int  pthread_mutex_destroy(pthread_mutex_t *m);
 int  pthread_mutex_lock(pthread_mutex_t *m);

@@ -16,6 +16,8 @@ typedef int wint_t;
 #endif
 
 size_t   wcslen(const wchar_t *s);
+int      wcwidth(wchar_t c);
+int      wcswidth(const wchar_t *s, size_t n);
 int      wcscmp(const wchar_t *a, const wchar_t *b);
 int      wcsncmp(const wchar_t *a, const wchar_t *b, size_t n);
 wchar_t *wcscpy(wchar_t *dst, const wchar_t *src);

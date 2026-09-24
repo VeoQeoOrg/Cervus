@@ -174,43 +174,116 @@ int pthread_attr_setdetachstate(pthread_attr_t *a, int state)
     return 0;
 }
 
-int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a)
+int pthread_mutexattr_init(pthread_mutexattr_t *a)
 {
-    (void)a;
-    if (!m) return EINVAL;
-    m->state = 0;
-    m->type = 0;
+    if (!a) return EINVAL;
+    a->type = PTHREAD_MUTEX_DEFAULT;
+    a->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
 }
+
+int pthread_mutexattr_destroy(pthread_mutexattr_t *a) { return a ? 0 : EINVAL; }
+
+int pthread_mutexattr_settype(pthread_mutexattr_t *a, int type)
+{
+    if (!a || type < PTHREAD_MUTEX_NORMAL || type > PTHREAD_MUTEX_ERRORCHECK) return EINVAL;
+    a->type = type;
+    return 0;
+}
+
+int pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *type)
+{
+    if (!a || !type) return EINVAL;
+    *type = a->type;
+    return 0;
+}
+
+int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
+{
+    if (!a || (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) return EINVAL;
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared)
+{
+    if (!a || !pshared) return EINVAL;
+    *pshared = a->pshared;
+    return 0;
+}
+
+int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a)
+{
+    if (!m) return EINVAL;
+    m->state = 0;
+    m->type = a ? a->type : PTHREAD_MUTEX_DEFAULT;
+    m->owner = 0;
+    m->count = 0;
+    return 0;
+}
+
 int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
+
+static void mutex_acquire(pthread_mutex_t *m)
+{
+    int zero = 0;
+    if (__atomic_compare_exchange_n(&m->state, &zero, 1, 0,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+        return;
+    for (;;) {
+        int prev = __atomic_exchange_n(&m->state, 2, __ATOMIC_ACQUIRE);
+        if (prev == 0) return;
+        futex_wait(&m->state, 2);
+    }
+}
 
 int pthread_mutex_lock(pthread_mutex_t *m)
 {
     if (!m) return EINVAL;
-    int zero = 0;
-    if (__atomic_compare_exchange_n(&m->state, &zero, 1, 0,
-                                    __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    if (m->type != PTHREAD_MUTEX_NORMAL) {
+        void *self = pthread_self();
+        if (m->owner == self) {
+            if (m->type == PTHREAD_MUTEX_ERRORCHECK) return EDEADLK;
+            m->count++;
+            return 0;
+        }
+        mutex_acquire(m);
+        m->owner = self;
+        m->count = 1;
         return 0;
-    for (;;) {
-        int prev = __atomic_exchange_n(&m->state, 2, __ATOMIC_ACQUIRE);
-        if (prev == 0) return 0;
-        futex_wait(&m->state, 2);
     }
+    mutex_acquire(m);
+    return 0;
 }
 
 int pthread_mutex_trylock(pthread_mutex_t *m)
 {
     if (!m) return EINVAL;
-    int zero = 0;
-    if (__atomic_compare_exchange_n(&m->state, &zero, 1, 0,
-                                    __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+    void *self = m->type != PTHREAD_MUTEX_NORMAL ? (void *)pthread_self() : 0;
+    if (self && m->owner == self) {
+        if (m->type == PTHREAD_MUTEX_ERRORCHECK) return EBUSY;
+        m->count++;
         return 0;
-    return EBUSY;
+    }
+    int zero = 0;
+    if (!__atomic_compare_exchange_n(&m->state, &zero, 1, 0,
+                                     __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+        return EBUSY;
+    if (self) {
+        m->owner = self;
+        m->count = 1;
+    }
+    return 0;
 }
 
 int pthread_mutex_unlock(pthread_mutex_t *m)
 {
     if (!m) return EINVAL;
+    if (m->type != PTHREAD_MUTEX_NORMAL) {
+        if (m->owner != (void *)pthread_self()) return EPERM;
+        if (--m->count > 0) return 0;
+        m->owner = 0;
+    }
     int prev = __atomic_exchange_n(&m->state, 0, __ATOMIC_RELEASE);
     if (prev == 2) futex_wake(&m->state, 1);
     return 0;

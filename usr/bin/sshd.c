@@ -23,7 +23,6 @@ static long syscall2(long n, unsigned long a, unsigned long b){(void)n;(void)a;(
 #define SYS_AUTH 570
 #endif
 void crypto_random(void *b, size_t n){ FILE*f=fopen("/dev/urandom","rb"); if(f){size_t r=fread(b,1,n,f);(void)r;fclose(f);} }
-#define openpty(m,s) openpty((m),(s),0,0,0)
 #endif
 
 #define TIOCSNONBLOCK 0x5481
@@ -409,7 +408,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
 
     if (!cmd) {
         int master, slave;
-        if (openpty(&master, &slave)) return -1;
+        if (openpty(&master, &slave, NULL, NULL, NULL)) return -1;
         { struct winsize ws; ws.ws_col=cols?cols:80; ws.ws_row=rows?rows:24; ws.ws_xpixel=0; ws.ws_ypixel=0; ioctl(master, TIOCSWINSZ, &ws); }
         pty_mode = 1;
         pid = fork();

@@ -12,11 +12,6 @@ extern "C" {
 
 #define CLOCK_MONOTONIC_TFD 1
 
-struct itimerspec {
-    struct timespec it_interval;
-    struct timespec it_value;
-};
-
 int timerfd_create(int clockid, int flags);
 int timerfd_settime(int fd, int flags, const struct itimerspec *new_value,
                     struct itimerspec *old_value);

@@ -5,6 +5,7 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <signal.h>
 
 #define WNOHANG    0x1
 #define WUNTRACED  0x2

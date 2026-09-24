@@ -28,6 +28,11 @@ struct timespec {
     long    tv_nsec;
 };
 
+struct itimerspec {
+    struct timespec it_interval;
+    struct timespec it_value;
+};
+
 time_t time(time_t *t);
 clock_t clock(void);
 
