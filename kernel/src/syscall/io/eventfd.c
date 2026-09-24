@@ -9,9 +9,11 @@
 #include <stdlib.h>
 
 #define EFD_NONBLOCK  0x800
+#define EFD_CLOEXEC   0x80000
 #define EFD_SEMAPHORE 1
 
 #define TFD_NONBLOCK  0x800
+#define TFD_CLOEXEC   0x80000
 
 typedef struct {
     uint64_t   count;
@@ -157,6 +159,7 @@ int64_t sys_eventfd(uint64_t initval, uint64_t flags, uint64_t unused)
 
     int fd = fd_alloc(t->fd_table, file, 0);
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (flags & EFD_CLOEXEC) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }
 
@@ -262,6 +265,7 @@ int64_t sys_timerfd_create(uint64_t clockid, uint64_t flags, uint64_t unused)
 
     int fd = fd_alloc(t->fd_table, file, 0);
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (flags & TFD_CLOEXEC) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }
 

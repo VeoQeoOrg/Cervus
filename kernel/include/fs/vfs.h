@@ -21,6 +21,7 @@
 #define O_APPEND    0x400
 #define O_DIRECTORY 0x10000
 #define O_NONBLOCK  0x800
+#define O_CLOEXEC   0x80000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1

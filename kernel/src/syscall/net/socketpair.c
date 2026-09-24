@@ -1,16 +1,15 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/fs/vfs.h"
-
-#define AF_UNIX     1
-#define SOCK_STREAM 1
+#include "../../../include/net/socket.h"
 
 extern int unix_make_pair(vnode_t **a_out, vnode_t **b_out);
 
 int64_t sys_socketpair(uint64_t domain, uint64_t type, uint64_t fds_ptr)
 {
     if (domain != AF_UNIX) return -EPROTO;
-    if ((type & 0xFF) != SOCK_STREAM) return -EPROTO;
+    int sflags = (int)(type & (SOCK_NONBLOCK | SOCK_CLOEXEC));
+    if ((type & ~(uint64_t)(SOCK_NONBLOCK | SOCK_CLOEXEC)) != SOCK_STREAM) return -EPROTO;
 
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
@@ -28,13 +27,24 @@ int64_t sys_socketpair(uint64_t domain, uint64_t type, uint64_t fds_ptr)
     }
     fa->vnode = va;
     fb->vnode = vb;
-    fa->flags = 2;
-    fb->flags = 2;
+    fa->flags = O_RDWR;
+    fb->flags = O_RDWR;
+    if (sflags & SOCK_NONBLOCK) {
+        fa->flags |= O_NONBLOCK;
+        fb->flags |= O_NONBLOCK;
+        unix_set_nonblock(va, 1);
+        unix_set_nonblock(vb, 1);
+    }
 
     int fd_a = fd_alloc(t->fd_table, fa, 0);
     if (fd_a < 0) { vfs_file_free(fa); vfs_file_free(fb); return -EMFILE; }
     int fd_b = fd_alloc(t->fd_table, fb, 0);
     if (fd_b < 0) { fd_close(t->fd_table, fd_a); vfs_file_free(fb); return -EMFILE; }
+
+    if (sflags & SOCK_CLOEXEC) {
+        fd_set_flags(t->fd_table, fd_a, FD_CLOEXEC);
+        fd_set_flags(t->fd_table, fd_b, FD_CLOEXEC);
+    }
 
     int pair[2] = { fd_a, fd_b };
     if (syscall_copy_to_user((void *)fds_ptr, pair, sizeof pair) < 0) {

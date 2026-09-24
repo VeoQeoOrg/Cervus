@@ -34,5 +34,6 @@ int64_t sys_open(uint64_t path_ptr, uint64_t flags, uint64_t mode)
 
     int newfd = fd_alloc(t->fd_table, file, 0);
     if (newfd < 0) { vfs_close(file); return -EMFILE; }
+    if (flags & O_CLOEXEC) fd_set_flags(t->fd_table, newfd, FD_CLOEXEC);
     return (int64_t)newfd;
 }

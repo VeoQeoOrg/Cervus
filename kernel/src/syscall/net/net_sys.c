@@ -49,14 +49,21 @@ static int parse_sockaddr(uint64_t uaddr, uint32_t *ip, uint16_t *port) {
 int64_t sys_socket(uint64_t domain, uint64_t type, uint64_t proto) {
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -ENOMEM;
+    int sflags = (int)(type & (SOCK_NONBLOCK | SOCK_CLOEXEC));
+    type &= ~(uint64_t)(SOCK_NONBLOCK | SOCK_CLOEXEC);
     vnode_t *vn = (domain == AF_UNIX) ? unix_new_vnode((int)type)
                                       : sock_new_vnode((int)domain, (int)type, (int)proto);
     if (!vn) return -EINVAL;
     vfs_file_t *f = vfs_file_alloc();
     if (!f) { vn->ops->unref(vn); return -ENOMEM; }
     f->vnode = vn; f->flags = O_RDWR; f->offset = 0; f->refcount = 1;
+    if (sflags & SOCK_NONBLOCK) {
+        f->flags |= O_NONBLOCK;
+        if (unix_is_vnode(vn)) unix_set_nonblock(vn, 1);
+    }
     int fd = fd_alloc(t->fd_table, f, 0);
     if (fd < 0) { vfs_file_free(f); return -EMFILE; }
+    if (sflags & SOCK_CLOEXEC) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }
 

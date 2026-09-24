@@ -11,6 +11,8 @@
 #define SOCK_STREAM  1
 #define SOCK_DGRAM   2
 #define SOCK_RAW     3
+#define SOCK_NONBLOCK 0x800
+#define SOCK_CLOEXEC  0x80000
 
 vnode_t *sock_new_vnode(int domain, int type, int proto);
 int      sock_is_vnode(const vnode_t *vn);
@@ -18,6 +20,7 @@ int      sock_is_vnode(const vnode_t *vn);
 vnode_t *unix_new_vnode(int type);
 int      unix_is_vnode(const vnode_t *vn);
 int      unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gid);
+void     unix_set_nonblock(vnode_t *vn, int on);
 int64_t  unix_op_bind(vnode_t *vn, const char *path);
 int64_t  unix_op_connect(vnode_t *vn, const char *path);
 int64_t  unix_op_listen(vnode_t *vn);

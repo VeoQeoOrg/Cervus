@@ -214,5 +214,6 @@ int64_t sys_signalfd(uint64_t ufd, uint64_t mask_ptr, uint64_t flags)
 
     int fd = fd_alloc(t->fd_table, file, 0);
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (flags & SFD_CLOEXEC) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
 }
