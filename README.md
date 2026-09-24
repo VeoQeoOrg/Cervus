@@ -122,7 +122,7 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 
 | Area | Highlights |
 |------|------------|
-| **Boot** | Limine bootloader, BIOS and UEFI, live ISO + persistent ext2 install |
+| **Boot** | Limine or GRUB, BIOS and UEFI, live ISO + persistent ext2 install |
 | **CPU / memory** | Long mode, 4-level paging, buddy + slab allocators, SMP across all cores |
 | **Scheduling** | Preemptive, per-priority ready queues, per-CPU state, SSE/FPU save/restore |
 | **Time** | TSC/LAPIC clocksource cascade with watchdog and drift recalibration |
@@ -130,14 +130,16 @@ log you can scroll through live (see [The Debug Monitor](#the-debug-monitor)).
 | **Filesystems** | VFS with ext2, FAT32, ISO9660, UDF, ramfs, initramfs, devfs, procfs |
 | **Storage** | AHCI/SATA, legacy ATA, NVMe; MBR and GPT partitions; block layer |
 | **USB** | xHCI, EHCI, UHCI; HID (keyboard/mouse) and Mass Storage class drivers |
-| **Networking** | e1000 + RTL8139 NICs, ARP/IPv4/ICMP/UDP/TCP, DHCP/DNS, BSD sockets; TLS 1.3, SSH (client + server), shared terminals — all from scratch |
+| **Networking** | e1000, RTL8139, RTL8169, virtio-net and Atheros L1C/L1E NICs; ARP/IPv4/ICMP/UDP/TCP, link-local IPv6, DHCP/DNS, BSD sockets; TLS 1.3, SSH (client + server), shared terminals — all from scratch |
 | **Crypto** | SHA-2, HMAC/HKDF/PBKDF2, ChaCha20-Poly1305, AES-128/256-GCM, X25519, Ed25519, RSA/ECDSA; RFC/NIST-verified |
-| **Input / video** | PS/2 keyboard + mouse, en/ru keymaps, framebuffer console, PSF2 fonts, UTF-8, PNG/JPEG/BMP/SVG/GIF image decoders |
+| **Input / video** | PS/2 keyboard + mouse, evdev devices, en/ru keymaps, framebuffer console, PSF2 and TrueType fonts, UTF-8, DRM/KMS, PNG/JPEG/BMP/SVG/GIF image decoders |
 | **Audio** | AC'97 and Intel HDA drivers, WAV/MP3 playback (`play`) |
 | **Security** | Multi-user, SHA-256 shadow passwords, `login`/`su`/`sudo`, POSIX permissions, capabilities, exec bit |
 | **Concurrency** | `splinterkernel` thread-level speculation engine |
 | **Resilience** | Process regeneration and kernel fault recovery |
-| **Userland** | `csh` shell, ~70 utilities, `neo` editor (multi-language highlighting + file tree), `cfm` file manager, `herd` package manager, and an `x86_64-cervus` cross toolchain |
+| **Userland** | `csh` shell, 130+ utilities, `neo` editor (multi-language highlighting + file tree), `cfm` file manager, `herd` package manager, shared libraries and `dlopen` |
+| **Desktop** | Wayland with the Weston desktop (from `herd`): panel, terminal, demo clients |
+| **Toolchain** | GCC 15 and binutils running on Cervus itself (C and C++), plus an `x86_64-cervus` cross toolchain for Linux |
 | **Terminals** | 12 virtual terminals, per-terminal login, a live debug monitor |
 
 ---
@@ -546,10 +548,13 @@ each user's files owned by that user.
 The network stack is written from scratch, entirely in-tree, from the NIC drivers
 up to TLS and SSH. Nothing is ported.
 
-- **Drivers:** Intel e1000 (`-device e1000`) and Realtek RTL8139, both over a
-  common `netdev` abstraction.
-- **Protocols:** Ethernet, ARP, IPv4, ICMP, UDP and TCP (client and server, with a
-  sliding send window), plus a DHCP client and a DNS resolver.
+- **Drivers:** Intel e1000 (`-device e1000`), Realtek RTL8139 and RTL8169,
+  virtio-net, and the Atheros L1C/L1E family found in many laptops, all over a
+  common `netdev` abstraction, plus a loopback interface.
+- **Protocols:** Ethernet, ARP, IPv4 with fragment reassembly, ICMP, UDP and TCP
+  (client and server, with a sliding send window), plus a DHCP client and a DNS
+  resolver. IPv6 works on the local link: link-local addresses, neighbour
+  discovery, ICMPv6, UDP and TCP.
 - **Sockets:** BSD sockets (`socket`/`bind`/`connect`/`listen`/`accept`/`sendto`/
   `recvfrom`) exposed as file descriptors. Interfaces are configured by DHCP or
   statically with `ifconfig eth0 <ip>`.
@@ -1138,13 +1143,29 @@ herd remove git          # take it away again
 Cervus is itself packaged — `cervus-base` (everything in `/bin`), `cervus-libc`,
 `cervus-media` and `kernel` are registered in herd's database when the image is
 built. So `herd upgrade` updates the operating system the same way it updates
-anything else, and tells you to reboot when it has replaced the kernel or part of
-the base system.
+anything else.
+
+An update is anything newer than what is installed: a higher version, or the
+same version published later — every package records the moment it was built,
+so a rebuilt package reaches machines without renumbering. `herd update` says
+how many updates are waiting, and it and `herd status` show which system is
+installed, when it was built and when it was last updated:
+
+```sh
+herd status
+system:        Cervus 0.0.2, built 2026-09-24 12:40 UTC
+last updated:  2026-09-24 13:05 UTC (today)
+```
+
+Replacing the kernel, the C library or the base system needs a reboot to take
+effect. herd offers to reboot straight away, and until the machine has been
+restarted it says so every time it runs.
 
 What is packaged today — GCC and binutils, Git, Lua, GNU make, SQLite, bzip2,
-zlib, NASM, TCC, Doom, sl, Wayland and Weston with the libraries under them
-(libinput, libevdev, mtdev, libdrm, pixman, libdisplay-info, libseat,
-libxkbcommon, libffi), and Cervus itself:
+zlib, NASM, TCC, Doom, sl, Wayland and the Weston desktop with the libraries
+under them (cairo, FreeType, fontconfig, libpng, expat, libinput, libevdev,
+mtdev, libdrm, pixman, libdisplay-info, libseat, libxkbcommon, libffi), and
+Cervus itself:
 
 <div align="center">
   <img src="assets/screenshots/herd-available.png" alt="herd available, listing the repository" width="760px">
@@ -1214,35 +1235,57 @@ forever.
 
 ### Weston
 
-The reference compositor runs too. `herd install weston` brings Weston 16 with
-its DRM backend, the pixman software renderer and the kiosk shell, and pulls in
-everything it stands on: libinput, libevdev, mtdev, libdrm, pixman,
-libdisplay-info, libseat and libxkbcommon with its keyboard layouts.
+The reference compositor runs too, with its full desktop. `herd install weston`
+brings Weston 16 with the DRM backend, the pixman software renderer and the
+desktop shell, and pulls in everything under them: libinput, libevdev, mtdev,
+libdrm, pixman, libdisplay-info, libseat, libxkbcommon with its keyboard
+layouts, and cairo with FreeType, fontconfig, libpng, zlib and expat for the
+shell's drawing and text.
 
 ```sh
 herd install weston
-startweston -- weston-simple-shm
+startweston
 ```
 
-`startweston` prepares the runtime directory and starts Weston on
-`/dev/dri/card0`. The program after `--` is launched as a client, and Weston
-exits when it does; Esc closes `weston-simple-shm` and brings the console back.
-
 <div align="center">
-  <img src="assets/screenshots/weston.png" alt="weston-simple-shm running under Weston on Cervus" width="760px">
+  <img src="assets/screenshots/weston-desktop.png" alt="The Weston desktop on Cervus: panel, terminal and a demo client" width="760px">
 </div>
 
+The panel along the top has launchers for `weston-terminal`, `weston-flower`
+and `weston-smoke` and a clock; the wallpaper is the Cervus one. The terminal
+runs your login shell on a pseudo-terminal, so everything from the console
+works inside it. Windows move and resize by their title bars, the keyboard
+switches between the US and Russian layouts with Alt+Shift, and
+Ctrl+Alt+Backspace leaves the desktop and brings the console back. The other
+demo clients (`weston-image`, `weston-clickdot`, `weston-eventdemo` and more)
+start from the terminal.
+
+`startweston` prepares the runtime directory and starts Weston on
+`/dev/dri/card0`. Settings live in `/etc/xdg/weston/weston.ini`; a
+`~/.config/weston.ini` takes precedence for one user. The kiosk shell is still
+there for a single full-screen program:
+
+```sh
+startweston --shell=kiosk -- weston-simple-shm
+```
+
 The ports carry small patches: libevdev, libinput and libdrm learn that
-`__cervus__` uses the Linux ioctl encoding and input headers, and Weston builds
-without cairo (which only its desktop shell and demo clients need) and exports
-the C library to the modules it loads. Beyond that they see the interfaces they
-would see on Linux. Input goes
-through the evdev devices (`/dev/input/event0` and `event1`), libinput finds
-them through `libudev-cervus`, a small libudev written for Cervus that describes
-what is in `/dev/dri` and `/dev/input`, and libseat opens them directly with its
-`noop` backend. Weston's modules are shared objects loaded with `dlopen`, and the
-libraries are shared as well, resolved by `/lib/ld-cervus.elf` through their
-`RUNPATH` and `LD_LIBRARY_PATH`.
+`__cervus__` uses the Linux ioctl encoding and input headers, and Weston's list
+of demo clients skips the two that need libraries Cervus does not package yet
+(pango for the editor, EGL for the subsurfaces demo). Beyond that they see the
+interfaces they would see on Linux. Input goes through the evdev devices
+(`/dev/input/event0` and `event1`), libinput finds them through
+`libudev-cervus`, a small libudev written for Cervus that describes what is in
+`/dev/dri` and `/dev/input`, and libseat opens them directly with its `noop`
+backend. Weston's modules are shared objects loaded with `dlopen`, every
+library is shared, and all of them use the one shared C library, resolved by
+`/lib/ld-cervus.elf`.
+
+Getting the desktop up meant fixing what a compositor and a terminal lean on:
+pseudo-terminals that answer `poll` and honour `O_NONBLOCK`, `O_CLOEXEC` and
+`SOCK_CLOEXEC` on every call that creates a descriptor, sockets that are really
+closed when the last process lets go of them, absolute-time `timerfd`s (libinput
+debounces mouse buttons with them), and a complete `strftime` for the clock.
 
 ### Mode setting (DRM/KMS)
 
@@ -1260,7 +1303,8 @@ takes.
 hand back its symbols. The loader at `/lib/ld-cervus.elf` does the work and
 passes a table of those calls to any program that asks for it; a program linked
 statically gets a plain error rather than a crash. Position independent
-executables and shared libraries link against `libcervus_pic.a`.
+executables and shared libraries use the shared C library, `/usr/lib/libc.so.1`,
+built from the same sources as the static `libcervus.a`.
 
 ---
 
@@ -1289,10 +1333,10 @@ algorithms all link and run. The resulting binary runs directly on Cervus:
 </p>
 
 Shared libraries and dynamically linked programs come out of the same compiler:
-`-shared` builds a library without the startup code or the C library in it, and
-`-pie` builds a program that `/lib/ld-cervus.elf` loads, linked against the
-position-independent C library and exporting it to whatever libraries it loads.
-Everything else stays static. `-pthread` is accepted, and C++ exceptions,
+`-shared` builds a library and `-pie` builds a program that `/lib/ld-cervus.elf`
+loads, and both link against the shared C library, `libc.so.1`, so every library
+in a process and the program itself share one `malloc`, one `stdio` and one
+`environ`. Everything else stays static. `-pthread` is accepted, and C++ exceptions,
 static constructors and destructors work in both kinds of program.
 
 ### Compiling on Cervus itself
@@ -1318,7 +1362,8 @@ It:
 1. Writes a partition table — an EFI system partition (FAT32) plus an ext2 root, with
    an optional swap area.
 2. Formats the partitions with the in-kernel formatters.
-3. Copies the system onto the root partition and installs the bootloader.
+3. Copies the system onto the root partition, together with the package
+   database, and installs the bootloader you pick: Limine or GRUB.
 4. Prompts for the **root password** and then creates one or more **user accounts**,
    each optionally granted sudo, seeding each home directory from `/etc/skel`.
 5. Offers the packages from the repository as a checklist, and installs the ticked
@@ -1493,7 +1538,8 @@ however, you can boot the live image, mount the installed partition, and edit
 `/etc/shadow` there (see the limitations note about physical access below).
 
 **Does Cervus have networking?**
-Not yet. See the [Roadmap](#roadmap).
+Yes, wired: DHCP, DNS, TCP and UDP, TLS 1.3, SSH, `curl`/`wget` and more, over
+the drivers listed under [Networking](#networking). Wi-Fi is not there yet.
 
 **Which real hardware does it run on?**
 Whatever has been implemented and tested. Coverage is limited and machine-specific;
@@ -1505,7 +1551,10 @@ test results and boot-log photos are welcome (see [Contributing](#contributing))
 
 Planned and in-progress directions, roughly in order of interest:
 
-- **Networking** — a stack with LAN and eventually Wi-Fi, `ping`, and downloads.
+- **Wi-Fi and more network hardware** — wireless drivers, more wired NICs, and
+  IPv6 beyond the local link (router advertisements, DHCPv6).
+- **Hardware-accelerated graphics** — the Wayland desktop draws with the
+  pixman software renderer today.
 - **Disk encryption** — encrypted volumes so data at rest is protected against
   someone who boots their own environment (see the limitations below).
 - **Stronger password hashing** — moving the key-derivation function toward a
@@ -1516,7 +1565,7 @@ Planned and in-progress directions, roughly in order of interest:
 
 ### Current limitations
 
-- There is **no networking** yet.
+- Networking is **wired only**, and IPv6 reaches only the local link.
 - There is **no disk encryption**. As with any system that stores data unencrypted,
   a person with physical access who boots their own environment can read the disk;
   user passwords protect the running system, not data at rest.
