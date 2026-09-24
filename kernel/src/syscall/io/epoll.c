@@ -74,11 +74,12 @@ static const vnode_ops_t EPOLL_OPS = {
     .unref = epoll_unref,
 };
 
-static epoll_set_t *epoll_from_fd(task_t *t, int fd)
+static vfs_file_t *epoll_file(task_t *t, int fd)
 {
     vfs_file_t *file = fd_get(t->fd_table, fd);
-    if (!file || !file->vnode || file->vnode->ops != &EPOLL_OPS) return NULL;
-    return (epoll_set_t *)file->vnode->fs_data;
+    if (!file) return NULL;
+    if (!file->vnode || file->vnode->ops != &EPOLL_OPS) { fd_put(file); return NULL; }
+    return file;
 }
 
 int64_t sys_epoll_create(uint64_t flags, uint64_t a, uint64_t b)
@@ -117,9 +118,6 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
     if (syscall_copy_from_user(&args, (void *)fd_and_event, sizeof args) < 0)
         return -EFAULT;
 
-    epoll_set_t *ep = epoll_from_fd(t, (int)epfd);
-    if (!ep) return -EBADF;
-
     epoll_event_t ev = { 0, 0 };
     if (op != EPOLL_CTL_DEL) {
         if (!args.evptr) return -EFAULT;
@@ -130,6 +128,10 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
     vfs_file_t *target = fd_get(t->fd_table, args.fd);
     if (target) fd_put(target);
     else if (op != EPOLL_CTL_DEL) return -EBADF;
+
+    vfs_file_t *epf = epoll_file(t, (int)epfd);
+    if (!epf) return -EBADF;
+    epoll_set_t *ep = (epoll_set_t *)epf->vnode->fs_data;
 
     uint64_t f = spinlock_acquire_irqsave(&ep->lock);
     int64_t rc = 0;
@@ -163,8 +165,11 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
     }
 
     spinlock_release_irqrestore(&ep->lock, f);
+    fd_put(epf);
     return rc;
 }
+
+static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, int maxevents, int timeout_ms);
 
 int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_timeout)
 {
@@ -177,12 +182,18 @@ int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_time
     if (args.maxevents <= 0) return -EINVAL;
     if (args.maxevents > EPOLL_MAX_WATCHED) args.maxevents = EPOLL_MAX_WATCHED;
 
-    epoll_set_t *ep = epoll_from_fd(t, (int)epfd);
-    if (!ep) return -EBADF;
+    vfs_file_t *epf = epoll_file(t, (int)epfd);
+    if (!epf) return -EBADF;
+    int64_t r = epoll_wait_on(t, (epoll_set_t *)epf->vnode->fs_data, events_ptr, args.maxevents, args.timeout_ms);
+    fd_put(epf);
+    return r;
+}
 
+static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, int maxevents, int timeout_ms)
+{
     uint64_t deadline = 0;
-    if (args.timeout_ms > 0)
-        deadline = sched_now_ns() + (uint64_t)args.timeout_ms * 1000000ULL;
+    if (timeout_ms > 0)
+        deadline = sched_now_ns() + (uint64_t)timeout_ms * 1000000ULL;
 
     epoll_event_t out[EPOLL_MAX_WATCHED];
 
@@ -194,7 +205,7 @@ int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_time
         memcpy(snapshot, ep->watched, sizeof snapshot);
         spinlock_release_irqrestore(&ep->lock, f);
 
-        for (int i = 0; i < EPOLL_MAX_WATCHED && n < args.maxevents; i++) {
+        for (int i = 0; i < EPOLL_MAX_WATCHED && n < maxevents; i++) {
             if (!snapshot[i].used) continue;
             vfs_file_t *file = fd_get(t->fd_table, snapshot[i].fd);
             if (!file) {
@@ -222,7 +233,7 @@ int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_time
             return n;
         }
 
-        if (args.timeout_ms == 0) return 0;
+        if (timeout_ms == 0) return 0;
         if (deadline && sched_now_ns() >= deadline) return 0;
 
         task_t *me = syscall_cur_task();

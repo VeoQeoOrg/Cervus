@@ -44,14 +44,8 @@ static int cmsg_space(int nfds)
     return (int)((raw + 7u) & ~7u);
 }
 
-int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
+static int64_t do_sendmsg(task_t *t, vfs_file_t *sock, uint64_t msg_ptr, uint64_t flags)
 {
-    task_t *t = syscall_cur_task();
-    if (!t || !t->fd_table) return -EINVAL;
-
-    vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
-    if (!sock || !sock->vnode) return -EBADF;
-
     int nonblock = ((flags & MSG_DONTWAIT) || (sock->flags & O_NONBLOCK)) ? 1 : 0;
     int is_unix  = unix_is_socket(sock->vnode);
 
@@ -79,7 +73,7 @@ int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
                 vfs_file_t *pass = fd_get(t->fd_table, fds[i]);
                 if (!pass) return -EBADF;
                 int64_t r = unix_send_fd(sock->vnode, pass);
-                if (r < 0) return r;
+                if (r < 0) { fd_put(pass); return r; }
             }
         }
     }
@@ -104,14 +98,8 @@ int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
     return total;
 }
 
-int64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
+static int64_t do_recvmsg(task_t *t, vfs_file_t *sock, uint64_t msg_ptr, uint64_t flags)
 {
-    task_t *t = syscall_cur_task();
-    if (!t || !t->fd_table) return -EINVAL;
-
-    vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
-    if (!sock || !sock->vnode) return -EBADF;
-
     int nonblock = ((flags & MSG_DONTWAIT) || (sock->flags & O_NONBLOCK)) ? 1 : 0;
     int is_unix  = unix_is_socket(sock->vnode);
 
@@ -176,4 +164,26 @@ int64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
     if (syscall_copy_to_user((void *)msg_ptr, &back, sizeof back) < 0) return -EFAULT;
 
     return total;
+}
+
+int64_t sys_sendmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EINVAL;
+    vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
+    if (!sock) return -EBADF;
+    int64_t r = sock->vnode ? do_sendmsg(t, sock, msg_ptr, flags) : -EBADF;
+    fd_put(sock);
+    return r;
+}
+
+int64_t sys_recvmsg(uint64_t fd, uint64_t msg_ptr, uint64_t flags)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EINVAL;
+    vfs_file_t *sock = fd_get(t->fd_table, (int)fd);
+    if (!sock) return -EBADF;
+    int64_t r = sock->vnode ? do_recvmsg(t, sock, msg_ptr, flags) : -EBADF;
+    fd_put(sock);
+    return r;
 }
