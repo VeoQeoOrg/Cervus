@@ -530,11 +530,28 @@ static int readline_edit(char *buf, int maxlen) {
         sync_line(buf, len, pos);
 
         if (c == '\x1b') {
-            char s[4];
-            if (read(0, &s[0], 1) <= 0) continue;
-            if (s[0] != '[') continue;
-            if (read(0, &s[1], 1) <= 0) continue;
-            if (s[1] == 'A') {
+            char intro;
+            if (read(0, &intro, 1) <= 0) continue;
+            if (intro != '[' && intro != 'O') continue;
+            char params[16];
+            int pn = 0;
+            char fin = 0;
+            for (;;) {
+                char ch;
+                if (read(0, &ch, 1) <= 0) break;
+                if (ch >= 0x40 && ch <= 0x7E) { fin = ch; break; }
+                if (pn < (int)sizeof params - 1) params[pn++] = ch;
+            }
+            params[pn] = '\0';
+            if (!fin || fin == 'R') continue;
+            int key = atoi(params);
+            if (fin == '~') {
+                if (key == 1 || key == 7) fin = 'H';
+                else if (key == 4 || key == 8) fin = 'F';
+                else if (key == 3) fin = 'X';
+                else continue;
+            }
+            if (fin == 'A') {
                 if (hidx == 0) strncpy(saved, buf, RL_LINE_MAX - 1);
                 if (hidx < g_hist_count) {
                     hidx++;
@@ -545,9 +562,7 @@ static int readline_edit(char *buf, int maxlen) {
                         replace_line(buf, &len, &pos, h, hl);
                     }
                 }
-                continue;
-            }
-            if (s[1] == 'B') {
+            } else if (fin == 'B') {
                 if (hidx > 0) {
                     hidx--;
                     const char *h = hidx == 0 ? saved : readline_history_get(hidx);
@@ -556,9 +571,7 @@ static int readline_edit(char *buf, int maxlen) {
                     if (hl > maxlen - 1) hl = maxlen - 1;
                     replace_line(buf, &len, &pos, h, hl);
                 }
-                continue;
-            }
-            if (s[1] == 'C') {
+            } else if (fin == 'C') {
                 if (pos < len) { pos = utf8_next(buf, len, pos); cursor_to(pos); }
                 else if (g_suggest_cb) {
                     const char *sug = NULL;
@@ -568,23 +581,19 @@ static int readline_edit(char *buf, int maxlen) {
                             insert_str(buf, &len, &pos, maxlen, sug, sl);
                     }
                 }
-                continue;
-            }
-            if (s[1] == 'D') { if (pos > 0) { pos = utf8_prev(buf, pos); cursor_to(pos); } continue; }
-            if (s[1] == 'H') { pos = 0; cursor_to(0); continue; }
-            if (s[1] == 'F') { pos = len; cursor_to(len); continue; }
-            if (s[1] >= '1' && s[1] <= '6') {
-                char tilde; read(0, &tilde, 1);
-                if (tilde != '~') continue;
-                if (s[1] == '3' && pos < len) {
-                    int old_len = len;
-                    int nx = utf8_next(buf, len, pos);
-                    int del = nx - pos;
-                    for (int i = pos; i < len - del; i++) buf[i] = buf[i + del];
-                    len -= del; buf[len] = '\0';
-                    redraw(buf, pos, len, old_len, pos);
-                } else if (s[1] == '1') { pos = 0; cursor_to(0); }
-                else if (s[1] == '4') { pos = len; cursor_to(len); }
+            } else if (fin == 'D') {
+                if (pos > 0) { pos = utf8_prev(buf, pos); cursor_to(pos); }
+            } else if (fin == 'H') {
+                pos = 0; cursor_to(0);
+            } else if (fin == 'F') {
+                pos = len; cursor_to(len);
+            } else if (fin == 'X' && pos < len) {
+                int old_len = len;
+                int nx = utf8_next(buf, len, pos);
+                int del = nx - pos;
+                for (int i = pos; i < len - del; i++) buf[i] = buf[i + del];
+                len -= del; buf[len] = '\0';
+                redraw(buf, pos, len, old_len, pos);
             }
             continue;
         }
