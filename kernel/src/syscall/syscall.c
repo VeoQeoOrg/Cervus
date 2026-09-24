@@ -498,9 +498,21 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         return -ENOSYS;
     }
 
+    if (t) {
+        t->cur_syscall = nr;
+        t->cur_syscall_args[0] = a1;
+        t->cur_syscall_args[1] = a2;
+        t->cur_syscall_args[2] = a3;
+        t->cur_syscall_args[3] = a4;
+        t->cur_syscall_args[4] = a5;
+        t->cur_syscall_args[5] = a6;
+        t->in_syscall = true;
+    }
+
     int64_t ret = syscall_table[nr](a1, a2, a3, a4, a5, a6);
 
     task_t *me = syscall_cur_task();
+    if (me) me->in_syscall = false;
     if (me && me->pending_kill) {
         me->pending_kill = false;
         me->exit_code = 130;

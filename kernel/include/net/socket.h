@@ -21,6 +21,7 @@ vnode_t *unix_new_vnode(int type);
 int      unix_is_vnode(const vnode_t *vn);
 int      unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gid);
 void     unix_set_nonblock(vnode_t *vn, int on);
+int      unix_describe(const vnode_t *vn, char *buf, size_t max);
 int64_t  unix_op_bind(vnode_t *vn, const char *path);
 int64_t  unix_op_connect(vnode_t *vn, const char *path);
 int64_t  unix_op_listen(vnode_t *vn);

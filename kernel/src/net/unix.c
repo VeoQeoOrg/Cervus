@@ -8,6 +8,7 @@
 #include "../../include/syscall/errno.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define UNIX_PATH_MAX 108
 #define UNIX_BUFSZ    16384
@@ -81,6 +82,16 @@ static vnode_t *unix_make(int type, unix_sock_t **out) {
 vnode_t *unix_new_vnode(int type) {
     if (type != SOCK_STREAM) return NULL;
     return unix_make(type, NULL);
+}
+
+int unix_describe(const vnode_t *vn, char *buf, size_t max) {
+    if (!unix_is_vnode(vn)) return -1;
+    unix_sock_t *s = vn->fs_data;
+    uint64_t f = spinlock_acquire_irqsave(&g_ulock);
+    int n = snprintf(buf, max, "unix state=%d self=%p peer=%p gone=%d queued=%u fds=%d",
+                     s->state, (void *)s, (void *)s->peer, s->peer_gone, rb_count(s), s->fic);
+    spinlock_release_irqrestore(&g_ulock, f);
+    return n;
 }
 
 int unix_is_socket(const vnode_t *vn) {

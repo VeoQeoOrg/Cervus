@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "../../include/fs/vfs.h"
+#include "../../include/net/socket.h"
 #include "../../include/fs/procfs.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/smp/smp.h"
@@ -228,6 +229,18 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
         (unsigned long long)t->total_runtime);
 }
 
+static int gen_pid_syscall(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    if (!t->in_syscall) return snprintf(buf, max, "running\n");
+    return snprintf(buf, max, "%llu 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n",
+        (unsigned long long)t->cur_syscall,
+        (unsigned long long)t->cur_syscall_args[0], (unsigned long long)t->cur_syscall_args[1],
+        (unsigned long long)t->cur_syscall_args[2], (unsigned long long)t->cur_syscall_args[3],
+        (unsigned long long)t->cur_syscall_args[4], (unsigned long long)t->cur_syscall_args[5],
+        (unsigned long long)t->user_rsp, (unsigned long long)t->user_saved_rip);
+}
+
 static int gen_pid_cmdline(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
@@ -262,8 +275,20 @@ static int gen_pid_fd(uint32_t pid, char *buf, size_t max) {
         int type = -1, oflags = 0;
         if (vfs_fd_info(t->fd_table, fd, &type, &oflags) < 0) continue;
         const char *acc = ((oflags & 3) == 0) ? "r" : ((oflags & 3) == 1) ? "w" : "rw";
-        int w = snprintf(buf + off, max - off, "%d %s %s\n",
-                         fd, vnode_type_name(type), acc);
+        char what[160] = "";
+        int refs = 0;
+        void *vn = NULL;
+        vfs_file_t *file = fd_get(t->fd_table, fd);
+        if (file) {
+            refs = file->refcount - 1;
+            vn = file->vnode;
+            if (file->vnode) unix_describe(file->vnode, what, sizeof what);
+            fd_put(file);
+        }
+        int cloexec = (fd_get_flags(t->fd_table, fd) & FD_CLOEXEC) != 0;
+        int w = snprintf(buf + off, max - off, "%d %s %s vnode=%p refs=%d%s %s\n",
+                         fd, vnode_type_name(type), acc, vn, refs,
+                         cloexec ? " cloexec" : "", what);
         if (w < 0) break;
         off += (size_t)w;
     }
@@ -287,6 +312,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "cmdline", gen_pid_cmdline },
     { "stat",    gen_pid_stat    },
     { "fd",      gen_pid_fd      },
+    { "syscall", gen_pid_syscall },
     { "puzzle",  gen_pid_puzzle  },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))

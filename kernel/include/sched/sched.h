@@ -167,6 +167,10 @@ typedef struct task {
 
     struct task_mapping *mappings;
     int io_nonblock;
+
+    volatile bool in_syscall;
+    uint64_t cur_syscall;
+    uint64_t cur_syscall_args[6];
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
