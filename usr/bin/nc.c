@@ -3,35 +3,74 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
+#include <errno.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define TIOCSNONBLOCK 0x5481
+static int write_all(int fd, const char *p, size_t n)
+{
+    while (n) {
+        long w = write(fd, p, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        p += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
 
-static void tty_nonblock(int on) { int v = on; ioctl(0, TIOCSNONBLOCK, &v); }
+static int send_all(int sock, const char *p, size_t n)
+{
+    while (n) {
+        long w = send(sock, p, n, 0);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN) {
+                struct pollfd pw = { sock, POLLOUT, 0 };
+                poll(&pw, 1, 1000);
+                continue;
+            }
+            return -1;
+        }
+        p += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
 
 static void relay(int sock) {
-    long fl = fcntl(sock, F_GETFL, 0);
-    fcntl(sock, F_SETFL, fl | O_NONBLOCK);
-    tty_nonblock(1);
-
-    char buf[2048];
-    int stdin_open = 1;
-    for (;;) {
-        long n = recv(sock, buf, sizeof(buf), 0);
-        if (n > 0) write(1, buf, (size_t)n);
-        else if (n == 0) break;
-
-        if (stdin_open) {
-            long m = read(0, buf, sizeof(buf));
-            if (m > 0) send(sock, buf, (size_t)m, 0);
-            else if (m == 0) stdin_open = 0;
+    char buf[4096];
+    int sock_open = 1, stdin_open = 1;
+    int interactive = isatty(0);
+    while (sock_open || stdin_open) {
+        struct pollfd fds[2] = { { sock_open ? sock : -1, POLLIN, 0 }, { stdin_open ? 0 : -1, POLLIN, 0 } };
+        if (poll(fds, 2, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
         }
-        usleep(5000);
+        if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+            long n = recv(sock, buf, sizeof(buf), 0);
+            if (n > 0) {
+                if (write_all(1, buf, (size_t)n) < 0) break;
+            } else if (n == 0 || (errno != EAGAIN && errno != EINTR)) {
+                sock_open = 0;
+                if (interactive) break;
+            }
+        }
+        if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+            long m = read(0, buf, sizeof(buf));
+            if (m > 0) {
+                if (send_all(sock, buf, (size_t)m) < 0) break;
+            } else if (m == 0 || (errno != EAGAIN && errno != EINTR)) {
+                stdin_open = 0;
+                shutdown(sock, SHUT_WR);
+            }
+        }
     }
-    tty_nonblock(0);
 }
 
 int main(int argc, char **argv) {
@@ -56,11 +95,11 @@ int main(int argc, char **argv) {
         a.sin_addr.s_addr = INADDR_ANY;
         if (bind(s, (struct sockaddr *)&a, sizeof(a)) < 0) { printf("nc: bind failed\n"); return 1; }
         if (udp) {
-            printf("nc: listening on udp %d\n", port);
+            fprintf(stderr, "nc: listening on udp %d\n", port);
             relay(s);
         } else {
             if (listen(s, 1) < 0) { printf("nc: listen failed\n"); return 1; }
-            printf("nc: listening on tcp %d\n", port);
+            fprintf(stderr, "nc: listening on tcp %d\n", port);
             struct sockaddr_in cli;
             socklen_t cl = sizeof(cli);
             int c = accept(s, (struct sockaddr *)&cli, &cl);
