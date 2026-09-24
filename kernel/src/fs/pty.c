@@ -1,4 +1,5 @@
 #include "../../include/fs/vfs.h"
+#include "../../include/fs/poll.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/syscall/syscall_internal.h"
@@ -122,7 +123,7 @@ static int64_t pty_do_write(pty_t *p, pty_ring *out, int *other_open, int nonblo
 
 static int64_t pty_master_read(vnode_t *n, void *buf, size_t len, uint64_t off) {
     (void)off; pty_t *p = n->fs_data;
-    return pty_do_read(p, &p->s2m, &p->s_open, p->m_nonblock, buf, len);
+    return pty_do_read(p, &p->s2m, &p->s_open, p->m_nonblock || vfs_io_nonblock(), buf, len);
 }
 static void pty_signal_foreground(pty_t *p, int sig) {
     extern task_t *task_find_by_pid(uint32_t pid);
@@ -139,7 +140,7 @@ static int64_t pty_master_write(vnode_t *n, const void *buf, size_t len, uint64_
     uint32_t lflag = tio_flag(p, TIO_OFF_LFLAG);
     uint8_t intr = p->termios[TIO_OFF_CC + TIO_VINTR];
     if (!(lflag & TIO_ISIG) || intr == 0)
-        return pty_do_write(p, &p->m2s, &p->s_open, p->m_nonblock, buf, len);
+        return pty_do_write(p, &p->m2s, &p->s_open, p->m_nonblock || vfs_io_nonblock(), buf, len);
 
     const char *src = buf;
     size_t consumed = 0;
@@ -148,7 +149,7 @@ static int64_t pty_master_write(vnode_t *n, const void *buf, size_t len, uint64_
         while (consumed + run < len && (uint8_t)src[consumed + run] != intr) run++;
 
         if (run) {
-            int64_t w = pty_do_write(p, &p->m2s, &p->s_open, p->m_nonblock,
+            int64_t w = pty_do_write(p, &p->m2s, &p->s_open, p->m_nonblock || vfs_io_nonblock(),
                                      src + consumed, run);
             if (w < 0) return consumed ? (int64_t)consumed : w;
             consumed += (size_t)w;
@@ -165,7 +166,7 @@ static int64_t pty_slave_read(vnode_t *n, void *buf, size_t len, uint64_t off) {
     (void)off; pty_t *p = n->fs_data;
     task_t *me = syscall_cur_task();
     if (me) p->slave_pid = me->pid;
-    return pty_do_read(p, &p->m2s, &p->m_open, p->s_nonblock, buf, len);
+    return pty_do_read(p, &p->m2s, &p->m_open, p->s_nonblock || vfs_io_nonblock(), buf, len);
 }
 
 static int64_t pty_slave_write(vnode_t *n, const void *buf, size_t len, uint64_t off) {
@@ -173,7 +174,7 @@ static int64_t pty_slave_write(vnode_t *n, const void *buf, size_t len, uint64_t
 
     uint32_t oflag = tio_flag(p, TIO_OFF_OFLAG);
     if (!(oflag & TIO_OPOST) || !(oflag & TIO_ONLCR))
-        return pty_do_write(p, &p->s2m, &p->m_open, p->s_nonblock, buf, len);
+        return pty_do_write(p, &p->s2m, &p->m_open, p->s_nonblock || vfs_io_nonblock(), buf, len);
 
     const char *src = buf;
     size_t consumed = 0;
@@ -187,7 +188,7 @@ static int64_t pty_slave_write(vnode_t *n, const void *buf, size_t len, uint64_t
             tmp[n++] = c;
             took++;
         }
-        int64_t w = pty_do_write(p, &p->s2m, &p->m_open, p->s_nonblock, tmp, (size_t)n);
+        int64_t w = pty_do_write(p, &p->s2m, &p->m_open, p->s_nonblock || vfs_io_nonblock(), tmp, (size_t)n);
         if (w < 0) return consumed ? (int64_t)consumed : w;
         if (w >= n) { consumed += took; continue; }
 
@@ -230,6 +231,22 @@ static int pty_stat(vnode_t *n, vfs_stat_t *out) {
     out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
     return 0;
 }
+static int pty_poll_end(vnode_t *n, int is_master) {
+    pty_t *p = n->fs_data;
+    pty_ring *in  = is_master ? &p->s2m : &p->m2s;
+    pty_ring *out = is_master ? &p->m2s : &p->s2m;
+    int other_open = is_master ? p->s_open : p->m_open;
+    int r = 0;
+    uint64_t f = spinlock_acquire_irqsave(&p->lock);
+    if (ring_count(in) > 0) r |= POLLIN;
+    if (!other_open) r |= POLLIN | POLLHUP;
+    else if (ring_free(out) > 0) r |= POLLOUT;
+    spinlock_release_irqrestore(&p->lock, f);
+    return r;
+}
+static int pty_master_poll(vnode_t *n, int events) { (void)events; return pty_poll_end(n, 1); }
+static int pty_slave_poll(vnode_t *n, int events) { (void)events; return pty_poll_end(n, 0); }
+
 static void pty_ref(vnode_t *n) { (void)n; }
 
 static void pty_close_end(vnode_t *n, int is_master) {
@@ -252,11 +269,11 @@ static void pty_slave_unref(vnode_t *n) { pty_close_end(n, 0); }
 
 static const vnode_ops_t pty_master_ops = {
     .read = pty_master_read, .write = pty_master_write, .ioctl = pty_master_ioctl,
-    .stat = pty_stat, .ref = pty_ref, .unref = pty_master_unref,
+    .stat = pty_stat, .ref = pty_ref, .unref = pty_master_unref, .poll = pty_master_poll,
 };
 static const vnode_ops_t pty_slave_ops = {
     .read = pty_slave_read, .write = pty_slave_write, .ioctl = pty_slave_ioctl,
-    .stat = pty_stat, .ref = pty_ref, .unref = pty_slave_unref,
+    .stat = pty_stat, .ref = pty_ref, .unref = pty_slave_unref, .poll = pty_slave_poll,
 };
 
 int64_t sys_openpty(uint64_t ufds) {
