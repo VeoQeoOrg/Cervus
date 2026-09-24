@@ -50,7 +50,8 @@ DEFINE_IRQ(0x20, timer_handler)
     if (cpu == 0) ticks++;
     else tick_stall_check(cpu);
 
-    if (g_ctrlc_pending && __sync_bool_compare_and_swap(&g_ctrlc_pending, 1, 0)) {
+    extern int vt_kbd_muted(void);
+    if (g_ctrlc_pending && __sync_bool_compare_and_swap(&g_ctrlc_pending, 1, 0) && !vt_kbd_muted()) {
         extern bool tty_has_isig_global(void);
         extern int  vt_active(void);
         extern void vt_write(int vt, const char *buf, size_t len);

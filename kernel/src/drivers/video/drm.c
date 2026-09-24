@@ -78,6 +78,7 @@ extern void vt_fb_acquire(int vt);
 extern void vt_fb_release(int vt);
 extern void vt_fb_set_owner_task(task_t *t);
 extern int  vt_fb_may_draw(int vt);
+extern void vt_kbd_off(int vt);
 extern void console_force_full_redraw(void);
 
 static dumb_t     g_dumb[DRM_MAX_DUMB];
@@ -163,6 +164,7 @@ static int scanout(uint32_t fb_id)
         task_t *t = syscall_cur_task();
         vt_fb_acquire(t ? t->ctty : 0);
         vt_fb_set_owner_task(t);
+        vt_kbd_off(t ? t->ctty : 0);
         g_scanout_on = 1;
     }
 

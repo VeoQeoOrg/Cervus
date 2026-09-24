@@ -81,6 +81,13 @@ static int ensure_grid(int n) {
 
 static int   g_fb_owner_vt = -1;
 static void *g_fb_owner_task;
+static int   g_kbd_off_vt = -1;
+
+void vt_kbd_off(int vt) { g_kbd_off_vt = vt; }
+
+int vt_kbd_muted(void) {
+    return g_inited && g_kbd_off_vt >= 0 && g_kbd_off_vt == g_active;
+}
 
 int vt_fb_owner(void) { return g_fb_owner_vt; }
 
@@ -90,6 +97,7 @@ void vt_fb_acquire(int vt) {
 }
 
 void vt_fb_release(int vt) {
+    if (g_kbd_off_vt == vt) g_kbd_off_vt = -1;
     if (g_fb_owner_vt != vt) return;
     g_fb_owner_vt = -1;
     g_fb_owner_task = NULL;
@@ -263,6 +271,7 @@ void console_input_char(char c) {
         monitor_input(c);
         return;
     }
+    if (vt_kbd_muted()) return;
     tty_vt_input(g_active, c);
 }
 
