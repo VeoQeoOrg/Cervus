@@ -14,6 +14,9 @@
 
 #define TFD_NONBLOCK  0x800
 #define TFD_CLOEXEC   0x80000
+#define TFD_TIMER_ABSTIME 1
+
+extern int64_t clock_realtime_offset_ns(void);
 
 typedef struct {
     uint64_t   count;
@@ -27,6 +30,7 @@ typedef struct {
     uint64_t   expires_ns;
     uint64_t   interval_ns;
     uint64_t   ticks;
+    int        clockid;
     int        nonblock;
     spinlock_t lock;
     task_t    *waiter;
@@ -242,12 +246,13 @@ static const vnode_ops_t TFD_OPS = {
 
 int64_t sys_timerfd_create(uint64_t clockid, uint64_t flags, uint64_t unused)
 {
-    (void)clockid; (void)unused;
+    (void)unused;
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
     timerfd_t *tm = calloc(1, sizeof *tm);
     if (!tm) return -ENOMEM;
+    tm->clockid  = (int)clockid;
     tm->nonblock = (flags & TFD_NONBLOCK) ? 1 : 0;
     tm->lock = (spinlock_t)SPINLOCK_INIT;
 
@@ -269,15 +274,27 @@ int64_t sys_timerfd_create(uint64_t clockid, uint64_t flags, uint64_t unused)
     return fd;
 }
 
-int64_t sys_timerfd_settime(uint64_t fd, uint64_t value_ptr, uint64_t old_ptr)
+static uint64_t timerfd_deadline(timerfd_t *tm, uint64_t flags, uint64_t value_ns)
 {
-    task_t *t = syscall_cur_task();
-    if (!t || !t->fd_table) return -EINVAL;
+    if (!value_ns) return 0;
+    if (!(flags & TFD_TIMER_ABSTIME)) return sched_now_ns() + value_ns;
+    int64_t at = (int64_t)value_ns;
+    if (tm->clockid == 0 || tm->clockid == 5) at -= clock_realtime_offset_ns();
+    return at > 0 ? (uint64_t)at : 1;
+}
 
-    vfs_file_t *file = fd_get(t->fd_table, (int)fd);
-    if (!file || !file->vnode || file->vnode->ops != &TFD_OPS) return -EINVAL;
-    timerfd_t *tm = (timerfd_t *)file->vnode->fs_data;
+static void timerfd_current(timerfd_t *tm, uint64_t out[4])
+{
+    uint64_t now = sched_now_ns();
+    uint64_t left = (tm->expires_ns > now) ? tm->expires_ns - now : 0;
+    out[0] = tm->interval_ns / 1000000000ULL;
+    out[1] = tm->interval_ns % 1000000000ULL;
+    out[2] = left / 1000000000ULL;
+    out[3] = left % 1000000000ULL;
+}
 
+static int64_t timerfd_settime_on(timerfd_t *tm, uint64_t flags, uint64_t value_ptr, uint64_t old_ptr)
+{
     uint64_t spec[4];
     if (syscall_copy_from_user(spec, (void *)value_ptr, sizeof spec) < 0) return -EFAULT;
 
@@ -286,18 +303,55 @@ int64_t sys_timerfd_settime(uint64_t fd, uint64_t value_ptr, uint64_t old_ptr)
 
     uint64_t f = spinlock_acquire_irqsave(&tm->lock);
     if (old_ptr) {
-        uint64_t now = sched_now_ns();
-        uint64_t left = (tm->expires_ns > now) ? tm->expires_ns - now : 0;
-        uint64_t out[4] = { tm->interval_ns / 1000000000ULL,
-                            tm->interval_ns % 1000000000ULL,
-                            left / 1000000000ULL, left % 1000000000ULL };
+        uint64_t out[4];
+        timerfd_current(tm, out);
         spinlock_release_irqrestore(&tm->lock, f);
         if (syscall_copy_to_user((void *)old_ptr, out, sizeof out) < 0) return -EFAULT;
         f = spinlock_acquire_irqsave(&tm->lock);
     }
     tm->interval_ns = interval;
-    tm->expires_ns  = initial ? sched_now_ns() + initial : 0;
+    tm->expires_ns  = timerfd_deadline(tm, flags, initial);
     wake_one(&tm->waiter);
     spinlock_release_irqrestore(&tm->lock, f);
     return 0;
+}
+
+int64_t sys_timerfd_settime2(uint64_t fd, uint64_t flags, uint64_t value_ptr, uint64_t old_ptr)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EINVAL;
+
+    vfs_file_t *file = fd_get(t->fd_table, (int)fd);
+    if (!file) return -EBADF;
+    int64_t r = -EINVAL;
+    if (file->vnode && file->vnode->ops == &TFD_OPS)
+        r = timerfd_settime_on((timerfd_t *)file->vnode->fs_data, flags, value_ptr, old_ptr);
+    fd_put(file);
+    return r;
+}
+
+int64_t sys_timerfd_settime(uint64_t fd, uint64_t value_ptr, uint64_t old_ptr)
+{
+    return sys_timerfd_settime2(fd, 0, value_ptr, old_ptr);
+}
+
+int64_t sys_timerfd_gettime(uint64_t fd, uint64_t cur_ptr)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EINVAL;
+    if (!cur_ptr) return -EFAULT;
+
+    vfs_file_t *file = fd_get(t->fd_table, (int)fd);
+    if (!file) return -EBADF;
+    int64_t r = -EINVAL;
+    if (file->vnode && file->vnode->ops == &TFD_OPS) {
+        timerfd_t *tm = (timerfd_t *)file->vnode->fs_data;
+        uint64_t out[4];
+        uint64_t f = spinlock_acquire_irqsave(&tm->lock);
+        timerfd_current(tm, out);
+        spinlock_release_irqrestore(&tm->lock, f);
+        r = syscall_copy_to_user((void *)cur_ptr, out, sizeof out) < 0 ? -EFAULT : 0;
+    }
+    fd_put(file);
+    return r;
 }

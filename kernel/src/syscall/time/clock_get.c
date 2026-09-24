@@ -97,6 +97,13 @@ int64_t clock_realtime_sec(void)
     return g_rtc_base_sec + (int64_t)(delta / 1000000000ULL);
 }
 
+int64_t clock_realtime_offset_ns(void)
+{
+    _ensure_rtc_base();
+    if (!g_rtc_initialized) return 0;
+    return g_rtc_base_sec * 1000000000LL - (int64_t)g_rtc_base_ns;
+}
+
 int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
 {
     if (!ts_ptr) return -EINVAL;

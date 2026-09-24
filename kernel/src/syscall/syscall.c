@@ -181,6 +181,8 @@ extern int64_t sys_futex_wait(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_eventfd(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_timerfd_create(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_timerfd_settime(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timerfd_settime2(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timerfd_gettime(uint64_t, uint64_t);
 extern int64_t sys_epoll_create(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_epoll_ctl(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_epoll_wait(uint64_t, uint64_t, uint64_t);
@@ -276,6 +278,7 @@ W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 W3(sys_futex_wait)  W3(sys_futex_wake)
 W3(sys_eventfd)     W3(sys_timerfd_create)  W3(sys_timerfd_settime)
+W4(sys_timerfd_settime2) W2(sys_timerfd_gettime)
 W3(sys_epoll_create) W3(sys_epoll_ctl)      W3(sys_epoll_wait)
 W3(sys_socketpair)  W3(sys_memfd_create)
 W3(sys_sendmsg)     W3(sys_recvmsg)
@@ -423,6 +426,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_EVENTFD]           = _sys_eventfd,
     [SYS_TIMERFD_CREATE]    = _sys_timerfd_create,
     [SYS_TIMERFD_SETTIME]   = _sys_timerfd_settime,
+    [SYS_TIMERFD_SETTIME2]  = _sys_timerfd_settime2,
+    [SYS_TIMERFD_GETTIME]   = _sys_timerfd_gettime,
     [SYS_EPOLL_CREATE]      = _sys_epoll_create,
     [SYS_EPOLL_CTL]         = _sys_epoll_ctl,
     [SYS_EPOLL_WAIT]        = _sys_epoll_wait,

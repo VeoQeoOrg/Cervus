@@ -64,6 +64,8 @@ extern "C" {
 #define SYS_MEMFD_CREATE     89
 #define SYS_SENDMSG          90
 #define SYS_RECVMSG          91
+#define SYS_TIMERFD_SETTIME2 92
+#define SYS_TIMERFD_GETTIME  93
 
 #define SYS_UNLINK          100
 #define SYS_RMDIR           101
