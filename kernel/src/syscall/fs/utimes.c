@@ -24,6 +24,5 @@ int64_t sys_utimes(uint64_t path_ptr, uint64_t atime, uint64_t mtime,
     }
 
     int r = vfs_set_times(path, at, mt);
-    if (r == 0) vfs_sync_all();
     return r;
 }

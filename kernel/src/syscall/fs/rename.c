@@ -63,6 +63,5 @@ int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
             vnode_unref(dir);
         }
     }
-    vfs_sync_all();
     return 0;
 }

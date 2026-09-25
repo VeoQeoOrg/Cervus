@@ -151,6 +151,7 @@ static void load_elf_module(void) {
     atl1c_start_worker();
     atl1e_start_worker();
     net_start_worker();
+    vfs_start_syncd();
     timer_start_recal_task();
 
     kernel_stage_echo_off();

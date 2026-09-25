@@ -86,12 +86,21 @@ int vfs_mount_fs(const char *path, vnode_t *fs_root,
 
 void vfs_sync_all(void) {
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-        if (g_mounts[i].used && g_mounts[i].fs_priv) {
-            serial_printf("[VFS] sync_all: flushing mount '%s'\n", g_mounts[i].path);
-            if (g_mounts[i].sync)
-                g_mounts[i].sync(g_mounts[i].fs_priv);
-        }
+        if (g_mounts[i].used && g_mounts[i].fs_priv && g_mounts[i].sync)
+            g_mounts[i].sync(g_mounts[i].fs_priv);
     }
+}
+
+static void vfs_syncd(void *arg) {
+    (void)arg;
+    for (;;) {
+        task_sleep_ms(5000);
+        vfs_sync_all();
+    }
+}
+
+void vfs_start_syncd(void) {
+    task_create("syncd", vfs_syncd, NULL, 1);
 }
 
 int vfs_umount(const char *path) {
@@ -560,7 +569,6 @@ int vfs_chmod(const char *path, uint32_t mode) {
     node->mode = (node->mode & ~0777u) | (mode & 0777u);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
-    vfs_sync_all();
     return 0;
 }
 
@@ -569,7 +577,6 @@ int vfs_fchmod(vfs_file_t *file, uint32_t mode) {
     vnode_t *node = file->vnode;
     node->mode = (node->mode & ~0777u) | (mode & 0777u);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
-    vfs_sync_all();
     return 0;
 }
 
@@ -579,7 +586,6 @@ int vfs_fchown(vfs_file_t *file, uint32_t uid, uint32_t gid) {
     if (uid != 0xFFFFFFFFu) node->uid = uid;
     if (gid != 0xFFFFFFFFu) node->gid = gid;
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
-    vfs_sync_all();
     return 0;
 }
 
@@ -592,7 +598,6 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
     if (gid != 0xFFFFFFFFu) node->gid = gid;
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
-    vfs_sync_all();
     return 0;
 }
 

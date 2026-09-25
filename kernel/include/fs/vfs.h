@@ -230,6 +230,7 @@ int         fd_set_flags(fd_table_t *table, int fd, int flags);
 int         fd_get_flags(const fd_table_t *table, int fd);
 int         vfs_fd_info (const fd_table_t *table, int fd, int *out_type, int *out_oflags);
 void vfs_sync_all(void);
+void vfs_start_syncd(void);
 int vfs_init_stdio(void *task_ptr);
 
 typedef struct {

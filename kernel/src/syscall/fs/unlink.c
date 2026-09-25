@@ -56,7 +56,6 @@ static int64_t remove_entry(uint64_t path_ptr, int want_dir)
     if (!dir->ops || !dir->ops->unlink) { vnode_unref(dir); return -ENOSYS; }
     r = dir->ops->unlink(dir, name);
     vnode_unref(dir);
-    if (r == 0) vfs_sync_all();
     return r;
 }
 
