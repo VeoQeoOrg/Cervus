@@ -17,20 +17,22 @@ int main(int argc, char **argv) {
     if (!shell[0]) strcpy(shell, "/bin/csh");
 
     if (getuid() == 0) {
-        if (syscall1(SYS_SETUID, (uint64_t)uid) != 0) {
+        session_runtime_dir(uid, gid);
+        if (setgid(gid) != 0 || syscall1(SYS_SETUID, (uint64_t)uid) != 0) {
             printf("su: cannot switch to '%s'\n", user);
             return 1;
         }
     } else {
         char pw[256];
         if (pw_getpass("Password: ", pw, sizeof(pw)) < 0) return 1;
-        long r = syscall2(SYS_AUTH, (uint64_t)uid, (uint64_t)(uintptr_t)pw);
+        long r = syscall3(SYS_AUTH, (uint64_t)uid, (uint64_t)(uintptr_t)pw, AUTH_SET_GID | gid);
         memset(pw, 0, sizeof(pw));
         if (r != 0) { printf("su: authentication failure\n"); return 1; }
     }
 
     setenv("USER", user, 1);
     setenv("HOME", home, 1);
+    session_runtime_dir(uid, gid);
 
     char *sh = shell;
     char *sargv[] = { sh, NULL };

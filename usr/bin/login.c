@@ -96,7 +96,9 @@ int main(void) {
         if (has_pw) {
             char pw[256];
             if (pw_getpass("Password: ", pw, sizeof(pw)) < 0) continue;
-            ok = (known && syscall2(SYS_AUTH, (uint64_t)uid, (uint64_t)(uintptr_t)pw) == 0);
+            if (known) session_runtime_dir(uid, gid);
+            ok = (known && syscall3(SYS_AUTH, (uint64_t)uid, (uint64_t)(uintptr_t)pw,
+                                        AUTH_SET_GID | AUTH_CLAIM_SEAT | gid) == 0);
             memset(pw, 0, sizeof(pw));
         } else if (known && uid == 0) {
             fputs("\x1b[1;33mWARNING: root has no password. Set one with 'passwd'.\x1b[0m\n", stdout);
@@ -119,6 +121,7 @@ int main(void) {
         setenv("LOGNAME", name, 1);
         setenv("HOME", home[0] ? home : "/", 1);
         setenv("SHELL", shell, 1);
+        session_runtime_dir(uid, gid);
         chdir(home[0] ? home : "/");
 
         char *argv[] = { shell, NULL };

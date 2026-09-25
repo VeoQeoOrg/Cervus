@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <pwutil.h>
 #include <string.h>
 #include <fcntl.h>
 #include <termios.h>
@@ -242,6 +243,7 @@ static void boot_setup(void) {
 
     read_default_shell();
     setenv("SHELL", g_shell, 1);
+    session_runtime_dir(0, 0);
     setenv("TERM", "cervus-vt", 1);
 }
 

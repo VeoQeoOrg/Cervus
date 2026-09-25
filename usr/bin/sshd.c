@@ -351,7 +351,8 @@ static int authenticate(ssh_t *s, char *user_out, uint32_t *uid_out, uint32_t *g
             char pass[256]; { size_t pn=pl>255?255:pl; memcpy(pass,s->pkt+i,pn); pass[pn]=0; } i+=pl;
             uint32_t uid=0,gid=0; char home[128]="/",shell[128]="/bin/csh";
             if (pw_lookup_name(user,&uid,&gid,home,sizeof home,shell,sizeof shell)==0) {
-                if (syscall2(SYS_AUTH,(uint64_t)uid,(uint64_t)(uintptr_t)pass)==0) {
+                session_runtime_dir(uid,gid);
+                if (syscall3(SYS_AUTH,(uint64_t)uid,(uint64_t)(uintptr_t)pass,AUTH_SET_GID|gid)==0) {
                     ok=1;
                     strcpy(user_out,user); *uid_out=uid; *gid_out=gid;
                     strcpy(home_out,home[0]?home:"/"); strcpy(shell_out,shell[0]?shell:"/bin/csh");
@@ -418,6 +419,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             dup2(slave,0); dup2(slave,1); dup2(slave,2);
             if (slave > 2) close(slave);
             close(s->fd);
+            session_runtime_dir(uid, gid);
             if (gid) setgid(gid);
             if (uid) setuid(uid);
             if (home[0]) chdir(home);
@@ -440,6 +442,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
             close(inpipe[0]); close(inpipe[1]); close(outpipe[0]); close(outpipe[1]);
             close(s->fd);
             setsid();
+            session_runtime_dir(uid, gid);
             if (gid) setgid(gid);
             if (uid) setuid(uid);
             if (home[0]) chdir(home);

@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#define AUTH_SET_GID    (1ULL << 32)
+#define AUTH_CLAIM_SEAT (1ULL << 33)
+
 int pw_getpass(const char *prompt, char *buf, int cap);
 int pw_lookup_name(const char *name, uint32_t *uid, uint32_t *gid,
                    char *home, int home_cap, char *shell, int shell_cap);
@@ -13,5 +16,7 @@ void priv_argv(int argc, char **argv);
 int  priv_is_root(void);
 void priv_denied(const char *path);
 int  priv_require_root(const char *doing);
+
+int  session_runtime_dir(uint32_t uid, uint32_t gid);
 
 #endif
