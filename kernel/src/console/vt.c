@@ -165,9 +165,16 @@ void vt_switch(int n) {
     }
     spinlock_release_irqrestore(&g_lock, f);
 
+    extern void seat_vt_switched(int vt);
+    extern void input_release_held(void);
+    input_release_held();
+    seat_vt_switched(n);
+
     if (owns) {
+        extern void drm_redraw_last(void);
         extern struct task *task_find_foreground(void);
         extern void signal_send_subtree(struct task *root, int sig);
+        drm_redraw_last();
         struct task *fg = task_find_foreground();
         if (fg) signal_send_subtree(fg, 28);
     }

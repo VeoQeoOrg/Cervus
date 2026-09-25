@@ -584,6 +584,9 @@ __attribute__((noreturn)) void task_exit(void)
     extern void shm_task_exit(task_t *who);
     shm_task_exit(me);
 
+    extern void seat_task_exit(uint32_t pid);
+    seat_task_exit(me->pid);
+
     task_t* init = task_find_by_pid(1);
     if (init && init != me) {
         uint64_t _cf = spinlock_acquire_irqsave(&children_lock);

@@ -1,3 +1,4 @@
+#include "../../../include/security/auth.h"
 #include "../../../include/drm/drm_uapi.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/devfs.h"
@@ -78,6 +79,7 @@ extern void vt_fb_acquire(int vt);
 extern void vt_fb_release(int vt);
 extern void vt_fb_set_owner_task(task_t *t);
 extern int  vt_fb_may_draw(int vt);
+extern int  vt_fb_owner(void);
 extern void vt_kbd_off(int vt);
 extern void console_force_full_redraw(void);
 
@@ -90,6 +92,8 @@ static spinlock_t g_drm_lock = SPINLOCK_INIT;
 static vnode_t    g_card_node;
 static int        g_master;
 static int        g_scanout_on;
+static uint32_t   g_scan_uid;
+static uint32_t   g_last_fb;
 
 typedef struct {
     int      used;
@@ -165,8 +169,11 @@ static int scanout(uint32_t fb_id)
         vt_fb_acquire(t ? t->ctty : 0);
         vt_fb_set_owner_task(t);
         vt_kbd_off(t ? t->ctty : 0);
+        g_scan_uid = t ? t->uid : 0;
         g_scanout_on = 1;
     }
+    g_last_fb = fb_id;
+    if (!vt_fb_may_draw(vt_fb_owner())) return 0;
 
     uint32_t rows = f->height < (uint32_t)dst->height ? f->height : (uint32_t)dst->height;
     uint32_t cols = f->width  < (uint32_t)dst->width  ? f->width  : (uint32_t)dst->width;
@@ -195,8 +202,14 @@ static int scanout(uint32_t fb_id)
     return 0;
 }
 
+void drm_redraw_last(void)
+{
+    if (g_scanout_on && g_last_fb) scanout(g_last_fb);
+}
+
 void drm_forget_scanout(void)
 {
+    g_last_fb = 0;
     g_scanout_on = 0;
     g_crtc.valid = 0;
     g_crtc.fb_id = 0;
@@ -208,6 +221,7 @@ void drm_stop_scanout(void)
     task_t *t = syscall_cur_task();
     int vt = t ? t->ctty : 0;
     vt_fb_release(vt);
+    g_last_fb = 0;
     g_scanout_on = 0;
     g_crtc.valid = 0;
     g_crtc.fb_id = 0;
@@ -853,6 +867,10 @@ static int64_t ioctl_atomic(struct drm_mode_atomic *a)
 static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
 {
     (void)n;
+    if (!seat_may_use()) {
+        task_t *t = syscall_cur_task();
+        if (!g_scanout_on || !t || t->uid != g_scan_uid) return -EACCES;
+    }
     if (!arg && req != DRM_IOCTL_SET_MASTER && req != DRM_IOCTL_DROP_MASTER)
         return -EINVAL;
 
@@ -897,7 +915,9 @@ static int drm_stat(vnode_t *n, vfs_stat_t *out)
 {
     memset(out, 0, sizeof *out);
     out->st_ino  = n->ino;
-    out->st_mode = 0666 | 0020000;
+    out->st_type = VFS_NODE_CHARDEV;
+    out->st_mode = 0600 | 0020000;
+    out->st_uid  = seat_owner_uid();
     out->st_nlink = 1;
     return 0;
 }
@@ -921,7 +941,7 @@ void drm_init(void)
 
     memset(&g_card_node, 0, sizeof g_card_node);
     g_card_node.type     = VFS_NODE_CHARDEV;
-    g_card_node.mode     = 0666;
+    g_card_node.mode     = 0600;
     g_card_node.ino      = 700;
     g_card_node.rdev     = vfs_makedev(226, 0);
     g_card_node.ops      = &drm_ops;

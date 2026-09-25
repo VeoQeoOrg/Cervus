@@ -1,3 +1,5 @@
+#include "../../../include/security/auth.h"
+#include "../../../include/sched/capabilities.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/devfs.h"
 #include "../../../include/fs/poll.h"
@@ -54,6 +56,8 @@ _Static_assert(sizeof(input_event_t) == 24, "input_event layout");
 
 typedef struct {
     input_event_t ring[EV_RING];
+    uint32_t      owner[EV_RING];
+    int16_t       owner_vt[EV_RING];
     uint64_t      seq;
     spinlock_t    lock;
     task_t       *waiters[EV_WAITERS];
@@ -80,19 +84,49 @@ static void ev_stamp(input_event_t *e, uint16_t type, uint16_t code, int32_t val
     e->value = value;
 }
 
-static void ev_push(evdev_t *d, uint16_t type, uint16_t code, int32_t value)
+static void ev_push_ex(evdev_t *d, uint16_t type, uint16_t code, int32_t value, int track)
 {
     task_t *wake[EV_WAITERS];
     uint64_t f = spinlock_acquire_irqsave(&d->lock);
     ev_stamp(&d->ring[d->seq % EV_RING], type, code, value);
+    d->owner[d->seq % EV_RING] = seat_owner_uid();
+    d->owner_vt[d->seq % EV_RING] = (int16_t)seat_active_vt();
     d->seq++;
-    if (type == EV_KEY && code <= KEY_MAX) {
+    if (track && type == EV_KEY && code <= KEY_MAX) {
         if (value) d->key_state[code / 8] |=  (uint8_t)(1u << (code % 8));
         else       d->key_state[code / 8] &= (uint8_t)~(1u << (code % 8));
     }
     for (int i = 0; i < EV_WAITERS; i++) { wake[i] = d->waiters[i]; d->waiters[i] = NULL; }
     spinlock_release_irqrestore(&d->lock, f);
     for (int i = 0; i < EV_WAITERS; i++) if (wake[i]) task_unblock(wake[i]);
+}
+
+static void ev_push(evdev_t *d, uint16_t type, uint16_t code, int32_t value)
+{
+    ev_push_ex(d, type, code, value, 1);
+}
+
+static void ev_release_held(evdev_t *d)
+{
+    uint8_t held[KEY_BYTES];
+    uint64_t f = spinlock_acquire_irqsave(&d->lock);
+    memcpy(held, d->key_state, sizeof held);
+    spinlock_release_irqrestore(&d->lock, f);
+    int any = 0;
+    for (unsigned code = 0; code <= KEY_MAX; code++) {
+        if (!(held[code / 8] & (1u << (code % 8)))) continue;
+        ev_push_ex(d, EV_KEY, (uint16_t)code, 0, 0);
+        any = 1;
+    }
+    if (any) ev_push_ex(d, EV_SYN, SYN_REPORT, 0, 0);
+}
+
+void input_release_held(void)
+{
+    ev_release_held(&g_kbd);
+    ev_release_held(&g_mouse);
+    ev_release_held(&g_ev_kbd);
+    ev_release_held(&g_ev_mouse);
 }
 
 void input_report_key(int keycode, int pressed)
@@ -188,8 +222,12 @@ static int64_t ev_read_file(vfs_file_t *file, void *buf, size_t len)
             ev_stamp(&dst[got++], EV_SYN, SYN_DROPPED, 0);
             pos = d->seq;
         }
+        uint32_t uid = me ? me->uid : UID_ROOT;
+        int vt = me ? me->ctty : -1;
         while (got < want && pos < d->seq) {
-            dst[got++] = d->ring[pos % EV_RING];
+            uint32_t k = (uint32_t)(pos % EV_RING);
+            if (uid == UID_ROOT || (d->owner[k] == uid && d->owner_vt[k] == vt))
+                dst[got++] = d->ring[k];
             pos++;
         }
         file->offset = pos;
@@ -324,6 +362,7 @@ static int64_t ev_ioctl(vnode_t *n, uint64_t req, void *arg)
         return (int64_t)size;
     case 0x18: {
         if (!arg) return -EFAULT;
+        if (!seat_may_use()) { memset(arg, 0, size); return (int64_t)size; }
         uint64_t f = spinlock_acquire_irqsave(&d->lock);
         size_t r = put_bits(arg, size, d->key_state, KEY_BYTES);
         spinlock_release_irqrestore(&d->lock, f);
@@ -369,6 +408,7 @@ static int ev_stat(vnode_t *n, vfs_stat_t *out)
     out->st_ino   = n->ino;
     out->st_type  = VFS_NODE_CHARDEV;
     out->st_mode  = 0020000 | (n->mode & 0777);
+    out->st_uid   = seat_owner_uid();
     out->st_nlink = 1;
     return 0;
 }
@@ -402,11 +442,11 @@ static vnode_t g_mouse_node = {
     .fs_data = &g_mouse, .refcount = 1, .ino = 801,
 };
 static vnode_t g_ev_kbd_node = {
-    .type = VFS_NODE_CHARDEV, .mode = 0660, .ops = &EV_OPS,
+    .type = VFS_NODE_CHARDEV, .mode = 0600, .ops = &EV_OPS,
     .fs_data = &g_ev_kbd, .refcount = 1, .ino = 13 * 256 + 64, .rdev = 13 * 256 + 64,
 };
 static vnode_t g_ev_mouse_node = {
-    .type = VFS_NODE_CHARDEV, .mode = 0660, .ops = &EV_OPS,
+    .type = VFS_NODE_CHARDEV, .mode = 0600, .ops = &EV_OPS,
     .fs_data = &g_ev_mouse, .refcount = 1, .ino = 13 * 256 + 65, .rdev = 13 * 256 + 65,
 };
 

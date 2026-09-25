@@ -154,7 +154,7 @@ extern int64_t sys_keymap_config(uint64_t, uint64_t);
 extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_puzzle(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_spec(uint64_t, uint64_t, uint64_t);
-extern int64_t sys_auth(uint64_t, uint64_t);
+extern int64_t sys_auth(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_sudo(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_passwd_set(uint64_t, uint64_t);
 extern int64_t sys_socket(uint64_t, uint64_t, uint64_t);
@@ -265,7 +265,7 @@ W2(sys_keymap_config)
 W4(sys_klog)
 W3(sys_puzzle)
 W3(sys_spec)
-W2(sys_auth)
+W3(sys_auth)
 W3(sys_sudo)
 W2(sys_passwd_set)
 W3(sys_socket)      W3(sys_bind)       W3(sys_connect)
