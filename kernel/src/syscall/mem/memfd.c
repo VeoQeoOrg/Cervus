@@ -7,11 +7,10 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define MEMFD_MAX_PAGES 8192
-
 typedef struct {
     void     **pages;
     size_t     npages;
+    size_t     cap;
     size_t     size;
     char       name[32];
     spinlock_t lock;
@@ -26,16 +25,21 @@ int memfd_is(const vnode_t *n)
 
 static int memfd_grow(memfd_t *m, size_t want_pages)
 {
-    if (want_pages > MEMFD_MAX_PAGES) return -ENOMEM;
     if (want_pages <= m->npages) return 0;
+    if (want_pages > pmm_get_usable_pages() / 2) return -ENOMEM;
 
-    void **np = calloc(want_pages, sizeof(void *));
-    if (!np) return -ENOMEM;
-    if (m->pages) {
-        memcpy(np, m->pages, m->npages * sizeof(void *));
-        free(m->pages);
+    if (want_pages > m->cap) {
+        size_t cap = m->cap ? m->cap : 16;
+        while (cap < want_pages) cap *= 2;
+        void **np = calloc(cap, sizeof(void *));
+        if (!np) return -ENOMEM;
+        if (m->pages) {
+            memcpy(np, m->pages, m->npages * sizeof(void *));
+            free(m->pages);
+        }
+        m->pages = np;
+        m->cap = cap;
     }
-    m->pages = np;
 
     for (size_t i = m->npages; i < want_pages; i++) {
         void *pg = pmm_alloc_zero(1);
@@ -127,8 +131,14 @@ static int memfd_truncate(vnode_t *n, uint64_t new_size)
         if (new_size < m->size) {
             size_t keep = (size_t)new_size;
             size_t page = keep / 0x1000, in = keep % 0x1000;
-            if (page < m->npages && m->pages[page] && in)
+            size_t last = (m->size + 0xFFF) / 0x1000;
+            if (last > m->npages) last = m->npages;
+            if (in && page < m->npages && m->pages[page]) {
                 memset((uint8_t *)m->pages[page] + in, 0, 0x1000 - in);
+                page++;
+            }
+            for (; page < last; page++)
+                if (m->pages[page]) memset(m->pages[page], 0, 0x1000);
         }
         m->size = (size_t)new_size;
         n->size = new_size;
