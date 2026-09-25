@@ -5,6 +5,7 @@ int64_t sys_setuid(uint64_t u)
 {
     task_t *t = syscall_cur_task();
     if (!t) return -ESRCH;
+    if (u == t->uid) return 0;
     if (t->uid != UID_ROOT && !cap_has(t->capabilities, CAP_SETUID)) return -EPERM;
     if (u > 65535) return -EINVAL;
     t->uid = (uint32_t)u;
