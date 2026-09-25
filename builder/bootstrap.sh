@@ -11,7 +11,7 @@ LIMINE_VERSION=12.9.0
 LIMINE_TARBALL=limine-binary.tar.gz
 LIMINE_URL="https://github.com/limine-bootloader/limine/releases/download/v${LIMINE_VERSION}/${LIMINE_TARBALL}"
 
-dep_clone() {  # $1=name  $2=url  $3=commit
+dep_clone() {
     dir="limine-tools/$1"
     [ -d "$dir" ] && { say "$1 present"; return 0; }
     say "cloning $1"

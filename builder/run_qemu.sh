@@ -112,7 +112,7 @@ if $UEFI; then
     green "UEFI/OVMF: $ovmf"
 fi
 
-mk_disk() {  # $1=file
+mk_disk() {
     if $FRESH && [ -f "$1" ]; then yellow "[disk] removing $1"; rm -f "$1"; fi
     if [ ! -f "$1" ]; then
         green "Creating $1 (256MB)..."

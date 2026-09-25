@@ -1,11 +1,3 @@
-/* This NIC was written in The Cinder Programming Language
- * Description: Child of C and Rust but raised by C
- * Link: https://github.com/z3nnix/cinder
- *
- * Note: This driver follows the existing C driver style
- * like polling, i32 error codes to minimize FFI friction
- */
-
 use "std/x86.cnd";
 
 extern fn ne2000_register(probe: fn(*void) -> i32);

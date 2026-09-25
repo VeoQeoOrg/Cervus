@@ -145,7 +145,7 @@ EOF
 chmod 0644 "$RFS/etc/skel/welcome.txt"
 
 mkdir -p "$RFS/boot"
-copy_boot() {  # $1=src $2=dst $3=required
+copy_boot() {
     if [ -f "$1" ]; then
         cp "$1" "$2"; green "$1 -> $2"
     elif [ "$3" = required ]; then
