@@ -2,6 +2,7 @@
 #include "../../include/smp/percpu.h"
 #include "../../include/memory/vmm.h"
 #include "../../include/fs/vfs.h"
+#include "../../include/memory/pmm.h"
 #include <string.h>
 
 task_t *syscall_cur_task(void)
@@ -197,4 +198,22 @@ int syscall_perm_parent(const char *kpath, int want)
     vfs_stat_t st;
     if (vfs_stat(parent, &st) != 0) return -EACCES;
     return perm_check(st.st_mode, st.st_uid, st.st_gid, t->uid, t->gid, want) ? 0 : -EACCES;
+}
+
+#define SYSCALL_BOUNCE_MAX (256 * 1024)
+
+void *syscall_bounce_get(size_t want, size_t *cap, void *stackbuf, size_t stack_cap)
+{
+    if (want > SYSCALL_BOUNCE_MAX) want = SYSCALL_BOUNCE_MAX;
+    for (size_t sz = want; sz > stack_cap; sz /= 4) {
+        void *b = kmalloc(sz);
+        if (b) { *cap = sz; return b; }
+    }
+    *cap = stack_cap;
+    return stackbuf;
+}
+
+void syscall_bounce_put(void *buf, void *stackbuf)
+{
+    if (buf && buf != stackbuf) kfree(buf);
 }

@@ -5,7 +5,7 @@
 int64_t sys_read(uint64_t fd, uint64_t buf_ptr, uint64_t count)
 {
     if (count == 0) return 0;
-    if (count > 65536) count = 65536;
+    if (count > (16u << 20)) count = 16u << 20;
 
     task_t *t = syscall_cur_task();
     if (!t) return -ESRCH;
@@ -16,18 +16,21 @@ int64_t sys_read(uint64_t fd, uint64_t buf_ptr, uint64_t count)
     if (!file) return -EBADF;
 
     char kbuf[4096];
+    size_t cap = 0;
+    char *bb = syscall_bounce_get(count, &cap, kbuf, sizeof(kbuf));
     size_t total = 0;
     int64_t err = 0;
     while (total < count) {
         size_t chunk = count - total;
-        if (chunk > sizeof(kbuf)) chunk = sizeof(kbuf);
-        int64_t r = vfs_read(file, kbuf, chunk);
+        if (chunk > cap) chunk = cap;
+        int64_t r = vfs_read(file, bb, chunk);
         if (r < 0) { err = r; break; }
         if (r == 0) break;
-        memcpy((char *)buf_ptr + total, kbuf, (size_t)r);
+        memcpy((char *)buf_ptr + total, bb, (size_t)r);
         total += (size_t)r;
         if ((size_t)r < chunk) break;
     }
+    syscall_bounce_put(bb, kbuf);
     fd_put(file);
     if (total) return (int64_t)total;
     return err;

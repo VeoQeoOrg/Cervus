@@ -6,7 +6,7 @@
 int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count)
 {
     if (count == 0) return 0;
-    if (count > 65536) count = 65536;
+    if (count > (16u << 20)) count = 16u << 20;
 
     task_t *t = syscall_cur_task();
     vfs_file_t *file = NULL;
@@ -14,19 +14,22 @@ int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count)
 
     char kbuf[4097];
     if (file) {
+        size_t cap = 0;
+        char *bb = syscall_bounce_get(count, &cap, kbuf, 4096);
         size_t total = 0;
         int64_t err = 0;
         while (total < count) {
             size_t chunk = count - total;
-            if (chunk > 4096) chunk = 4096;
-            if (syscall_copy_from_user(kbuf, (const char *)buf_ptr + total, chunk) < 0) {
+            if (chunk > cap) chunk = cap;
+            if (syscall_copy_from_user(bb, (const char *)buf_ptr + total, chunk) < 0) {
                 err = -EFAULT; break;
             }
-            int64_t w = vfs_write(file, kbuf, chunk);
+            int64_t w = vfs_write(file, bb, chunk);
             if (w < 0) { err = w; break; }
             total += (size_t)w;
             if ((size_t)w < chunk) break;
         }
+        syscall_bounce_put(bb, kbuf);
         fd_put(file);
         if (total) return (int64_t)total;
         return err;
