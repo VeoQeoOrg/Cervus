@@ -860,6 +860,17 @@ static void log_replace_last(const char *line) {
     snprintf(g_log[slot], sizeof(g_log[slot]), "%s", line);
 }
 
+static int g_step_log_idx = -1;
+
+static void log_replace_step(const char *line) {
+    if (g_step_log_idx < 0 || g_log_total - g_step_log_idx > MAX_LOG_LINES) {
+        log_replace_last(line);
+        return;
+    }
+    int slot = g_step_log_idx % MAX_LOG_LINES;
+    snprintf(g_log[slot], sizeof(g_log[slot]), "%s", line);
+}
+
 static void install_redraw_log(void) {
     int rows_avail = g_step_rows_avail;
     int start = (g_log_n > rows_avail) ? (g_log_total - rows_avail) : (g_log_total - g_log_n);
@@ -887,6 +898,7 @@ static void step_begin(const char *desc) {
     snprintf(buf, sizeof(buf), C_YELLOW " [%d/%d] %s..." C_RESET,
              g_step_n, g_step_total, desc);
     log_append(buf);
+    g_step_log_idx = g_log_total - 1;
     install_redraw_log();
     draw_progress_bar();
 }
@@ -899,7 +911,7 @@ static void step_ok(const char *desc) {
     char buf[96];
     snprintf(buf, sizeof(buf), C_GREEN " [%d/%d]" C_RESET " %s " C_GREEN "OK" C_RESET,
              g_step_n, g_step_total, desc);
-    log_replace_last(buf);
+    log_replace_step(buf);
     install_redraw_log();
     draw_progress_bar();
 }
@@ -1016,7 +1028,7 @@ static void step_fail(const char *desc, int rc) {
     char buf[96];
     snprintf(buf, sizeof(buf), C_RED " [%d/%d]" C_RESET " %s " C_RED "FAIL rc=%d" C_RESET,
              g_step_n, g_step_total, desc, rc);
-    log_replace_last(buf);
+    log_replace_step(buf);
     install_redraw_log();
     draw_progress_bar();
 }
@@ -2155,14 +2167,14 @@ static int choose_appearance(void) {
 }
 
 
-#define MAX_PKGS 64
+#define MAX_PKGS 256
 
 typedef struct {
     char name[48];
     char version[24];
     char summary[160];
     char license[32];
-    char depends[96];
+    char depends[256];
     long size;
     int  chosen;
 } pkg_entry_t;
@@ -2188,6 +2200,28 @@ static void info_wrap(int *row, int col, int w, const char *txt) {
         memcpy(line, p, (size_t)n);
         line[n] = 0;
         info_print(row, col, w, 1, line);
+        p += take;
+        while (*p == ' ') p++;
+    }
+}
+
+static void info_field_wrap(int *row, int col, int w, const char *label, const char *txt) {
+    int lw = (int)strlen(label);
+    int max_len = w - 4 - lw;
+    if (max_len < 8) { info_print(row, col, w, 1, label); return; }
+    const char *p = txt;
+    int first = 1;
+    while (*p) {
+        int take = 0, last_space = -1;
+        while (p[take] && take < max_len) {
+            if (p[take] == ' ') last_space = take;
+            take++;
+        }
+        if (p[take] && last_space > 0) take = last_space;
+        char line[160];
+        snprintf(line, sizeof line, "%-*s%.*s", lw, first ? label : "", take, p);
+        info_print(row, col, w, 1, line);
+        first = 0;
         p += take;
         while (*p == ' ') p++;
     }
@@ -2219,10 +2253,7 @@ static void info_packages(int row, int col, int w) {
             snprintf(line, sizeof line, "license    %s", p->license);
             info_print(&r, col, w, 1, line);
         }
-        if (p->depends[0]) {
-            snprintf(line, sizeof line, "needs      %s", p->depends);
-            info_print(&r, col, w, 1, line);
-        }
+        if (p->depends[0]) info_field_wrap(&r, col, w, "needs      ", p->depends);
         snprintf(line, sizeof line, "selected   %s", p->chosen ? "yes" : "no");
         info_print(&r, col, w, 1, line);
         r++;
@@ -2341,11 +2372,16 @@ static int choose_packages(void) {
         }
         if (sel >= nshown) sel = nshown ? nshown - 1 : 0;
 
+        int name_w = 4;
+        for (int i = 0; i < g_npkgs; i++)
+            if ((int)strlen(g_pkgs[i].name) > name_w) name_w = (int)strlen(g_pkgs[i].name);
+        if (name_w > 24) name_w = 24;
+
         for (int r = 0; r < nshown; r++) {
             int i = shown[r];
             char row[256];
-            snprintf(row, sizeof row, "[%c] %-14s %s",
-                     g_pkgs[i].chosen ? '*' : ' ',
+            snprintf(row, sizeof row, "[%c] %-*.*s %s",
+                     g_pkgs[i].chosen ? '*' : ' ', name_w, name_w,
                      g_pkgs[i].name, g_pkgs[i].version);
             if (item_w > 4 && (int)strlen(row) > item_w - 2) row[item_w - 2] = 0;
             render_menu_item(5 + r, pane_col, item_w, r == sel, row);
@@ -2406,6 +2442,26 @@ static int choose_packages(void) {
     }
 }
 
+static void herd_error_line(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256], last[256] = "";
+    while (fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (line[0]) snprintf(last, sizeof last, "%s", line);
+    }
+    fclose(f);
+    if (!last[0]) return;
+    int room = g_step_pane_w - 10;
+    if (room < 16) room = 16;
+    char note[320];
+    snprintf(note, sizeof note, "       " C_GRAY "%.*s" C_RESET, room, last);
+    log_append(note);
+    install_redraw_log();
+}
+
+static int g_pkg_name_w = 12;
+
 static void pkg_bar(const char *name, int pct, int done, int ok) {
     char bar[64];
     int width = 24;
@@ -2418,10 +2474,10 @@ static void pkg_bar(const char *name, int pct, int done, int ok) {
 
     char note[160];
     if (done)
-        snprintf(note, sizeof note, "       %-12s %s %s", name, bar,
+        snprintf(note, sizeof note, "       %-*.*s %s %s", g_pkg_name_w, g_pkg_name_w, name, bar,
                  ok ? C_GREEN "installed" C_RESET : C_RED "failed" C_RESET);
     else
-        snprintf(note, sizeof note, "       %-12s %s %3d%%", name, bar, pct);
+        snprintf(note, sizeof note, "       %-*.*s %s %3d%%", g_pkg_name_w, g_pkg_name_w, name, bar, pct);
 
     log_replace_last(note);
     install_redraw_log();
@@ -2433,15 +2489,21 @@ static void install_chosen_packages(void) {
     if (!any) return;
 
     step_begin("Installing extra software");
+    const char *errlog = "/tmp/.herd-install.err";
     int failed = 0;
+    g_pkg_name_w = 12;
+    for (int i = 0; i < g_npkgs; i++)
+        if (g_pkgs[i].chosen && (int)strlen(g_pkgs[i].name) > g_pkg_name_w)
+            g_pkg_name_w = (int)strlen(g_pkgs[i].name);
+    if (g_pkg_name_w > 32) g_pkg_name_w = 32;
 
     for (int i = 0; i < g_npkgs; i++) {
         if (!g_pkgs[i].chosen) continue;
 
         char cmd[256];
         snprintf(cmd, sizeof cmd,
-                 "herd --root=/mnt/root --progress=plain -y install %s 2>/dev/null",
-                 g_pkgs[i].name);
+                 "herd --root=/mnt/root --progress=plain -y install %s 2>%s",
+                 g_pkgs[i].name, errlog);
 
         log_append("");
         pkg_bar(g_pkgs[i].name, 0, 0, 0);
@@ -2450,10 +2512,18 @@ static void install_chosen_packages(void) {
         if (!p) { pkg_bar(g_pkgs[i].name, 0, 1, 0); failed = 1; continue; }
 
         char line[256];
-        int last = -1;
+        int last = -1, step = 1, steps = 1;
         while (fgets(line, sizeof line, p)) {
+            if (!strncmp(line, "STEP ", 5)) {
+                char *e = NULL;
+                step = (int)strtol(line + 5, &e, 10);
+                steps = e ? (int)strtol(e, NULL, 10) : 1;
+                if (steps < 1) steps = 1;
+                if (step < 1 || step > steps) step = 1;
+                continue;
+            }
             if (line[0] != 'P' || line[1] != ' ') continue;
-            int pct = atoi(line + 2);
+            int pct = ((step - 1) * 100 + atoi(line + 2)) / steps;
             if (pct == last) continue;
             last = pct;
             pkg_bar(g_pkgs[i].name, pct, 0, 0);
@@ -2461,8 +2531,12 @@ static void install_chosen_packages(void) {
 
         int rc = pclose(p);
         pkg_bar(g_pkgs[i].name, 100, 1, rc == 0);
-        if (rc != 0) failed = 1;
+        if (rc != 0) {
+            failed = 1;
+            herd_error_line(errlog);
+        }
     }
+    unlink(errlog);
 
     step_ok(failed ? "extra software (with failures)" : "extra software");
 }
