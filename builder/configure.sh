@@ -154,6 +154,12 @@ rule cc_lib_pic
   depfile = \$out.d
   deps = gcc
 
+rule cc_lib_pic_opt
+  command = gcc $LIBCERVUS_CFLAGS_OPT -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(pic*)  \$in
+  depfile = \$out.d
+  deps = gcc
+
 rule cc_lib_opt
   command = gcc $LIBCERVUS_CFLAGS_OPT -MMD -MF \$out.d -c \$in -o \$out
   description = CC(lib*)  \$in
@@ -231,14 +237,15 @@ PIC_OBJS=""
 for src in $(find usr/lib/libcervus -name '*.c' | sort); do
     obj=$(obj_for "$src" libcervus)
     case "$src" in
-        */image/*|*/gl/*|*/compress/inflate.c|*/math/trig.c) rule=cc_lib_opt ;;
-        *) rule=cc_lib ;;
+        */image/*|*/gl/*|*/compress/inflate.c|*/math/trig.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
+            rule=cc_lib_opt; picrule=cc_lib_pic_opt ;;
+        *) rule=cc_lib; picrule=cc_lib_pic ;;
     esac
     printf 'build %s: %s %s\n' "$obj" "$rule" "$src"
     LIB_OBJS="$LIB_OBJS $obj"
 
     picobj=$(printf '%s' "$obj" | sed 's|^obj/libcervus/|obj/libcervus_pic/|')
-    printf 'build %s: cc_lib_pic %s\n' "$picobj" "$src"
+    printf 'build %s: %s %s\n' "$picobj" "$picrule" "$src"
     PIC_OBJS="$PIC_OBJS $picobj"
 done
 printf 'build obj/ldso/ld_start.o: asm_bare usr/ldso/ld_start.asm\n'
