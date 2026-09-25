@@ -86,6 +86,7 @@ int  __cervus_fflush(struct __cervus_FILE *s);
 void __cervus_stream_register(struct __cervus_FILE *s);
 void __cervus_stream_forget(struct __cervus_FILE *s);
 void __cervus_flush_all(void);
+#define __CERVUS_STDIO_BUFSZ 16384
 int  __cervus_fill(struct __cervus_FILE *s);
 void __cervus_setup_buf(struct __cervus_FILE *s);
 

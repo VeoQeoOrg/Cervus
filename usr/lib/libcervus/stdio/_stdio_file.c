@@ -124,9 +124,9 @@ int __cervus_fill(FILE *s)
     if (s->bufmode == __CBUF_NONE) return 0;
 
     if (!s->buf) {
-        s->buf = (char *)malloc(BUFSIZ);
+        s->buf = (char *)malloc(__CERVUS_STDIO_BUFSZ);
         if (!s->buf) return 0;
-        s->buf_size = BUFSIZ;
+        s->buf_size = __CERVUS_STDIO_BUFSZ;
         __cervus_stream_register(s);
     }
 

@@ -20,9 +20,9 @@ size_t fwrite(const void *buf, size_t size, size_t nmemb, FILE *s)
     }
 
     if (!s->buf) {
-        s->buf = (char *)malloc(BUFSIZ);
+        s->buf = (char *)malloc(__CERVUS_STDIO_BUFSZ);
         if (s->buf) {
-            s->buf_size = BUFSIZ;
+            s->buf_size = __CERVUS_STDIO_BUFSZ;
             __cervus_stream_register(s);
         }
     }

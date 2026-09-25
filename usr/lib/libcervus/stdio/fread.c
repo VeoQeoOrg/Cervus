@@ -33,7 +33,7 @@ size_t fread(void *buf, size_t size, size_t nmemb, FILE *s)
 
         if (avail == 0) {
             size_t want = total - got;
-            if (want >= BUFSIZ) {
+            if (want >= __CERVUS_STDIO_BUFSZ) {
                 ssize_t r = __cervus_io_read(s, out + got, want);
                 if (r < 0) { s->err = 1; break; }
                 if (r == 0) { s->eof = 1; break; }
