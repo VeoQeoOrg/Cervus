@@ -1,14 +1,21 @@
 NAME
-       killall - kill processes by name
+       killall - signal processes by name
 
 SYNOPSIS
-       killall [-q] name ...
+       killall [-q] [-s sig | -SIG] name ...
 
 DESCRIPTION
-       Sends TERM to every process whose name matches NAME.
+       Sends a signal, TERM by default, to every process whose name is
+       NAME. A user reaches only their own processes.
 
 OPTIONS
-       -q     do not complain when nothing matched
+       -q       do not complain when nothing matched
+       -s SIG   send SIG, given by name or number
+       -SIG     the same: -9 or -KILL
+
+EXAMPLES
+       killall doom
+       killall -9 weston
 
 SEE ALSO
        kill(1), ps(1)

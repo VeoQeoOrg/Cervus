@@ -1410,6 +1410,28 @@ static int exec_tokens(char **tok, int n) {
         printf("[%d]+ %s &\n", g_jobs[idx].jid, g_jobs[idx].cmd);
         rc_set(0); return 0;
     }
+    if (strcmp(tok[0], "kill") == 0) {
+        static char job_pid[CSH_MAX_JOBS][16];
+        int used = 0;
+        jobs_reap(0);
+        for (int i = 1; i < n; i++) {
+            if (tok[i][0] != '%') continue;
+            const char *spec = tok[i] + 1;
+            int idx = -1;
+            if (!*spec || !strcmp(spec, "%") || !strcmp(spec, "+")) {
+                idx = g_njobs - 1;
+            } else {
+                int jid = atoi(spec);
+                for (int k = 0; k < g_njobs; k++) if (g_jobs[k].jid == jid) { idx = k; break; }
+            }
+            if (idx < 0 || used >= CSH_MAX_JOBS) {
+                printf(C_RED "kill: %s: no such job\n" C_RESET, tok[i]);
+                rc_set(1); return 1;
+            }
+            snprintf(job_pid[used], sizeof job_pid[used], "%d", (int)g_jobs[idx].pid);
+            tok[i] = job_pid[used++];
+        }
+    }
 
     {
         int pipe_idx[CSH_PIPELINE_MAX];

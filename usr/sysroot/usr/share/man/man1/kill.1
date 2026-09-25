@@ -1,21 +1,33 @@
 NAME
-       kill - send a signal to a process
+       kill - send a signal to processes
 
 SYNOPSIS
-       kill [-l] [-s sig | -SIG] pid ...
+       kill [-s sig | -SIG | -n num] target ...
+       kill -l [sig]
 
 DESCRIPTION
-       Sends a signal to each PID. The default is TERM.
+       Sends a signal to each TARGET. The default is TERM. A target is a
+       pid, -PGID for every process in that process group, or a process
+       name, which reaches every process of that name you may signal.
+       In csh, %N stands for the pid of job N and %% for the latest job.
+
+       A user may signal only their own processes; root may signal any.
+       Before signalling init or a kernel thread, kill asks for
+       confirmation.
 
 OPTIONS
-       -l       list the known signal names
+       -l       list the signal names; with an argument, translate a
+                number to a name or a name to a number
        -s SIG   send SIG, given by name or number
-       -SIG     the same, written as -9 or -KILL
+       -SIG     the same: -9, -KILL, -kill or -SIGKILL
+       -n NUM   send the signal with number NUM
 
 EXAMPLES
        kill 42
-       kill -9 42
+       kill -9 doom
        kill -s INT 42
+       kill -TERM -- -42
+       kill %1
 
 SEE ALSO
-       killall(1), ps(1), signals in sigtest(1)
+       killall(1), ps(1), sysmon(1), signals in sigtest(1)
