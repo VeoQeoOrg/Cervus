@@ -8,7 +8,8 @@
 
 use "std/x86.cnd";
 
-extern fn pci_register_driver(drv: *void);
+extern fn ne2000_register(probe: fn(*void) -> i32);
+extern fn ne2000_set_link(ndev: *void, up: i32);
 extern fn pci_config_read16(seg: u16, bus: u8, dev: u8, func: u8, off: u16) -> u16;
 extern fn pci_config_write16(seg: u16, bus: u8, dev: u8, func: u8, off: u16, v: u16);
 extern fn netdev_register(mac: *u8, mtu: u32, tx: fn(*void, *void, usize) -> i32, priv: *void) -> *void;
@@ -85,7 +86,6 @@ static NDEV: usize = 0;
 static MAC_STORE: [MAC_LEN]u8 = [0; MAC_LEN];
 static PROM_STORE: [PROM_LEN]u8 = [0; PROM_LEN];
 static RXBUF: [TX_MAX]u8 = [0; TX_MAX];
-static DRIVER_BUF: [24]u8 = [0; 24];
 
 struct pci_bar_t {
     base: u64,
@@ -115,15 +115,6 @@ struct pci_device_t {
     cap_msi_off: u8,
     cap_msix_off: u8,
     msix_table_size: u16,
-}
-
-struct PCI_Driver {
-    name: *u8,
-    match_vendor: i16,
-    match_device: i16,
-    match_class: i16,
-    match_subclass: i16,
-    probe: fn(*void) -> i32,
 }
 
 fn reg8(off: u8, v: u8) {
@@ -342,6 +333,7 @@ unsafe fn probe(dev: *void) -> i32 {
     }
     NDEV = ndev as usize;
     NEXT_PAGE = RING_START;
+    ne2000_set_link(ndev, 1);
 
     serial_printf(c"[ne2000] %02x:%02x:%02x:%02x:%02x:%02x link=up irq=poll\n",
                   MAC_STORE[0] as u32, MAC_STORE[1] as u32, MAC_STORE[2] as u32,
@@ -351,14 +343,7 @@ unsafe fn probe(dev: *void) -> i32 {
 
 export fn ne2000_init() {
     unsafe {
-        let d = &DRIVER_BUF as *PCI_Driver;
-        d.name = c"ne2000";
-        d.match_vendor = 0x10ECi16;
-        d.match_device = -32727i16;
-        d.match_class = -1i16;
-        d.match_subclass = -1i16;
-        d.probe = probe;
-        pci_register_driver(&DRIVER_BUF as *void);
+        ne2000_register(probe);
     }
 }
 
