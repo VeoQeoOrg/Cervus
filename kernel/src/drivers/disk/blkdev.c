@@ -48,6 +48,9 @@ int blkdev_read(blkdev_t *dev, uint64_t offset, void *buf, size_t len) {
     if (len == 0) return 0;
 
     uint32_t sec_size = dev->sector_size ? dev->sector_size : BLKDEV_SECTOR_SIZE;
+    if (offset % sec_size == 0 && len % sec_size == 0)
+        return dev->ops->read_sectors(dev, offset / sec_size, (uint32_t)(len / sec_size), buf);
+
     uint64_t start_lba = offset / sec_size;
     uint64_t end_byte  = offset + len;
     uint64_t end_lba   = (end_byte + sec_size - 1) / sec_size;
@@ -73,6 +76,9 @@ int blkdev_write(blkdev_t *dev, uint64_t offset, const void *buf, size_t len) {
     if (len == 0) return 0;
 
     uint32_t sec_size = dev->sector_size ? dev->sector_size : BLKDEV_SECTOR_SIZE;
+    if (offset % sec_size == 0 && len % sec_size == 0)
+        return dev->ops->write_sectors(dev, offset / sec_size, (uint32_t)(len / sec_size), buf);
+
     uint64_t start_lba = offset / sec_size;
     uint64_t end_byte  = offset + len;
     uint64_t end_lba   = (end_byte + sec_size - 1) / sec_size;

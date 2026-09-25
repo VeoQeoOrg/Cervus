@@ -165,6 +165,12 @@ typedef struct {
     bool               has_csum;
     uint32_t           csum_seed;
     bool               journal_writable;
+    uint32_t           alloc_group;
+    uint32_t           alloc_bit;
+    void              *wb;
+    volatile int       lock_held;
+    void              *lock_owner;
+    int                lock_depth;
 } ext2_t;
 
 #define EXT4_FEATURE_INCOMPAT_CSUM_SEED 0x2000
