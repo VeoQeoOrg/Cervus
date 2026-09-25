@@ -6,6 +6,8 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <http.h>
 #include <crypto.h>
 #include <inflate.h>
@@ -56,8 +58,11 @@ enum { PG_BAR, PG_PACMAN, PG_HASH, PG_DOTS, PG_PERCENT, PG_PLAIN, PG_NONE };
 static int  g_style = PG_BAR;
 static int  g_tty;
 static char g_label[64];
+static int  g_label_w = 20;
 static long g_dots;
 static int  g_active;
+static int  g_dl_share = 100;
+static int  g_last_pct = -1;
 
 static void progress_style(const char *name)
 {
@@ -71,58 +76,46 @@ static void progress_style(const char *name)
     else if (!strcmp(name, "none"))    g_style = PG_NONE;
 }
 
-static void progress_begin(const char *label)
+static void progress_begin(const char *label, int will_unpack)
 {
     snprintf(g_label, sizeof g_label, "%s", label ? label : "");
     g_dots = 0;
     g_active = 1;
+    g_dl_share = will_unpack ? 60 : 100;
+    g_last_pct = -1;
     if (g_style == PG_PLAIN) {
         printf("BEGIN %s\n", g_label);
         fflush(stdout);
         return;
     }
     if (g_style == PG_NONE || !g_tty) return;
-    if (g_style == PG_DOTS) fprintf(stderr, "%-20s ", g_label);
+    if (g_style == PG_DOTS) fprintf(stderr, "%-*s ", g_label_w, g_label);
 }
 
-static void progress_draw(void *ctx, long got, long total)
+static void progress_render(int pct, int moving, const char *status)
 {
-    (void)ctx;
-    if (!g_active || g_style == PG_NONE) return;
+    if (pct > 100) pct = 100;
+    if (pct < 0) pct = 0;
     if (g_style == PG_PLAIN) {
-        static long last;
-        int pct = total > 0 ? (int)((long long)got * 100 / total) : 0;
-        if (pct > 100) pct = 100;
-        if (got < last || pct == 100 || got - last >= 16384) {
+        if (pct != g_last_pct) {
             printf("P %d\n", pct);
             fflush(stdout);
-            last = got;
+            g_last_pct = pct;
         }
         return;
     }
-    if (!g_tty) return;
-
-    if (g_style == PG_DOTS) {
-        long want = total > 0 ? (got * 40 / total) : (got / 65536);
-        while (g_dots < want) { fputc('.', stderr); g_dots++; }
-        return;
-    }
-
-    int pct = total > 0 ? (int)((long long)got * 100 / total) : 0;
-    if (pct > 100) pct = 100;
-
+    if (!g_tty || g_style == PG_NONE || g_style == PG_DOTS) return;
     if (g_style == PG_PERCENT) {
-        fprintf(stderr, "\r%-20s %3d%%", g_label, pct);
+        fprintf(stderr, "\r%-*s %3d%%  %-12s", g_label_w, g_label, pct, status);
         return;
     }
 
     const int W = 32;
-    int fill = total > 0 ? pct * W / 100 : (int)((got / 32768) % (W + 1));
-
-    fprintf(stderr, "\r%-20s [", g_label);
+    int fill = moving >= 0 ? moving % (W + 1) : pct * W / 100;
+    fprintf(stderr, "\r%-*s [", g_label_w, g_label);
     if (g_style == PG_PACMAN) {
         for (int i = 0; i < W; i++) {
-            if (i < fill - 1)   fputc('-', stderr);
+            if (i < fill - 1)       fputc('-', stderr);
             else if (i == fill - 1) fputc('C', stderr);
             else if ((i & 1) == 0)  fputc('o', stderr);
             else                    fputc(' ', stderr);
@@ -132,8 +125,42 @@ static void progress_draw(void *ctx, long got, long total)
     } else {
         for (int i = 0; i < W; i++) fputc(i < fill ? '#' : '-', stderr);
     }
-    if (total > 0) fprintf(stderr, "] %3d%%  %ldK", pct, got / 1024);
-    else           fprintf(stderr, "] %ldK", got / 1024);
+    if (moving >= 0) fprintf(stderr, "]       %-12s", status);
+    else             fprintf(stderr, "] %3d%%  %-12s", pct, status);
+}
+
+static void progress_draw(void *ctx, long got, long total)
+{
+    (void)ctx;
+    if (!g_active || g_style == PG_NONE) return;
+    if (g_style == PG_DOTS) {
+        if (!g_tty) return;
+        long want = total > 0 ? (got * 40 / total) : (got / 65536);
+        while (g_dots < want) { fputc('.', stderr); g_dots++; }
+        return;
+    }
+    char status[24];
+    snprintf(status, sizeof status, "%ldK", got / 1024);
+    if (total > 0) progress_render((int)((long long)got * g_dl_share / total), -1, status);
+    else           progress_render(0, (int)(got / 32768), status);
+}
+
+static void progress_unpack(int from, int span, size_t done, size_t total)
+{
+    if (!g_active || g_style == PG_NONE || g_style == PG_DOTS || total == 0) return;
+    progress_render(from + (int)((unsigned long long)done * (unsigned)span / total), -1, "unpacking");
+}
+
+static void progress_gunzip(void *ctx, size_t done, size_t total)
+{
+    (void)ctx;
+    progress_unpack(g_dl_share, (100 - g_dl_share) / 2, done, total);
+}
+
+static void progress_extract(size_t done, size_t total)
+{
+    int half = (100 - g_dl_share) / 2;
+    progress_unpack(g_dl_share + half, 100 - g_dl_share - half, done, total);
 }
 
 static void progress_end(int ok)
@@ -141,14 +168,15 @@ static void progress_end(int ok)
     if (!g_active) return;
     g_active = 0;
     if (g_style == PG_PLAIN) {
+        if (ok) progress_render(100, -1, "");
         printf("END %s\n", ok ? "ok" : "failed");
         fflush(stdout);
         return;
     }
     if (g_style == PG_NONE || !g_tty) return;
     if (g_style == PG_DOTS) { fprintf(stderr, " %s\n", ok ? "ok" : "failed"); return; }
-    progress_draw(NULL, 1, 1);
-    fprintf(stderr, "  %s\n", ok ? "ok" : "failed");
+    progress_render(100, -1, ok ? "ok" : "failed");
+    fputc('\n', stderr);
 }
 
 static char g_repo[512];
@@ -271,15 +299,34 @@ static int parse_hex(const char *s, uint8_t *out, int outlen)
     return n;
 }
 
+static int download_file(char *tmp, size_t n)
+{
+    snprintf(tmp, n, "/tmp/.herd.%d.dl", (int)getpid());
+    return open(tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
+}
+
+static void download_error(const char *name, int status)
+{
+    if (status >= 200 && status < 300)
+        fprintf(stderr, "herd: the download of %s broke off\n", name);
+    else if (status)
+        fprintf(stderr, "herd: the download of %s failed (HTTP %d)\n", name, status);
+    else
+        fprintf(stderr, "herd: cannot reach the repository for %s\n", name);
+}
+
 static char *fetch_url(const char *url, size_t *len_out, int *status_out)
 {
-    char tmp[128];
-    snprintf(tmp, sizeof tmp, "/tmp/.herd.%d.dl", (int)getpid());
-    int fd = open(tmp, O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0) return NULL;
+    char tmp[128] = "";
+    int fd = memfd_create("herd-download", 0);
+    if (fd < 0) {
+        fd = download_file(tmp, sizeof tmp);
+        if (fd < 0) return NULL;
+    }
     int status = 0;
     http_opts o;
     memset(&o, 0, sizeof o);
+    o.header_fd = -1;
     o.method = "GET";
     o.user_agent = "herd/1";
     o.follow = 1;
@@ -291,8 +338,14 @@ static char *fetch_url(const char *url, size_t *len_out, int *status_out)
     int rc = -1;
     for (int attempt = 0; attempt < 3; attempt++) {
         if (attempt) {
-            lseek(fd, 0, SEEK_SET);
-            if (ftruncate(fd, 0) != 0) break;
+            if (!tmp[0]) {
+                close(fd);
+                fd = download_file(tmp, sizeof tmp);
+                if (fd < 0) return NULL;
+            } else {
+                lseek(fd, 0, SEEK_SET);
+                if (ftruncate(fd, 0) != 0) break;
+            }
             sleep(2);
         }
         status = 0;
@@ -301,12 +354,26 @@ static char *fetch_url(const char *url, size_t *len_out, int *status_out)
         if (rc >= 0 && status >= 200 && status < 300) break;
         if (status >= 400) break;
     }
-    close(fd);
     if (status_out) *status_out = status;
-    if (rc < 0 || status < 200 || status >= 300) { unlink(tmp); return NULL; }
-    size_t len;
-    char *buf = read_file(tmp, &len);
-    unlink(tmp);
+    char *buf = NULL;
+    size_t len = 0;
+    if (rc >= 0 && status >= 200 && status < 300) {
+        struct stat st;
+        if (fstat(fd, &st) == 0 && lseek(fd, 0, SEEK_SET) == 0) {
+            len = (size_t)st.st_size;
+            buf = malloc(len + 1);
+            size_t got = 0;
+            while (buf && got < len) {
+                long n = read(fd, buf + got, len - got);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (buf && got == len) buf[len] = 0;
+            else { free(buf); buf = NULL; }
+        }
+    }
+    close(fd);
+    if (tmp[0]) unlink(tmp);
     if (!buf) return NULL;
     if (len_out) *len_out = len;
     return buf;
@@ -383,7 +450,7 @@ static unsigned long long oct(const char *s, int n)
 
 static void mkparents(const char *path)
 {
-    char tmp[1024];
+    char tmp[2048];
     snprintf(tmp, sizeof tmp, "%s", path);
     for (char *p = tmp + 1; *p; p++)
         if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
@@ -408,21 +475,66 @@ static int copy_file(const char *src, const char *dst, unsigned mode)
     return rc;
 }
 
+static void pax_field(const char *rec, size_t n, const char *key, char *out, size_t cap)
+{
+    size_t p = 0, klen = strlen(key);
+    while (p < n) {
+        size_t rlen = 0, q = p;
+        while (q < n && rec[q] >= '0' && rec[q] <= '9') rlen = rlen * 10 + (size_t)(rec[q++] - '0');
+        if (!rlen || p + rlen > n || q >= n || rec[q] != ' ') return;
+        const char *kv = rec + q + 1;
+        size_t kvlen = p + rlen - (q + 1);
+        if (kvlen > klen + 1 && !memcmp(kv, key, klen) && kv[klen] == '=') {
+            size_t vlen = kvlen - klen - 1;
+            if (vlen && kv[klen + vlen] == '\n') vlen--;
+            if (vlen >= cap) vlen = cap - 1;
+            memcpy(out, kv + klen + 1, vlen);
+            out[vlen] = 0;
+        }
+        p += rlen;
+    }
+}
+
 static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
 {
     size_t off = 0;
+    char longname[1024] = "", longlink[1024] = "";
     while (off + 512 <= len) {
+        progress_extract(off, len);
         const char *h = (const char *)(tar + off);
         int allzero = 1;
         for (int i = 0; i < 512; i++) if (h[i]) { allzero = 0; break; }
         if (allzero) break;
         off += 512;
 
-        char name[256];
-        if (h[345]) snprintf(name, sizeof name, "%.155s%.100s", h + 345, h);
-        else        snprintf(name, sizeof name, "%.100s", h);
         unsigned long long fsize = oct(h + 124, 12);
         char type = h[156];
+        size_t body = fsize < len - off ? (size_t)fsize : len - off;
+        if (type == 'L' || type == 'K') {
+            char *d = type == 'L' ? longname : longlink;
+            size_t n = body < sizeof longname - 1 ? body : sizeof longname - 1;
+            memcpy(d, tar + off, n);
+            d[n] = 0;
+            off += (size_t)((fsize + 511) & ~511ULL);
+            continue;
+        }
+        if (type == 'x' || type == 'g') {
+            if (type == 'x') {
+                pax_field((const char *)tar + off, body, "path", longname, sizeof longname);
+                pax_field((const char *)tar + off, body, "linkpath", longlink, sizeof longlink);
+            }
+            off += (size_t)((fsize + 511) & ~511ULL);
+            continue;
+        }
+
+        char name[1024];
+        if (longname[0])                                  snprintf(name, sizeof name, "%s", longname);
+        else if (!memcmp(h + 257, "ustar", 6) && h[345]) snprintf(name, sizeof name, "%.155s/%.100s", h + 345, h);
+        else                                              snprintf(name, sizeof name, "%.100s", h);
+        char linkname[1024];
+        if (longlink[0]) snprintf(linkname, sizeof linkname, "%s", longlink);
+        else             snprintf(linkname, sizeof linkname, "%.100s", h + 157);
+        longname[0] = longlink[0] = 0;
         unsigned mode = (unsigned)oct(h + 100, 8) & 07777;
         if (!mode) mode = 0644;
 
@@ -431,7 +543,7 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
         while (rel[0] == '/') rel++;
         if (!rel[0]) { off += (fsize + 511) & ~511ULL; continue; }
 
-        char dst[1088];
+        char dst[2048];
         snprintf(dst, sizeof dst, "%s/%s", g_root, rel);
 
         for (char *q = dst; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
@@ -455,12 +567,10 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
             close(fd);
             fprintf(files, "f %s\n", dst);
         } else if (type == '1') {
-            char linkname[101];
-            snprintf(linkname, sizeof linkname, "%.100s", h + 157);
             const char *lrel = linkname;
             while (lrel[0] == '.' && lrel[1] == '/') lrel += 2;
             while (lrel[0] == '/') lrel++;
-            char src[1088];
+            char src[2048];
             snprintf(src, sizeof src, "%s/%s", g_root, lrel);
             for (char *q = src; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
             mkparents(dst);
@@ -468,8 +578,6 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
             if (copy_file(src, dst, mode) == 0) fprintf(files, "f %s\n", dst);
             else fprintf(stderr, "herd: cannot link %s to %s\n", dst, src);
         } else if (type == '2') {
-            char linkname[101];
-            snprintf(linkname, sizeof linkname, "%.100s", h + 157);
             mkparents(dst);
             unlink(dst);
             if (symlink(linkname, dst) == 0) fprintf(files, "f %s\n", dst);
@@ -689,7 +797,7 @@ static int cmd_update(void)
     snprintf(url, sizeof url, "%s/INDEX", g_repo);
     snprintf(sigurl, sizeof sigurl, "%s/INDEX.sig", g_repo);
 
-    progress_begin("index");
+    progress_begin("index", 0);
     size_t ilen; int st = 0;
     char *index = fetch_url(url, &ilen, &st);
     progress_end(index != NULL);
@@ -750,55 +858,76 @@ static int cmd_update(void)
     return 0;
 }
 
-static int cmd_search(const char *term)
+static int term_cols(void)
+{
+    struct winsize ws;
+    if (!isatty(1)) return 0;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col >= 40) return ws.ws_col;
+    return 80;
+}
+
+static void print_row(int cols, int wn, int wv, const char *nm, const char *ver,
+                      const char *built, const char *state, const char *sm)
+{
+    char date[11] = "";
+    if (built) snprintf(date, sizeof date, "%.10s", built);
+    int used = printf("%-*s %-*s %-10s %-9s ", wn, nm, wv, ver ? ver : "?", date, state);
+    const char *text = sm ? sm : "";
+    int room = cols ? cols - used - 1 : 0;
+    int len = (int)strlen(text);
+    if (cols && room < 4) { putchar('\n'); return; }
+    if (!cols || len <= room) printf("%s\n", text);
+    else printf("%.*s...\n", room - 3, text);
+}
+
+static int list_index(const char *term)
 {
     char *idx = load_index();
-    const char *p = idx;
-    int found = 0;
-    while (p && *p) {
-        const char *end = strstr(p, "\n\n");
-        size_t reclen = end ? (size_t)(end - p) + 1 : strlen(p);
-        char *rec = malloc(reclen + 1); memcpy(rec, p, reclen); rec[reclen] = 0;
-        char *nm = field(rec, "name");
-        char *sm = field(rec, "summary");
-        char *ver = field(rec, "version");
-        if (nm && (ci_strstr(nm, term) || (sm && ci_strstr(sm, term)))) {
-            printf("%-16s %-10s %s%s\n", nm, ver ? ver : "?", sm ? sm : "",
-                   is_installed(nm) ? "  [installed]" : "");
-            found++;
+    int cols = term_cols();
+    int wn = 4, wv = 7, n = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        const char *p = idx;
+        if (pass == 1 && n > 0) {
+            if (isatty(1)) printf("\x1b[1m");
+            printf("%-*s %-*s %-10s %-9s %s", wn, "NAME", wv, "VERSION", "BUILT", "STATE", "DESCRIPTION");
+            printf(isatty(1) ? "\x1b[0m\n" : "\n");
         }
-        free(nm); free(sm); free(ver); free(rec);
-        if (!end) break;
-        p = end + 2;
+        n = 0;
+        while (p && *p) {
+            const char *end = strstr(p, "\n\n");
+            size_t reclen = end ? (size_t)(end - p) + 1 : strlen(p);
+            char *rec = malloc(reclen + 1); memcpy(rec, p, reclen); rec[reclen] = 0;
+            char *nm = field(rec, "name");
+            char *ver = field(rec, "version");
+            char *sm = field(rec, "summary");
+            char *dt = field(rec, "built");
+            if (nm && (!term || ci_strstr(nm, term) || (sm && ci_strstr(sm, term)))) {
+                if (pass == 0) {
+                    if ((int)strlen(nm) > wn) wn = (int)strlen(nm);
+                    if (ver && (int)strlen(ver) > wv) wv = (int)strlen(ver);
+                } else {
+                    print_row(cols, wn, wv, nm, ver, dt, is_installed(nm) ? "installed" : "", sm);
+                }
+                n++;
+            }
+            free(nm); free(ver); free(sm); free(dt); free(rec);
+            if (!end) break;
+            p = end + 2;
+        }
     }
     free(idx);
-    if (!found) printf("no match for '%s'\n", term);
+    return n;
+}
+
+static int cmd_search(const char *term)
+{
+    if (list_index(term) == 0) printf("no match for '%s'\n", term);
     return 0;
 }
 
 static int cmd_available(void)
 {
-    char *idx = load_index();
-    const char *p = idx;
-    int n = 0;
-    while (p && *p) {
-        const char *end = strstr(p, "\n\n");
-        size_t reclen = end ? (size_t)(end - p) + 1 : strlen(p);
-        char *rec = malloc(reclen + 1); memcpy(rec, p, reclen); rec[reclen] = 0;
-        char *nm = field(rec, "name");
-        char *ver = field(rec, "version");
-        char *sm = field(rec, "summary");
-        char *dt = field(rec, "built");
-        if (nm) {
-            printf("%-14s %-10s %-11s %-9s %s\n", nm, ver ? ver : "?",
-                   dt ? dt : "", is_installed(nm) ? "installed" : "", sm ? sm : "");
-            n++;
-        }
-        free(nm); free(ver); free(sm); free(dt); free(rec);
-        if (!end) break;
-        p = end + 2;
-    }
-    free(idx);
+    int n = list_index(NULL);
     printf("\n%d package(s) available\n", n);
     return 0;
 }
@@ -809,20 +938,27 @@ static int cmd_list(void)
     DIR *d = opendir(rooted(DBDIR, dbb, sizeof dbb));
     if (!d) { printf("no packages installed\n"); return 0; }
     struct dirent *e;
-    int n = 0;
-    while ((e = readdir(d))) {
-        size_t l = strlen(e->d_name);
-        if (l > 9 && !strcmp(e->d_name + l - 9, ".manifest")) {
+    int n = 0, wn = 8, wv = 7;
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) rewinddir(d);
+        while ((e = readdir(d))) {
+            size_t l = strlen(e->d_name);
+            if (l <= 9 || strcmp(e->d_name + l - 9, ".manifest")) continue;
             char name[256]; snprintf(name, sizeof name, "%.*s", (int)(l - 9), e->d_name);
             char mpath[512]; snprintf(mpath, sizeof mpath, "%s" DBDIR "/%s.manifest", g_root, name);
             char *m = read_file(mpath, NULL);
             char *ver = m ? field(m, "version") : NULL;
             char *bt = m ? field(m, "built") : NULL;
-            char when[64];
-            fmt_stamp(bt, when, sizeof when);
-            printf("%-16s %-12s %s\n", name, ver ? ver : "", bt ? when : "");
+            if (pass == 0) {
+                if ((int)strlen(name) > wn) wn = (int)strlen(name);
+                if (ver && (int)strlen(ver) > wv) wv = (int)strlen(ver);
+            } else {
+                char when[64];
+                fmt_stamp(bt, when, sizeof when);
+                printf("%-*s %-*s %s\n", wn, name, wv, ver ? ver : "", bt ? when : "");
+                n++;
+            }
             free(ver); free(bt); free(m);
-            n++;
         }
     }
     closedir(d);
@@ -907,21 +1043,19 @@ static int install_one(const char *idx, const char *name)
 
     char plabel[64];
     snprintf(plabel, sizeof plabel, "%s-%s", name, ver ? ver : "");
-    progress_begin(plabel);
+    progress_begin(plabel, 1);
     size_t dlen; int st = 0;
     char *data = fetch_url(url, &dlen, &st);
-    progress_end(data != NULL);
-    if (!data) { fprintf(stderr, "herd: download failed (status %d)\n", st); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
+    if (!data) { progress_end(0); download_error(name, st); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
 
     if (sizef) {
         unsigned long want = strtoul(sizef, NULL, 10);
-        if (want && want != dlen) { fprintf(stderr, "herd: size mismatch for %s (%lu vs %zu)\n", name, want, dlen); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
+        if (want && want != dlen) { progress_end(0); fprintf(stderr, "herd: size mismatch for %s (%lu vs %zu)\n", name, want, dlen); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
     }
     if (shaf) {
         uint8_t dg[32]; char hex[65];
         sha256(data, dlen, dg); hex_of(dg, 32, hex);
-        if (strcasecmp(hex, shaf) != 0) { fprintf(stderr, "herd: sha256 mismatch for %s\n  want %s\n  got  %s\n", name, shaf, hex); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
-        printf("checksum ok\n");
+        if (strcasecmp(hex, shaf) != 0) { progress_end(0); fprintf(stderr, "herd: sha256 mismatch for %s\n  want %s\n  got  %s\n", name, shaf, hex); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
     } else {
         fprintf(stderr, "herd: warning: %s has no sha256 in index\n", name);
     }
@@ -929,7 +1063,7 @@ static int install_one(const char *idx, const char *name)
     uint8_t *tar = NULL; size_t tarlen = 0;
     int is_gz = dlen > 2 && (uint8_t)data[0] == 0x1f && (uint8_t)data[1] == 0x8b;
     if (is_gz) {
-        if (gunzip((const uint8_t *)data, dlen, &tar, &tarlen) != 0) { fprintf(stderr, "herd: cannot decompress %s\n", name); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
+        if (gunzip_progress((const uint8_t *)data, dlen, &tar, &tarlen, progress_gunzip, NULL) != 0) { progress_end(0); fprintf(stderr, "herd: cannot decompress %s\n", name); free(data); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
     } else { tar = (uint8_t *)data; tarlen = dlen; }
 
     { char b[512]; mkpath(rooted(DBDIR, b, sizeof b), 0755); }
@@ -940,6 +1074,7 @@ static int install_one(const char *idx, const char *name)
     if (!ff) { die("cannot record file list"); }
     int rc = extract_tar(tar, tarlen, ff);
     fclose(ff);
+    progress_end(rc == 0);
     if (is_gz) free(tar);
     free(data);
 
@@ -981,7 +1116,7 @@ static int install_one(const char *idx, const char *name)
         int sfd = open(sp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (sfd >= 0) { write(sfd, stamp, strlen(stamp)); write(sfd, "\n", 1); close(sfd); }
     }
-    printf("installed %s %s\n", name, ver ? ver : "");
+    if (!g_tty || g_style == PG_NONE) printf("installed %s %s\n", name, ver ? ver : "");
     free(rec); free(ver); free(filef); free(shaf); free(sizef);
     return 0;
 }
@@ -1024,15 +1159,33 @@ static int plan_install(const char *idx, const char *name, char order[][64], int
     return 0;
 }
 
+static void sync_kernel_to_esp(void);
+
 static int apply_plan(const char *idx, char order[][64], int norder)
 {
+    int widest = 16;
     for (int i = 0; i < norder; i++) {
+        char *rec = find_record(idx, order[i]);
+        char *ver = rec ? field(rec, "version") : NULL;
+        int w = (int)strlen(order[i]) + 1 + (ver ? (int)strlen(ver) : 0);
+        if (w > widest) widest = w;
+        free(ver);
+        free(rec);
+    }
+    g_label_w = widest < 40 ? widest : 40;
+
+    for (int i = 0; i < norder; i++) {
+        if (g_style == PG_PLAIN) {
+            printf("STEP %d %d\n", i + 1, norder);
+            fflush(stdout);
+        }
         if (is_installed(order[i])) {
             char *have = installed_version(order[i]);
             printf("replacing %s %s\n", order[i], have ? have : "");
             free(have);
         }
         if (install_one(idx, order[i]) != 0) return 1;
+        if (!g_root[0] && !strcmp(order[i], "kernel")) sync_kernel_to_esp();
     }
     if (g_reboot_needed) {
         puts("\nthe system was updated -- a reboot is required to run it");
@@ -1226,6 +1379,34 @@ static int esp_find(esp_t *e, int quiet)
     }
     if (!quiet) fputs("herd: no Cervus boot partition found (is this a live session?)\n", stderr);
     return -1;
+}
+
+static int root_device(char *dev, size_t n)
+{
+    cervus_mount_info_t m[16];
+    long c = cervus_list_mounts(m, 16);
+    for (long i = 0; i < c; i++) {
+        if (strcmp(m[i].path, "/") != 0) continue;
+        snprintf(dev, n, "%s", m[i].device);
+        return 0;
+    }
+    return -1;
+}
+
+static void sync_kernel_to_esp(void)
+{
+    char rdev[32] = "";
+    if (root_device(rdev, sizeof rdev) != 0 || !rdev[0]) return;
+    esp_t e;
+    if (esp_find(&e, 1) != 0) return;
+    if (!e.disk[0] || strncmp(rdev, e.disk, strlen(e.disk)) != 0) { esp_unmount(&e); return; }
+    copy_file(ESPMNT "/boot/kernel", ESPMNT "/boot/kernel.old", 0644);
+    int ok = copy_file("/boot/kernel", ESPMNT "/boot/kernel", 0755) == 0;
+    if (ok && path_exists("/boot/shell.elf"))
+        ok = copy_file("/boot/shell.elf", ESPMNT "/boot/shell.elf", 0755) == 0;
+    esp_unmount(&e);
+    if (ok) printf("boot partition %s: the new kernel is in place, the old one is /boot/kernel.old\n", e.part);
+    else    fputs("herd: could not copy the new kernel to the boot partition -- run 'herd update-kernel'\n", stderr);
 }
 
 static const char *esp_loader(const esp_t *e)
