@@ -1,3 +1,4 @@
+#include "../../include/sched/capabilities.h"
 #include "../../include/signal/signal.h"
 #include "../../include/sched/sched.h"
 #include "../../include/syscall/syscall_internal.h"
@@ -163,19 +164,26 @@ int64_t sys_rt_sigprocmask(uint64_t how, uint64_t set, uint64_t oldset, uint64_t
     return 0;
 }
 
+int signal_may_send(task_t *me, task_t *t) {
+    if (!me || !t) return 1;
+    if (me->uid == 0 || cap_has(me->capabilities, CAP_KILL_ANY)) return 1;
+    return t->is_userspace && me->uid == t->uid;
+}
+
 int64_t sys_kill(uint64_t pid_a, uint64_t sig_a) {
     int pid = (int)(int64_t)pid_a;
     int sig = (int)sig_a;
     if (sig < 0 || sig >= NSIG) return -EINVAL;
 
+    task_t *me = syscall_cur_task();
     if (pid > 0) {
         task_t *t = task_find_by_pid((uint32_t)pid);
         if (!t) return -ESRCH;
+        if (!signal_may_send(me, t)) return -EPERM;
         if (sig != 0) signal_send(t, sig);
         return 0;
     }
 
-    task_t *me = syscall_cur_task();
     uint32_t pgid;
     if (pid == 0)       pgid = me ? me->pgid : 0;
     else if (pid < -1)  pgid = (uint32_t)(-pid);
@@ -183,15 +191,18 @@ int64_t sys_kill(uint64_t pid_a, uint64_t sig_a) {
 
     uint32_t pids[256];
     int n = task_collect_pids(pids, 256);
-    int found = 0;
+    int found = 0, sent = 0;
     for (int i = 0; i < n; i++) {
         task_t *t = task_find_by_pid(pids[i]);
         if (t && t->pgid == pgid) {
             found = 1;
+            if (!signal_may_send(me, t)) continue;
+            sent = 1;
             if (sig != 0) signal_send(t, sig);
         }
     }
-    return found ? 0 : -ESRCH;
+    if (!found) return -ESRCH;
+    return sent ? 0 : -EPERM;
 }
 
 int64_t sys_rt_sigreturn(void) {
