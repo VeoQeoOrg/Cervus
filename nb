@@ -17,7 +17,28 @@ prune_orphans() {
 
 configure() { prune_orphans; sh builder/configure.sh; }
 
-usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; }
+usage() {
+  cat <<'USAGE'
+Cervus build front-end.
+
+  ./nb                   configure and build everything
+  ./nb <targets...>      build ninja targets, e.g. kernel, iso, grubiso
+  ./nb run [opts]        build the ISO and boot it in QEMU
+  ./nb flash [device]    write the ISO to a USB stick
+  ./nb upload [--bump]   publish the system packages and the signed index
+  ./nb deps              fetch the build dependencies
+  ./nb reconfigure       regenerate build.ninja only
+  ./nb clean             remove build output, keep fetched dependencies
+  ./nb gitclean          remove everything that is not in git
+  ./nb cleaniso          remove demo_iso/
+  ./nb help              this text
+
+run options:
+  --live --installed --fresh --uefi --grub --limine
+  --disk=ide|ahci|nvme|all|none
+  --net --net=ne2k --net=rtl8139 --net=virtio --sound --no-sound
+USAGE
+}
 
 
 cervus_abi() {
