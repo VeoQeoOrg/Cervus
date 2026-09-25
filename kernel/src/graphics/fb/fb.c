@@ -237,9 +237,28 @@ void fb_font_init(void) {
 uint32_t fb_font_width(void)  { if (!g_font.ready) fb_font_init(); return g_font.width; }
 uint32_t fb_font_height(void) { if (!g_font.ready) fb_font_init(); return g_font.height; }
 
+static uint32_t ascii_stand_in(uint32_t cp) {
+    switch (cp) {
+    case 0x00A0: case 0x2002: case 0x2003: case 0x2009: return ' ';
+    case 0x2010: case 0x2011: case 0x2012: case 0x2013:
+    case 0x2014: case 0x2015: case 0x2212: return '-';
+    case 0x2018: case 0x2019: case 0x201A: case 0x2032: return '\'';
+    case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
+    case 0x2022: case 0x00B7: return '*';
+    case 0x2026: return '.';
+    case 0x2190: return '<';
+    case 0x2192: return '>';
+    case 0x00AB: return '<';
+    case 0x00BB: return '>';
+    default:     return 0;
+    }
+}
+
 static uint32_t codepoint_to_glyph(uint32_t cp) {
     if (cp < FONT_CP_MAP_SIZE && g_font.cp2glyph[cp] != 0xFFFF) return g_font.cp2glyph[cp];
     if (cp < 128 && cp < g_font.nglyph) return cp;
+    uint32_t alt = ascii_stand_in(cp);
+    if (alt) return codepoint_to_glyph(alt);
     return '?';
 }
 
