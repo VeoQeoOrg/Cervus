@@ -36,7 +36,7 @@ static int copy_file(const char *src, const char *dst, const cp_opts_t *o)
         }
         if (dfd < 0) { fprintf(stderr, "cp: cannot create '%s'\n", dst); close(sfd); return 1; }
     }
-    char buf[4096];
+    static char buf[128 * 1024];
     ssize_t n;
     int rc = 0;
     while ((n = read(sfd, buf, sizeof(buf))) > 0) {

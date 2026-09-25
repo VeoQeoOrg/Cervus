@@ -162,14 +162,15 @@ static inline int cervus_confirm(const char *what,
         __cervus_help_write("\x1b[0m\n");
     }
     __cervus_help_write("  Continue? [y/N] ");
-    char buf[8];
-    ssize_t n = read(0, buf, sizeof(buf));
-    if (n <= 0) { __cervus_help_write("\n"); return 0; }
-    int ok = (buf[0] == 'y' || buf[0] == 'Y');
-    int saw_nl = 0;
-    for (ssize_t i = 0; i < n; i++) if (buf[i] == '\n') { saw_nl = 1; break; }
-    if (!saw_nl) __cervus_help_write("\n");
-    return ok;
+    char first = 0, c;
+    ssize_t got = 0;
+    for (;;) {
+        ssize_t n = read(0, &c, 1);
+        if (n <= 0) { __cervus_help_write("\n"); return 0; }
+        if (c == '\n' || c == '\r') break;
+        if (got++ == 0) first = c;
+    }
+    return got > 0 && (first == 'y' || first == 'Y');
 }
 
 static inline const char *cervus_path_danger(const char *path)

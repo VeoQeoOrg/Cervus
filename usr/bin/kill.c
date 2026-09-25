@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,7 +93,7 @@ int main(int argc, char **argv)
         }
 
         if (cervus_task_kill((pid_t)pid) < 0) {
-            fprintf(stderr, "kill: failed to kill pid %ld\n", pid);
+            fprintf(stderr, "kill: cannot kill pid %ld: %s\n", pid, strerror(errno));
             rc = 1;
         }
     }

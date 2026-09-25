@@ -22,7 +22,7 @@ static int remove_tree(const char *path, const rm_opts_t *o)
         fprintf(stderr, "rm: cannot remove '%s': No such file or directory\n", path);
         return 1;
     }
-    if (st.st_type != DT_DIR) {
+    if (!S_ISDIR(st.st_mode)) {
         if (o->interactive) {
             fprintf(stderr, "rm: remove '%s'? ", path);
             char ans[8];
