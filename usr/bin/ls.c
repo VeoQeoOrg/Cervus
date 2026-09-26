@@ -38,6 +38,9 @@ static void fmt_mode(mode_t m, uint32_t type, char *buf)
     const char *bits = "rwxrwxrwx";
     for (int i = 0; i < 9; i++)
         buf[1 + i] = (m & (0400 >> i)) ? bits[i] : '-';
+    if (m & 04000) buf[3] = (m & 0100) ? 's' : 'S';
+    if (m & 02000) buf[6] = (m & 0010) ? 's' : 'S';
+    if (m & 01000) buf[9] = (m & 0001) ? 't' : 'T';
     buf[10] = '\0';
 }
 
@@ -56,7 +59,7 @@ static int cmp_name(const void *a, const void *b)
 static char type_indicator(const Entry *e)
 {
     if (e->d_type == DT_DIR) return '/';
-    if (e->has_stat && (e->st.st_mode & S_IXUSR) && e->d_type != DT_DIR) return '*';
+    if (e->has_stat && (e->st.st_mode & S_IXUSR)) return '*';
     return 0;
 }
 
@@ -213,7 +216,8 @@ int main(int argc, char **argv)
         } else {
             Entry e;
             strncpy(e.name, argv[i], 255); e.name[255] = '\0';
-            e.d_type = st.st_type;
+            e.d_type = S_ISDIR(st.st_mode) ? DT_DIR : S_ISLNK(st.st_mode) ? DT_LNK
+                     : S_ISCHR(st.st_mode) ? DT_CHR : S_ISBLK(st.st_mode) ? DT_BLK : DT_REG;
             e.st = st;
             e.has_stat = 1;
             emit_entry(&e, &o);

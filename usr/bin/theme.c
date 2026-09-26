@@ -281,6 +281,8 @@ static int save_conf(void) {
     fprintf(f, "theme=%s\n", g_cur_name);
     fprintf(f, "fg=%06X\n", g_cur.fg);
     fprintf(f, "bg=%06X\n", g_cur.bg);
+    fprintf(f, "palette=");
+    for (int i = 0; i < 16; i++) fprintf(f, "%06X%s", g_cur.palette[i], i < 15 ? "," : "\n");
     fclose(f);
     return 0;
 }
@@ -325,7 +327,9 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) { fputs(USAGE, stdout); return 0; }
 
     if (!strcmp(argv[1], "--restore")) {
-        return apply(&g_cur) == 0 ? 0 : 1;
+        if (apply(&g_cur) != 0) return 1;
+        if (getuid() == 0) save_conf();
+        return 0;
     }
     if (!strcmp(argv[1], "--list")) {
         for (int i = 0; i < total_themes(); i++)
