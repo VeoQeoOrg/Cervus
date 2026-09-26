@@ -17,6 +17,8 @@
 #include <sys/syscall.h>
 #include <pwutil.h>
 #include <cervus_util.h>
+#include <json.h>
+#include <readline.h>
 
 static const char USAGE[] =
     "Usage: herd <command> [args]\n"
@@ -32,6 +34,10 @@ static const char USAGE[] =
     "  install NAME...   fetch, verify and install packages and their deps\n"
     "  upgrade [NAME...] update everything installed, or just what you name\n"
     "  remove NAME...    remove installed packages\n"
+    "  add PATH          send a program to the repository: PATH is a program,\n"
+    "                    a script, a .tar.gz or a directory laid out like /;\n"
+    "                    herd asks for a name, version and description, then\n"
+    "                    opens a pull request for review on GitHub\n"
     "\n"
     "  boot-status              show the boot partition and its bootloader\n"
     "  update-kernel            replace the kernel on the boot partition,\n"
@@ -1547,6 +1553,1078 @@ static int cmd_update_bootloader(const char *want)
     return rc;
 }
 
+typedef struct { uint8_t *p; size_t n, cap; } buf_t;
+
+static void buf_put(buf_t *b, const void *d, size_t n)
+{
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap : 65536;
+        while (b->n + n + 1 > cap) cap *= 2;
+        uint8_t *q = realloc(b->p, cap);
+        if (!q) die("out of memory");
+        b->p = q;
+        b->cap = cap;
+    }
+    if (n) memcpy(b->p + b->n, d, n);
+    b->n += n;
+    b->p[b->n] = 0;
+}
+
+static void buf_str(buf_t *b, const char *s) { buf_put(b, s, strlen(s)); }
+
+static void tar_header(buf_t *b, const char *name, char type, unsigned mode, size_t size,
+                       const char *link)
+{
+    uint8_t h[512];
+    memset(h, 0, sizeof h);
+    size_t nl = strlen(name);
+    if (nl > 100) {
+        const char *cut = NULL;
+        for (const char *s = name + nl - 1; s > name; s--)
+            if (*s == '/' && (size_t)(s - name) <= 155 && strlen(s + 1) <= 100 && s[1]) { cut = s; break; }
+        if (cut) {
+            memcpy(h + 345, name, (size_t)(cut - name));
+            memcpy(h, cut + 1, strlen(cut + 1));
+        } else {
+            tar_header(b, "././@LongLink", 'L', 0644, nl + 1, NULL);
+            uint8_t pad[512];
+            for (size_t off = 0; off < nl + 1; off += 512) {
+                memset(pad, 0, sizeof pad);
+                size_t k = nl + 1 - off < 512 ? nl + 1 - off : 512;
+                memcpy(pad, name + off, k < nl - off ? k : nl - off);
+                buf_put(b, pad, 512);
+            }
+            memcpy(h, name, 100);
+        }
+    } else {
+        memcpy(h, name, nl);
+    }
+    snprintf((char *)h + 100, 8, "%07o", mode & 07777);
+    snprintf((char *)h + 108, 8, "%07o", 0);
+    snprintf((char *)h + 116, 8, "%07o", 0);
+    snprintf((char *)h + 124, 12, "%011llo", (unsigned long long)size);
+    snprintf((char *)h + 136, 12, "%011llo", (unsigned long long)time(NULL));
+    h[156] = (uint8_t)type;
+    if (link) snprintf((char *)h + 157, 100, "%s", link);
+    memcpy(h + 257, "ustar", 6);
+    memcpy(h + 263, "00", 2);
+    memcpy(h + 265, "root", 4);
+    memcpy(h + 297, "root", 4);
+    memset(h + 148, ' ', 8);
+    unsigned sum = 0;
+    for (int i = 0; i < 512; i++) sum += h[i];
+    snprintf((char *)h + 148, 8, "%06o", sum);
+    h[155] = ' ';
+    buf_put(b, h, 512);
+}
+
+static void tar_file(buf_t *b, const char *name, unsigned mode, const void *data, size_t size)
+{
+    tar_header(b, name, '0', mode, size, NULL);
+    buf_put(b, data, size);
+    static const uint8_t zero[512];
+    if (size % 512) buf_put(b, zero, 512 - size % 512);
+}
+
+static uint32_t crc32_of(const uint8_t *d, size_t n)
+{
+    static uint32_t t[256];
+    if (!t[1]) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            t[i] = c;
+        }
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) c = t[(c ^ d[i]) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+static int gzip_buf(const uint8_t *in, size_t n, buf_t *out)
+{
+    uint8_t *z = NULL;
+    size_t zn = 0;
+    if (raw_deflate(in, n, &z, &zn) != 0) return -1;
+    uint32_t mt = (uint32_t)time(NULL);
+    uint8_t hdr[10] = { 0x1f, 0x8b, 8, 0, (uint8_t)mt, (uint8_t)(mt >> 8), (uint8_t)(mt >> 16),
+                        (uint8_t)(mt >> 24), 0, 3 };
+    buf_put(out, hdr, sizeof hdr);
+    buf_put(out, z, zn);
+    free(z);
+    uint32_t crc = crc32_of(in, n), sz = (uint32_t)n;
+    uint8_t tail[8] = { (uint8_t)crc, (uint8_t)(crc >> 8), (uint8_t)(crc >> 16), (uint8_t)(crc >> 24),
+                        (uint8_t)sz, (uint8_t)(sz >> 8), (uint8_t)(sz >> 16), (uint8_t)(sz >> 24) };
+    buf_put(out, tail, sizeof tail);
+    return 0;
+}
+
+static char *base64_of(const uint8_t *d, size_t n)
+{
+    static const char a[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char *o = malloc((n + 2) / 3 * 4 + 1);
+    if (!o) die("out of memory");
+    size_t j = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        uint32_t v = (uint32_t)d[i] << 16;
+        if (i + 1 < n) v |= (uint32_t)d[i + 1] << 8;
+        if (i + 2 < n) v |= d[i + 2];
+        o[j++] = a[(v >> 18) & 63];
+        o[j++] = a[(v >> 12) & 63];
+        o[j++] = i + 1 < n ? a[(v >> 6) & 63] : '=';
+        o[j++] = i + 2 < n ? a[v & 63] : '=';
+    }
+    o[j] = 0;
+    return o;
+}
+
+#define ADD_MAX_FILES 4096
+
+typedef struct {
+    char     path[512];
+    char     type;
+    unsigned mode;
+    size_t   size;
+    char     link[256];
+    uint8_t *data;
+} add_entry_t;
+
+typedef struct {
+    add_entry_t *e;
+    int          n;
+    char         deps[1024];
+    char         missing[1024];
+    int          linux_bin;
+    int          elves;
+} add_pkg_t;
+
+static void add_entry(add_pkg_t *pk, const char *path, char type, unsigned mode,
+                      uint8_t *data, size_t size, const char *link)
+{
+    if (pk->n >= ADD_MAX_FILES) die("too many files in one package");
+    add_entry_t *e = &pk->e[pk->n++];
+    memset(e, 0, sizeof *e);
+    snprintf(e->path, sizeof e->path, "%s", path);
+    e->type = type;
+    e->mode = mode;
+    e->data = data;
+    e->size = size;
+    if (link) snprintf(e->link, sizeof e->link, "%s", link);
+}
+
+static int safe_rel(const char *p)
+{
+    while (p[0] == '.' && p[1] == '/') p += 2;
+    if (p[0] == '/' || !p[0]) return p[0] == 0;
+    for (const char *s = p; *s; ) {
+        const char *sl = strchr(s, '/');
+        size_t len = sl ? (size_t)(sl - s) : strlen(s);
+        if (len == 2 && s[0] == '.' && s[1] == '.') return 0;
+        if (!sl) break;
+        s = sl + 1;
+    }
+    return 1;
+}
+
+static uint8_t *slurp(const char *path, size_t *n)
+{
+    return (uint8_t *)read_file(path, n);
+}
+
+static int walk_dir(add_pkg_t *pk, const char *root, const char *rel)
+{
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s%s%s", root, rel[0] ? "/" : "", rel);
+    DIR *d = opendir(dir);
+    if (!d) { fprintf(stderr, "herd: cannot read %s\n", dir); return -1; }
+    char (*names)[256] = malloc(1024 * 256);
+    if (!names) die("out of memory");
+    int nn = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) && nn < 1024) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        snprintf(names[nn++], 256, "%s", de->d_name);
+    }
+    closedir(d);
+    qsort(names, (size_t)nn, sizeof names[0], (int (*)(const void *, const void *))strcmp);
+    int rc = 0;
+    for (int i = 0; i < nn; i++) {
+        char r[512], full[1024];
+        snprintf(r, sizeof r, "%s%s%s", rel, rel[0] ? "/" : "", names[i]);
+        snprintf(full, sizeof full, "%s/%s", root, r);
+        struct stat st;
+        if (lstat(full, &st) != 0) continue;
+        char tp[520];
+        snprintf(tp, sizeof tp, "./%s", r);
+        if (S_ISLNK(st.st_mode)) {
+            char lk[256];
+            ssize_t k = readlink(full, lk, sizeof lk - 1);
+            if (k < 0) continue;
+            lk[k] = 0;
+            add_entry(pk, tp, '2', 0777, NULL, 0, lk);
+        } else if (S_ISDIR(st.st_mode)) {
+            add_entry(pk, tp, '5', st.st_mode & 07777 ? st.st_mode & 07777 : 0755, NULL, 0, NULL);
+            if (walk_dir(pk, root, r) != 0) { rc = -1; break; }
+        } else if (S_ISREG(st.st_mode)) {
+            size_t n = 0;
+            uint8_t *data = slurp(full, &n);
+            if (!data) { fprintf(stderr, "herd: cannot read %s\n", full); rc = -1; break; }
+            unsigned mode = st.st_mode & 07777 ? st.st_mode & 07777 : 0644;
+            int runnable = (n > 4 && !memcmp(data, "\x7f" "ELF", 4)) || (n > 2 && data[0] == '#' && data[1] == '!');
+            if (runnable && (strstr(tp, "/bin/") || strstr(tp, "/sbin/"))) mode |= 0755;
+            add_entry(pk, tp, '0', mode, data, n, NULL);
+        }
+    }
+    free(names);
+    return rc;
+}
+
+static int read_tar_entries(add_pkg_t *pk, uint8_t *tar, size_t len)
+{
+    size_t off = 0;
+    char longname[1024] = "";
+    while (off + 512 <= len) {
+        const char *h = (const char *)(tar + off);
+        int allzero = 1;
+        for (int i = 0; i < 512; i++) if (h[i]) { allzero = 0; break; }
+        if (allzero) break;
+        if (memcmp(h + 257, "ustar", 5) != 0) return -1;
+        off += 512;
+        unsigned long long fsize = oct(h + 124, 12);
+        char type = h[156];
+        if (fsize > len - off) return -1;
+        if (type == 'L') {
+            size_t k = fsize < sizeof longname - 1 ? (size_t)fsize : sizeof longname - 1;
+            memcpy(longname, tar + off, k);
+            longname[k] = 0;
+            off += (size_t)((fsize + 511) & ~511ULL);
+            continue;
+        }
+        if (type == 'x' || type == 'g' || type == 'K') { off += (size_t)((fsize + 511) & ~511ULL); continue; }
+        char name[1024];
+        if (longname[0]) snprintf(name, sizeof name, "%s", longname);
+        else if (h[345]) snprintf(name, sizeof name, "%.155s/%.100s", h + 345, h);
+        else             snprintf(name, sizeof name, "%.100s", h);
+        longname[0] = 0;
+        if (!safe_rel(name)) {
+            fprintf(stderr, "herd: the archive has an unsafe path: %s\n", name);
+            return -2;
+        }
+        char lk[101];
+        snprintf(lk, sizeof lk, "%.100s", h + 157);
+        unsigned mode = (unsigned)oct(h + 100, 8) & 07777;
+        if (type == 0) type = '0';
+        add_entry(pk, name, type, mode, type == '0' ? tar + off : NULL,
+                  type == '0' ? (size_t)fsize : 0, lk[0] ? lk : NULL);
+        off += (size_t)((fsize + 511) & ~511ULL);
+    }
+    return 0;
+}
+
+static const char *path_base(const char *p)
+{
+    const char *s = strrchr(p, '/');
+    return s ? s + 1 : p;
+}
+
+static int pkg_has_base(add_pkg_t *pk, const char *base)
+{
+    for (int i = 0; i < pk->n; i++)
+        if (pk->e[i].type != '5' && !strcmp(path_base(pk->e[i].path), base)) return 1;
+    return 0;
+}
+
+static int pkg_has_path(add_pkg_t *pk, const char *abs)
+{
+    for (int i = 0; i < pk->n; i++) {
+        const char *p = pk->e[i].path;
+        while (p[0] == '.' && p[1] == '/') p += 2;
+        while (p[0] == '/') p++;
+        if (!strcmp(p, abs + 1)) return 1;
+    }
+    return 0;
+}
+
+static int word_in(const char *list, const char *w)
+{
+    size_t wl = strlen(w);
+    for (const char *p = list; *p; ) {
+        while (*p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ' ') e++;
+        if ((size_t)(e - p) == wl && !strncmp(p, w, wl)) return 1;
+        p = e;
+    }
+    return 0;
+}
+
+static void word_add(char *list, size_t cap, const char *w)
+{
+    if (word_in(list, w)) return;
+    size_t l = strlen(list);
+    snprintf(list + l, cap - l, "%s%s", l ? " " : "", w);
+}
+
+static int base_system_pkg(const char *name)
+{
+    return !strcmp(name, "cervus-libc") || !strcmp(name, "cervus-base") ||
+           !strcmp(name, "kernel") || !strcmp(name, "cervus-system") ||
+           !strcmp(name, "cervus-media");
+}
+
+static int owner_of(const char *suffix, int by_base, char *out, size_t cap)
+{
+    char dbdir[512];
+    snprintf(dbdir, sizeof dbdir, "%s" DBDIR, g_root);
+    DIR *d = opendir(dbdir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    size_t sl = strlen(suffix);
+    while (!found && (de = readdir(d))) {
+        size_t nl = strlen(de->d_name);
+        if (nl < 7 || strcmp(de->d_name + nl - 6, ".files")) continue;
+        char p[800];
+        snprintf(p, sizeof p, "%s/%s", dbdir, de->d_name);
+        char *fl = read_file(p, NULL);
+        if (!fl) continue;
+        for (char *line = fl; line && *line && !found; ) {
+            char *eol = strchr(line, '\n');
+            if (eol) *eol = 0;
+            if (line[0] == 'f' && line[1] == ' ') {
+                const char *path = line + 2;
+                size_t pl = strlen(path);
+                int hit = by_base ? (pl > sl && path[pl - sl - 1] == '/' && !strcmp(path + pl - sl, suffix))
+                                  : !strcmp(path, suffix);
+                if (hit) {
+                    snprintf(out, cap, "%.*s", (int)(nl - 6), de->d_name);
+                    found = 1;
+                }
+            }
+            line = eol ? eol + 1 : NULL;
+        }
+        free(fl);
+    }
+    closedir(d);
+    return found;
+}
+
+static void need_path(add_pkg_t *pk, const char *what, int by_base)
+{
+    if (by_base ? pkg_has_base(pk, what) : pkg_has_path(pk, what)) return;
+    char owner[128];
+    if (owner_of(what, by_base, owner, sizeof owner)) {
+        if (!base_system_pkg(owner)) word_add(pk->deps, sizeof pk->deps, owner);
+        return;
+    }
+    struct stat st;
+    if (!by_base && stat(what, &st) == 0) return;
+    if (by_base) {
+        char p[300];
+        snprintf(p, sizeof p, "/lib/%s", what);
+        if (stat(p, &st) == 0) return;
+        snprintf(p, sizeof p, "/usr/lib/%s", what);
+        if (stat(p, &st) == 0) return;
+    }
+    word_add(pk->missing, sizeof pk->missing, what);
+}
+
+static uint64_t rd64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
+static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+static uint16_t rd16(const uint8_t *p) { uint16_t v; memcpy(&v, p, 2); return v; }
+
+static int elf_off(const uint8_t *f, size_t n, uint64_t vaddr, uint64_t *off)
+{
+    uint64_t phoff = rd64(f + 32);
+    uint16_t phent = rd16(f + 54), phnum = rd16(f + 56);
+    for (uint16_t i = 0; i < phnum; i++) {
+        const uint8_t *ph = f + phoff + (uint64_t)i * phent;
+        if (ph + 56 > f + n || rd32(ph) != 1) continue;
+        uint64_t pv = rd64(ph + 16), po = rd64(ph + 8), pf = rd64(ph + 32);
+        if (vaddr >= pv && vaddr < pv + pf) { *off = vaddr - pv + po; return 0; }
+    }
+    return -1;
+}
+
+static void scan_elf(add_pkg_t *pk, const uint8_t *f, size_t n)
+{
+    if (n < 64 || memcmp(f, "\x7f" "ELF", 4) != 0) return;
+    if (f[4] != 2 || rd16(f + 18) != 62) { pk->linux_bin = 2; return; }
+    pk->elves++;
+    uint64_t phoff = rd64(f + 32);
+    uint16_t phent = rd16(f + 54), phnum = rd16(f + 56);
+    if (phent < 56 || phoff + (uint64_t)phent * phnum > n) return;
+    uint64_t dyn_off = 0, dyn_sz = 0;
+    for (uint16_t i = 0; i < phnum; i++) {
+        const uint8_t *ph = f + phoff + (uint64_t)i * phent;
+        uint32_t type = rd32(ph);
+        uint64_t off = rd64(ph + 8), fsz = rd64(ph + 32);
+        if (off > n || fsz > n - off) continue;
+        if (type == 3) {
+            char interp[256];
+            snprintf(interp, sizeof interp, "%.*s", (int)(fsz < 255 ? fsz : 255), (const char *)f + off);
+            if (strstr(interp, "ld-linux") || strstr(interp, "ld-musl")) pk->linux_bin = 1;
+        } else if (type == 2) {
+            dyn_off = off;
+            dyn_sz = fsz;
+        } else if (type == 4) {
+            for (uint64_t p = off; p + 12 <= off + fsz; ) {
+                uint32_t nsz = rd32(f + p), dsz = rd32(f + p + 4), nt = rd32(f + p + 8);
+                if (nsz == 4 && nt == 1 && p + 16 <= n && !memcmp(f + p + 12, "GNU", 4)) pk->linux_bin = 1;
+                p += 12 + ((nsz + 3) & ~3u) + ((dsz + 3) & ~3u);
+            }
+        }
+    }
+    if (!dyn_sz) return;
+    uint64_t strtab = 0;
+    for (uint64_t p = dyn_off; p + 16 <= dyn_off + dyn_sz; p += 16) {
+        int64_t tag = (int64_t)rd64(f + p);
+        if (tag == 0) break;
+        if (tag == 5) strtab = rd64(f + p + 8);
+    }
+    uint64_t stroff;
+    if (!strtab || elf_off(f, n, strtab, &stroff) != 0) return;
+    for (uint64_t p = dyn_off; p + 16 <= dyn_off + dyn_sz; p += 16) {
+        int64_t tag = (int64_t)rd64(f + p);
+        if (tag == 0) break;
+        if (tag != 1) continue;
+        uint64_t o = stroff + rd64(f + p + 8);
+        if (o >= n) continue;
+        char lib[128];
+        snprintf(lib, sizeof lib, "%.*s", (int)(n - o < 127 ? n - o : 127), (const char *)f + o);
+        if (!strcmp(lib, "libc.so.1") || !strcmp(lib, "libc.so")) continue;
+        need_path(pk, lib, 1);
+    }
+}
+
+static void scan_script(add_pkg_t *pk, const uint8_t *f, size_t n)
+{
+    if (n < 3 || f[0] != '#' || f[1] != '!') return;
+    char line[256];
+    size_t i = 2, k = 0;
+    while (i < n && f[i] == ' ') i++;
+    while (i < n && f[i] != '\n' && k < sizeof line - 1) line[k++] = (char)f[i++];
+    line[k] = 0;
+    char *prog = strtok(line, " \t\r");
+    if (!prog) return;
+    if (!strcmp(path_base(prog), "env")) {
+        char *arg = strtok(NULL, " \t\r");
+        if (!arg) return;
+        char full[300];
+        snprintf(full, sizeof full, "/usr/bin/%s", arg);
+        struct stat st;
+        if (stat(full, &st) != 0) snprintf(full, sizeof full, "/bin/%s", arg);
+        need_path(pk, full, 0);
+        return;
+    }
+    need_path(pk, prog, 0);
+}
+
+static int valid_name(const char *s)
+{
+    if (!s[0] || strlen(s) > 40) return 0;
+    if (!islower((unsigned char)s[0]) && !isdigit((unsigned char)s[0])) return 0;
+    for (const char *p = s; *p; p++)
+        if (!islower((unsigned char)*p) && !isdigit((unsigned char)*p) && !strchr("+-._", *p)) return 0;
+    return 1;
+}
+
+static int valid_version(const char *s)
+{
+    if (!s[0] || strlen(s) > 32 || !isalnum((unsigned char)s[0])) return 0;
+    for (const char *p = s; *p; p++)
+        if (!isalnum((unsigned char)*p) && !strchr("+-._~", *p)) return 0;
+    return 1;
+}
+
+static void trim(char *s)
+{
+    size_t l = strlen(s);
+    while (l && (s[l - 1] == ' ' || s[l - 1] == '\t' || s[l - 1] == '\r' || s[l - 1] == '\n')) s[--l] = 0;
+    size_t i = 0;
+    while (s[i] == ' ' || s[i] == '\t') i++;
+    if (i) memmove(s, s + i, l - i + 1);
+}
+
+static int ask_field(const char *label, const char *hint, char *val, size_t cap, int required,
+                     int (*check)(const char *))
+{
+    for (;;) {
+        if (hint && hint[0]) printf("\x1b[90m  %s\x1b[0m\n", hint);
+        char prompt[256];
+        if (val[0]) snprintf(prompt, sizeof prompt, "\x1b[1m%s\x1b[0m [%s]: ", label, val);
+        else        snprintf(prompt, sizeof prompt, "\x1b[1m%s\x1b[0m: ", label);
+        fflush(stdout);
+        char *line = readline(prompt);
+        if (!line) { putchar('\n'); return -1; }
+        trim(line);
+        if (line[0]) {
+            if (!strcmp(line, "-")) val[0] = 0;
+            else snprintf(val, cap, "%s", line);
+        }
+        free(line);
+        if (!val[0] && required) { puts("  this one is needed"); continue; }
+        if (val[0] && check && !check(val)) {
+            printf("  '%s' will not do -- ", val);
+            if (check == valid_name) puts("lowercase letters, digits and + - . _ , at most 40");
+            else                     puts("letters, digits and + - . _ ~ , no spaces");
+            continue;
+        }
+        return 0;
+    }
+}
+
+static char g_gh_token[256];
+static char g_gh_login[128];
+
+static json_t *gh_api(const char *method, const char *path, const char *body, long body_len,
+                      int *status)
+{
+    char url[1024];
+    snprintf(url, sizeof url, "https://api.github.com%s", path);
+    char auth[320];
+    snprintf(auth, sizeof auth, "Authorization: Bearer %s", g_gh_token);
+    int fd = memfd_create("herd-gh", 0);
+    if (fd < 0) return NULL;
+    http_opts o;
+    memset(&o, 0, sizeof o);
+    o.header_fd = -1;
+    o.method = method;
+    o.data = body;
+    o.data_len = body ? (body_len >= 0 ? body_len : (long)strlen(body)) : 0;
+    o.content_type = "application/json";
+    o.user_agent = "herd/1";
+    o.headers[o.nheaders++] = auth;
+    o.headers[o.nheaders++] = "Accept: application/vnd.github+json";
+    o.headers[o.nheaders++] = "X-GitHub-Api-Version: 2022-11-28";
+    o.silent = 1;
+    o.out_status = status;
+    *status = 0;
+    int rc = http_request(url, fd, &o);
+    if (*status == 0 && rc > 0) *status = rc;
+    struct stat st;
+    json_t *j = NULL;
+    if (fstat(fd, &st) == 0 && st.st_size > 0 && lseek(fd, 0, SEEK_SET) == 0) {
+        char *txt = malloc((size_t)st.st_size + 1);
+        size_t got = 0;
+        while (txt && got < (size_t)st.st_size) {
+            ssize_t r = read(fd, txt + got, (size_t)st.st_size - got);
+            if (r <= 0) break;
+            got += (size_t)r;
+        }
+        if (txt) { txt[got] = 0; j = json_parse(txt, NULL); free(txt); }
+    }
+    close(fd);
+    return j;
+}
+
+static void gh_fail(const char *what, int status, json_t *j)
+{
+    const char *msg = j ? json_string(json_get(j, "message"), NULL) : NULL;
+    if (status == 0) fprintf(stderr, "herd: %s: cannot reach GitHub\n", what);
+    else fprintf(stderr, "herd: %s: GitHub said %d%s%s\n", what, status, msg ? " -- " : "", msg ? msg : "");
+}
+
+static void token_path(char *out, size_t cap)
+{
+    const char *home = getenv("HOME");
+    snprintf(out, cap, "%s/.config/herd/token", home && *home ? home : "/root");
+}
+
+static int gh_login(void)
+{
+    const char *env = getenv("HERD_GITHUB_TOKEN");
+    char tp[512];
+    token_path(tp, sizeof tp);
+    if (env && *env) snprintf(g_gh_token, sizeof g_gh_token, "%s", env);
+    else {
+        char *t = read_file(tp, NULL);
+        if (t) { snprintf(g_gh_token, sizeof g_gh_token, "%s", t); trim(g_gh_token); free(t); }
+    }
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (!g_gh_token[0]) {
+            puts("");
+            puts("Packages are submitted as a pull request on GitHub, under your account.");
+            puts("herd needs a GitHub token for that, once. Make a classic token with the");
+            puts("'public_repo' scope here:");
+            puts("");
+            puts("  https://github.com/settings/tokens/new?scopes=public_repo&description=herd");
+            puts("");
+            char tok[256] = { 0 };
+            if (pw_getpass("paste the token (it is not shown): ", tok, sizeof tok) < 0) return -1;
+            trim(tok);
+            if (!tok[0]) return -1;
+            snprintf(g_gh_token, sizeof g_gh_token, "%s", tok);
+            memset(tok, 0, sizeof tok);
+        }
+        int st;
+        json_t *u = gh_api("GET", "/user", NULL, 0, &st);
+        const char *login = st == 200 && u ? json_string(json_get(u, "login"), NULL) : NULL;
+        if (login) {
+            snprintf(g_gh_login, sizeof g_gh_login, "%s", login);
+            json_free(u);
+            if (!(env && *env)) {
+                char dir[512];
+                snprintf(dir, sizeof dir, "%s", tp);
+                *strrchr(dir, '/') = 0;
+                mkpath(dir, 0700);
+                int fd = open(tp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+                if (fd >= 0) {
+                    fchmod(fd, 0600);
+                    if (write(fd, g_gh_token, strlen(g_gh_token)) < 0) { }
+                    close(fd);
+                }
+            }
+            return 0;
+        }
+        if (st == 401) puts("GitHub does not accept that token.");
+        else gh_fail("signing in", st, u);
+        json_free(u);
+        if (st != 401) return -1;
+        g_gh_token[0] = 0;
+        if (env && *env) return -1;
+        unlink(tp);
+    }
+    return -1;
+}
+
+static int upstream_repo(char *out, size_t cap)
+{
+    const char *e = getenv("HERD_SUBMIT_REPO");
+    if (e && *e) { snprintf(out, cap, "%s", e); return 0; }
+    const char *p = strstr(g_repo, "github.com/");
+    if (!p) return -1;
+    p += 11;
+    const char *s1 = strchr(p, '/');
+    if (!s1) return -1;
+    const char *s2 = strchr(s1 + 1, '/');
+    size_t len = s2 ? (size_t)(s2 - p) : strlen(p);
+    snprintf(out, cap, "%.*s", (int)len, p);
+    return 0;
+}
+
+static int gh_put_file(const char *repo, const char *branch, const char *path,
+                       const uint8_t *data, size_t n, const char *msg)
+{
+    char *b64 = base64_of(data, n);
+    json_t *m = json_new_string(msg);
+    char *mj = json_dump(m, 0);
+    json_free(m);
+    buf_t body = { 0 };
+    buf_str(&body, "{\"message\":");
+    buf_str(&body, mj);
+    buf_str(&body, ",\"branch\":\"");
+    buf_str(&body, branch);
+    buf_str(&body, "\",\"content\":\"");
+    buf_str(&body, b64);
+    buf_str(&body, "\"}");
+    free(mj);
+    free(b64);
+    char api[768];
+    snprintf(api, sizeof api, "/repos/%s/contents/%s", repo, path);
+    int st;
+    json_t *r = gh_api("PUT", api, (const char *)body.p, (long)body.n, &st);
+    free(body.p);
+    if (st != 201 && st != 200) { gh_fail("uploading the package", st, r); json_free(r); return -1; }
+    json_free(r);
+    return 0;
+}
+
+static int submit_github(const char *name, const char *version, const char *manifest,
+                         const buf_t *tgz, const char *pr_body, char *pr_url, size_t pr_cap)
+{
+    char up[256];
+    if (upstream_repo(up, sizeof up) != 0) {
+        fputs("herd: this repository is not on GitHub, so herd cannot open a pull request\n", stderr);
+        return -1;
+    }
+    printf("signing in to GitHub ... ");
+    fflush(stdout);
+    if (gh_login() != 0) return -1;
+    printf("%s\n", g_gh_login);
+
+    char api[512];
+    int st;
+    snprintf(api, sizeof api, "/repos/%s", up);
+    json_t *r = gh_api("GET", api, NULL, 0, &st);
+    if (st != 200 || !r) { gh_fail("reading the repository", st, r); json_free(r); return -1; }
+    char base[128];
+    snprintf(base, sizeof base, "%s", json_string(json_get(r, "default_branch"), "main"));
+    int can_push = json_bool(json_query(r, "permissions.push"), 0);
+    json_free(r);
+
+    char head[256];
+    if (can_push) {
+        snprintf(head, sizeof head, "%s", up);
+    } else {
+        printf("forking %s ... ", up);
+        fflush(stdout);
+        snprintf(api, sizeof api, "/repos/%s/forks", up);
+        r = gh_api("POST", api, "{}", -1, &st);
+        const char *fn = r ? json_string(json_get(r, "full_name"), NULL) : NULL;
+        if ((st != 202 && st != 200) || !fn) { puts(""); gh_fail("forking", st, r); json_free(r); return -1; }
+        snprintf(head, sizeof head, "%s", fn);
+        json_free(r);
+        for (int i = 0; i < 30; i++) {
+            snprintf(api, sizeof api, "/repos/%s/branches/%s", head, base);
+            r = gh_api("GET", api, NULL, 0, &st);
+            json_free(r);
+            if (st == 200) break;
+            sleep(2);
+        }
+        puts(head);
+        char body[200];
+        snprintf(body, sizeof body, "{\"branch\":\"%s\"}", base);
+        snprintf(api, sizeof api, "/repos/%s/merge-upstream", head);
+        json_free(gh_api("POST", api, body, -1, &st));
+    }
+
+    snprintf(api, sizeof api, "/repos/%s/git/ref/heads/%s", head, base);
+    r = gh_api("GET", api, NULL, 0, &st);
+    if (st != 200) {
+        json_free(r);
+        snprintf(api, sizeof api, "/repos/%s/git/ref/heads/%s", up, base);
+        r = gh_api("GET", api, NULL, 0, &st);
+    }
+    const char *sha = r ? json_string(json_query(r, "object.sha"), NULL) : NULL;
+    if (st != 200 || !sha) { gh_fail("reading the main branch", st, r); json_free(r); return -1; }
+    char base_sha[64];
+    snprintf(base_sha, sizeof base_sha, "%s", sha);
+    json_free(r);
+
+    char branch[160];
+    snprintf(branch, sizeof branch, "herd-add/%s-%s", name, version);
+    snprintf(api, sizeof api, "/repos/%s/git/refs", head);
+    for (int k = 2; ; k++) {
+        char body[400];
+        snprintf(body, sizeof body, "{\"ref\":\"refs/heads/%s\",\"sha\":\"%s\"}", branch, base_sha);
+        r = gh_api("POST", api, body, -1, &st);
+        json_free(r);
+        if (st == 201) break;
+        if (st != 422 || k > 20) { gh_fail("making a branch", st, NULL); return -1; }
+        snprintf(branch, sizeof branch, "herd-add/%s-%s-%d", name, version, k);
+    }
+
+    char msg[256], path[512];
+    snprintf(msg, sizeof msg, "herd add: %s %s", name, version);
+    printf("uploading %s-%s-x86_64.tar.gz (%zu bytes) ... ", name, version, tgz->n);
+    fflush(stdout);
+    snprintf(path, sizeof path, "submissions/%s/%s/%s-%s-x86_64.tar.gz", name, version, name, version);
+    if (gh_put_file(head, branch, path, tgz->p, tgz->n, msg) != 0) return -1;
+    snprintf(path, sizeof path, "submissions/%s/%s/%s-%s-x86_64.manifest", name, version, name, version);
+    if (gh_put_file(head, branch, path, (const uint8_t *)manifest, strlen(manifest), msg) != 0) return -1;
+    puts("done");
+
+    json_t *pr = json_new_object();
+    json_set(pr, "title", json_new_string(msg));
+    char hb[400];
+    if (can_push) snprintf(hb, sizeof hb, "%s", branch);
+    else {
+        char owner[128];
+        snprintf(owner, sizeof owner, "%s", head);
+        char *sl = strchr(owner, '/');
+        if (sl) *sl = 0;
+        snprintf(hb, sizeof hb, "%s:%s", owner, branch);
+    }
+    json_set(pr, "head", json_new_string(hb));
+    json_set(pr, "base", json_new_string(base));
+    json_set(pr, "body", json_new_string(pr_body));
+    json_set(pr, "maintainer_can_modify", json_new_bool(1));
+    char *pj = json_dump(pr, 0);
+    json_free(pr);
+    snprintf(api, sizeof api, "/repos/%s/pulls", up);
+    r = gh_api("POST", api, pj, -1, &st);
+    free(pj);
+    const char *url = r ? json_string(json_get(r, "html_url"), NULL) : NULL;
+    if (st != 201 || !url) { gh_fail("opening the pull request", st, r); json_free(r); return -1; }
+    snprintf(pr_url, pr_cap, "%s", url);
+    json_free(r);
+    return 0;
+}
+
+static void default_name(const char *path, char *out, size_t cap)
+{
+    const char *b = path_base(path);
+    size_t l = strlen(b);
+    while (l && b[l - 1] == '/') l--;
+    char tmp[256];
+    snprintf(tmp, sizeof tmp, "%.*s", (int)l, b);
+    const char *exts[] = { ".tar.gz", ".tgz", ".tar", ".elf", ".sh", ".csh", ".lua", ".py" };
+    for (size_t i = 0; i < sizeof exts / sizeof exts[0]; i++) {
+        size_t el = strlen(exts[i]), tl = strlen(tmp);
+        if (tl > el && !strcmp(tmp + tl - el, exts[i])) { tmp[tl - el] = 0; break; }
+    }
+    char *dash = NULL;
+    for (char *p = tmp; *p; p++) if (*p == '-' && isdigit((unsigned char)p[1])) { dash = p; break; }
+    if (dash) *dash = 0;
+    size_t k = 0;
+    for (const char *p = tmp; *p && k < cap - 1 && k < 40; p++) {
+        char c = (char)tolower((unsigned char)*p);
+        if (islower((unsigned char)c) || isdigit((unsigned char)c) || strchr("+-._", c)) out[k++] = c;
+        else if (c == ' ') out[k++] = '-';
+    }
+    out[k] = 0;
+}
+
+static void default_version(const char *path, char *out, size_t cap)
+{
+    const char *b = path_base(path);
+    for (const char *p = b; *p; p++) {
+        if (*p == '-' && isdigit((unsigned char)p[1])) {
+            size_t k = 0;
+            for (const char *q = p + 1; *q && k < cap - 1; q++) {
+                if (!strncmp(q, ".tar", 4) || !strcmp(q, ".tgz") || !strcmp(q, ".elf")) break;
+                if (isalnum((unsigned char)*q) || strchr("+-._~", *q)) out[k++] = *q;
+                else break;
+            }
+            out[k] = 0;
+            if (k) return;
+        }
+    }
+    snprintf(out, cap, "1.0");
+}
+
+static int cmd_add(const char *src)
+{
+    struct stat st;
+    if (stat(src, &st) != 0) { fprintf(stderr, "herd: %s: %s\n", src, strerror(errno)); return 1; }
+    if (!isatty(0)) die("add asks questions -- run it from a terminal");
+
+    add_pkg_t pk;
+    memset(&pk, 0, sizeof pk);
+    pk.e = calloc(ADD_MAX_FILES, sizeof(add_entry_t));
+    if (!pk.e) die("out of memory");
+    word_add(pk.deps, sizeof pk.deps, "libc");
+
+    char name[64] = "", version[40] = "", summary[160] = "", license[64] = "";
+    char homepage[256] = "", descr[512] = "", dest[256] = "";
+    default_name(src, name, sizeof name);
+    default_version(src, version, sizeof version);
+
+    uint8_t *raw = NULL;
+    size_t rawn = 0;
+    buf_t tgz = { 0 };
+    int single = 0;
+    const char *kind;
+
+    if (S_ISDIR(st.st_mode)) {
+        kind = "a directory, packaged as it is laid out";
+        if (walk_dir(&pk, src, "") != 0) return 1;
+    } else {
+        raw = slurp(src, &rawn);
+        if (!raw) { fprintf(stderr, "herd: cannot read %s\n", src); return 1; }
+        uint8_t *tar = NULL;
+        size_t tarn = 0;
+        if (rawn > 2 && raw[0] == 0x1f && raw[1] == 0x8b) {
+            if (gunzip(raw, rawn, &tar, &tarn) != 0) die("the archive is not a valid .tar.gz");
+            if (read_tar_entries(&pk, tar, tarn) != 0) die("the archive is not a tar archive herd can read");
+            buf_put(&tgz, raw, rawn);
+            kind = "an archive, installed from /";
+        } else if (rawn > 512 && !memcmp(raw + 257, "ustar", 5)) {
+            if (read_tar_entries(&pk, raw, rawn) != 0) die("the archive is not a tar archive herd can read");
+            kind = "a tar archive, installed from /";
+        } else {
+            single = 1;
+            kind = rawn > 4 && !memcmp(raw, "\x7f" "ELF", 4) ? "a program" : "a script";
+        }
+    }
+
+    if (single) {
+        scan_elf(&pk, raw, rawn);
+        scan_script(&pk, raw, rawn);
+    } else {
+        for (int i = 0; i < pk.n; i++)
+            if (pk.e[i].type == '0') {
+                scan_elf(&pk, pk.e[i].data, pk.e[i].size);
+                scan_script(&pk, pk.e[i].data, pk.e[i].size);
+            }
+        if (pk.n == 0) die("there is nothing in it to package");
+    }
+    if (pk.linux_bin == 1)
+        die("that is a Linux program; Cervus cannot run it. Build it with x86_64-cervus-gcc");
+    if (pk.linux_bin == 2)
+        die("that is not an x86_64 program");
+    int is_elf = rawn > 4 && !memcmp(raw, "\x7f" "ELF", 4);
+    int is_script = rawn > 2 && raw[0] == '#' && raw[1] == '!';
+    if (single && !is_elf && !is_script)
+        die("a single file must be a program or a script starting with #!; "
+            "for anything else give a directory laid out like / (usr/bin/..., usr/share/...)");
+
+    printf("\n\x1b[1mherd add\x1b[0m -- %s is %s\n", src, kind);
+    puts("Answer a few questions; Enter keeps what is in brackets, '-' clears it.\n");
+
+    char *idx = read_file(INDEXF, NULL);
+    for (;;) {
+        if (ask_field("Name", "lowercase, as people will type it in 'herd install'", name, sizeof name, 1,
+                      valid_name) < 0) return 1;
+        char *rec = idx ? find_record(idx, name) : NULL;
+        if (rec) {
+            char *v = field(rec, "version");
+            char *s = field(rec, "summary");
+            printf("  the repository already has %s %s (%s)\n", name, v ? v : "?", s ? s : "");
+            free(v);
+            free(s);
+            free(rec);
+            if (!ask_yes("  send this as a new version of it?")) { name[0] = 0; continue; }
+        }
+        break;
+    }
+    if (ask_field("Version", NULL, version, sizeof version, 1, valid_version) < 0) return 1;
+    if (ask_field("Summary", "one line: what it is, e.g. 'a tiny text editor'", summary, sizeof summary, 1,
+                  NULL) < 0) return 1;
+    if (ask_field("License", "SPDX name: MIT, GPL-3.0-or-later, Apache-2.0, BSD-2-Clause, ...",
+                  license, sizeof license, 1, NULL) < 0) return 1;
+    if (ask_field("Homepage", "where the source lives (optional)", homepage, sizeof homepage, 0, NULL) < 0)
+        return 1;
+    if (ask_field("Description", "anything the reviewers should know (optional)", descr, sizeof descr, 0,
+                  NULL) < 0) return 1;
+    if (pk.missing[0])
+        printf("\x1b[33m  not found on this system: %s -- ship it in the package, or it will not run\x1b[0m\n",
+               pk.missing);
+    if (ask_field("Depends", "detected from the files; 'libc' is the base system", pk.deps, sizeof pk.deps, 1,
+                  NULL) < 0) return 1;
+    if (single) {
+        snprintf(dest, sizeof dest, "/usr/bin/%s", name);
+        for (;;) {
+            if (ask_field("Installs as", NULL, dest, sizeof dest, 1, NULL) < 0) return 1;
+            if (dest[0] == '/' && safe_rel(dest + 1) && dest[strlen(dest) - 1] != '/') break;
+            puts("  an absolute path to a file, like /usr/bin/name");
+        }
+    }
+    free(idx);
+
+    if (single) {
+        buf_t tar = { 0 };
+        char dirs[256];
+        snprintf(dirs, sizeof dirs, ".%s", dest);
+        for (char *p = dirs + 2; *p; p++) {
+            if (*p != '/') continue;
+            *p = 0;
+            char d[260];
+            snprintf(d, sizeof d, "%s/", dirs);
+            tar_header(&tar, d, '5', 0755, 0, NULL);
+            *p = '/';
+        }
+        char fp[260];
+        snprintf(fp, sizeof fp, ".%s", dest);
+        tar_file(&tar, fp, 0755, raw, rawn);
+        static const uint8_t zero[1024];
+        buf_put(&tar, zero, sizeof zero);
+        add_entry(&pk, fp, '0', 0755, raw, rawn, NULL);
+        if (gzip_buf(tar.p, tar.n, &tgz) != 0) die("compression failed");
+        free(tar.p);
+    } else if (!tgz.n) {
+        buf_t tar = { 0 };
+        for (int i = 0; i < pk.n; i++) {
+            add_entry_t *e = &pk.e[i];
+            if (e->type == '0') tar_file(&tar, e->path, e->mode, e->data, e->size);
+            else {
+                char p[520];
+                snprintf(p, sizeof p, "%s%s", e->path, e->type == '5' ? "/" : "");
+                tar_header(&tar, p, e->type, e->mode, 0, e->type == '2' || e->type == '1' ? e->link : NULL);
+            }
+        }
+        static const uint8_t zero[1024];
+        buf_put(&tar, zero, sizeof zero);
+        if (gzip_buf(tar.p, tar.n, &tgz) != 0) die("compression failed");
+        free(tar.p);
+    }
+
+    uint8_t dig[32];
+    char hex[65];
+    sha256(tgz.p, tgz.n, dig);
+    hex_of(dig, 32, hex);
+    char stamp[32];
+    now_stamp(stamp, sizeof stamp);
+    int abi = system_abi();
+
+    buf_t man = { 0 };
+    char line[700];
+    snprintf(line, sizeof line,
+             "name: %s\nversion: %s\narch: x86_64\nsize: %zu\nsha256: %s\nfile: %s-%s-x86_64.tar.gz\n"
+             "depends: %s\n", name, version, tgz.n, hex, name, version, pk.deps);
+    buf_str(&man, line);
+    if (abi >= 0) { snprintf(line, sizeof line, "abi: %d\n", abi); buf_str(&man, line); }
+    snprintf(line, sizeof line, "built: %s\nsummary: %s\nlicense: %s\n", stamp, summary, license);
+    buf_str(&man, line);
+    if (homepage[0]) { snprintf(line, sizeof line, "homepage: %s\n", homepage); buf_str(&man, line); }
+
+    printf("\n\x1b[1m%s-%s-x86_64.tar.gz\x1b[0m  %zu bytes\n", name, version, tgz.n);
+    int shown = 0, files = 0;
+    for (int i = 0; i < pk.n; i++) {
+        if (pk.e[i].type == '5') continue;
+        files++;
+        if (shown < 12) {
+            const char *p = pk.e[i].path;
+            while (p[0] == '.' && p[1] == '/') p += 2;
+            printf("  /%s\n", p);
+            shown++;
+        }
+    }
+    if (files > shown) printf("  ... and %d more\n", files - shown);
+    printf("\n%s\n", (char *)man.p);
+
+    for (;;) {
+        char *a = readline("[s]ubmit for review, [w]rite the files here, [q]uit: ");
+        if (!a) return 1;
+        char c = a[0];
+        free(a);
+        if (c == 'q' || c == 'Q') { puts("nothing was sent"); return 0; }
+        if (c == 'w' || c == 'W') {
+            char f1[256], f2[256];
+            snprintf(f1, sizeof f1, "%s-%s-x86_64.tar.gz", name, version);
+            snprintf(f2, sizeof f2, "%s-%s-x86_64.manifest", name, version);
+            int fd1 = open(f1, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd2 = open(f2, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int ok = fd1 >= 0 && fd2 >= 0 &&
+                     write(fd1, tgz.p, tgz.n) == (ssize_t)tgz.n &&
+                     write(fd2, man.p, man.n) == (ssize_t)man.n;
+            if (fd1 >= 0) close(fd1);
+            if (fd2 >= 0) close(fd2);
+            if (!ok) { fprintf(stderr, "herd: cannot write here: %s\n", strerror(errno)); continue; }
+            printf("wrote %s and %s\n", f1, f2);
+            continue;
+        }
+        if (c != 's' && c != 'S') continue;
+        if (tgz.n > 40u * 1024 * 1024) {
+            fputs("herd: over 40 MB is too big to send this way; write the files and open the pull\n"
+                  "      request by hand, linking to where they can be downloaded\n", stderr);
+            continue;
+        }
+        buf_t body = { 0 };
+        snprintf(line, sizeof line, "**%s %s** -- %s\n\n", name, version, summary);
+        buf_str(&body, line);
+        if (descr[0]) { buf_str(&body, descr); buf_str(&body, "\n\n"); }
+        buf_str(&body, "| | |\n|---|---|\n");
+        snprintf(line, sizeof line, "| license | %s |\n| depends | %s |\n| size | %zu bytes |\n"
+                 "| sha256 | `%s` |\n", license, pk.deps, tgz.n, hex);
+        buf_str(&body, line);
+        if (homepage[0]) { snprintf(line, sizeof line, "| homepage | %s |\n", homepage); buf_str(&body, line); }
+        buf_str(&body, "\nFiles:\n```\n");
+        for (int i = 0, k = 0; i < pk.n && k < 60; i++) {
+            if (pk.e[i].type == '5') continue;
+            const char *p = pk.e[i].path;
+            while (p[0] == '.' && p[1] == '/') p += 2;
+            snprintf(line, sizeof line, "/%s\n", p);
+            buf_str(&body, line);
+            k++;
+        }
+        buf_str(&body, "```\n\nSubmitted with `herd add` from Cervus. "
+                       "A maintainer publishes it with `tools/accept`.\n");
+        char url[512];
+        int rc = submit_github(name, version, (const char *)man.p, &tgz, (const char *)body.p, url, sizeof url);
+        free(body.p);
+        if (rc != 0) {
+            puts("the package was not sent; [w] keeps a copy you can send later");
+            continue;
+        }
+        printf("\n\x1b[32mSent for review:\x1b[0m %s\n\n", url);
+        puts("A maintainer checks it and publishes it. From then on everyone can");
+        printf("install it:  herd update && herd install %s\n", name);
+        return 0;
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "herd")) return 0;
@@ -1597,6 +2675,11 @@ int main(int argc, char **argv)
         if (argc < 3) die("remove needs a name");
         if (elevate("remove") != 0) return 1;
         return cmd_remove(argc - 2, argv + 2);
+    }
+    if (!strcmp(cmd, "add")) {
+        if (argc < 3) die("add needs a program, a script, an archive or a directory");
+        load_repo();
+        return cmd_add(argv[2]);
     }
     if (!strcmp(cmd, "boot-status"))       return cmd_boot_status();
     if (!strcmp(cmd, "update-kernel")) {

@@ -10,6 +10,7 @@ SYNOPSIS
        herd install NAME...
        herd upgrade [NAME...]
        herd remove NAME...
+       herd add PATH
        herd boot-status
        herd update-kernel
        herd update-bootloader [limine|grub]
@@ -60,6 +61,21 @@ COMMANDS
                      and kernel) is registered like any other package, so
                      a plain 'herd upgrade' updates the whole machine.
        remove NAME   delete the files a package installed
+       add PATH      send a program to the repository for review. PATH
+                     is a program or #! script (installed as one file,
+                     /usr/bin/NAME by default), a .tar.gz, or a
+                     directory laid out like /. herd asks for the name,
+                     version, summary, license and homepage, works out
+                     the dependencies from the libraries and
+                     interpreters the files use, builds the package and
+                     its manifest, and opens a pull request on GitHub
+                     under your account. Once a maintainer approves it,
+                     'herd install NAME' works everywhere. The first
+                     submission asks for a GitHub token with the
+                     public_repo scope and keeps it in
+                     ~/.config/herd/token ($HERD_GITHUB_TOKEN overrides
+                     it). Choosing [w] instead writes the package and
+                     its manifest to the current directory.
 
        boot-status   find the boot partition and say which bootloader
                      is on it and where the kernel lives
@@ -78,6 +94,7 @@ FILES
        /etc/herd.pub          Ed25519 public key, as hex
        /var/lib/herd/INDEX    the last downloaded index
        /var/lib/herd/*.files  the file list of each installed package
+       ~/.config/herd/token   the GitHub token 'add' submits with
        /var/lib/herd/reboot-required
                               written when an update replaced the kernel
                               or part of the base system; the shell says
