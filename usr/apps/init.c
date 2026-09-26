@@ -122,6 +122,18 @@ static void restore_audio_settings(void) {
     waitpid(child, &status, 0);
 }
 
+static void refresh_font_cache(void) {
+    struct stat st;
+    if (stat("/usr/bin/fc-cache", &st) != 0) return;
+    pid_t child = fork();
+    if (child != 0) return;
+    int null = open("/dev/null", O_RDWR);
+    if (null >= 0) { dup2(null, 1); dup2(null, 2); }
+    const char *argv[2] = { "/usr/bin/fc-cache", NULL };
+    execve("/usr/bin/fc-cache", (char *const *)argv, environ);
+    _exit(127);
+}
+
 static void restore_console_theme(void) {
     struct stat st;
     if (stat("/bin/theme", &st) != 0) return;
@@ -278,9 +290,14 @@ static void spawn_shell(int vt) {
 
 static void make_runtime_dirs(void) {
     mode_t old = umask(0);
-    mkdir("/run", 01777);
-    mkdir("/run/user", 01777);
-    mkdir("/tmp", 01777);
+    mkdir("/run", 0755);
+    mkdir("/run/user", 0755);
+    chmod("/run/user", 0755);
+    static const char *shared[] = { "/tmp", "/var/tmp", NULL };
+    for (int i = 0; shared[i]; i++) {
+        mkdir(shared[i], 01777);
+        chmod(shared[i], 01777);
+    }
     umask(old);
 }
 
@@ -294,6 +311,7 @@ int main(void) {
 
     restore_console_font();
     restore_console_theme();
+    refresh_font_cache();
     sync_clock_from_network();
     restore_audio_settings();
 
