@@ -26,8 +26,15 @@ int main(int argc, char **argv) {
     uint32_t *row = malloc((size_t)w * 4);
     if (!row) return 1;
 
+    int windowed = cervus_fb_windowed();
+    if (cervus_fb_acquire() != 0) {
+        fputs("fbdemo: the screen belongs to a graphical session; run it from its terminal\n", stderr);
+        free(row);
+        return 1;
+    }
+
     struct termios orig, raw;
-    int have_tio = (tcgetattr(0, &orig) == 0);
+    int have_tio = !windowed && (tcgetattr(0, &orig) == 0);
     if (have_tio) {
         raw = orig;
         raw.c_lflag &= ~(ECHO | ICANON | ISIG);
@@ -35,8 +42,6 @@ int main(int argc, char **argv) {
         raw.c_cc[VTIME] = 0;
         tcsetattr(0, TCSAFLUSH, &raw);
     }
-
-    cervus_fb_acquire();
 
     for (unsigned y = 0; y < h; y++) {
         for (unsigned x = 0; x < w; x++) {
@@ -50,8 +55,20 @@ int main(int argc, char **argv) {
 
     free(row);
 
-    char c;
-    read(0, &c, 1);
+    if (windowed) {
+        cervus_fb_event_t ev;
+        int quit = 0;
+        while (!quit) {
+            cervus_fb_wait_event(-1);
+            while (cervus_fb_poll_event(&ev) > 0)
+                if (ev.type == CERVUS_FBEV_CLOSE ||
+                    ((ev.type == CERVUS_FBEV_KEY || ev.type == CERVUS_FBEV_BUTTON) && ev.value))
+                    quit = 1;
+        }
+    } else {
+        char c;
+        read(0, &c, 1);
+    }
 
     cervus_fb_release();
 

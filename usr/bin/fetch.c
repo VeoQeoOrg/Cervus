@@ -205,7 +205,7 @@ static void print_term(void)
 {
     fputs(C_RESET "display: ", stdout);
     cervus_fb_info_t fb;
-    if (cervus_fb_info(&fb) == 0) printf("%ux%u %u bpp", fb.width, fb.height, fb.bpp);
+    if (cervus_display_info(&fb) == 0) printf("%ux%u %u bpp", fb.width, fb.height, fb.bpp);
     else fputs("text", stdout);
 }
 

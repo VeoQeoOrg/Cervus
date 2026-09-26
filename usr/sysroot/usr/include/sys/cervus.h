@@ -249,6 +249,31 @@ void    *cervus_fb_map(void);
 int      cervus_fb_acquire(void);
 int      cervus_fb_release(void);
 
+typedef struct {
+    uint32_t type;
+    uint32_t code;
+    int32_t  value;
+    int32_t  x;
+    int32_t  y;
+} cervus_fb_event_t;
+
+#define CERVUS_FBEV_KEY     1
+#define CERVUS_FBEV_BUTTON  2
+#define CERVUS_FBEV_MOTION  3
+#define CERVUS_FBEV_RELMOVE 4
+#define CERVUS_FBEV_WHEEL   5
+#define CERVUS_FBEV_FOCUS   6
+#define CERVUS_FBEV_CLOSE   7
+
+int      cervus_display_info(cervus_fb_info_t *out);
+int      cervus_fb_windowed(void);
+void     cervus_fb_set_size(unsigned w, unsigned h);
+void     cervus_fb_set_title(const char *title);
+int      cervus_fb_present(void);
+int      cervus_fb_poll_event(cervus_fb_event_t *ev);
+int      cervus_fb_wait_event(int timeout_ms);
+int      cervus_fb_grab_pointer(int on);
+
 #define CERVUS_FONT_CP_MAP_SIZE 0x600
 #define CERVUS_FONT_MAX_W       32
 #define CERVUS_FONT_MAX_H       64

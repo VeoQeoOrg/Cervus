@@ -224,6 +224,12 @@ static void load_preview_text(const char *path) {
     }
 }
 
+static int on_console(void);
+
+static int cmp_pvline(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
 static void load_preview_dir(const char *path) {
     if (!strcmp(g_pv_path, path)) return;
     snprintf(g_pv_path, sizeof g_pv_path, "%s", path);
@@ -241,7 +247,24 @@ static void load_preview_dir(const char *path) {
         bp += n + 1; rem -= (size_t)n + 1;
     }
     closedir(d);
+    qsort(g_pvlines, (size_t)g_pvn, sizeof g_pvlines[0], cmp_pvline);
     if (g_pvn == 0) g_pvlines[g_pvn++] = "(empty)";
+}
+
+static void footer(const char *const *items, int n) {
+    int width = g_cols - 1, used = 1;
+    printf("\x1b[46m\x1b[30m ");
+    for (int i = 0; i < n; i++) {
+        int len = 0;
+        for (const unsigned char *p = (const unsigned char *)items[i]; *p; p++)
+            if ((*p & 0xC0) != 0x80) len++;
+        int need = (i ? 2 : 0) + len;
+        if (used + need > width) break;
+        printf("%s%s", i ? "  " : "", items[i]);
+        used += need;
+    }
+    if (used < width) printf(" ");
+    printf("\x1b[0m\x1b[K");
 }
 
 static void draw(void) {
@@ -324,13 +347,22 @@ static void draw(void) {
     printf("%.*s", g_cols - 20, g_status);
 
     tui_move(g_rows, 1);
-    printf("\x1b[46m\x1b[30m"
-           " \x18\x19 nav  Enter open  o open with  e run  y copy path  "
-           "r rename  d del  c/x/v  n mkdir  s settings  q quit  Q quit here \x1b[0m\x1b[K");
+    {
+        static const char *const hints[] = {
+            "\u2191\u2193 nav", "Enter open", "q quit", "o open with", "e run", "y copy path",
+            "r rename", "d del", "c/x/v", "n mkdir", "s settings", "Q quit here"
+        };
+        footer(hints, (int)(sizeof hints / sizeof hints[0]));
+    }
 
     if (prev_img) {
         char full[PMAX]; path_join(g_cwd, sel->name, full);
-        if (strcmp(g_thumb_path, full) != 0) {
+        if (!on_console()) {
+            tui_move(2, split + 2);
+            printf("\x1b[93m image\x1b[0m");
+            tui_move(4, split + 2);
+            printf("\x1b[90m Enter opens it in a window\x1b[0m");
+        } else if (strcmp(g_thumb_path, full) != 0) {
             tui_move(2, split + 2);
             printf("\x1b[93m Loading image... \x1b[0m");
         }
@@ -460,8 +492,12 @@ static void view_file(const char *path) {
             if (idx < li) printf("%-.*s", g_cols, lines[idx]);
         }
         tui_move(g_rows, 1);
-        printf("\x1b[46m\x1b[30m \x18\x19 scroll  PgUp/PgDn  line %d/%d  left or q goes back \x1b[0m\x1b[K",
-               off + 1, li);
+        {
+            char where[40];
+            snprintf(where, sizeof where, "line %d/%d", off + 1, li);
+            const char *hints[] = { "\u2191\u2193 scroll", "left or q goes back", where, "PgUp/PgDn" };
+            footer(hints, 4);
+        }
         fflush(stdout);
 
         int k = tui_read_key();
@@ -522,6 +558,38 @@ static uint8_t *read_whole(const char *path, size_t *len) {
     return buf;
 }
 
+static int on_console(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *tn = ttyname(1);
+        v = !getenv("WAYLAND_DISPLAY") && tn && strncmp(tn, "/dev/pts/", 9) != 0;
+    }
+    return v;
+}
+
+static int window_wait_close(int timeout_ms) {
+    cervus_fb_event_t ev;
+    cervus_fb_wait_event(timeout_ms);
+    while (cervus_fb_poll_event(&ev) > 0)
+        if (ev.type == CERVUS_FBEV_CLOSE ||
+            ((ev.type == CERVUS_FBEV_KEY || ev.type == CERVUS_FBEV_BUTTON) && ev.value))
+            return 1;
+    return 0;
+}
+
+static void window_fit(int iw, int ih, const char *path) {
+    cervus_fb_info_t disp;
+    int mw = 1024, mh = 700;
+    if (cervus_display_info(&disp) == 0) { mw = (int)disp.width * 9 / 10; mh = (int)disp.height * 8 / 10; }
+    if (iw > mw) { ih = (int)((long)ih * mw / iw); iw = mw; }
+    if (ih > mh) { iw = (int)((long)iw * mh / ih); ih = mh; }
+    if (iw < 64) iw = 64;
+    if (ih < 64) ih = 64;
+    cervus_fb_set_size((unsigned)iw, (unsigned)ih);
+    const char *base = strrchr(path, '/');
+    cervus_fb_set_title(base ? base + 1 : path);
+}
+
 static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
     size_t got = 0;
     uint8_t *buf = read_whole(path, &got);
@@ -532,17 +600,24 @@ static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
     free(buf);
     if (a.nframes < 2) { gif_free(&a); return -1; }
 
+    int windowed = cervus_fb_windowed();
+    cervus_fb_info_t wi = *fbi;
+    if (windowed) {
+        window_fit(a.w, a.h, path);
+        cervus_fb_info(&wi);
+    }
+    if (cervus_fb_acquire() != 0) { gif_free(&a); return -1; }
     int v = 1;
-    ioctl(0, TIOCSNONBLOCK, &v);
-    cervus_fb_acquire();
+    if (!windowed) ioctl(0, TIOCSNONBLOCK, &v);
 
     int quit = 0;
     while (!quit) {
         for (int i = 0; i < a.nframes && !quit; i++) {
             image_t fr = { a.w, a.h, a.frames[i] };
-            blit_fit(&fr, 0, 0, (int)fbi->width, (int)fbi->height);
+            blit_fit(&fr, 0, 0, (int)wi.width, (int)wi.height);
             int ms = a.delays_ms[i] < 20 ? 20 : a.delays_ms[i];
             for (int slept = 0; slept < ms && !quit; slept += 20) {
+                if (windowed) { if (window_wait_close(20)) quit = 1; continue; }
                 usleep(20000);
                 char c;
                 if (read(0, &c, 1) == 1) quit = 1;
@@ -552,12 +627,13 @@ static int play_gif_fullscreen(const char *path, const cervus_fb_info_t *fbi) {
 
     cervus_fb_release();
     v = 0;
-    ioctl(0, TIOCSNONBLOCK, &v);
+    if (!windowed) ioctl(0, TIOCSNONBLOCK, &v);
     gif_free(&a);
     return 0;
 }
 
 static void view_image_fullscreen(const char *path) {
+    if (!on_console() && !getenv("WAYLAND_DISPLAY")) { view_file(path); return; }
     cervus_fb_info_t fbi;
     if (cervus_fb_info(&fbi) != 0) { view_file(path); return; }
 
@@ -566,9 +642,19 @@ static void view_image_fullscreen(const char *path) {
 
     image_t im;
     if (image_load(path, &im) != 0) { set_status("cannot decode image"); return; }
-    cervus_fb_acquire();
+    int windowed = cervus_fb_windowed();
+    if (windowed) {
+        window_fit(im.w, im.h, path);
+        cervus_fb_info(&fbi);
+    }
+    if (cervus_fb_acquire() != 0) {
+        image_free(&im);
+        set_status("the screen belongs to another program");
+        return;
+    }
     blit_fit(&im, 0, 0, (int)fbi.width, (int)fbi.height);
-    tui_read_key();
+    if (windowed) while (!window_wait_close(-1)) { }
+    else tui_read_key();
     cervus_fb_release();
     image_free(&im);
 }
@@ -596,6 +682,7 @@ static int thumb_load_gif(const char *path) {
 }
 
 static void draw_inline_thumb(const char *path, int split) {
+    if (!on_console()) return;
     cervus_fb_info_t fbi;
     if (cervus_fb_info(&fbi) != 0) return;
     int cell_w = (int)fbi.width / g_cols;
@@ -633,7 +720,7 @@ static void draw_inline_thumb(const char *path, int split) {
 }
 
 static int thumb_next_frame(void) {
-    if (!g_thumb_gif_ok || g_thumb_rw <= 0) return 0;
+    if (!g_thumb_gif_ok || g_thumb_rw <= 0 || !on_console()) return 0;
     int delay = g_thumb_gif.delays_ms[g_thumb_frame];
     g_thumb_frame = (g_thumb_frame + 1) % g_thumb_gif.nframes;
     image_t fr = { g_thumb_gif.w, g_thumb_gif.h, g_thumb_gif.frames[g_thumb_frame] };
@@ -943,7 +1030,7 @@ static void do_settings(void) {
     static const char *sort_names[3] = { "name", "size", "type" };
     for (;;) {
         printf("\x1b[?25l\x1b[2J\x1b[H");
-        printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n");
+        printf("\x1b[44m\x1b[97m cfm settings \x1b[0m  \u2191\u2193 move   < > change   Esc close\r\n\r\n");
         char vals[11][32];
         snprintf(vals[0], sizeof vals[0], "%s", g_preview ? "ON" : "OFF");
         snprintf(vals[1], sizeof vals[1], "%s", g_confirm_del ? "ON" : "OFF");

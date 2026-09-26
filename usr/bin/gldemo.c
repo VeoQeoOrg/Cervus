@@ -337,8 +337,17 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    int windowed = cervus_fb_windowed();
+    if (windowed) cervus_fb_set_title("gldemo");
+    if (cervus_fb_acquire() != 0) {
+        fputs("gldemo: the screen belongs to a graphical session; run it from Weston's\n"
+              "        terminal or from a text console of its own\n", stderr);
+        return 1;
+    }
+
     uint32_t *fb = (uint32_t *)cervus_fb_map();
     if (!fb) {
+        cervus_fb_release();
         fputs("gldemo: cannot map the framebuffer\n", stderr);
         return 1;
     }
@@ -376,7 +385,7 @@ int main(int argc, char **argv)
     cube.color[0]  = 0.9f; cube.color[1]  = 0.6f; cube.color[2]  = 0.1f; cube.color[3] = 1.0f;
 
     struct termios orig, raw;
-    int have_tio = (tcgetattr(0, &orig) == 0);
+    int have_tio = !windowed && (tcgetattr(0, &orig) == 0);
     if (have_tio) {
         raw = orig;
         raw.c_lflag &= ~(ECHO | ICANON | ISIG);
@@ -385,9 +394,7 @@ int main(int argc, char **argv)
         tcsetattr(0, TCSAFLUSH, &raw);
     }
     int nb = 1;
-    ioctl(0, TIOCSNONBLOCK, &nb);
-
-    cervus_fb_acquire();
+    if (!windowed) ioctl(0, TIOCSNONBLOCK, &nb);
 
     for (int y = 0; y < sh; y++)
         for (int x = 0; x < sw; x++)
@@ -428,16 +435,26 @@ int main(int argc, char **argv)
     for (int y = 0; y < rh; y++) { pmin[y] = 0; pmax[y] = 0; }
 
     while (running) {
-        char key;
-        while (read(0, &key, 1) == 1) {
-            if (key == 'q' || key == 'Q' || key == 27) running = 0;
-            else if (key == 'g' || key == 'G') scene = 0;
-            else if (key == 'c' || key == 'C') scene = 1;
+        int key = 0;
+        char ch;
+        cervus_fb_event_t ev;
+        while (!windowed && read(0, &ch, 1) == 1) {
+            key = (unsigned char)ch;
+            if (key >= 'A' && key <= 'Z') key += 'a' - 'A';
+            if (key == 'q' || key == 27) running = 0;
+            else if (key == 'g') scene = 0;
+            else if (key == 'c') scene = 1;
             else if (key == ' ') paused = !paused;
-            else if (key == 'f' || key == 'F') {
-                flat = !flat;
-                glShadeModel(flat ? GL_FLAT : GL_SMOOTH);
-            }
+            else if (key == 'f') { flat = !flat; glShadeModel(flat ? GL_FLAT : GL_SMOOTH); }
+        }
+        while (windowed && cervus_fb_poll_event(&ev) > 0) {
+            if (ev.type == CERVUS_FBEV_CLOSE) running = 0;
+            if (ev.type != CERVUS_FBEV_KEY || !ev.value) continue;
+            if (ev.code == 16 || ev.code == 1) running = 0;
+            else if (ev.code == 34) scene = 0;
+            else if (ev.code == 46) scene = 1;
+            else if (ev.code == 57) paused = !paused;
+            else if (ev.code == 33) { flat = !flat; glShadeModel(flat ? GL_FLAT : GL_SMOOTH); }
         }
         if (!running) break;
 
@@ -522,6 +539,7 @@ int main(int argc, char **argv)
         }
         blit_rect(fb, pitch32, ox, oy, cbuf, rw, rh, 8, 8, 8 + tw, 8 + th);
         blit_rect(fb, pitch32, ox, oy, cbuf, rw, rh, 8, rh - 26, 8 + bw2, rh - 10);
+        cervus_fb_present();
 
         for (int y = 0; y < rh; y++) {
             pmin[y] = nmin[y];
@@ -550,7 +568,7 @@ int main(int argc, char **argv)
     cervus_fb_release();
     if (have_tio) tcsetattr(0, TCSAFLUSH, &orig);
     nb = 0;
-    ioctl(0, TIOCSNONBLOCK, &nb);
+    if (!windowed) ioctl(0, TIOCSNONBLOCK, &nb);
 
     glDestroyContext();
     free(pmin); free(pmax);

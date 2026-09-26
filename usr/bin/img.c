@@ -82,14 +82,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    cervus_fb_info_t fbi;
-    if (cervus_fb_info(&fbi) != 0) {
-        fprintf(stderr, "img: no framebuffer\n");
-        free(fdata);
-        return 1;
-    }
-    sw = (int)fbi.width; sh = (int)fbi.height;
-
     gif_anim_t anim;
     int animated = 0;
     if (flen >= 6 && memcmp(fdata, "GIF8", 4) == 0 &&
@@ -103,11 +95,43 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    int windowed = cervus_fb_windowed();
+    if (windowed) {
+        cervus_fb_info_t disp;
+        int iw = animated ? anim.w : still.w, ih = animated ? anim.h : still.h;
+        int mw = 1024, mh = 700;
+        if (cervus_display_info(&disp) == 0) { mw = (int)disp.width * 9 / 10; mh = (int)disp.height * 8 / 10; }
+        if (iw > mw) { ih = (int)((long)ih * mw / iw); iw = mw; }
+        if (ih > mh) { iw = (int)((long)iw * mh / ih); ih = mh; }
+        if (iw < 64) iw = 64;
+        if (ih < 64) ih = 64;
+        cervus_fb_set_size((unsigned)iw, (unsigned)ih);
+        char title[64];
+        const char *base = strrchr(argv[1], '/');
+        snprintf(title, sizeof title, "%s", base ? base + 1 : argv[1]);
+        cervus_fb_set_title(title);
+    }
+
+    cervus_fb_info_t fbi;
+    if (cervus_fb_info(&fbi) != 0) {
+        fprintf(stderr, "img: no framebuffer\n");
+        free(fdata);
+        return 1;
+    }
+    sw = (int)fbi.width; sh = (int)fbi.height;
+
     uint32_t *screen = calloc((size_t)sw * sh, 4);
     if (!screen) { free(fdata); return 1; }
 
+    if (cervus_fb_acquire() != 0) {
+        fprintf(stderr, "img: the screen belongs to a graphical session; run img from its terminal\n");
+        free(screen);
+        free(fdata);
+        return 1;
+    }
+
     struct termios orig, raw;
-    int have_tio = (tcgetattr(0, &orig) == 0);
+    int have_tio = !windowed && (tcgetattr(0, &orig) == 0);
     if (have_tio) {
         raw = orig;
         raw.c_lflag &= ~(ECHO | ICANON | ISIG);
@@ -116,13 +140,11 @@ int main(int argc, char **argv) {
         tcsetattr(0, TCSAFLUSH, &raw);
     }
 
-    cervus_fb_acquire();
-
     if (animated) {
         fit(anim.w, anim.h);
         memset(screen, 0, (size_t)sw * sh * 4);
         int nb = 1;
-        ioctl(0, TIOCSNONBLOCK, &nb);
+        if (!windowed) ioctl(0, TIOCSNONBLOCK, &nb);
         int quit = 0;
         while (!quit) {
             for (int i = 0; i < anim.nframes && !quit; i++) {
@@ -132,6 +154,15 @@ int main(int argc, char **argv) {
                 int ms = anim.delays_ms[i];
                 if (ms < 20) ms = 20;
                 for (int slept = 0; slept < ms && !quit; slept += 20) {
+                    if (windowed) {
+                        cervus_fb_event_t ev;
+                        cervus_fb_wait_event(20);
+                        while (cervus_fb_poll_event(&ev) > 0)
+                            if (ev.type == CERVUS_FBEV_CLOSE ||
+                                ((ev.type == CERVUS_FBEV_KEY || ev.type == CERVUS_FBEV_BUTTON) && ev.value))
+                                quit = 1;
+                        continue;
+                    }
                     syscall1(SYS_SLEEP_NS, 20000000ULL);
                     char c;
                     if (read(0, &c, 1) == 1) quit = 1;
@@ -139,7 +170,7 @@ int main(int argc, char **argv) {
             }
         }
         nb = 0;
-        ioctl(0, TIOCSNONBLOCK, &nb);
+        if (!windowed) ioctl(0, TIOCSNONBLOCK, &nb);
         gif_free(&anim);
     } else {
         struct sigaction sa;
@@ -153,6 +184,18 @@ int main(int argc, char **argv) {
         for (;;) {
             cervus_fb_blit(screen, 0, 0, sw, sh);
             g_redraw = 0;
+            if (windowed) {
+                int quit = 0;
+                cervus_fb_event_t ev;
+                while (!quit) {
+                    cervus_fb_wait_event(-1);
+                    while (cervus_fb_poll_event(&ev) > 0)
+                        if (ev.type == CERVUS_FBEV_CLOSE ||
+                            ((ev.type == CERVUS_FBEV_KEY || ev.type == CERVUS_FBEV_BUTTON) && ev.value))
+                            quit = 1;
+                }
+                break;
+            }
             char c;
             ssize_t n = read(0, &c, 1);
             if (n == 1) break;
