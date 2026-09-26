@@ -40,6 +40,8 @@ void vt_init(void);
 int  vt_active(void);
 void vt_switch(int n);
 void vt_handle_chord(int fn);
+void vt_request_switch(int n);
+void vt_start_worker(void);
 void console_input_char(char c);
 
 int  vt_take_spawn_request(void);
@@ -49,12 +51,13 @@ void vt_cursor(int vt, int on);
 void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 void vt_font_changed(void);
 
-int  vt_fb_owner(void);
-void vt_fb_acquire(int vt);
-void vt_fb_release(int vt);
-void vt_fb_set_owner_task(void *task);
+int  vt_fb_owned(int vt);
+int  vt_fb_owner_is(int vt, void *task);
+int  vt_fb_claim(int vt, void *task, int drm);
+void vt_fb_unclaim(int vt, void *task);
 void vt_fb_task_exit(void *task);
-int  vt_fb_may_draw(int vt);
+int  vt_fb_may_draw(int vt, void *task);
+void vt_fb_mapped(int vt, void *task, uintptr_t uaddr, uint64_t pages, uintptr_t vram_phys);
 
 void tty_vt_init(void);
 void tty_vt_input(int vt, char c);

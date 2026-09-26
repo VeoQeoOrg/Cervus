@@ -75,11 +75,9 @@ typedef struct {
 } drm_crtc_t;
 
 extern fb_info_t *global_framebuffer;
-extern void vt_fb_acquire(int vt);
-extern void vt_fb_release(int vt);
-extern void vt_fb_set_owner_task(task_t *t);
-extern int  vt_fb_may_draw(int vt);
-extern int  vt_fb_owner(void);
+extern int  vt_fb_claim(int vt, void *task, int drm);
+extern void vt_fb_unclaim(int vt, void *task);
+extern int  vt_fb_may_draw(int vt, void *task);
 extern void vt_kbd_off(int vt);
 extern void console_force_full_redraw(void);
 
@@ -93,6 +91,8 @@ static vnode_t    g_card_node;
 static int        g_master;
 static int        g_scanout_on;
 static uint32_t   g_scan_uid;
+static int        g_scan_vt;
+static void      *g_scan_task;
 static uint32_t   g_last_fb;
 
 typedef struct {
@@ -155,6 +155,63 @@ static void dumb_free(dumb_t *d)
     d->used = 0;
 }
 
+static uint32_t  *g_scan_line;
+static uint32_t   g_scan_line_cap;
+static spinlock_t g_scan_lock = SPINLOCK_INIT;
+
+static void scan_copy_rows(drm_fb_t *f, dumb_t *d, fb_info_t *dst)
+{
+    uint32_t rows = f->height < (uint32_t)dst->height ? f->height : (uint32_t)dst->height;
+    uint32_t cols = f->width  < (uint32_t)dst->width  ? f->width  : (uint32_t)dst->width;
+    uint32_t bytes = cols * 4;
+    uint32_t *bb = fb_get_backbuffer();
+
+    if (!bb || !g_scan_line || g_scan_line_cap < cols) {
+        uint32_t *vram = (uint32_t *)dst->address;
+        uint32_t vpitch = (uint32_t)(dst->pitch / 4);
+        for (uint32_t y = 0; y < rows; y++) {
+            uint8_t *drow = (uint8_t *)(vram + (size_t)y * vpitch);
+            uint64_t off = (uint64_t)y * f->pitch;
+            for (uint32_t done = 0; done < bytes; ) {
+                size_t   page = (size_t)((off + done) >> 12);
+                uint32_t in   = (uint32_t)((off + done) & 0xFFF);
+                uint32_t n    = 0x1000 - in;
+                if (n > bytes - done) n = bytes - done;
+                if (page < d->npages && d->pages[page])
+                    memcpy(drow + done, (uint8_t *)d->pages[page] + in, n);
+                done += n;
+            }
+        }
+        return;
+    }
+
+    uint32_t bpitch = fb_backbuffer_pitch();
+    uint32_t *line = g_scan_line;
+    for (uint32_t y = 0; y < rows; y++) {
+        uint64_t off = (uint64_t)y * f->pitch;
+        for (uint32_t done = 0; done < bytes; ) {
+            size_t   page = (size_t)((off + done) >> 12);
+            uint32_t in   = (uint32_t)((off + done) & 0xFFF);
+            uint32_t n    = 0x1000 - in;
+            if (n > bytes - done) n = bytes - done;
+            if (page < d->npages && d->pages[page])
+                memcpy((uint8_t *)line + done, (uint8_t *)d->pages[page] + in, n);
+            else
+                memset((uint8_t *)line + done, 0, n);
+            done += n;
+        }
+        uint32_t *brow = bb + (size_t)y * bpitch;
+        uint32_t x0 = 0;
+        while (x0 < cols && line[x0] == brow[x0]) x0++;
+        if (x0 == cols) continue;
+        uint32_t x1 = cols;
+        while (x1 > x0 && line[x1 - 1] == brow[x1 - 1]) x1--;
+        memcpy(brow + x0, line + x0, (size_t)(x1 - x0) * 4);
+        fb_flush_span(dst, y, x0, x1);
+    }
+    asm volatile ("sfence" ::: "memory");
+}
+
 static int scanout(uint32_t fb_id)
 {
     drm_fb_t *f = fb_by_id(fb_id);
@@ -166,51 +223,47 @@ static int scanout(uint32_t fb_id)
 
     if (!g_scanout_on) {
         task_t *t = syscall_cur_task();
-        vt_fb_acquire(t ? t->ctty : 0);
-        vt_fb_set_owner_task(t);
-        vt_kbd_off(t ? t->ctty : 0);
-        g_scan_uid = t ? t->uid : 0;
+        int vt = t ? t->ctty : 0;
+        if (vt_fb_claim(vt, t, 1) < 0) return -EBUSY;
+        vt_kbd_off(vt);
+        g_scan_vt   = vt;
+        g_scan_task = t;
+        g_scan_uid  = t ? t->uid : 0;
         g_scanout_on = 1;
     }
-    g_last_fb = fb_id;
-    if (!vt_fb_may_draw(vt_fb_owner())) return 0;
-
-    uint32_t rows = f->height < (uint32_t)dst->height ? f->height : (uint32_t)dst->height;
-    uint32_t cols = f->width  < (uint32_t)dst->width  ? f->width  : (uint32_t)dst->width;
-    uint32_t bytes = cols * 4;
-
-    uint32_t *bb     = fb_get_backbuffer();
-    uint32_t  bpitch = bb ? fb_backbuffer_pitch() : (uint32_t)(dst->pitch / 4);
-    uint32_t *base   = bb ? bb : (uint32_t *)dst->address;
-
-    for (uint32_t y = 0; y < rows; y++) {
-        uint8_t *drow = (uint8_t *)(base + (size_t)y * bpitch);
-        uint64_t off  = (uint64_t)y * f->pitch;
-        uint32_t done = 0;
-        while (done < bytes) {
-            size_t   page = (size_t)((off + done) >> 12);
-            uint32_t in   = (uint32_t)((off + done) & 0xFFF);
-            uint32_t n    = 0x1000 - in;
-            if (n > bytes - done) n = bytes - done;
-            if (page < d->npages && d->pages[page])
-                memcpy(drow + done, (uint8_t *)d->pages[page] + in, n);
-            done += n;
+    if (!g_scan_line || g_scan_line_cap < (uint32_t)dst->width) {
+        uint32_t *nl = kmalloc((size_t)dst->width * 4);
+        if (nl) {
+            if (g_scan_line) kfree(g_scan_line);
+            g_scan_line = nl;
+            g_scan_line_cap = (uint32_t)dst->width;
         }
     }
+    g_last_fb = fb_id;
+    if (!vt_fb_may_draw(g_scan_vt, g_scan_task)) return 0;
 
-    if (bb) fb_flush_lines(dst, 0, rows);
+    uint64_t fl = spinlock_acquire_irqsave(&g_scan_lock);
+    scan_copy_rows(f, d, dst);
+    spinlock_release_irqrestore(&g_scan_lock, fl);
     return 0;
 }
 
 void drm_redraw_last(void)
 {
-    if (g_scanout_on && g_last_fb) scanout(g_last_fb);
+    if (!g_scanout_on || !g_last_fb || !global_framebuffer) return;
+    drm_fb_t *f = fb_by_id(g_last_fb);
+    dumb_t *d = f ? dumb_by_handle(f->handle) : NULL;
+    if (!d) return;
+    uint64_t fl = spinlock_acquire_irqsave(&g_scan_lock);
+    scan_copy_rows(f, d, global_framebuffer);
+    spinlock_release_irqrestore(&g_scan_lock, fl);
 }
 
 void drm_forget_scanout(void)
 {
     g_last_fb = 0;
     g_scanout_on = 0;
+    g_scan_task = NULL;
     g_crtc.valid = 0;
     g_crtc.fb_id = 0;
 }
@@ -218,14 +271,10 @@ void drm_forget_scanout(void)
 void drm_stop_scanout(void)
 {
     if (!g_scanout_on) return;
-    task_t *t = syscall_cur_task();
-    int vt = t ? t->ctty : 0;
-    vt_fb_release(vt);
-    g_last_fb = 0;
-    g_scanout_on = 0;
-    g_crtc.valid = 0;
-    g_crtc.fb_id = 0;
-    if (vt_fb_may_draw(vt)) console_force_full_redraw();
+    void *task = g_scan_task;
+    int vt = g_scan_vt;
+    drm_forget_scanout();
+    vt_fb_unclaim(vt, task);
 }
 
 static void queue_flip_event(uint32_t crtc_id, uint64_t user_data)

@@ -73,6 +73,7 @@ void fb_init_backbuffer(fb_info_t *fb);
 void fb_resize_backbuffer(fb_info_t *fb);
 void fb_flush(fb_info_t *fb);
 void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end);
+void fb_flush_span(fb_info_t *fb, uint32_t y, uint32_t x0, uint32_t x1);
 
 void      fb_set_backbuffer(uint32_t *buf);
 uint32_t *fb_get_backbuffer(void);

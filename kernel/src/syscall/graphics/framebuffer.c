@@ -8,9 +8,12 @@
 
 extern fb_info_t *global_framebuffer;
 extern void console_set_offscreen(int on);
-extern int  vt_fb_may_draw(int vt);
-extern void vt_fb_acquire(int vt);
-extern void vt_fb_release(int vt);
+extern int  vt_fb_may_draw(int vt, void *task);
+extern int  vt_fb_owned(int vt);
+extern int  vt_fb_owner_is(int vt, void *task);
+extern int  vt_fb_claim(int vt, void *task, int drm);
+extern void vt_fb_unclaim(int vt, void *task);
+extern void vt_fb_mapped(int vt, void *task, uintptr_t uaddr, uint64_t pages, uintptr_t vram_phys);
 
 static int caller_vt(void) {
     task_t *t = syscall_cur_task();
@@ -47,7 +50,11 @@ int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64
 
     if (!syscall_uptr_validate((void *)buf_ptr, w * h * 4)) return -EFAULT;
 
-    if (!vt_fb_may_draw(caller_vt())) return (int64_t)(w * h * 4);
+    task_t *me = syscall_cur_task();
+    if (!vt_fb_may_draw(caller_vt(), me)) {
+        if (vt_fb_owned(caller_vt())) return -EBUSY;
+        return (int64_t)(w * h * 4);
+    }
 
     extern uint32_t *fb_get_backbuffer(void);
     extern uint32_t  fb_backbuffer_pitch(void);
@@ -81,6 +88,8 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
 
     task_t *t = syscall_cur_task();
     if (!t || !t->pagemap) return -EPERM;
+    int claim = vt_fb_claim(t->ctty, t, 0);
+    if (claim < 0) return claim;
 
     uint64_t fb_bytes = (uint64_t)fb->pitch * fb->height;
     uint64_t pages = (fb_bytes + 0xFFF) >> 12;
@@ -100,6 +109,8 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
             return -ENOMEM;
     }
 
+    vt_fb_mapped(t->ctty, t, uaddr, pages, phys);
+
     serial_printf("[FB] mapped %llu pages to user at 0x%llx (write-combining)\n",
                   (unsigned long long)pages, (unsigned long long)uaddr);
 
@@ -108,17 +119,12 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
 
 int64_t sys_fb_acquire(void)
 {
-    vt_fb_acquire(caller_vt());
-    vt_fb_set_owner_task(syscall_cur_task());
-    return 0;
+    return vt_fb_claim(caller_vt(), syscall_cur_task(), 0);
 }
 
 int64_t sys_fb_release(void)
 {
-    extern void console_force_full_redraw(void);
-    int vt = caller_vt();
-    vt_fb_release(vt);
-    if (vt_fb_may_draw(vt)) console_force_full_redraw();
+    vt_fb_unclaim(caller_vt(), syscall_cur_task());
     return 0;
 }
 

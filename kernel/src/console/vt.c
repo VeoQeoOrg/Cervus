@@ -1,8 +1,14 @@
 #include "../../include/console/console.h"
 #include "../../include/graphics/fb/fb.h"
+#include "../../include/syscall/errno.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/sched/sched.h"
+#include "../../include/memory/vmm.h"
+#include "../../include/apic/apic.h"
+#include "../../include/smp/smp.h"
+#include <stdlib.h>
+#include <string.h>
 
 extern fb_info_t *global_framebuffer;
 extern void kb_buf_push(char c);
@@ -79,52 +85,180 @@ static int ensure_grid(int n) {
     return 1;
 }
 
-static int   g_fb_owner_vt = -1;
-static void *g_fb_owner_task;
-static int   g_kbd_off_vt = -1;
+static void   *g_fb_task[VT_COUNT];
+static uint8_t g_fb_drm[VT_COUNT];
+static uint8_t g_kbd_off[VT_COUNT];
 
-void vt_kbd_off(int vt) { g_kbd_off_vt = vt; }
+static int vt_valid(int vt) { return vt >= 0 && vt < VT_COUNT; }
+
+typedef struct {
+    void      *task;
+    uintptr_t  uaddr;
+    uint64_t   pages;
+    uintptr_t  vram_phys;
+    uintptr_t *shadow;
+    uint64_t   nshadow;
+} fb_park_t;
+
+static fb_park_t g_park[VT_COUNT];
+
+#define PARK_VRAM_FLAGS (VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED | VMM_PWT | VMM_PAT)
+#define PARK_RAM_FLAGS  (VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED)
+
+static void park_flush_tlb(void) {
+    if (smp_get_cpu_count() > 1) ipi_tlb_shootdown_broadcast(NULL, TLB_FLUSH_ALL);
+}
+
+static vmm_pagemap_t *park_pagemap(fb_park_t *p) {
+    task_t *t = p->task;
+    return t ? t->pagemap : NULL;
+}
+
+static uint64_t park_fb_bytes(void) {
+    fb_info_t *fb = global_framebuffer;
+    return fb ? (uint64_t)fb->pitch * fb->height : 0;
+}
+
+static void park_free_shadow(fb_park_t *p) {
+    if (!p->shadow) return;
+    for (uint64_t i = 0; i < p->nshadow; i++)
+        if (p->shadow[i]) pmm_free(pmm_phys_to_virt(p->shadow[i]), 1);
+    free(p->shadow);
+    p->shadow = NULL;
+    p->nshadow = 0;
+}
+
+static void fb_park(int vt) {
+    fb_park_t *p = &g_park[vt];
+    uint64_t bytes = park_fb_bytes();
+    if (p->shadow || !bytes) return;
+    uint64_t n = (bytes + 0xFFF) >> 12;
+    uintptr_t *list = calloc(n, sizeof(uintptr_t));
+    if (!list) return;
+    const uint8_t *vram = (const uint8_t *)global_framebuffer->address;
+    for (uint64_t i = 0; i < n; i++) {
+        void *pg = pmm_alloc(1);
+        if (!pg) {
+            p->shadow = list;
+            p->nshadow = i;
+            park_free_shadow(p);
+            return;
+        }
+        uint64_t off = i << 12;
+        uint64_t len = bytes - off < 0x1000 ? bytes - off : 0x1000;
+        memcpy(pg, vram + off, (size_t)len);
+        list[i] = pmm_virt_to_phys(pg);
+    }
+    p->shadow = list;
+    p->nshadow = n;
+
+    vmm_pagemap_t *pm = park_pagemap(p);
+    if (pm && p->pages) {
+        for (uint64_t i = 0; i < p->pages && i < n; i++)
+            vmm_map_page(pm, p->uaddr + (i << 12), list[i], PARK_RAM_FLAGS);
+        park_flush_tlb();
+    }
+}
+
+static void fb_unpark(int vt) {
+    fb_park_t *p = &g_park[vt];
+    uint64_t bytes = park_fb_bytes();
+    if (!p->shadow || !bytes) return;
+    uint8_t *vram = (uint8_t *)global_framebuffer->address;
+    for (uint64_t i = 0; i < p->nshadow; i++) {
+        uint64_t off = i << 12;
+        if (off >= bytes) break;
+        uint64_t len = bytes - off < 0x1000 ? bytes - off : 0x1000;
+        memcpy(vram + off, pmm_phys_to_virt(p->shadow[i]), (size_t)len);
+    }
+    vmm_pagemap_t *pm = park_pagemap(p);
+    if (pm && p->pages) {
+        for (uint64_t i = 0; i < p->pages; i++)
+            vmm_map_page(pm, p->uaddr + (i << 12), p->vram_phys + (i << 12), PARK_VRAM_FLAGS);
+        park_flush_tlb();
+    }
+    park_free_shadow(p);
+}
+
+static void fb_park_drop(int vt) {
+    fb_park_t *p = &g_park[vt];
+    if (p->shadow) {
+        vmm_pagemap_t *pm = park_pagemap(p);
+        if (pm && p->pages) {
+            for (uint64_t i = 0; i < p->pages; i++)
+                vmm_unmap_page_noflush(pm, p->uaddr + (i << 12));
+            park_flush_tlb();
+        }
+        park_free_shadow(p);
+    }
+    p->task = NULL;
+    p->uaddr = 0;
+    p->pages = 0;
+}
+
+void vt_fb_mapped(int vt, void *task, uintptr_t uaddr, uint64_t pages, uintptr_t vram_phys) {
+    if (!vt_valid(vt) || !task) return;
+    g_park[vt].task = task;
+    g_park[vt].uaddr = uaddr;
+    g_park[vt].pages = pages;
+    g_park[vt].vram_phys = vram_phys;
+}
+
+void vt_kbd_off(int vt) { if (vt_valid(vt)) g_kbd_off[vt] = 1; }
 
 int vt_kbd_muted(void) {
-    return g_inited && g_kbd_off_vt >= 0 && g_kbd_off_vt == g_active;
+    return g_inited && vt_valid(g_active) && g_kbd_off[g_active];
 }
 
-int vt_fb_owner(void) { return g_fb_owner_vt; }
+int vt_fb_owned(int vt) { return vt_valid(vt) && g_fb_task[vt] != NULL; }
 
-void vt_fb_acquire(int vt) {
-    g_fb_owner_vt = vt;
-    console_set_offscreen(vt == g_active);
+int vt_fb_owner_is(int vt, void *task) { return vt_valid(vt) && task && g_fb_task[vt] == task; }
+
+int vt_fb_claim(int vt, void *task, int drm) {
+    if (!vt_valid(vt) || !task) return -EINVAL;
+    if (g_fb_task[vt] && g_fb_task[vt] != task) return -EBUSY;
+    g_fb_task[vt] = task;
+    g_fb_drm[vt]  = (uint8_t)(drm != 0);
+    if (vt == g_active) console_set_offscreen(1);
+    return 0;
 }
 
-void vt_fb_release(int vt) {
-    if (g_kbd_off_vt == vt) g_kbd_off_vt = -1;
-    if (g_fb_owner_vt != vt) return;
-    g_fb_owner_vt = -1;
-    g_fb_owner_task = NULL;
-    console_set_offscreen(0);
+void vt_fb_unclaim(int vt, void *task) {
+    if (!vt_valid(vt) || !task || g_fb_task[vt] != task) return;
+    fb_park_drop(vt);
+    g_fb_task[vt] = NULL;
+    g_fb_drm[vt]  = 0;
+    g_kbd_off[vt] = 0;
+    if (vt == g_active) {
+        extern void console_force_full_redraw(void);
+        console_set_offscreen(0);
+        console_force_full_redraw();
+    }
 }
 
-void vt_fb_set_owner_task(void *task) {
-    g_fb_owner_task = task;
+int vt_fb_may_draw(int vt, void *task) {
+    return vt_valid(vt) && vt == g_active && (!g_fb_task[vt] || g_fb_task[vt] == task);
 }
 
 void vt_fb_task_exit(void *task) {
-    if (!task || g_fb_owner_task != task) return;
-    extern void console_force_full_redraw(void);
-    extern void drm_forget_scanout(void);
-    drm_forget_scanout();
-    vt_fb_release(g_fb_owner_vt);
-    console_force_full_redraw();
-}
-
-int vt_fb_may_draw(int vt) {
-    return vt == g_active;
+    if (!task) return;
+    for (int vt = 0; vt < VT_COUNT; vt++) {
+        if (g_fb_task[vt] != task) continue;
+        if (g_fb_drm[vt]) {
+            extern void drm_forget_scanout(void);
+            drm_forget_scanout();
+        }
+        vt_fb_unclaim(vt, task);
+    }
 }
 
 void vt_switch(int n) {
     if (!g_inited) return;
     if (n < 0 || n >= VT_COUNT) return;
     if (n == g_active) return;
+
+    int old = g_active;
+    if (vt_valid(old) && g_fb_task[old] && !g_fb_drm[old]) fb_park(old);
 
     uint64_t f = spinlock_acquire_irqsave(&g_lock);
     if (n == g_active) { spinlock_release_irqrestore(&g_lock, f); return; }
@@ -154,7 +288,7 @@ void vt_switch(int n) {
     console_load_state(&g_vts[n].state);
     g_active = n;
 
-    int owns = (g_fb_owner_vt == n);
+    int owns = g_fb_task[n] != NULL;
     console_set_offscreen(owns);
     if (owns) {
         fb_clear(global_framebuffer, 0);
@@ -174,7 +308,8 @@ void vt_switch(int n) {
         extern void drm_redraw_last(void);
         extern struct task *task_find_foreground(void);
         extern void signal_send_subtree(struct task *root, int sig);
-        drm_redraw_last();
+        if (g_fb_drm[n]) drm_redraw_last();
+        else             fb_unpark(n);
         struct task *fg = task_find_foreground();
         if (fg) signal_send_subtree(fg, 28);
     }
@@ -215,7 +350,7 @@ void vt_write(int n, const char *buf, size_t len) {
 
     console_set_offscreen(1);
     for (size_t i = 0; i < len; i++) putchar((int)(unsigned char)buf[i]);
-    console_set_offscreen(g_fb_owner_vt == g_active);
+    console_set_offscreen(g_fb_task[g_active] != NULL);
 
     console_save_state(&g_vts[n].state);
     console_set_grid(g_vts[g_active].grid, g_cols, g_rows);
@@ -226,9 +361,30 @@ void vt_write(int n, const char *buf, size_t len) {
     for (int i = 0; i < rn; i++) tty_vt_input(n, rep[i]);
 }
 
+static volatile int g_switch_req = -1;
+static int g_switch_worker;
+
+static void vt_switch_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        int n = __atomic_exchange_n(&g_switch_req, -1, __ATOMIC_ACQ_REL);
+        if (n >= 0) vt_switch(n);
+        task_sleep_ms(5);
+    }
+}
+
+void vt_start_worker(void) {
+    if (task_create("vt_switch", vt_switch_worker, NULL, 1)) g_switch_worker = 1;
+}
+
+void vt_request_switch(int n) {
+    if (!g_switch_worker) { vt_switch(n); return; }
+    __atomic_store_n(&g_switch_req, n, __ATOMIC_RELEASE);
+}
+
 void vt_handle_chord(int fn) {
     if (fn < 1 || fn > VT_COUNT) return;
-    vt_switch(fn - 1);
+    vt_request_switch(fn - 1);
 }
 
 void vt_tick_flush(void) {

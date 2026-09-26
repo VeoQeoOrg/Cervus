@@ -404,7 +404,7 @@ static void mon_key(char c) {
         case '/':           mon_pause_here(); g_mode = MON_SEARCH; g_qlen = 0; g_query[0] = 0; mon_render(1); break;
         case 'n':           mon_pause_here(); mon_do_search(g_cursor + 1); mon_render(1); break;
         case 'q': case 'Q': case 27:
-            if (g_return_vt >= 0) { int v = g_return_vt; g_return_vt = -1; vt_switch(v); }
+            if (g_return_vt >= 0) { int v = g_return_vt; g_return_vt = -1; vt_request_switch(v); }
             break;
         case '0': mon_set_filter(-1);            break;
         case '1': mon_set_filter(KLOG_LVL_INFO); break;

@@ -153,6 +153,7 @@ static void load_elf_module(void) {
     net_start_worker();
     vfs_start_syncd();
     timer_start_recal_task();
+    vt_start_worker();
 
     kernel_stage_echo_off();
     console_boot_logging_off();

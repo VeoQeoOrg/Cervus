@@ -72,48 +72,46 @@ void fb_flush(fb_info_t *fb) {
     fb_flush_lines(fb, 0, g_bb_h);
 }
 
+static void flush_row(fb_info_t *fb, uint32_t y, uint32_t x0, uint32_t x1) {
+    uint32_t bpp = fb->bpp ? (uint32_t)fb->bpp : 32;
+    uint8_t *drow = (uint8_t *)fb->address + (size_t)y * fb->pitch;
+    const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
+    if (bpp == 32) {
+        memcpy((uint32_t *)drow + x0, s + x0, (size_t)(x1 - x0) * 4);
+    } else if (bpp == 24) {
+        uint8_t *d = drow + (size_t)x0 * 3;
+        for (uint32_t x = x0; x < x1; x++) {
+            uint32_t c = s[x];
+            d[0] = (uint8_t)(c);
+            d[1] = (uint8_t)(c >> 8);
+            d[2] = (uint8_t)(c >> 16);
+            d += 3;
+        }
+    } else if (bpp == 16) {
+        uint16_t *d = (uint16_t *)drow;
+        for (uint32_t x = x0; x < x1; x++) {
+            uint32_t c = s[x];
+            d[x] = (uint16_t)((((c >> 16) & 0xF8) << 8) |
+                              (((c >> 8)  & 0xFC) << 3) |
+                              (( c        & 0xF8) >> 3));
+        }
+    }
+}
+
 void fb_flush_lines(fb_info_t *fb, uint32_t y_start, uint32_t y_end) {
     if (!fb || !g_backbuf) return;
     if (y_start >= g_bb_h) return;
     if (y_end > g_bb_h) y_end = g_bb_h;
     if (y_start >= y_end) return;
-
-    uint32_t bpp    = fb->bpp ? (uint32_t)fb->bpp : 32;
-    uint32_t w      = g_bb_w;
-    uint8_t *vram   = (uint8_t *)fb->address;
-    uint64_t vpitch = fb->pitch;
-
-    if (bpp == 32) {
-        for (uint32_t y = y_start; y < y_end; y++) {
-            uint32_t *d = (uint32_t *)(vram + (size_t)y * vpitch);
-            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
-            memcpy(d, s, (size_t)w * 4);
-        }
-    } else if (bpp == 24) {
-        for (uint32_t y = y_start; y < y_end; y++) {
-            uint8_t *d = vram + (size_t)y * vpitch;
-            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
-            for (uint32_t x = 0; x < w; x++) {
-                uint32_t c = s[x];
-                d[0] = (uint8_t)(c);
-                d[1] = (uint8_t)(c >> 8);
-                d[2] = (uint8_t)(c >> 16);
-                d += 3;
-            }
-        }
-    } else if (bpp == 16) {
-        for (uint32_t y = y_start; y < y_end; y++) {
-            uint16_t *d = (uint16_t *)(vram + (size_t)y * vpitch);
-            const uint32_t *s = g_backbuf + (size_t)y * g_bb_pitch;
-            for (uint32_t x = 0; x < w; x++) {
-                uint32_t c = s[x];
-                d[x] = (uint16_t)((((c >> 16) & 0xF8) << 8) |
-                                  (((c >> 8)  & 0xFC) << 3) |
-                                  (( c        & 0xF8) >> 3));
-            }
-        }
-    }
+    for (uint32_t y = y_start; y < y_end; y++) flush_row(fb, y, 0, g_bb_w);
     asm volatile ("sfence" ::: "memory");
+}
+
+void fb_flush_span(fb_info_t *fb, uint32_t y, uint32_t x0, uint32_t x1) {
+    if (!fb || !g_backbuf || y >= g_bb_h) return;
+    if (x1 > g_bb_w) x1 = g_bb_w;
+    if (x0 >= x1) return;
+    flush_row(fb, y, x0, x1);
 }
 
 void fb_draw_pixel(fb_info_t *fb, uint32_t x, uint32_t y, uint32_t color) {
@@ -246,8 +244,10 @@ static uint32_t ascii_stand_in(uint32_t cp) {
     case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
     case 0x2022: case 0x00B7: return '*';
     case 0x2026: return '.';
-    case 0x2190: return '<';
-    case 0x2192: return '>';
+    case 0x2190: return 0x1B;
+    case 0x2191: return 0x18;
+    case 0x2192: return 0x1A;
+    case 0x2193: return 0x19;
     case 0x00AB: return '<';
     case 0x00BB: return '>';
     default:     return 0;
