@@ -100,26 +100,9 @@ int tui_read_key(void) {
 
     if (!ib_more()) return TK_ESC;
     int s0 = ib_getc();
-    if (s0 != '[' && s0 != 'O') return TK_ESC;
-    if (!ib_more()) return TK_ESC;
-    int s1 = ib_getc();
-
-    if (s0 == '[') {
-        if (s1 >= '0' && s1 <= '9') {
-            if (!ib_more()) return TK_ESC;
-            int s2 = ib_getc();
-            if (s2 == '~') {
-                switch (s1) {
-                    case '1': case '7': return TK_HOME;
-                    case '3':           return TK_DEL;
-                    case '4': case '8': return TK_END;
-                    case '5':           return TK_PGUP;
-                    case '6':           return TK_PGDN;
-                }
-            }
-            return TK_ESC;
-        }
-        switch (s1) {
+    if (s0 == 'O') {
+        if (!ib_more()) return TK_ESC;
+        switch (ib_getc()) {
             case 'A': return TK_UP;
             case 'B': return TK_DOWN;
             case 'C': return TK_RIGHT;
@@ -127,11 +110,34 @@ int tui_read_key(void) {
             case 'H': return TK_HOME;
             case 'F': return TK_END;
         }
-        return TK_ESC;
+        return TK_NONE;
     }
-    switch (s1) {
+    if (s0 != '[') return TK_ESC;
+
+    int p1 = 0, nparam = 0, fin = 0;
+    for (int n = 0; n < 24; n++) {
+        if (!ib_more()) return TK_NONE;
+        int ch = ib_getc();
+        if (ch >= '0' && ch <= '9') { if (nparam == 0) p1 = p1 * 10 + (ch - '0'); continue; }
+        if (ch == ';') { nparam++; continue; }
+        if (ch >= 0x40 && ch <= 0x7E) { fin = ch; break; }
+    }
+    switch (fin) {
+        case 'A': return TK_UP;
+        case 'B': return TK_DOWN;
+        case 'C': return TK_RIGHT;
+        case 'D': return TK_LEFT;
         case 'H': return TK_HOME;
         case 'F': return TK_END;
+        case '~':
+            switch (p1) {
+                case 1: case 7: return TK_HOME;
+                case 3:         return TK_DEL;
+                case 4: case 8: return TK_END;
+                case 5:         return TK_PGUP;
+                case 6:         return TK_PGDN;
+            }
+            break;
     }
-    return TK_ESC;
+    return TK_NONE;
 }

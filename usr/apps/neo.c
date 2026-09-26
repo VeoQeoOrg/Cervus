@@ -1803,7 +1803,7 @@ static void editor_tree(void)
         }
         char foot[800];
         n = snprintf(foot, sizeof foot,
-                     "\x1b[%d;1H\x1b[46m\x1b[30m \x18\x19 nav  Enter open/expand  a file  m folder  r rename  d del  g refresh  Esc close \x1b[0m\x1b[K",
+                     "\x1b[%d;1H\x1b[46m\x1b[30m \u2191\u2193 nav  Enter open/expand  a file  m folder  r rename  d del  g refresh  Esc close \x1b[0m\x1b[K",
                      E.screenrows + 2);
         ab_append(&ab, foot, n);
         write(1, ab.b, ab.len);
@@ -2579,7 +2579,7 @@ static void editor_settings(void)
                               "Backup on save", "Scroll margin", "Autocomplete",
                               "Edit syntax rules", "Save settings" };
     for (;;) {
-        static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \x18\x19 move   < > change   Esc close\r\n\r\n";
+        static const char hdr[] = "\x1b[44m\x1b[97m neo settings \x1b[0m  \u2191\u2193 move   < > change   Esc close\r\n\r\n";
         abuf_t ab = {0};
         ab_append(&ab, "\x1b[?25l\x1b[2J\x1b[H", 13);
         ab_append(&ab, hdr, (int)(sizeof hdr - 1));

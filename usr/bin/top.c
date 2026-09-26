@@ -395,7 +395,7 @@ static void draw(uint64_t up_ns) {
 
     fputs("\x1b[J", stdout);
     if (g_nrows > 0 && g_selected >= 0 && g_selected < g_nrows)
-        printf("\x1b[7m sel PID %u (%.12s) \x1b[0m  \x18\x19 select  k kill  "
+        printf("\x1b[7m sel PID %u (%.12s) \x1b[0m  \u2191\u2193 select  k kill  "
                "P/M/N/T sort  p pause  q quit%s\x1b[K",
                (unsigned)g_rows[g_selected].pid, g_rows[g_selected].name,
                g_paused ? "  \x1b[7m[PAUSED]\x1b[0m" : "");
