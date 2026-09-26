@@ -22,8 +22,10 @@
 #define R_TCR       0x40
 #define R_RCR       0x44
 #define R_9346CR    0x50
+#define R_CONFIG3   0x52
 #define R_CONFIG2   0x53
 #define R_CONFIG5   0x56
+#define R_PHYAR     0x60
 #define R_PHYSTS    0x6C
 #define R_PMCH      0x6F
 #define R_ERIDR     0x70
@@ -37,8 +39,12 @@
 #define R_RDSAR     0xE4
 #define R_MTPS      0xEC
 #define R_DLLPR     0xD0
+#define R_MCU       0xD3
 #define R_MISC      0xF0
 #define R_MISC1     0xF2
+#define R_IBCR0     0xF8
+#define R_IBCR2     0xF9
+#define R_IBISR0    0xFB
 
 #define CR_RST      0x10
 #define CR_RE       0x08
@@ -64,6 +70,11 @@
 
 #define CONFIG2_CLKREQ_EN 0x80
 #define CONFIG5_ASPM_EN   0x01
+#define CONFIG5_SPI_EN    0x08
+#define CONFIG3_RDY_L23   0x02
+#define MCU_NOW_IS_OOB    0x80
+#define MCU_LL_READY      0x02
+#define PHYAR_FLAG        0x80000000u
 #define MISC_RXDV_GATED   (1u << 19)
 
 #define OCP_FLAG          0x80000000u
@@ -92,7 +103,7 @@
 #define RTL_NUM_TX  16
 #define RTL_BUFSZ   2048
 
-enum { RTL_CLASSIC, RTL_8168_MODERN, RTL_8125 };
+enum { RTL_CLASSIC, RTL_8168_EVL, RTL_8168_MODERN, RTL_8125 };
 
 typedef struct __attribute__((packed)) {
     uint32_t opts1;
@@ -163,6 +174,19 @@ static void mii_write(rtl8169_t *r, int reg, uint16_t val) {
     phy_ocp_write(r, OCP_STD_PHY_BASE + (uint32_t)reg * 2, val);
 }
 
+static int phyar_read(rtl8169_t *r, int reg) {
+    w32(r, R_PHYAR, ((uint32_t)reg & 0x1F) << 16);
+    if (rtl_wait32(r, R_PHYAR, PHYAR_FLAG, 1, 20, 25) < 0) return -1;
+    rtl_udelay(20);
+    return (int)(r32(r, R_PHYAR) & 0xFFFF);
+}
+
+static void phyar_write(rtl8169_t *r, int reg, uint16_t val) {
+    w32(r, R_PHYAR, PHYAR_FLAG | (((uint32_t)reg & 0x1F) << 16) | val);
+    rtl_wait32(r, R_PHYAR, PHYAR_FLAG, 0, 20, 25);
+    rtl_udelay(20);
+}
+
 static uint16_t mac_ocp_read(rtl8169_t *r, uint32_t reg) {
     w32(r, R_OCPDR, (reg >> 1) << 15);
     return (uint16_t)r32(r, R_OCPDR);
@@ -210,7 +234,40 @@ static int classify(uint16_t xid) {
     uint16_t fam = xid & 0x7C0;
     if (fam >= 0x600 && xid != 0x6C0) return RTL_8125;
     if (fam >= 0x4C0 || xid == 0x6C0) return RTL_8168_MODERN;
+    uint16_t v = xid & 0x7C8;
+    if (v == 0x2C8 || v == 0x480 || v == 0x488) return RTL_8168_EVL;
     return RTL_CLASSIC;
+}
+
+static int is_8168g(uint16_t xid) {
+    uint16_t v = xid & 0x7CF;
+    return v == 0x4C0 || v == 0x4C1 || v == 0x509 || v == 0x5C8;
+}
+
+static int is_8168ep(uint16_t xid) {
+    uint16_t v = xid & 0x7CF;
+    return v == 0x500 || v == 0x501 || v == 0x502 || v == 0x54A || v == 0x54B;
+}
+
+static const char *chip_name(uint16_t xid) {
+    switch (xid & 0x7CF) {
+    case 0x4C0: case 0x4C1: return "RTL8168G/8111G";
+    case 0x509:             return "RTL8168GU/8111GU";
+    case 0x5C8:             return "RTL8411B";
+    case 0x540: case 0x541: case 0x6C0: return "RTL8168H/8111H";
+    case 0x500: case 0x501: case 0x502: return "RTL8168EP/8111EP";
+    case 0x54A: case 0x54B: return "RTL8168FP/8117";
+    case 0x480: case 0x481: return "RTL8168F/8111F";
+    case 0x488:             return "RTL8411";
+    case 0x2C8: case 0x2C9: return "RTL8168E-VL/8111E-VL";
+    default: break;
+    }
+    switch (classify(xid)) {
+    case RTL_8125:        return "RTL8125, not supported";
+    case RTL_8168_MODERN: return "RTL8168 modern family";
+    case RTL_8168_EVL:    return "RTL8168E/F family";
+    default:              return "RTL8169/8168 classic";
+    }
 }
 
 static int is_8168h(uint16_t xid) {
@@ -312,6 +369,58 @@ static void rtl_read_mac(rtl8169_t *r, uint8_t mac[6]) {
     }
 }
 
+static void eri_modify(rtl8169_t *r, uint32_t addr, uint32_t clear, uint32_t set) {
+    uint32_t v = eri_read(r, addr);
+    eri_write(r, addr, ERIAR_MASK_1111, (v & ~clear) | set);
+}
+
+static int rtl_wait_ll_ready(rtl8169_t *r) {
+    for (int i = 0; i < 100; i++) {
+        if (r8(r, R_MCU) & MCU_LL_READY) return 0;
+        rtl_udelay(42);
+    }
+    serial_printf("[rtl8169] the link-list FIFO never became ready\n");
+    return -1;
+}
+
+static void rtl_8168ep_stop_cmac(rtl8169_t *r) {
+    w8(r, R_IBCR2, r8(r, R_IBCR2) & ~0x01);
+    for (int i = 0; i < 50 && !(r8(r, R_IBISR0) & 0x20); i++) rtl_udelay(2000);
+    w8(r, R_IBISR0, r8(r, R_IBISR0) | 0x20);
+    w8(r, R_IBCR0, r8(r, R_IBCR0) & ~0x01);
+}
+
+static void rtl_modern_leave_oob(rtl8169_t *r) {
+    uint8_t mcu = r8(r, R_MCU);
+    if (mcu & MCU_NOW_IS_OOB) serial_printf("[rtl8169] the chip was left in OOB mode, taking it back\n");
+    if (is_8168ep(r->xid)) rtl_8168ep_stop_cmac(r);
+    w32(r, R_MISC, r32(r, R_MISC) | MISC_RXDV_GATED);
+    w8(r, R_CR, r8(r, R_CR) & ~(CR_TE | CR_RE));
+    rtl_udelay(1000);
+    w8(r, R_MCU, r8(r, R_MCU) & ~MCU_NOW_IS_OOB);
+    mac_ocp_modify(r, 0xE8DE, 1u << 14, 0);
+    rtl_wait_ll_ready(r);
+    mac_ocp_modify(r, 0xE8DE, 0, 1u << 15);
+    rtl_wait_ll_ready(r);
+}
+
+static void rtl_evl_mac_setup(rtl8169_t *r) {
+    int evl = (r->xid & 0x7C8) == 0x2C8;
+    eri_write(r, 0xC0, ERIAR_MASK_0011, 0x0000);
+    eri_write(r, 0xB8, evl ? ERIAR_MASK_1111 : ERIAR_MASK_0011, 0x0000);
+    eri_write(r, 0xC8, ERIAR_MASK_1111, 0x00100002);
+    eri_write(r, 0xE8, ERIAR_MASK_1111, 0x00100006);
+    eri_write(r, 0xCC, ERIAR_MASK_1111, 0x00000050);
+    eri_write(r, 0xD0, ERIAR_MASK_1111, evl ? 0x07FF0060 : 0x00000060);
+    eri_modify(r, 0x1D0, 0, evl ? 0x02 : 0x12);
+    eri_modify(r, 0xDC, 1u, 0);
+    eri_modify(r, 0xDC, 0, 1u);
+    eri_modify(r, 0x1B0, 0, 0x10);
+    if (evl) eri_write(r, 0x5F0, ERIAR_MASK_0011, 0x4F87);
+    w8(r, R_MCU, r8(r, R_MCU) & ~MCU_NOW_IS_OOB);
+    w8(r, R_CONFIG5, r8(r, R_CONFIG5) & ~CONFIG5_SPI_EN);
+}
+
 static void rtl_8168h_ephy(rtl8169_t *r) {
     ephy_modify(r, 0x1E, 0x0800, 0x0001);
     ephy_modify(r, 0x1D, 0x0000, 0x0800);
@@ -331,18 +440,31 @@ static void rtl_modern_mac_setup(rtl8169_t *r) {
 
     eri_write(r, 0xDC, ERIAR_MASK_1111, eri_read(r, 0xDC) & ~1u);
     eri_write(r, 0xDC, ERIAR_MASK_1111, eri_read(r, 0xDC) | 1u);
-    eri_write(r, 0xDC, ERIAR_MASK_1111, eri_read(r, 0xDC) | 0x1Cu);
-    eri_write(r, 0x5F0, ERIAR_MASK_0011, 0x4F87);
+    if (is_8168g(r->xid)) {
+        eri_write(r, 0x2F8, ERIAR_MASK_0011, 0x1D8F);
+    } else {
+        eri_write(r, 0xDC, ERIAR_MASK_1111, eri_read(r, 0xDC) | 0x1Cu);
+        eri_write(r, 0x5F0, ERIAR_MASK_0011, 0x4F87);
+    }
 
     w32(r, R_MISC, r32(r, R_MISC) & ~MISC_RXDV_GATED);
 
     eri_write(r, 0xC0, ERIAR_MASK_0011, 0x0000);
     eri_write(r, 0xB8, ERIAR_MASK_0011, 0x0000);
 
+    if (is_8168g(r->xid) || is_8168ep(r->xid)) eri_modify(r, 0x2FC, 0x06, 0x01);
+
     w8(r, R_DLLPR, r8(r, R_DLLPR) & ~0xC0);
     w8(r, R_MISC1, r8(r, R_MISC1) & ~0x40);
+    eri_modify(r, 0x1B0, 1u << 12, 0);
+    w8(r, R_CONFIG3, r8(r, R_CONFIG3) & ~CONFIG3_RDY_L23);
 
     if (is_8168h(r->xid)) {
+        int saw = phy_ocp_read(r, 0x0C42 * 16 + (0x13 - 0x10) * 2);
+        if (saw > 0 && (saw & 0x3FFF)) {
+            uint16_t cnt = (uint16_t)((16000000 / (saw & 0x3FFF)) & 0x0FFF);
+            mac_ocp_modify(r, 0xD412, 0x0FFF, cnt);
+        }
         mac_ocp_modify(r, 0xE056, 0x00F0, 0x0070);
         mac_ocp_modify(r, 0xE052, 0x6000, 0x8008);
         mac_ocp_modify(r, 0xE0D6, 0x01FF, 0x017F);
@@ -354,15 +476,19 @@ static void rtl_modern_mac_setup(rtl8169_t *r) {
     }
 }
 
-static void rtl_modern_phy_up(rtl8169_t *r) {
-    int bmcr = mii_read(r, MII_BMCR);
-    int bmsr = mii_read(r, MII_BMSR);
-    serial_printf("[rtl8169] PHY BMCR=%04x BMSR=%04x\n", bmcr & 0xFFFF, bmsr & 0xFFFF);
+static void rtl_phy_up(rtl8169_t *r) {
+    int modern = r->family == RTL_8168_MODERN;
+    if (!modern) phyar_write(r, 0x1F, 0x0000);
+    int bmcr = modern ? mii_read(r, MII_BMCR) : phyar_read(r, MII_BMCR);
+    int bmsr = modern ? mii_read(r, MII_BMSR) : phyar_read(r, MII_BMSR);
+    serial_printf("[rtl8169] PHY BMCR=%04x BMSR=%04x%s\n", bmcr & 0xFFFF, bmsr & 0xFFFF,
+                  bmcr >= 0 && (bmcr & BMCR_PDOWN) ? " (was powered down)" : "");
     if (bmcr < 0) return;
     uint16_t v = (uint16_t)bmcr;
     v &= (uint16_t)~(BMCR_PDOWN | BMCR_ISOLATE);
     v |= BMCR_ANENABLE | BMCR_ANRESTART;
-    mii_write(r, MII_BMCR, v);
+    if (modern) mii_write(r, MII_BMCR, v);
+    else        phyar_write(r, MII_BMCR, v);
 }
 
 static int rtl_probe(pci_device_t *dev) {
@@ -386,14 +512,18 @@ static int rtl_probe(pci_device_t *dev) {
     r->xid = (uint16_t)((r32(r, R_TCR) >> 20) & 0xFCF);
     r->family = classify(r->xid);
     serial_printf("[rtl8169] %04x:%04x chip xid %03x (%s)\n", dev->vendor_id, dev->device_id, r->xid,
-                  r->family == RTL_8168_MODERN ? (is_8168h(r->xid) ? "RTL8111H/8168H" : "RTL8168G family")
-                  : r->family == RTL_8125 ? "RTL8125, not supported" : "RTL8169/8168 classic");
+                  chip_name(r->xid));
     if (r->family == RTL_8125) { free(r); return -1; }
 
+    w16(r, R_IMR, 0);
+    w16(r, R_ISR, 0xFFFF);
+
+    if (r->family == RTL_8168_MODERN || r->family == RTL_8168_EVL) pci_disable_aspm(dev);
     if (r->family == RTL_8168_MODERN) {
-        pci_disable_aspm(dev);
         w8(r, R_PMCH, r8(r, R_PMCH) | 0xC0);
+        if (!is_8168g(r->xid) || (r->xid & 0x7CF) == 0x5C8) eri_modify(r, 0x1A8, 0xFC000000u, 0);
         rtl_udelay(100);
+        rtl_modern_leave_oob(r);
     }
 
     w8(r, R_CR, CR_RST);
@@ -424,10 +554,11 @@ static int rtl_probe(pci_device_t *dev) {
     }
 
     w8(r, R_9346CR, C9346_UNLOCK);
-    if (r->family == RTL_8168_MODERN) {
+    if (r->family == RTL_8168_MODERN || r->family == RTL_8168_EVL) {
         w8(r, R_CONFIG2, r8(r, R_CONFIG2) & ~CONFIG2_CLKREQ_EN);
         w8(r, R_CONFIG5, r8(r, R_CONFIG5) & ~CONFIG5_ASPM_EN);
-        rtl_modern_mac_setup(r);
+        if (r->family == RTL_8168_MODERN) rtl_modern_mac_setup(r);
+        else                              rtl_evl_mac_setup(r);
     }
     w32(r, R_MAC0,     (uint32_t)mac[0] | ((uint32_t)mac[1] << 8) |
                        ((uint32_t)mac[2] << 16) | ((uint32_t)mac[3] << 24));
@@ -438,11 +569,14 @@ static int rtl_probe(pci_device_t *dev) {
     w32(r, R_RDSAR + 4, (uint32_t)(r->rx_phys >> 32));
     w32(r, R_TNPDS,     (uint32_t)(r->tx_phys & 0xFFFFFFFFu));
     w32(r, R_TNPDS + 4, (uint32_t)(r->tx_phys >> 32));
-    w8 (r, R_MTPS, r->family == RTL_8168_MODERN ? 0x27 : 0x3B);
+    w8 (r, R_MTPS, r->family == RTL_CLASSIC ? 0x3B : 0x27);
     w16(r, R_RMS, RTL_BUFSZ);
     w8(r, R_CR, CR_TE | CR_RE);
     if (r->family == RTL_8168_MODERN) {
         w32(r, R_RCR, (1u << 15) | (1u << 14) | (1u << 11) | (7u << 8) | 0x0E);
+        w32(r, R_TCR, 0x03000700u | 0x80u);
+    } else if (r->family == RTL_8168_EVL) {
+        w32(r, R_RCR, (1u << 15) | (1u << 14) | (7u << 8) | 0x0E);
         w32(r, R_TCR, 0x03000700u | 0x80u);
     } else {
         w32(r, R_TCR, 0x03000700u);
@@ -452,7 +586,7 @@ static int rtl_probe(pci_device_t *dev) {
     w32(r, R_MAR0 + 4, 0xFFFFFFFFu);
     w8(r, R_9346CR, C9346_LOCK);
 
-    if (r->family == RTL_8168_MODERN) rtl_modern_phy_up(r);
+    rtl_phy_up(r);
 
     r->ndev = netdev_register(mac, 1500, rtl_transmit, r);
     if (!r->ndev) { free(r); return -1; }
