@@ -1,12 +1,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <errno.h>
 #include <libcervus.h>
 
 void *realloc(void *p, size_t n)
 {
     if (!p) return malloc(n);
     if (n == 0) { free(p); return NULL; }
+    if (n > ((size_t)-1) / 2) { __cervus_errno = ENOMEM; return NULL; }
 
     __cervus_lock(&__cervus_heap_lock);
 
@@ -17,20 +19,7 @@ void *realloc(void *p, size_t n)
     if (need < MB_MIN_TOTAL) need = MB_MIN_TOTAL;
 
     if (need <= cur_total) {
-        if (cur_total >= need + MB_MIN_TOTAL) {
-            b->size = need;
-            __mblock_t *rest = (__mblock_t *)((char *)b + need);
-            rest->size      = (cur_total - need) | MB_FREE_BIT;
-            rest->prev_size = need;
-            __mblock_t *after = __cervus_mb_next(rest);
-            if (after) after->prev_size = MB_SIZE(rest);
-            if (after != __cervus_heap_end && MB_IS_FREE(after)) {
-                size_t merged = MB_SIZE(rest) + MB_SIZE(after);
-                rest->size = merged | MB_FREE_BIT;
-                __mblock_t *aft2 = __cervus_mb_next(rest);
-                if (aft2) aft2->prev_size = merged;
-            }
-        }
+        __cervus_mb_split(b, need);
         __cervus_unlock(&__cervus_heap_lock);
         return p;
     }
@@ -39,18 +28,11 @@ void *realloc(void *p, size_t n)
     if (next != __cervus_heap_end && MB_IS_FREE(next) &&
         cur_total + MB_SIZE(next) >= need)
     {
+        __cervus_bin_remove(next);
         size_t combined = cur_total + MB_SIZE(next);
         b->size = combined;
-        __mblock_t *after = __cervus_mb_next(b);
-        if (after) after->prev_size = combined;
-        if (combined >= need + MB_MIN_TOTAL) {
-            b->size = need;
-            __mblock_t *rest = (__mblock_t *)((char *)b + need);
-            rest->size      = (combined - need) | MB_FREE_BIT;
-            rest->prev_size = need;
-            __mblock_t *aft = __cervus_mb_next(rest);
-            if (aft) aft->prev_size = MB_SIZE(rest);
-        }
+        __cervus_mb_next(b)->prev_size = combined;
+        __cervus_mb_split(b, need);
         __cervus_unlock(&__cervus_heap_lock);
         return p;
     }
@@ -59,7 +41,7 @@ void *realloc(void *p, size_t n)
 
     void *np = malloc(n);
     if (!np) return NULL;
-    memcpy(np, p, cur_user);
+    memcpy(np, p, cur_user < n ? cur_user : n);
     free(p);
     return np;
 }

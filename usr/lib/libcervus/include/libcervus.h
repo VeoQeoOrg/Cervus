@@ -114,6 +114,10 @@ extern __mblock_t *__cervus_heap_end;
 
 __mblock_t *__cervus_heap_grow(size_t need);
 void        __cervus_mb_split(__mblock_t *b, size_t need);
+__mblock_t *__cervus_bin_fit(size_t need);
+void        __cervus_bin_insert(__mblock_t *b);
+void        __cervus_bin_remove(__mblock_t *b);
+void        __cervus_mb_release(__mblock_t *b);
 
 static inline size_t __cervus_align_up(size_t n, size_t a) {
     return (n + a - 1) & ~(a - 1);
