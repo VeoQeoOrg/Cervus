@@ -15,6 +15,7 @@ void    syscall_save_user_regs(task_t *t);
 bool syscall_uptr_validate(const void *ptr, size_t len);
 bool syscall_uptr_validate_write(const void *ptr, size_t len);
 int  syscall_copy_from_user(void *dst, const void *src, size_t n);
+int   syscall_perm_sticky(const char *kpath);
 void *syscall_bounce_get(size_t want, size_t *cap, void *stackbuf, size_t stack_cap);
 void  syscall_bounce_put(void *buf, void *stackbuf);
 int  syscall_copy_to_user(void *dst, const void *src, size_t n);

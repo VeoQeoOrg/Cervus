@@ -200,6 +200,25 @@ int syscall_perm_parent(const char *kpath, int want)
     return perm_check(st.st_mode, st.st_uid, st.st_gid, t->uid, t->gid, want) ? 0 : -EACCES;
 }
 
+int syscall_perm_sticky(const char *kpath)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || t->uid == 0) return 0;
+    char parent[VFS_MAX_PATH];
+    strncpy(parent, kpath, sizeof(parent));
+    parent[sizeof(parent) - 1] = 0;
+    char *slash = strrchr(parent, '/');
+    if (slash == parent) parent[1] = 0;
+    else if (slash)      *slash = 0;
+    else                 { parent[0] = '/'; parent[1] = 0; }
+    vfs_stat_t dir, file;
+    if (vfs_stat(parent, &dir) != 0) return 0;
+    if (!(dir.st_mode & 01000)) return 0;
+    if (vfs_lstat(kpath, &file) != 0) return 0;
+    if (file.st_uid == t->uid || dir.st_uid == t->uid) return 0;
+    return -EPERM;
+}
+
 #define SYSCALL_BOUNCE_MAX (256 * 1024)
 
 void *syscall_bounce_get(size_t want, size_t *cap, void *stackbuf, size_t stack_cap)

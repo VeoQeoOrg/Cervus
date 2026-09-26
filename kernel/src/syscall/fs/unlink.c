@@ -39,6 +39,8 @@ static int64_t remove_entry(uint64_t path_ptr, int want_dir)
     if (ct < 0) return ct;
     int pp = syscall_perm_parent(path, 2);
     if (pp < 0) return pp;
+    int ps = syscall_perm_sticky(path);
+    if (ps < 0) return ps;
     char dirpath[VFS_MAX_PATH];
     strncpy(dirpath, path, 255);
     char *slash = NULL;

@@ -14,7 +14,7 @@ int64_t sys_chmod(uint64_t path_ptr, uint64_t mode)
         if (vfs_stat(kpath, &st) != 0) return -ENOENT;
         if (st.st_uid != t->uid) return -EPERM;
     }
-    return vfs_chmod(kpath, (uint32_t)(mode & 0777));
+    return vfs_chmod(kpath, (uint32_t)(mode & 07777));
 }
 
 int64_t sys_chown(uint64_t path_ptr, uint64_t uid, uint64_t gid)
@@ -40,7 +40,7 @@ int64_t sys_fchmod(uint64_t fd, uint64_t mode)
         if (vfs_fstat(f, &st) != 0) { fd_put(f); return -EIO; }
         if (st.st_uid != t->uid) { fd_put(f); return -EPERM; }
     }
-    r = vfs_fchmod(f, (uint32_t)(mode & 0777));
+    r = vfs_fchmod(f, (uint32_t)(mode & 07777));
     fd_put(f);
     return r;
 }

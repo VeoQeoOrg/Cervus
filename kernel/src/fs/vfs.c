@@ -566,7 +566,7 @@ int vfs_chmod(const char *path, uint32_t mode) {
     vnode_t *node = NULL;
     int ret = vfs_lookup(path, &node);
     if (ret < 0) return ret;
-    node->mode = (node->mode & ~0777u) | (mode & 0777u);
+    node->mode = (node->mode & ~07777u) | (mode & 07777u);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
     return 0;
@@ -575,7 +575,7 @@ int vfs_chmod(const char *path, uint32_t mode) {
 int vfs_fchmod(vfs_file_t *file, uint32_t mode) {
     if (!file || !file->vnode) return -EINVAL;
     vnode_t *node = file->vnode;
-    node->mode = (node->mode & ~0777u) | (mode & 0777u);
+    node->mode = (node->mode & ~07777u) | (mode & 07777u);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     return 0;
 }

@@ -12,6 +12,6 @@ int64_t sys_mkdir(uint64_t path_ptr, uint64_t mode, uint64_t a3,
     if (rp < 0) return rp;
     int pp = syscall_perm_parent(path, 2);
     if (pp < 0) return pp;
-    int r = vfs_mkdir(path, (uint32_t)(mode & 0777u) & ~(t->umask & 0777u));
+    int r = vfs_mkdir(path, (uint32_t)(mode & 07777u) & ~(t->umask & 0777u));
     return r;
 }

@@ -16,6 +16,10 @@ int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
     if (ps < 0) return ps;
     int pd = syscall_perm_parent(newp, 2);
     if (pd < 0) return pd;
+    int ss = syscall_perm_sticky(oldp);
+    if (ss < 0) return ss;
+    int sd = syscall_perm_sticky(newp);
+    if (sd < 0) return sd;
 
     vnode_t *src_node = NULL;
     int r = vfs_lookup(oldp, &src_node);
