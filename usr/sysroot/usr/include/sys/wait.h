@@ -9,6 +9,7 @@ extern "C" {
 
 #define WNOHANG    0x1
 #define WUNTRACED  0x2
+#define WCONTINUED 0x8
 
 #define WIFEXITED(s)    (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s)  (((s) >> 8) & 0xFF)
@@ -16,6 +17,7 @@ extern "C" {
 #define WTERMSIG(s)     ((s) & 0x7F)
 #define WIFSTOPPED(s)   (((s) & 0xFF) == 0x7F)
 #define WSTOPSIG(s)     (((s) >> 8) & 0xFF)
+#define WIFCONTINUED(s) ((s) == 0xFFFF)
 
 pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);

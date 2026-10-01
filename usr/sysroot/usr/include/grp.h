@@ -16,6 +16,8 @@ struct group {
 
 struct group *getgrgid(gid_t gid);
 struct group *getgrnam(const char *name);
+int getgrgid_r(gid_t gid, struct group *gr, char *buf, size_t len, struct group **res);
+int getgrnam_r(const char *name, struct group *gr, char *buf, size_t len, struct group **res);
 void          setgrent(void);
 struct group *getgrent(void);
 void          endgrent(void);

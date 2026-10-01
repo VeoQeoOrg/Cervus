@@ -16,7 +16,13 @@ lldiv_t lldiv(long long num, long long den);
 #include <stddef.h>
 #include <alloca.h>
 
-#define MB_CUR_MAX 1
+#define MB_CUR_MAX 4
+
+int   posix_openpt(int flags);
+int   grantpt(int fd);
+int   unlockpt(int fd);
+char *ptsname(int fd);
+int   ptsname_r(int fd, char *buf, size_t len);
 
 int  __cxa_atexit(void (*fn)(void *), void *arg, void *dso);
 void __cxa_finalize(void *dso);

@@ -6,6 +6,14 @@ extern "C" {
 
 #include <sys/time.h>
 
+#ifndef __CERVUS_STRUCT_TIMESPEC
+#define __CERVUS_STRUCT_TIMESPEC
+struct timespec {
+    time_t  tv_sec;
+    long    tv_nsec;
+};
+#endif
+
 #define FD_SETSIZE 1024
 
 typedef struct {

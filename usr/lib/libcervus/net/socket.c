@@ -42,3 +42,11 @@ ssize_t send(int fd, const void *buf, size_t len, int flags) {
 ssize_t recv(int fd, void *buf, size_t len, int flags) {
     return recvfrom(fd, buf, len, flags, NULL, NULL);
 }
+
+int getsockname(int fd, struct sockaddr *addr, socklen_t *len) {
+    return (int)__cervus_sys_ret(syscall3(SYS_GETSOCKNAME, fd, addr, len));
+}
+
+int getpeername(int fd, struct sockaddr *addr, socklen_t *len) {
+    return (int)__cervus_sys_ret(syscall3(SYS_GETPEERNAME, fd, addr, len));
+}

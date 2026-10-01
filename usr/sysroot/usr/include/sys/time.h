@@ -57,6 +57,9 @@ int getitimer(int which, struct itimerval *curr_value);
         }                                                     \
     } while (0)
 
+int futimes(int fd, const struct timeval tv[2]);
+int lutimes(const char *path, const struct timeval tv[2]);
+
 #ifdef __cplusplus
 }
 #endif

@@ -18,6 +18,8 @@ struct passwd {
 
 struct passwd *getpwuid(uid_t uid);
 struct passwd *getpwnam(const char *name);
+int getpwuid_r(uid_t uid, struct passwd *pw, char *buf, size_t len, struct passwd **res);
+int getpwnam_r(const char *name, struct passwd *pw, char *buf, size_t len, struct passwd **res);
 void           setpwent(void);
 struct passwd *getpwent(void);
 void           endpwent(void);

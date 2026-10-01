@@ -37,6 +37,21 @@ static void tz_load(void) {
     snprintf(g_tz_name, sizeof g_tz_name, "%s", line);
 }
 
+char *tzname[2] = { g_tz_name, g_tz_name };
+long  timezone;
+int   daylight;
+
+void tzset(void)
+{
+    g_tz_loaded = 0;
+    g_tz_offset = 0;
+    snprintf(g_tz_name, sizeof g_tz_name, "UTC");
+    tz_load();
+    tzname[0] = tzname[1] = g_tz_name;
+    timezone = -g_tz_offset;
+    daylight = 0;
+}
+
 long timezone_offset(void) { tz_load(); return g_tz_offset; }
 const char *timezone_name(void) { tz_load(); return g_tz_name; }
 

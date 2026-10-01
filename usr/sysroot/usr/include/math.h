@@ -175,13 +175,42 @@ float modff(float x, float *ip);
 static inline long   lrint(double x) { return (long)round(x); }
 static inline long   lrintf(float x) { return (long)round((double)x); }
 
-#define MIN(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a < _b ? _a : _b; })
-#define MAX(a, b) ({ __typeof__(a) _a = (a); __typeof__(b) _b = (b); _a > _b ? _a : _b; })
+#define FP_ILOGB0   (-2147483647 - 1)
+#define FP_ILOGBNAN (-2147483647 - 1)
 
-#define ALIGN_UP(x, align)   (((x) + (align) - 1) & ~((align) - 1))
-#define ALIGN_DOWN(x, align) ((x) & ~((align) - 1))
+extern int signgam;
 
-#define IS_POWER_OF_TWO(x) ((x) != 0 && (((x) & ((x) - 1)) == 0))
+int         ilogb(double x);
+int         ilogbf(float x);
+int         ilogbl(long double x);
+double      logb(double x);
+float       logbf(float x);
+long double logbl(long double x);
+double      nextafter(double x, double y);
+float       nextafterf(float x, float y);
+long double nextafterl(long double x, long double y);
+double      nexttoward(double x, long double y);
+float       nexttowardf(float x, long double y);
+long double nexttowardl(long double x, long double y);
+double      remquo(double x, double y, int *quo);
+float       remquof(float x, float y, int *quo);
+long double remquol(long double x, long double y, int *quo);
+double      scalbln(double x, long n);
+float       scalblnf(float x, long n);
+long double scalblnl(long double x, long n);
+double      erf(double x);
+float       erff(float x);
+long double erfl(long double x);
+double      erfc(double x);
+float       erfcf(float x);
+long double erfcl(long double x);
+double      lgamma(double x);
+float       lgammaf(float x);
+long double lgammal(long double x);
+double      lgamma_r(double x, int *sign);
+double      tgamma(double x);
+float       tgammaf(float x);
+long double tgammal(long double x);
 
 #ifdef __cplusplus
 }

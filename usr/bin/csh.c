@@ -2349,7 +2349,7 @@ static void render_ps1(const char *ps1, char *out, int outmax) {
 
 static void build_prompt(char *out, int outmax) {
     int o = 0;
-    struct cursor_pos cp;
+    struct cervus_cursor_pos cp;
     if (ioctl(1, TIOCGCURSOR, &cp) == 0 && cp.col != 0) {
         if (o + 1 < outmax) out[o++] = '\n';
     }

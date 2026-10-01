@@ -61,7 +61,7 @@ struct winsize {
     uint16_t ws_ypixel;
 };
 
-struct cursor_pos {
+struct cervus_cursor_pos {
     uint32_t row;
     uint32_t col;
 };

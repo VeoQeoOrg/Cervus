@@ -54,6 +54,12 @@ int open(const char *path, int flags, ...);
 int fcntl(int fd, int cmd, ...);
 int creat(const char *path, mode_t mode);
 
+#define AT_FDCWD            (-100)
+#define AT_SYMLINK_NOFOLLOW 0x100
+#define AT_REMOVEDIR        0x200
+#define AT_SYMLINK_FOLLOW   0x400
+#define AT_EACCESS          0x200
+
 #ifdef __cplusplus
 }
 #endif

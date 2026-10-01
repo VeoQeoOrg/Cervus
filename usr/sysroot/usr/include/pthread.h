@@ -6,6 +6,8 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sched.h>
+#include <time.h>
 
 typedef struct __pthread *pthread_t;
 
@@ -91,6 +93,27 @@ int  pthread_rwlock_destroy(pthread_rwlock_t *l);
 int  pthread_rwlock_rdlock(pthread_rwlock_t *l);
 int  pthread_rwlock_wrlock(pthread_rwlock_t *l);
 int  pthread_rwlock_unlock(pthread_rwlock_t *l);
+int  pthread_rwlock_tryrdlock(pthread_rwlock_t *l);
+int  pthread_rwlock_trywrlock(pthread_rwlock_t *l);
+
+int  pthread_condattr_init(pthread_condattr_t *a);
+int  pthread_condattr_destroy(pthread_condattr_t *a);
+int  pthread_condattr_setclock(pthread_condattr_t *a, int clock);
+int  pthread_condattr_getclock(const pthread_condattr_t *a, int *clock);
+int  pthread_condattr_setpshared(pthread_condattr_t *a, int pshared);
+int  pthread_condattr_getpshared(const pthread_condattr_t *a, int *pshared);
+struct timespec;
+int  pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *abstime);
+int  pthread_cond_clockwait(pthread_cond_t *c, pthread_mutex_t *m, int clock, const struct timespec *abstime);
+
+struct sched_param;
+int  pthread_getschedparam(pthread_t th, int *policy, struct sched_param *param);
+int  pthread_setschedparam(pthread_t th, int policy, const struct sched_param *param);
+int  pthread_setschedprio(pthread_t th, int prio);
+int  pthread_attr_getdetachstate(const pthread_attr_t *a, int *state);
+int  pthread_setname_np(pthread_t th, const char *name);
+int  pthread_getname_np(pthread_t th, char *name, size_t len);
+int  pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
 
 #ifdef __cplusplus
 }

@@ -5,6 +5,10 @@
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <libcervus.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
 
 int openpty(int *master, int *slave, char *name,
             const struct termios *termp, const struct winsize *winp)
@@ -51,4 +55,40 @@ pid_t forkpty(int *master, char *name,
     close(s);
     if (master) *master = m;
     return pid;
+}
+
+int ptsname_r(int fd, char *buf, size_t len)
+{
+    unsigned int n = 0;
+    if (ioctl(fd, TIOCGPTN, &n) != 0) return errno ? errno : ENOTTY;
+    if ((size_t)snprintf(buf, len, "/dev/pts/%u", n) >= len) return ERANGE;
+    return 0;
+}
+
+char *ptsname(int fd)
+{
+    static char name[32];
+    int e = ptsname_r(fd, name, sizeof name);
+    if (e) { errno = e; return NULL; }
+    return name;
+}
+
+int grantpt(int fd)
+{
+    unsigned int n;
+    return ioctl(fd, TIOCGPTN, &n) == 0 ? 0 : -1;
+}
+
+int unlockpt(int fd)
+{
+    return grantpt(fd);
+}
+
+int posix_openpt(int flags)
+{
+    int m, s;
+    if (openpty(&m, &s, NULL, NULL, NULL) != 0) return -1;
+    close(s);
+    if (flags & O_CLOEXEC) fcntl(m, F_SETFD, FD_CLOEXEC);
+    return m;
 }

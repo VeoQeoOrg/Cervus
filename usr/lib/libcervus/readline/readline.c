@@ -40,7 +40,7 @@ static void term_update_size(void) {
 }
 
 static int term_get_cursor_row(void) {
-    struct cursor_pos cp;
+    struct cervus_cursor_pos cp;
     if (ioctl(1, TIOCGCURSOR, &cp) == 0) return (int)cp.row;
     return 0;
 }
@@ -470,7 +470,7 @@ static void do_completion(char *buf, int *len, int *pos, int maxlen) {
 static void sync_line(const char *buf, int len, int pos) {
     if (g_no_cursor) return;
 
-    struct cursor_pos cp;
+    struct cervus_cursor_pos cp;
     if (ioctl(1, TIOCGCURSOR, &cp) < 0) return;
 
     int abs = g_prompt_len + vis_cols(pos);
@@ -495,7 +495,7 @@ static int readline_edit(char *buf, int maxlen) {
     g_cur_len = 0;
     term_update_size();
     {
-        struct cursor_pos cp;
+        struct cervus_cursor_pos cp;
         g_no_cursor = (ioctl(1, TIOCGCURSOR, &cp) < 0);
     }
     g_start_row = term_get_cursor_row() - g_prompt_len / g_cols;

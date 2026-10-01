@@ -29,6 +29,13 @@ int utimes_at(const char *path, int64_t atime, int64_t mtime);
 int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);
 int chown(const char *path, uid_t owner, gid_t group);
+int lchown(const char *path, uid_t owner, gid_t group);
+
+#define UTIME_NOW  ((1L << 30) - 1L)
+#define UTIME_OMIT ((1L << 30) - 2L)
+struct timespec;
+int futimens(int fd, const struct timespec times[2]);
+int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
 
 #define S_ISUID   04000
 #define S_ISGID   02000
@@ -46,6 +53,9 @@ int chown(const char *path, uid_t owner, gid_t group);
 #define S_IROTH   00004
 #define S_IWOTH   00002
 #define S_IXOTH   00001
+#define S_IREAD   S_IRUSR
+#define S_IWRITE  S_IWUSR
+#define S_IEXEC   S_IXUSR
 
 struct stat {
     ino_t    st_ino;

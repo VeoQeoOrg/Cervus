@@ -1,17 +1,60 @@
 #include <locale.h>
 #include <string.h>
+#include <stdlib.h>
 
-static char g_current[] = "C";
+static char g_names[7][48] = { "C", "C", "C", "C", "C", "C", "C" };
 static char g_empty[] = "";
 static char g_point[] = ".";
 static char g_cmax = 127;
 
+static const char *const g_envs[7] = {
+    "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "LC_MESSAGES",
+};
+
+static int has_utf8(const char *s)
+{
+    for (; *s; s++) {
+        const char *p = s;
+        int ok = 1;
+        const char *want = "utf8";
+        for (; *want; p++) {
+            if (*p == '-') continue;
+            char c = *p;
+            if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+            if (c != *want++) { ok = 0; break; }
+        }
+        if (ok) return 1;
+    }
+    return 0;
+}
+
+static const char *resolve(int category, const char *locale)
+{
+    if (*locale) return locale;
+    const char *e = getenv("LC_ALL");
+    if (e && *e) return e;
+    if (category != LC_ALL) {
+        e = getenv(g_envs[category]);
+        if (e && *e) return e;
+    }
+    e = getenv("LANG");
+    if (e && *e) return e;
+    return "C.UTF-8";
+}
+
 char *setlocale(int category, const char *locale)
 {
-    (void)category;
-    if (locale && *locale && strcmp(locale, "C") != 0 && strcmp(locale, "POSIX") != 0)
-        return 0;
-    return g_current;
+    if (category < LC_ALL || category > LC_MESSAGES) return 0;
+    if (!locale) return g_names[category == LC_ALL ? LC_CTYPE : category];
+    const char *name = resolve(category, locale);
+    if (strcmp(name, "C") && strcmp(name, "POSIX") && !has_utf8(name)) return 0;
+    if (strlen(name) >= sizeof g_names[0]) return 0;
+    if (category == LC_ALL) {
+        for (int i = 0; i < 7; i++) strcpy(g_names[i], name);
+        return g_names[LC_ALL];
+    }
+    strcpy(g_names[category], name);
+    return g_names[category];
 }
 
 struct lconv *localeconv(void)

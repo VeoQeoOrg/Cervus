@@ -6,6 +6,8 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <libcervus.h>
+#include <sched.h>
+#include <time.h>
 
 #define TH_RUNNING  0
 #define TH_DONE     1
@@ -20,6 +22,7 @@ struct __pthread {
     size_t        stacksize;
     int           tid;
     void         *tls;
+    char          name[16];
 };
 
 #define DEFAULT_STACK (256 * 1024)
@@ -298,14 +301,16 @@ int pthread_mutex_unlock(pthread_mutex_t *m)
     return 0;
 }
 
+static void cond_clock_set(pthread_cond_t *c, int clock);
+
 int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a)
 {
-    (void)a;
     if (!c) return EINVAL;
     c->seq = 0;
+    cond_clock_set(c, a ? a->unused : CLOCK_REALTIME);
     return 0;
 }
-int pthread_cond_destroy(pthread_cond_t *c) { (void)c; return 0; }
+int pthread_cond_destroy(pthread_cond_t *c) { if (c) cond_clock_set(c, CLOCK_REALTIME); return 0; }
 
 int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 {
@@ -385,4 +390,170 @@ int pthread_rwlock_unlock(pthread_rwlock_t *l)
         return 0;
     }
     return pthread_mutex_unlock(&l->w);
+}
+
+int pthread_rwlock_tryrdlock(pthread_rwlock_t *l)
+{
+    if (!l) return EINVAL;
+    if (pthread_mutex_trylock(&l->w) != 0) return EBUSY;
+    __atomic_add_fetch(&l->readers, 1, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(&l->w);
+    return 0;
+}
+
+int pthread_rwlock_trywrlock(pthread_rwlock_t *l)
+{
+    if (!l) return EINVAL;
+    if (pthread_mutex_trylock(&l->w) != 0) return EBUSY;
+    if (__atomic_load_n(&l->readers, __ATOMIC_ACQUIRE) > 0) {
+        pthread_mutex_unlock(&l->w);
+        return EBUSY;
+    }
+    return 0;
+}
+
+int pthread_condattr_init(pthread_condattr_t *a) { if (!a) return EINVAL; a->unused = CLOCK_REALTIME; return 0; }
+int pthread_condattr_destroy(pthread_condattr_t *a) { (void)a; return 0; }
+int pthread_condattr_setpshared(pthread_condattr_t *a, int pshared) { (void)a; (void)pshared; return 0; }
+int pthread_condattr_getpshared(const pthread_condattr_t *a, int *pshared) { (void)a; *pshared = PTHREAD_PROCESS_PRIVATE; return 0; }
+
+int pthread_condattr_setclock(pthread_condattr_t *a, int clock)
+{
+    if (!a || (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)) return EINVAL;
+    a->unused = clock;
+    return 0;
+}
+
+int pthread_condattr_getclock(const pthread_condattr_t *a, int *clock)
+{
+    if (!a || !clock) return EINVAL;
+    *clock = a->unused;
+    return 0;
+}
+
+void futex_lock(volatile uint32_t *lock);
+void futex_unlock(volatile uint32_t *lock);
+
+#define COND_CLOCKS 64
+static struct { pthread_cond_t *c; int clock; } g_cond_clock[COND_CLOCKS];
+static volatile uint32_t g_cond_clock_lock;
+
+static void cond_clock_set(pthread_cond_t *c, int clock)
+{
+    futex_lock(&g_cond_clock_lock);
+    int free_slot = -1;
+    for (int i = 0; i < COND_CLOCKS; i++) {
+        if (g_cond_clock[i].c == c) { free_slot = i; break; }
+        if (!g_cond_clock[i].c && free_slot < 0) free_slot = i;
+    }
+    if (free_slot >= 0) {
+        g_cond_clock[free_slot].c = clock == CLOCK_REALTIME ? NULL : c;
+        g_cond_clock[free_slot].clock = clock;
+    }
+    futex_unlock(&g_cond_clock_lock);
+}
+
+static int cond_clock_get(pthread_cond_t *c)
+{
+    int clock = CLOCK_REALTIME;
+    futex_lock(&g_cond_clock_lock);
+    for (int i = 0; i < COND_CLOCKS; i++)
+        if (g_cond_clock[i].c == c) { clock = g_cond_clock[i].clock; break; }
+    futex_unlock(&g_cond_clock_lock);
+    return clock;
+}
+
+int pthread_cond_clockwait(pthread_cond_t *c, pthread_mutex_t *m, int clock, const struct timespec *abstime)
+{
+    if (!c || !m || !abstime) return EINVAL;
+    if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L) return EINVAL;
+    struct timespec now;
+    clock_gettime(clock, &now);
+    int64_t left = (int64_t)(abstime->tv_sec - now.tv_sec) * 1000000000LL + (abstime->tv_nsec - now.tv_nsec);
+    if (left <= 0) return ETIMEDOUT;
+    int seq = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(m);
+    long r = (long)syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)&c->seq, (uint64_t)(unsigned)seq, (uint64_t)left);
+    pthread_mutex_lock(m);
+    if (r == -ETIMEDOUT && __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE) == seq) return ETIMEDOUT;
+    return 0;
+}
+
+int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *abstime)
+{
+    return pthread_cond_clockwait(c, m, cond_clock_get(c), abstime);
+}
+
+int pthread_getschedparam(pthread_t th, int *policy, struct sched_param *param)
+{
+    (void)th;
+    if (policy) *policy = SCHED_OTHER;
+    if (param) param->sched_priority = 0;
+    return 0;
+}
+
+int pthread_setschedparam(pthread_t th, int policy, const struct sched_param *param)
+{
+    (void)th;
+    if (!param) return EINVAL;
+    if (policy != SCHED_OTHER && policy != SCHED_BATCH && policy != SCHED_IDLE) return EPERM;
+    return param->sched_priority == 0 ? 0 : EINVAL;
+}
+
+int pthread_setschedprio(pthread_t th, int prio)
+{
+    (void)th;
+    return prio == 0 ? 0 : EINVAL;
+}
+
+int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state)
+{
+    if (!a || !state) return EINVAL;
+    *state = a->detachstate;
+    return 0;
+}
+
+int pthread_setname_np(pthread_t th, const char *name)
+{
+    if (!th || !name) return EINVAL;
+    if (strlen(name) >= sizeof th->name) return ERANGE;
+    strcpy(th->name, name);
+    return 0;
+}
+
+int pthread_getname_np(pthread_t th, char *name, size_t len)
+{
+    if (!th || !name) return EINVAL;
+    if (strlen(th->name) >= len) return ERANGE;
+    strcpy(name, th->name);
+    return 0;
+}
+
+#define ATFORK_MAX 32
+static struct { void (*prepare)(void); void (*parent)(void); void (*child)(void); } g_atfork[ATFORK_MAX];
+static int g_atfork_n;
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void))
+{
+    if (g_atfork_n >= ATFORK_MAX) return ENOMEM;
+    g_atfork[g_atfork_n].prepare = prepare;
+    g_atfork[g_atfork_n].parent = parent;
+    g_atfork[g_atfork_n].child = child;
+    g_atfork_n++;
+    return 0;
+}
+
+void __cervus_atfork_prepare(void)
+{
+    for (int i = g_atfork_n - 1; i >= 0; i--) if (g_atfork[i].prepare) g_atfork[i].prepare();
+}
+
+void __cervus_atfork_parent(void)
+{
+    for (int i = 0; i < g_atfork_n; i++) if (g_atfork[i].parent) g_atfork[i].parent();
+}
+
+void __cervus_atfork_child(void)
+{
+    for (int i = 0; i < g_atfork_n; i++) if (g_atfork[i].child) g_atfork[i].child();
 }

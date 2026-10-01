@@ -27,6 +27,9 @@ extern "C" {
 
 #define LLONG_MIN   LONG_MIN
 #define LLONG_MAX   LONG_MAX
+#ifndef SSIZE_MAX
+#define SSIZE_MAX   LONG_MAX
+#endif
 #define ULLONG_MAX  ULONG_MAX
 
 #define PATH_MAX    512

@@ -23,13 +23,23 @@ extern "C" {
 #define SOCK_STREAM  1
 #define SOCK_DGRAM   2
 #define SOCK_RAW     3
+#define SOCK_RDM     4
+#define SOCK_SEQPACKET 5
 #define SOCK_CLOEXEC  0x80000
 #define SOCK_NONBLOCK 0x800
 
 typedef uint32_t socklen_t;
 
+typedef uint16_t sa_family_t;
+
+struct linger {
+    int l_onoff;
+    int l_linger;
+};
+#define SO_LINGER 13
+
 struct sockaddr {
-    uint16_t sa_family;
+    sa_family_t sa_family;
     char     sa_data[14];
 };
 
@@ -52,6 +62,8 @@ int     sendfd  (int sockfd, int fd);
 int     recvfd  (int sockfd);
 
 int socketpair(int domain, int type, int protocol, int fds[2]);
+int getsockname(int fd, struct sockaddr *addr, socklen_t *len);
+int getpeername(int fd, struct sockaddr *addr, socklen_t *len);
 
 #define SCM_RIGHTS 1
 

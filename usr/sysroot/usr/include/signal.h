@@ -34,6 +34,16 @@ typedef int sig_atomic_t;
 #define SIGTTOU   22
 #define SIGWINCH  28
 
+#define SIGSTKFLT 16
+#define SIGURG    23
+#define SIGXCPU   24
+#define SIGXFSZ   25
+#define SIGVTALRM 26
+#define SIGPROF   27
+#define SIGIO     29
+#define SIGPWR    30
+#define SIGSYS    31
+#define SIGPOLL   SIGIO
 #define NSIG      32
 
 typedef void (*sighandler_t)(int);
@@ -156,6 +166,7 @@ struct sigaction {
 sighandler_t signal(int signum, sighandler_t handler);
 int raise(int sig);
 int kill(pid_t pid, int sig);
+int killpg(pid_t pgrp, int sig);
 
 int sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 int sigemptyset(sigset_t *set);
@@ -164,6 +175,8 @@ int sigaddset(sigset_t *set, int sig);
 int sigdelset(sigset_t *set, int sig);
 int sigismember(const sigset_t *set, int sig);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sigpending(sigset_t *set);
+int sigsuspend(const sigset_t *mask);
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *old);
 
 #define SIG_BLOCK    0

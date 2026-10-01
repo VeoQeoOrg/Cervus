@@ -69,6 +69,17 @@ struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type);
 struct servent *getservbyname(const char *name, const char *proto);
 struct servent *getservbyport(int port, const char *proto);
+
+struct protoent {
+    char  *p_name;
+    char **p_aliases;
+    int    p_proto;
+};
+struct protoent *getprotobyname(const char *name);
+struct protoent *getprotobynumber(int proto);
+struct protoent *getprotoent(void);
+void             setprotoent(int stayopen);
+void             endprotoent(void);
 void            herror(const char *s);
 const char     *hstrerror(int err);
 

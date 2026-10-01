@@ -23,10 +23,13 @@ struct tm {
     int tm_isdst;
 };
 
+#ifndef __CERVUS_STRUCT_TIMESPEC
+#define __CERVUS_STRUCT_TIMESPEC
 struct timespec {
     time_t  tv_sec;
     long    tv_nsec;
 };
+#endif
 
 struct itimerspec {
     struct timespec it_interval;
@@ -39,6 +42,10 @@ clock_t clock(void);
 struct tm *localtime(const time_t *t);
 long        timezone_offset(void);
 const char *timezone_name(void);
+void        tzset(void);
+extern char *tzname[2];
+extern long  timezone;
+extern int   daylight;
 struct tm *gmtime(const time_t *t);
 struct tm *gmtime_r(const time_t *t, struct tm *out);
 struct tm *localtime_r(const time_t *t, struct tm *out);
