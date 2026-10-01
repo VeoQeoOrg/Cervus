@@ -793,8 +793,15 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
 {
     xhci_trb_t ev;
     int r = xhci_send_cmd(c, 0, 0, TRB_TYPE(TRB_ENABLE_SLOT), &ev);
-    if (r < 0 || ((ev.status >> 24) & 0xFFu) != CC_SUCCESS) {
-        serial_printf("[xhci] %s: ENABLE SLOT failed\n", path_label);
+    if (r < 0) {
+        serial_printf("[xhci] %s: ENABLE SLOT timed out (USBSTS=0x%x CRCR=0x%x IMAN=0x%x)\n",
+                      path_label, op_r32(c, XHCI_OP_USBSTS), op_r32(c, XHCI_OP_CRCR),
+                      rt_r32(c, XHCI_RT_IR0_IMAN));
+        return;
+    }
+    if (((ev.status >> 24) & 0xFFu) != CC_SUCCESS) {
+        serial_printf("[xhci] %s: ENABLE SLOT failed, completion code %u\n",
+                      path_label, (ev.status >> 24) & 0xFFu);
         return;
     }
     uint8_t slot_id = (uint8_t)((ev.control >> 24) & 0xFFu);
