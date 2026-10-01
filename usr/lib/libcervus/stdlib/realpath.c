@@ -1,57 +1,88 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <stddef.h>
+#include <limits.h>
 #include <errno.h>
-#include <libcervus.h>
+#include <sys/stat.h>
+
+#define REALPATH_MAX_LINKS 40
+
+static int append_name(char *out, size_t *ol, const char *name, size_t n)
+{
+    if (*ol + 1 + n >= PATH_MAX) return -1;
+    out[(*ol)++] = '/';
+    memcpy(out + *ol, name, n);
+    *ol += n;
+    out[*ol] = '\0';
+    return 0;
+}
 
 char *realpath(const char *path, char *resolved)
 {
-    if (!path) { __cervus_errno = EINVAL; return NULL; }
-    static char sbuf[512];
-    char *out = resolved ? resolved : sbuf;
+    char out[PATH_MAX], rest[PATH_MAX], target[PATH_MAX], joined[PATH_MAX];
+    size_t ol = 0;
+    int links = 0;
 
-    if (path[0] == '/') {
-        strncpy(out, path, 511);
-        out[511] = '\0';
-    } else {
-        char cwd[512];
-        if (!getcwd(cwd, sizeof(cwd))) { cwd[0] = '/'; cwd[1] = '\0'; }
-        strncpy(out, cwd, 511);
-        out[511] = '\0';
-        size_t bl = strlen(out);
-        if (bl > 0 && out[bl - 1] != '/' && bl < 510) {
-            out[bl++] = '/';
-            out[bl] = '\0';
-        }
-        strncat(out, path, 511 - strlen(out));
+    if (!path) { errno = EINVAL; return NULL; }
+    if (!*path) { errno = ENOENT; return NULL; }
+    size_t pl = strlen(path);
+    if (pl >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
+    memcpy(rest, path, pl + 1);
+
+    out[0] = '\0';
+    if (rest[0] != '/') {
+        if (!getcwd(out, sizeof out)) return NULL;
+        ol = strlen(out);
+        while (ol > 0 && out[ol - 1] == '/') ol--;
+        out[ol] = '\0';
     }
 
-    char tmp[512];
-    strncpy(tmp, out, 511);
-    tmp[511] = '\0';
-    char *parts[64];
-    int np = 0;
-    char *p = tmp;
+    char *p = rest;
     while (*p) {
         while (*p == '/') p++;
         if (!*p) break;
         char *s = p;
         while (*p && *p != '/') p++;
-        if (*p) *p++ = '\0';
-        if (strcmp(s, ".") == 0) continue;
-        if (strcmp(s, "..") == 0) { if (np > 0) np--; continue; }
-        if (np < 64) parts[np++] = s;
+        size_t n = (size_t)(p - s);
+
+        if (n == 1 && s[0] == '.') continue;
+        if (n == 2 && s[0] == '.' && s[1] == '.') {
+            while (ol > 0 && out[ol - 1] != '/') ol--;
+            if (ol > 0) ol--;
+            out[ol] = '\0';
+            continue;
+        }
+
+        size_t parent = ol;
+        if (append_name(out, &ol, s, n) < 0) { errno = ENAMETOOLONG; return NULL; }
+
+        struct stat st;
+        if (lstat(out, &st) < 0) return NULL;
+
+        if (S_ISLNK(st.st_mode)) {
+            if (++links > REALPATH_MAX_LINKS) { errno = ELOOP; return NULL; }
+            ssize_t tl = readlink(out, target, sizeof target - 1);
+            if (tl < 0) return NULL;
+            target[tl] = '\0';
+            size_t rl = strlen(p);
+            if ((size_t)tl + rl + 1 >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
+            memcpy(joined, target, (size_t)tl);
+            memcpy(joined + tl, p, rl + 1);
+            memcpy(rest, joined, (size_t)tl + rl + 1);
+            p = rest;
+            ol = target[0] == '/' ? 0 : parent;
+            out[ol] = '\0';
+            continue;
+        }
+
+        if (*p && !S_ISDIR(st.st_mode)) { errno = ENOTDIR; return NULL; }
     }
-    size_t ol = 0;
-    for (int i = 0; i < np; i++) {
-        out[ol++] = '/';
-        size_t pl = strlen(parts[i]);
-        if (ol + pl >= 511) break;
-        memcpy(out + ol, parts[i], pl);
-        ol += pl;
+
+    if (ol == 0) { out[0] = '/'; out[1] = '\0'; ol = 1; }
+    if (!resolved) {
+        resolved = malloc(ol + 1);
+        if (!resolved) { errno = ENOMEM; return NULL; }
     }
-    out[ol] = '\0';
-    if (ol == 0) { out[0] = '/'; out[1] = '\0'; }
-    return out;
+    memcpy(resolved, out, ol + 1);
+    return resolved;
 }
