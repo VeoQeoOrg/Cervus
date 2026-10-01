@@ -2,3 +2,5 @@
 pthread
 Driver
 
+rdynamic
+Driver

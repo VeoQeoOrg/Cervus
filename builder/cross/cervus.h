@@ -11,7 +11,7 @@
 #define ENDFILE_SPEC "%{shared|pie:crtendS.o%s;:crtend.o%s}"
 
 #undef LINK_SPEC
-#define LINK_SPEC "%{shared:-shared --hash-style=sysv;pie:--export-dynamic --hash-style=sysv -dynamic-linker /lib/ld-cervus.elf;:-static %{!Ttext-segment*:%{!Wl,-Ttext-segment*:-Ttext-segment=0x401000}}}"
+#define LINK_SPEC "%{rdynamic:--export-dynamic} %{shared:-shared --hash-style=sysv;pie:--export-dynamic --hash-style=sysv -dynamic-linker /lib/ld-cervus.elf;:-static %{!Ttext-segment*:%{!Wl,-Ttext-segment*:-Ttext-segment=0x401000}}}"
 
 #undef TARGET_ASM_FILE_END
 #define TARGET_ASM_FILE_END file_end_indicate_exec_stack
