@@ -793,7 +793,9 @@ int ahci_flush(ahci_device_t *d) {
 
 static int ahci_probe(pci_device_t *pd) {
     if (g_hba_present) return 0;
-    if (pd->class_code != 0x01 || pd->subclass != 0x06 || pd->prog_if != 0x01) return 0;
+    bool is_ahci = pd->class_code == 0x01 && pd->subclass == 0x06 && pd->prog_if == 0x01;
+    bool is_rst  = pd->class_code == 0x01 && pd->subclass == 0x04 && pd->vendor_id == 0x8086;
+    if (!is_ahci && !is_rst) return 0;
 
     pci_bar_t *bar5 = &pd->bars[5];
     if (bar5->type != PCI_BAR_TYPE_MEM || bar5->base == 0) {
@@ -828,6 +830,17 @@ static int ahci_probe(pci_device_t *pd) {
 
     volatile uint8_t *abar =
         (volatile uint8_t *)(uintptr_t)(bar5->base + hhdm);
+
+    if (is_rst) {
+        uint32_t vs = hba_r32(abar, HBA_VS);
+        if (vs == 0xFFFFFFFFu || (vs >> 16) != 1) {
+            serial_printf("[ahci] %04x:%04x in RAID mode does not answer as AHCI (vs=0x%x)\n",
+                          pd->vendor_id, pd->device_id, vs);
+            return 0;
+        }
+        serial_printf("[ahci] %04x:%04x is in Intel RST RAID mode; driving its disks through AHCI %u.%u\n",
+                      pd->vendor_id, pd->device_id, vs >> 16, (vs >> 8) & 0xFF);
+    }
 
     memset(&g_hba, 0, sizeof(g_hba));
     g_hba.abar = abar;
@@ -958,8 +971,18 @@ static const pci_driver_t g_ahci_driver = {
     .probe          = ahci_probe,
 };
 
+static const pci_driver_t g_ahci_rst_driver = {
+    .name           = "ahci-rst",
+    .match_vendor   = 0x8086,
+    .match_device   = -1,
+    .match_class    = 0x01,
+    .match_subclass = 0x04,
+    .probe          = ahci_probe,
+};
+
 void ahci_init(void) {
     pci_register_driver(&g_ahci_driver);
+    pci_register_driver(&g_ahci_rst_driver);
 }
 
 int ahci_device_count(void) { return g_dev_count; }
