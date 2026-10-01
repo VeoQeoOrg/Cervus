@@ -65,23 +65,29 @@ void signal_send_group(uint32_t pgid, int sig) {
     }
 }
 
+static void signal_restore_saved_mask(task_t *t) {
+    if (!t->sig_saved_valid) return;
+    t->sig_blocked = t->sig_saved_mask;
+    t->sig_saved_valid = 0;
+}
+
 int64_t signal_deliver_pending(task_t *t, int64_t retval) {
     if (!t || !t->is_userspace) return retval;
 
     uint64_t deliverable = t->sig_pending & ~t->sig_blocked;
-    if (!deliverable) return retval;
+    if (!deliverable) { signal_restore_saved_mask(t); return retval; }
 
     int sig = __builtin_ctzll(deliverable);
-    if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~deliverable; return retval; }
+    if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~deliverable; signal_restore_saved_mask(t); return retval; }
 
     uint64_t h = t->sig_handler[sig];
 
     if (sig == SIGKILL || h == SIG_DFL_ADDR) {
         t->sig_pending &= ~(1ULL << sig);
-        if (sig != SIGKILL && sig_default_ignore(sig)) return retval;
+        if (sig != SIGKILL && sig_default_ignore(sig)) { signal_restore_saved_mask(t); return retval; }
         signal_terminate(t, sig);
     }
-    if (h == SIG_IGN_ADDR) { t->sig_pending &= ~(1ULL << sig); return retval; }
+    if (h == SIG_IGN_ADDR) { t->sig_pending &= ~(1ULL << sig); signal_restore_saved_mask(t); return retval; }
 
     uint64_t restorer = t->sig_restorer[sig];
     if (!restorer) { t->sig_pending &= ~(1ULL << sig); signal_terminate(t, sig); }
@@ -107,7 +113,8 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval) {
     uc->r13    = t->user_saved_r13;
     uc->r14    = t->user_saved_r14;
     uc->r15    = t->user_saved_r15;
-    uc->mask   = t->sig_blocked;
+    uc->mask   = t->sig_saved_valid ? t->sig_saved_mask : t->sig_blocked;
+    t->sig_saved_valid = 0;
 
     t->sig_blocked |= t->sig_mask[sig];
     if (!(t->sig_flags[sig] & SA_NODEFER)) t->sig_blocked |= (1ULL << sig);
@@ -224,4 +231,32 @@ int64_t sys_rt_sigreturn(void) {
     t->user_saved_r15 = uc->r15;
     t->sig_blocked    = uc->mask;
     return (int64_t)uc->rax;
+}
+
+int64_t sys_rt_sigpending(uint64_t set, uint64_t sigsetsize) {
+    (void)sigsetsize;
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (!syscall_uptr_validate((void *)set, 8)) return -EFAULT;
+    *(uint64_t *)set = t->sig_pending & t->sig_blocked;
+    return 0;
+}
+
+int64_t sys_rt_sigsuspend(uint64_t set, uint64_t sigsetsize) {
+    (void)sigsetsize;
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (!syscall_uptr_validate((void *)set, 8)) return -EFAULT;
+    uint64_t m = (*(uint64_t *)set) & ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    t->sig_saved_mask = t->sig_blocked;
+    t->sig_saved_valid = 1;
+    t->sig_blocked = m;
+    while (!signal_pending_deliverable(t) && !t->pending_kill) {
+        t->runnable = false;
+        t->state = TASK_BLOCKED;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        if (signal_pending_deliverable(t) || t->pending_kill) task_unblock(t);
+        sched_reschedule();
+    }
+    return -EINTR;
 }

@@ -361,8 +361,51 @@ static const vnode_ops_t pidfile_ops = {
     .unref = piddyn_unref,
 };
 
+static int64_t pidexe_readlink(vnode_t *node, char *buf, size_t bufsiz) {
+    task_t *t = task_find_by_pid((uint32_t)(uintptr_t)node->fs_data);
+    if (!t || !t->exe[0]) return -ENOENT;
+    size_t n = strlen(t->exe);
+    if (n > bufsiz) n = bufsiz;
+    memcpy(buf, t->exe, n);
+    return (int64_t)n;
+}
+
+static int pidexe_stat(vnode_t *node, vfs_stat_t *out) {
+    task_t *t = task_find_by_pid((uint32_t)(uintptr_t)node->fs_data);
+    memset(out, 0, sizeof(*out));
+    out->st_ino  = node->ino;
+    out->st_type = VFS_NODE_SYMLINK;
+    out->st_mode = 0777;
+    out->st_size = t ? strlen(t->exe) : 0;
+    out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
+    return 0;
+}
+
+static void pidexe_unref(vnode_t *node) {
+    kfree(node);
+}
+
+static const vnode_ops_t pidexe_ops = {
+    .readlink = pidexe_readlink,
+    .stat     = pidexe_stat,
+    .ref      = proc_ref,
+    .unref    = pidexe_unref,
+};
+
 static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
+    if (strcmp(name, "exe") == 0) {
+        vnode_t *v = kzalloc(sizeof(vnode_t));
+        if (!v) return -ENOMEM;
+        v->type = VFS_NODE_SYMLINK;
+        v->mode = 0777;
+        v->ino  = g_proc_ino++;
+        v->ops  = &pidexe_ops;
+        v->fs_data = (void *)(uintptr_t)pid;
+        v->refcount = 1;
+        *out = v;
+        return 0;
+    }
     for (size_t i = 0; i < PROC_PID_NFILES; i++) {
         if (strcmp(g_pid_files[i].name, name) != 0) continue;
         vnode_t *v = kzalloc(sizeof(vnode_t));
@@ -385,6 +428,12 @@ static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
 
 static int piddir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     (void)dir;
+    if (index == PROC_PID_NFILES) {
+        out->d_ino  = index + 1;
+        out->d_type = (uint8_t)VFS_NODE_SYMLINK;
+        strcpy(out->d_name, "exe");
+        return 0;
+    }
     if (index >= PROC_PID_NFILES) return -ENOENT;
     out->d_ino  = index + 1;
     out->d_type = (uint8_t)VFS_NODE_FILE;

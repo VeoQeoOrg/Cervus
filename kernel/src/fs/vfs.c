@@ -589,10 +589,10 @@ int vfs_fchown(vfs_file_t *file, uint32_t uid, uint32_t gid) {
     return 0;
 }
 
-int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
+static int chown_common(const char *path, uint32_t uid, uint32_t gid, bool follow) {
     if (!path) return -EINVAL;
     vnode_t *node = NULL;
-    int ret = vfs_lookup(path, &node);
+    int ret = follow ? vfs_lookup(path, &node) : vfs_lookup_nofollow(path, &node);
     if (ret < 0) return ret;
     if (uid != 0xFFFFFFFFu) node->uid = uid;
     if (gid != 0xFFFFFFFFu) node->gid = gid;
@@ -600,6 +600,9 @@ int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
     vnode_unref(node);
     return 0;
 }
+
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid) { return chown_common(path, uid, gid, true); }
+int vfs_lchown(const char *path, uint32_t uid, uint32_t gid) { return chown_common(path, uid, gid, false); }
 
 int vfs_fsync(vfs_file_t *file) {
     if (!file || !file->vnode) return -EBADF;
@@ -960,13 +963,17 @@ int64_t vfs_make_time(int year, int mon, int day, int hour, int min, int sec) {
     return days * 86400LL + (int64_t)hour * 3600LL + (int64_t)min * 60LL + sec;
 }
 
+void vfs_set_times_node(vnode_t *node, int64_t atime, int64_t mtime) {
+    if (atime > 0) node->atime = atime;
+    if (mtime > 0) { node->mtime = mtime; node->ctime = mtime; }
+}
+
 int vfs_set_times(const char *path, int64_t atime, int64_t mtime) {
     if (!path) return -EINVAL;
     vnode_t *node = NULL;
     int ret = vfs_lookup(path, &node);
     if (ret < 0) return ret;
-    if (atime > 0) node->atime = atime;
-    if (mtime > 0) { node->mtime = mtime; node->ctime = mtime; }
+    vfs_set_times_node(node, atime, mtime);
     vnode_unref(node);
     return 0;
 }

@@ -304,6 +304,8 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     for (const char *p = kpath; *p; p++) if (*p == '/') bn = p + 1;
     strncpy(t->name, bn, sizeof(t->name) - 1);
     t->name[sizeof(t->name) - 1] = '\0';
+    strncpy(t->exe, kpath, sizeof(t->exe) - 1);
+    t->exe[sizeof(t->exe) - 1] = '\0';
 
     if (t->puzzle) { puzzle_destroy(t->puzzle); t->puzzle = NULL; }
     {

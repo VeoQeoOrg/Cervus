@@ -171,6 +171,9 @@ typedef struct task {
     volatile bool in_syscall;
     uint64_t cur_syscall;
     uint64_t cur_syscall_args[6];
+    uint64_t sig_saved_mask;
+    uint8_t  sig_saved_valid;
+    char     exe[256];
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -188,6 +191,21 @@ _Static_assert(offsetof(task_t, stack_base)     == 136, "task_t: stack_base");
 _Static_assert(offsetof(task_t, user_rsp)       == 144, "task_t: user_rsp — update TASK_USER_RSP_OFFSET");
 _Static_assert(offsetof(task_t, user_saved_rip) == 272, "task_t: user_saved_rip");
 _Static_assert(offsetof(task_t, user_saved_rbp) == 280, "task_t: user_saved_rbp — update TASK_USER_SAVED_RBP_OFFSET");
+_Static_assert(offsetof(task_t, cr3)            ==  24, "task_t: cr3 — update TASK_CR3_OFFSET");
+_Static_assert(offsetof(task_t, user_saved_rbx) == 288, "task_t: user_saved_rbx");
+_Static_assert(offsetof(task_t, user_saved_r12) == 296, "task_t: user_saved_r12");
+_Static_assert(offsetof(task_t, user_saved_r13) == 304, "task_t: user_saved_r13");
+_Static_assert(offsetof(task_t, user_saved_r14) == 312, "task_t: user_saved_r14");
+_Static_assert(offsetof(task_t, user_saved_r15) == 320, "task_t: user_saved_r15");
+_Static_assert(offsetof(task_t, user_saved_r11) == 328, "task_t: user_saved_r11");
+_Static_assert(offsetof(task_t, on_cpu)         == 0x158, "task_t: on_cpu — update TASK_ON_CPU_OFFSET");
+_Static_assert(offsetof(task_t, user_saved_rdi) == 1680, "task_t: user_saved_rdi — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, user_saved_rsi) == 1688, "task_t: user_saved_rsi");
+_Static_assert(offsetof(task_t, user_saved_rdx) == 1696, "task_t: user_saved_rdx");
+_Static_assert(offsetof(task_t, user_saved_r10) == 1704, "task_t: user_saved_r10");
+_Static_assert(offsetof(task_t, user_saved_r8)  == 1712, "task_t: user_saved_r8");
+_Static_assert(offsetof(task_t, user_saved_r9)  == 1720, "task_t: user_saved_r9");
+_Static_assert(offsetof(task_t, user_saved_rax) == 1728, "task_t: user_saved_rax");
 
 extern task_t* ready_queues[MAX_PRIORITY + 1];
 extern task_t* current_task[MAX_CPUS];

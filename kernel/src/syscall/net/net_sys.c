@@ -367,3 +367,47 @@ int64_t sys_net_ifcfg(uint64_t index, uint64_t ubuf, uint64_t ubuf_len) {
 int64_t sys_net_ifset(uint64_t index, uint64_t ip, uint64_t netmask, uint64_t gateway, uint64_t dns) {
     return net_ifcfg_set((int)index, (uint32_t)ip, (uint32_t)netmask, (uint32_t)gateway, (uint32_t)dns);
 }
+
+static int64_t sock_name(uint64_t fd, uint64_t uaddr, uint64_t ulen, int peer) {
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    if (!uaddr || !ulen || !syscall_uptr_validate((void *)ulen, sizeof(int))) return -EFAULT;
+    int cap;
+    memcpy(&cap, (void *)ulen, sizeof(int));
+    if (cap < 0) return -EINVAL;
+    vfs_file_t *f; vnode_t *vn = sock_vnode_from_fd(t, (int)fd, &f);
+    if (!vn) return -ENOTSOCK;
+    uint8_t sa[112];
+    memset(sa, 0, sizeof sa);
+    int len;
+    int64_t r;
+    if (unix_is_vnode(vn)) {
+        sa[0] = AF_UNIX;
+        r = unix_get_name(vn, peer, (char *)sa + 2, 108);
+        len = 2 + (int)strlen((char *)sa + 2) + 1;
+    } else {
+        uint32_t ip; uint8_t ip6[16]; uint16_t port;
+        r = sock_get_name(vn, peer, &ip, ip6, &port);
+        if (sock_family(vn) == AF_INET6) {
+            sa[0] = AF_INET6;
+            wr16be(sa + 2, port);
+            memcpy(sa + 8, ip6, 16);
+            len = 28;
+        } else {
+            sa[0] = AF_INET;
+            wr16be(sa + 2, port);
+            wr32be(sa + 4, ip);
+            len = 16;
+        }
+    }
+    fd_put(f);
+    if (r < 0) return r;
+    int n = cap < len ? cap : len;
+    if (n && !syscall_uptr_validate((void *)uaddr, (size_t)n)) return -EFAULT;
+    memcpy((void *)uaddr, sa, (size_t)n);
+    memcpy((void *)ulen, &len, sizeof(int));
+    return 0;
+}
+
+int64_t sys_getsockname(uint64_t fd, uint64_t uaddr, uint64_t ulen) { return sock_name(fd, uaddr, ulen, 0); }
+int64_t sys_getpeername(uint64_t fd, uint64_t uaddr, uint64_t ulen) { return sock_name(fd, uaddr, ulen, 1); }

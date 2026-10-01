@@ -56,3 +56,14 @@ int64_t sys_fchown(uint64_t fd, uint64_t uid, uint64_t gid)
     fd_put(f);
     return r;
 }
+
+int64_t sys_lchown(uint64_t path_ptr, uint64_t uid, uint64_t gid)
+{
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (t->uid != UID_ROOT && !cap_has(t->capabilities, CAP_FS_OWNER)) return -EPERM;
+    char kpath[VFS_MAX_PATH];
+    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (rp < 0) return rp;
+    return vfs_lchown(kpath, (uint32_t)uid, (uint32_t)gid);
+}

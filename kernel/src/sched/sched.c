@@ -420,6 +420,7 @@ task_t* task_fork(task_t* parent) {
     child->umask           = parent->umask;
     child->ctty            = parent->ctty;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+    memcpy(child->exe, parent->exe, sizeof(child->exe));
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;

@@ -612,3 +612,25 @@ vnode_t *sock_op_accept6(vnode_t *vn, int nonblock, uint8_t rip6[16], uint16_t *
     spinlock_release(&g_socks_lock);
     return cvn;
 }
+
+int sock_get_name(const vnode_t *vn, int peer, uint32_t *ip, uint8_t ip6[16], uint16_t *port)
+{
+    sock_t *s = vn->fs_data;
+    if (!s) return -EBADF;
+    if (peer) {
+        if (!s->connected) return -ENOTCONN;
+        *ip = s->peer_ip;
+        memcpy(ip6, s->peer_ip6, 16);
+        *port = s->peer_port;
+        return 0;
+    }
+    *ip = 0;
+    memset(ip6, 0, 16);
+    if (s->connected && s->family == AF_INET) {
+        netdev_t *d = netdev_first();
+        if (d) *ip = d->ip;
+        if (s->peer_ip == 0x7F000001u) *ip = 0x7F000001u;
+    }
+    *port = s->local_port;
+    return 0;
+}

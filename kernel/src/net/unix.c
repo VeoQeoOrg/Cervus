@@ -385,3 +385,17 @@ int unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gi
     if (gid) *gid = s->peer_gid;
     return 0;
 }
+
+int unix_get_name(const vnode_t *vn, int peer, char *path, size_t cap)
+{
+    unix_sock_t *s = vn->fs_data;
+    if (!s || !cap) return -EBADF;
+    if (peer) {
+        if (!s->peer) return -ENOTCONN;
+        s = s->peer;
+    }
+    size_t i = 0;
+    for (; i + 1 < cap && s->path[i]; i++) path[i] = s->path[i];
+    path[i] = 0;
+    return 0;
+}

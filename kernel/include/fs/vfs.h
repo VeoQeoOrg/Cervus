@@ -199,6 +199,8 @@ int     vfs_truncate (const char *path, uint64_t new_size);
 int     vfs_ftruncate(vfs_file_t *file, uint64_t new_size);
 int     vfs_chmod    (const char *path, uint32_t mode);
 int     vfs_chown    (const char *path, uint32_t uid, uint32_t gid);
+int  vfs_lchown(const char *path, uint32_t uid, uint32_t gid);
+void vfs_set_times_node(vnode_t *node, int64_t atime, int64_t mtime);
 int     vfs_fchmod   (vfs_file_t *file, uint32_t mode);
 int     vfs_fchown   (vfs_file_t *file, uint32_t uid, uint32_t gid);
 uint32_t vfs_current_uid(void);

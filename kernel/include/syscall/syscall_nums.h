@@ -193,6 +193,12 @@
 #define SYS_GETITIMER         618
 #define SYS_SHUTDOWN_SOCK     619
 #define SYS_SIGNALFD          620
+#define SYS_RT_SIGPENDING     621
+#define SYS_RT_SIGSUSPEND     622
+#define SYS_GETSOCKNAME       623
+#define SYS_GETPEERNAME       624
+#define SYS_FUTIMES           625
+#define SYS_LCHOWN            626
 
 #define SYSCALL_TABLE_SIZE    640
 

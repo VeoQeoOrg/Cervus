@@ -47,6 +47,8 @@ int  sock_udp6_input(const uint8_t *src6, uint16_t src_port, uint16_t dst_port,
 void sock_icmp_input(uint32_t src_ip, const uint8_t *data, size_t len);
 
 int      sock_family(const vnode_t *vn);
+int      sock_get_name(const vnode_t *vn, int peer, uint32_t *ip, uint8_t ip6[16], uint16_t *port);
+int      unix_get_name(const vnode_t *vn, int peer, char *path, size_t cap);
 int64_t  sock_op_bind6(vnode_t *vn, const uint8_t ip6[16], uint16_t port);
 int64_t  sock_op_connect6(vnode_t *vn, const uint8_t ip6[16], uint16_t port);
 int64_t  sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t ip6[16], uint16_t port);

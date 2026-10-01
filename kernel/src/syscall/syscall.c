@@ -146,6 +146,12 @@ extern int64_t sys_fb_release(void);
 extern int64_t sys_setfont(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rt_sigaction(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rt_sigprocmask(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_rt_sigpending(uint64_t, uint64_t);
+extern int64_t sys_rt_sigsuspend(uint64_t, uint64_t);
+extern int64_t sys_getsockname(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getpeername(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_futimes(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_lchown(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_kill(uint64_t, uint64_t);
 extern int64_t sys_rt_sigreturn(void);
 extern int64_t signal_deliver_pending(task_t *t, int64_t retval);
@@ -261,6 +267,7 @@ W1(sys_fb_info)     W5(sys_fb_blit)    W1(sys_fb_map)
 W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W5(sys_setfont)
 W4(sys_rt_sigaction) W4(sys_rt_sigprocmask) W2(sys_kill) W0(sys_rt_sigreturn)
+W2(sys_rt_sigpending) W2(sys_rt_sigsuspend) W3(sys_getsockname) W3(sys_getpeername) W3(sys_futimes) W3(sys_lchown)
 W2(sys_keymap_config)
 W4(sys_klog)
 W3(sys_puzzle)
@@ -390,6 +397,12 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETITIMER]         = _sys_getitimer,
     [SYS_SHUTDOWN_SOCK]     = _sys_sock_shutdown,
     [SYS_SIGNALFD]          = _sys_signalfd,
+    [SYS_RT_SIGPENDING]     = _sys_rt_sigpending,
+    [SYS_RT_SIGSUSPEND]     = _sys_rt_sigsuspend,
+    [SYS_GETSOCKNAME]       = _sys_getsockname,
+    [SYS_GETPEERNAME]       = _sys_getpeername,
+    [SYS_FUTIMES]           = _sys_futimes,
+    [SYS_LCHOWN]            = _sys_lchown,
     [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,
