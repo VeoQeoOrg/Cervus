@@ -134,6 +134,46 @@ void syscall_path_normalize(char *path)
     for (size_t k = 0; k <= bi; k++) path[k] = buf[k];
 }
 
+static bool is_dot_segment(const char *s)
+{
+    if (s[0] != '.') return false;
+    if (s[1] == '/' || s[1] == '\0') return true;
+    return s[1] == '.' && (s[2] == '/' || s[2] == '\0');
+}
+
+static int path_require_dirs(const char *path)
+{
+    char prefix[512];
+    size_t i = 0;
+    while (path[i]) {
+        while (path[i] == '/') i++;
+        if (!path[i]) break;
+        size_t start = i;
+        while (path[i] && path[i] != '/') i++;
+        size_t end = i;
+        size_t next = i;
+        while (path[next] == '/') next++;
+        if (next == end) continue;
+        if (is_dot_segment(&path[start])) continue;
+        bool last = path[next] == '\0';
+        if (!last && !is_dot_segment(&path[next])) continue;
+        if (end >= sizeof(prefix)) return -ENAMETOOLONG;
+        memcpy(prefix, path, end);
+        prefix[end] = '\0';
+        syscall_path_normalize(prefix);
+        vnode_t *node = NULL;
+        int r = vfs_lookup(prefix, &node);
+        if (r < 0) {
+            if (last) continue;
+            return r;
+        }
+        bool dir = node->type == VFS_NODE_DIR;
+        vnode_unref(node);
+        if (!dir) return -ENOTDIR;
+    }
+    return 0;
+}
+
 int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
 {
     if (!dst || max == 0) return -EINVAL;
@@ -158,6 +198,8 @@ int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
         for (size_t k = 0; k < tl; k++) dst[pos++] = tmp[k];
         dst[pos] = '\0';
     }
+    int r = path_require_dirs(dst);
+    if (r < 0) return r;
     syscall_path_normalize(dst);
     return 0;
 }
