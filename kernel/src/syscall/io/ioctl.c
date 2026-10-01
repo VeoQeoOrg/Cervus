@@ -13,6 +13,7 @@
 #define TCSETSF       0x5404
 #define TIOCSWINSZ    0x5414
 #define SIOCSTTL      0x5460
+#define FIONREAD      0x541B
 
 #define IOCTL_TERMIOS_SIZE 48
 
@@ -27,6 +28,7 @@ static size_t ioctl_out_size(uint64_t request)
         case TIOCGWINSZ:  return 8;
         case TIOCGCURSOR: return 8;
         case TCGETS:      return IOCTL_TERMIOS_SIZE;
+        case FIONREAD:    return sizeof(int);
         default:
             if (IOC_DIR(request) & IOC_READ) return IOC_SIZE(request);
             return 0;

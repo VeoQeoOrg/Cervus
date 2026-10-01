@@ -37,10 +37,21 @@ extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 #define TIOCSNONBLOCK 0x5481
 #define TIOCGPGRP     0x540F
 #define TIOCSPGRP     0x5410
+#define FIONREAD      0x541B
 
 #define T_ICANON  0x0002
 #define T_ECHO    0x0008
 #define T_ISIG    0x0001
+
+#define T_VINTR   0
+#define T_VQUIT   1
+#define T_VERASE  2
+#define T_VKILL   3
+#define T_VEOF    4
+#define T_VMIN    6
+#define T_VSTART  8
+#define T_VSTOP   9
+#define T_VSUSP   10
 
 struct cervus_winsize {
     uint16_t ws_row;
@@ -87,6 +98,15 @@ static void vtty_reset(vt_tty_t *t) {
     t->termios.c_cflag = 0;
     t->termios.c_lflag = T_ICANON | T_ECHO | T_ISIG;
     memset(t->termios.c_cc, 0, sizeof(t->termios.c_cc));
+    t->termios.c_cc[T_VINTR]  = 0x03;
+    t->termios.c_cc[T_VQUIT]  = 0x1C;
+    t->termios.c_cc[T_VERASE] = 0x7F;
+    t->termios.c_cc[T_VKILL]  = 0x15;
+    t->termios.c_cc[T_VEOF]   = 0x04;
+    t->termios.c_cc[T_VMIN]   = 1;
+    t->termios.c_cc[T_VSTART] = 0x11;
+    t->termios.c_cc[T_VSTOP]  = 0x13;
+    t->termios.c_cc[T_VSUSP]  = 0x1A;
     t->line_len = 0;
     t->line_read = 0;
     t->line_eof = 0;
@@ -98,9 +118,7 @@ void tty_vt_init(void) {
     for (int i = 0; i < VT_COUNT; i++) vtty_reset(&g_vtty[i]);
 }
 
-void tty_vt_input(int vt, char c) {
-    if (vt < 0 || vt >= VT_COUNT) return;
-    vt_tty_t *t = &g_vtty[vt];
+static void tty_queue_char(vt_tty_t *t, char c) {
     uint16_t next = (uint16_t)((t->r_tail + 1) % KB_BUF_SIZE);
     if (next != t->r_head) {
         t->ring[t->r_tail] = c;
@@ -111,6 +129,24 @@ void tty_vt_input(int vt, char c) {
         t->reader = NULL;
         task_unblock(r);
     }
+}
+
+void tty_vt_input(int vt, char c) {
+    if (vt < 0 || vt >= VT_COUNT) return;
+    vt_tty_t *t = &g_vtty[vt];
+    uint8_t intr = t->termios.c_cc[T_VINTR];
+    if ((t->termios.c_lflag & T_ISIG) && intr && (uint8_t)c == intr) {
+        extern volatile uint32_t g_ctrlc_pending;
+        g_ctrlc_pending = 1;
+        return;
+    }
+    tty_queue_char(t, c);
+}
+
+void tty_vt_inject_intr(int vt) {
+    if (vt < 0 || vt >= VT_COUNT) return;
+    vt_tty_t *t = &g_vtty[vt];
+    if (t->termios.c_cc[T_VINTR]) tty_queue_char(t, (char)t->termios.c_cc[T_VINTR]);
 }
 
 static int ring_empty(vt_tty_t *t) { return t->r_head == t->r_tail; }
@@ -134,8 +170,9 @@ static int cur_vt(void) {
     return v;
 }
 
-bool tty_has_isig_global(void) {
-    return (g_vtty[vt_active()].termios.c_lflag & T_ISIG) != 0;
+bool tty_echo_enabled(int vt) {
+    if (vt < 0 || vt >= VT_COUNT) return false;
+    return (g_vtty[vt].termios.c_lflag & T_ECHO) != 0;
 }
 
 void tty_reset_nonblock(void) {
@@ -213,6 +250,8 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     int      canonical   = (t->termios.c_lflag & T_ICANON) != 0;
     int      isig        = (t->termios.c_lflag & T_ISIG) != 0;
     int      echo        = canonical && (t->termios.c_lflag & T_ECHO) != 0;
+    uint8_t  intr        = t->termios.c_cc[T_VINTR];
+    uint8_t  eof         = t->termios.c_cc[T_VEOF];
 
     int nb = t->nonblock && (devfs_cur_task() == t->nonblock_owner);
     if (nb && ring_empty(t)
@@ -223,7 +262,7 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
         char c;
         if (wait_for_char(vt, t, &c) < 0)
             return -EINTR;
-        if (isig && c == 0x03) return -EINTR;
+        if (isig && intr && (uint8_t)c == intr) return -EINTR;
         dst[0] = c;
         size_t got = 1;
         while (got < len) {
@@ -244,13 +283,13 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
             if (wait_for_char(vt, t, &c) < 0)
                 return -EINTR;
 
-            if (isig && c == 0x03) {
+            if (isig && intr && (uint8_t)c == intr) {
                 t->line_len  = 0;
                 t->line_read = 0;
                 return -EINTR;
             }
 
-            if (c == 0x04) {
+            if (eof && (uint8_t)c == eof) {
                 t->line_eof = 1;
                 break;
             }
@@ -342,6 +381,23 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
         if (!arg) return -EFAULT;
         if (*((int *)arg)) { t->nonblock = 1; t->nonblock_owner = devfs_cur_task(); }
         else { t->nonblock = 0; t->nonblock_owner = NULL; }
+        return 0;
+    }
+
+    if (req == FIONREAD) {
+        if (!arg) return -EFAULT;
+        int queued = 0;
+        int pending = (int)((t->r_tail - t->r_head + KB_BUF_SIZE) % KB_BUF_SIZE);
+        if (t->termios.c_lflag & T_ICANON) {
+            for (int i = 0; i < pending; i++) {
+                char c = t->ring[(t->r_head + i) % KB_BUF_SIZE];
+                if (c == '\n' || c == '\r') queued = i + 1;
+            }
+        } else {
+            queued = pending;
+        }
+        if (t->line_read < t->line_len) queued += (int)(t->line_len - t->line_read);
+        *((int *)arg) = queued;
         return 0;
     }
 

@@ -18,6 +18,7 @@
 #define TIOCSWINSZ    0x5414
 #define TIOCGCURSOR   0x5480
 #define TIOCSNONBLOCK 0x5481
+#define FIONREAD      0x541B
 
 #define TIO_OFF_OFLAG   4
 #define TIO_OFF_LFLAG   12
@@ -212,6 +213,13 @@ static int64_t pty_ioctl(vnode_t *n, uint64_t req, void *arg, int is_master) {
         case TIOCGWINSZ: if (arg) memcpy(arg, p->ws, 8); return 0;
         case TIOCSWINSZ: if (arg) memcpy(p->ws, arg, 8); return 0;
         case TIOCGCURSOR: return -1;
+        case FIONREAD: {
+            if (!arg) return -EFAULT;
+            uint64_t f = spinlock_acquire_irqsave(&p->lock);
+            *(int *)arg = ring_count(is_master ? &p->s2m : &p->m2s);
+            spinlock_release_irqrestore(&p->lock, f);
+            return 0;
+        }
         case TIOCSNONBLOCK: {
             int v = arg ? *(int *)arg : 0;
             if (is_master) p->m_nonblock = v ? 1 : 0; else p->s_nonblock = v ? 1 : 0;

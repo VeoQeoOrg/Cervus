@@ -267,16 +267,13 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
         char base = scancode_to_char(key);
         if (base >= 'a' && base <= 'z') {
             uint8_t ctrl_char = (uint8_t)(base - 'a' + 1);
-            if (ctrl_char == 0x03) {
-                g_ctrlc_pending = 1;
-                lapic_eoi();
-                return;
-            }
+            if (kb_state.alt) console_input_char('\x1b');
             console_input_char((char)ctrl_char);
             lapic_eoi();
             return;
         }
         if (base >= 'A' && base <= 'Z') {
+            if (kb_state.alt) console_input_char('\x1b');
             console_input_char((char)(base - 'A' + 1));
             lapic_eoi();
             return;
@@ -284,7 +281,10 @@ DEFINE_IRQ(KB_IRQ_VECTOR, ps2_kb_handler)
     }
 
     char c = scancode_to_char(key);
-    if (c != 0) {
+    if (c != 0 && kb_state.alt) {
+        console_input_char('\x1b');
+        console_input_char(c);
+    } else if (c != 0) {
         if (keymap_is_alt())
             keymap_emit(c, console_input_char);
         else

@@ -6,7 +6,6 @@
 #include <string.h>
 
 extern void console_input_char(char c);
-extern volatile uint32_t g_ctrlc_pending;
 
 static bool g_caps_lock = false;
 
@@ -140,8 +139,13 @@ static void emit_one(uint8_t usage, uint8_t modifier) {
     if (ctrl && letter) {
         char low = hid_kbd_lower[usage];
         uint8_t ctrl_char = (uint8_t)(low - 'a' + 1);
-        if (ctrl_char == 0x03) { g_ctrlc_pending = 1; return; }
+        if (alt) console_input_char('\x1b');
         console_input_char((char)ctrl_char);
+        return;
+    }
+    if (alt) {
+        console_input_char('\x1b');
+        console_input_char(base);
         return;
     }
     if (keymap_is_alt())

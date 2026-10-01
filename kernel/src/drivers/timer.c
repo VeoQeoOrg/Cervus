@@ -52,26 +52,18 @@ DEFINE_IRQ(0x20, timer_handler)
 
     extern int vt_kbd_muted(void);
     if (g_ctrlc_pending && __sync_bool_compare_and_swap(&g_ctrlc_pending, 1, 0) && !vt_kbd_muted()) {
-        extern bool tty_has_isig_global(void);
+        extern bool tty_echo_enabled(int vt);
         extern int  vt_active(void);
         extern void vt_write(int vt, const char *buf, size_t len);
-        extern void tty_vt_input(int vt, char c);
+        extern void tty_vt_inject_intr(int vt);
+        extern void signal_send_subtree(task_t *root, int sig);
 
-        int  vt   = vt_active();
-        bool isig = tty_has_isig_global();
-
-        if (isig) {
-            extern void signal_send_subtree(task_t *root, int sig);
-            vt_write(vt, "^C\n", 3);
-            task_t *fg = task_find_foreground();
-            LOG_D("[tty] ctrl-c on vt%d: isig=1 foreground=%u\n",
-                  vt, fg ? fg->pid : 0);
-            if (fg) signal_send_subtree(fg, 2);
-            else    tty_vt_input(vt, 0x03);
-        } else {
-            LOG_D("[tty] ctrl-c on vt%d: the terminal is raw, passing 0x03 through\n", vt);
-            tty_vt_input(vt, 0x03);
-        }
+        int vt = vt_active();
+        if (tty_echo_enabled(vt)) vt_write(vt, "^C\n", 3);
+        task_t *fg = task_find_foreground();
+        LOG_D("[tty] interrupt on vt%d: foreground=%u\n", vt, fg ? fg->pid : 0);
+        if (fg) signal_send_subtree(fg, 2);
+        else    tty_vt_inject_intr(vt);
     }
 
     if (cpu == 0) {
