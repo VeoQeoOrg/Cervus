@@ -100,6 +100,10 @@ void console_redraw_grid(void) {
                 fb_draw_char(global_framebuffer, c->ch, x, y, c->fg);
         }
     }
+    uint32_t used_w = g_gcols * CW(), used_h = g_grows * CH();
+    uint32_t fw = global_framebuffer->width, fh = global_framebuffer->height;
+    if (used_w < fw) fb_fill_rect(global_framebuffer, used_w, 0, fw - used_w, fh, theme_bg);
+    if (used_h < fh) fb_fill_rect(global_framebuffer, 0, used_h, used_w < fw ? used_w : fw, fh - used_h, theme_bg);
 }
 
 static void mark_dirty(uint32_t y_start, uint32_t h) {
