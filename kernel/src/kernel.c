@@ -38,6 +38,7 @@
 #include "../include/drivers/disk/disk.h"
 #include "../include/drivers/disk/partition.h"
 #include "../include/drivers/pci.h"
+#include "../include/drivers/iommu/dmar.h"
 #include "../include/drivers/disk/nvme.h"
 #include "../include/drivers/usb/xhci.h"
 #include "../include/drivers/usb/ehci.h"
@@ -310,6 +311,8 @@ void kmain(void) {
     kstage("apic_init");
     apic_init();
     serial_writestring("APIC [OK]\n");
+    kstage("dmar_init");
+    dmar_init();
     kstage("pci_init");
     bga_init();
     pci_init();
