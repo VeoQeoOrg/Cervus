@@ -34,6 +34,7 @@ static const char USAGE[] =
     "  install NAME...   fetch, verify and install packages and their deps\n"
     "  upgrade [NAME...] update everything installed, or just what you name\n"
     "  remove NAME...    remove installed packages\n"
+    "  clean             delete the downloaded packages kept in " "/var/cache/herd" "\n"
     "  add PATH          send a program to the repository: PATH is a program,\n"
     "                    a script, a .tar.gz or a directory laid out like /;\n"
     "                    herd asks for a name, version and description, then\n"
@@ -52,12 +53,15 @@ static const char USAGE[] =
     "                    (also $HERD_PROGRESS, or progress= in herd.conf)\n"
     "  --root=DIR        install into DIR instead of /, for setting up\n"
     "                    another system from this one\n"
-    "  -y, --yes         do not ask before pulling in dependencies\n";
+    "  -y, --yes         do not ask before pulling in dependencies\n"
+    "  --offline         do not go online: keep the current index and install\n"
+    "                    only packages that were downloaded before\n";
 
 #define DBDIR    "/var/lib/herd"
 #define INDEXF   DBDIR "/INDEX"
 #define CONF     "/etc/herd.conf"
 #define PUBKEY   "/etc/herd.pub"
+#define CACHEDIR "/var/cache/herd"
 
 enum { PG_BAR, PG_PACMAN, PG_HASH, PG_DOTS, PG_PERCENT, PG_PLAIN, PG_NONE };
 
@@ -635,6 +639,7 @@ static int version_cmp(const char *a, const char *b)
 
 static int g_assume_yes;
 static int g_reboot_needed;
+static int g_offline;
 
 static void built_key(const char *s, char out[15])
 {
@@ -768,6 +773,93 @@ static int confirm(const char *question)
     return line[0] == '\n' || line[0] == 'y' || line[0] == 'Y';
 }
 
+static int ensure_online(void)
+{
+    if (g_offline) return 0;
+    for (;;) {
+        char why[320];
+        if (net_check(g_repo, 6000, why, sizeof why) == NET_ONLINE) return 1;
+        fprintf(stderr, "herd: no connection to the repository: %s\n", why);
+        if (!isatty(0) || g_assume_yes) {
+            fprintf(stderr, "herd: connect to the internet and run it again, or add --offline "
+                            "to use only what is already downloaded\n");
+            exit(1);
+        }
+        fprintf(stderr, "[r]etry, [s]kip downloading and use what is already here, or [q]uit? ");
+        fflush(stderr);
+        char line[16];
+        if (!fgets(line, sizeof line, stdin)) exit(1);
+        if (line[0] == 'r' || line[0] == 'R' || line[0] == '\n') continue;
+        if (line[0] == 's' || line[0] == 'S') { g_offline = 1; return 0; }
+        exit(1);
+    }
+}
+
+static const char *base_name(const char *p)
+{
+    const char *s = strrchr(p, '/');
+    return s ? s + 1 : p;
+}
+
+static char *cached_package(const char *fname, const char *shaf, size_t *len_out)
+{
+    char rel[512], buf[600];
+    snprintf(rel, sizeof rel, CACHEDIR "/%s", base_name(fname));
+    const char *path = rooted(rel, buf, sizeof buf);
+    size_t len;
+    char *data = read_file(path, &len);
+    if (!data) return NULL;
+    if (shaf) {
+        uint8_t dg[32]; char hex[65];
+        sha256(data, len, dg); hex_of(dg, 32, hex);
+        if (strcasecmp(hex, shaf) != 0) { free(data); unlink(path); return NULL; }
+    }
+    *len_out = len;
+    return data;
+}
+
+static void cache_package(const char *fname, const char *data, size_t len)
+{
+    char rel[512], dbuf[600], fbuf[600], tmp[640];
+    mkpath(rooted(CACHEDIR, dbuf, sizeof dbuf), 0755);
+    snprintf(rel, sizeof rel, CACHEDIR "/%s", base_name(fname));
+    const char *path = rooted(rel, fbuf, sizeof fbuf);
+    snprintf(tmp, sizeof tmp, "%s.part", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    size_t done = 0;
+    while (done < len) {
+        ssize_t w = write(fd, data + done, len - done);
+        if (w <= 0) break;
+        done += (size_t)w;
+    }
+    close(fd);
+    if (done == len) rename(tmp, path);
+    else unlink(tmp);
+}
+
+static int cmd_clean(void)
+{
+    char buf[600];
+    const char *path = rooted(CACHEDIR, buf, sizeof buf);
+    DIR *d = opendir(path);
+    if (!d) { puts("the package cache is already empty"); return 0; }
+    struct dirent *e;
+    int n = 0;
+    unsigned long long bytes = 0;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char f[900];
+        snprintf(f, sizeof f, "%s/%s", path, e->d_name);
+        struct stat st;
+        if (stat(f, &st) == 0) bytes += (unsigned long long)st.st_size;
+        if (unlink(f) == 0) n++;
+    }
+    closedir(d);
+    printf("removed %d cached package(s), %llu KiB freed\n", n, bytes / 1024);
+    return 0;
+}
+
 static void note_reboot(const char *flist_path)
 {
     char *fl = read_file(flist_path, NULL);
@@ -792,6 +884,15 @@ static int cmd_update(void)
 {
     load_repo();
     mkpath(DBDIR, 0755);
+
+    if (!ensure_online()) {
+        struct stat ist;
+        if (stat(INDEXF, &ist) != 0)
+            die("there is no package index yet -- it needs an internet connection once");
+        puts("offline: keeping the package index that is already here");
+        print_system_status();
+        return 0;
+    }
 
     uint8_t pub[32];
     size_t klen;
@@ -1051,7 +1152,15 @@ static int install_one(const char *idx, const char *name)
     snprintf(plabel, sizeof plabel, "%s-%s", name, ver ? ver : "");
     progress_begin(plabel, 1);
     size_t dlen; int st = 0;
-    char *data = fetch_url(url, &dlen, &st);
+    char *data = cached_package(fname, shaf, &dlen);
+    int from_cache = data != NULL;
+    if (!data && g_offline) {
+        progress_end(0);
+        fprintf(stderr, "herd: %s was never downloaded and there is no internet connection\n", name);
+        free(rec); free(ver); free(filef); free(shaf); free(sizef);
+        return 1;
+    }
+    if (!data) data = fetch_url(url, &dlen, &st);
     if (!data) { progress_end(0); download_error(name, st); free(rec); free(ver); free(filef); free(shaf); free(sizef); return 1; }
 
     if (sizef) {
@@ -1065,6 +1174,7 @@ static int install_one(const char *idx, const char *name)
     } else {
         fprintf(stderr, "herd: warning: %s has no sha256 in index\n", name);
     }
+    if (!from_cache && shaf) cache_package(fname, data, dlen);
 
     uint8_t *tar = NULL; size_t tarlen = 0;
     int is_gz = dlen > 2 && (uint8_t)data[0] == 0x1f && (uint8_t)data[1] == 0x8b;
@@ -1214,6 +1324,7 @@ static int apply_plan(const char *idx, char order[][64], int norder)
 static int cmd_install(int argc, char **argv)
 {
     load_repo();
+    ensure_online();
     char *idx = load_index();
 
     char order[256][64]; int norder = 0;
@@ -2640,6 +2751,8 @@ int main(int argc, char **argv)
             progress_style(argv[argi] + 11);
         } else if (!strcmp(argv[argi], "-y") || !strcmp(argv[argi], "--yes")) {
             g_assume_yes = 1;
+        } else if (!strcmp(argv[argi], "--offline")) {
+            g_offline = 1;
         } else if (!strncmp(argv[argi], "--root=", 7)) {
             snprintf(g_root, sizeof g_root, "%s", argv[argi] + 7);
             size_t l = strlen(g_root);
@@ -2670,6 +2783,10 @@ int main(int argc, char **argv)
         if (elevate("upgrade") != 0) return 1;
         load_repo();
         return cmd_upgrade(argc - 2, argv + 2);
+    }
+    if (!strcmp(cmd, "clean")) {
+        if (elevate("clean") != 0) return 1;
+        return cmd_clean();
     }
     if (!strcmp(cmd, "remove")) {
         if (argc < 3) die("remove needs a name");

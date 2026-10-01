@@ -10,6 +10,7 @@ SYNOPSIS
        herd install NAME...
        herd upgrade [NAME...]
        herd remove NAME...
+       herd clean
        herd add PATH
        herd boot-status
        herd update-kernel
@@ -30,6 +31,18 @@ DESCRIPTION
        A command that needs the index fetches it first if there is not
        one yet, so a fresh install does not have to 'update' by hand.
 
+       Before going online herd checks that an interface is up and has
+       an address, that the repository name resolves and that the
+       repository answers. When it does not, herd says which of these
+       failed. At a terminal it then offers to retry, to skip the
+       download and go on with what is already on the machine, or to
+       quit; without a terminal it stops unless --offline is given.
+
+       Every package that is downloaded and verified is kept in
+       /var/cache/herd, so installing it again, or installing it with no
+       connection, takes it from there after checking its sha256 against
+       the index.
+
        Anything that writes outside your home directory asks for your
        password, unless you are already root.
 
@@ -38,6 +51,11 @@ OPTIONS
               Agree to the dependencies and the upgrade list without
               asking. Without a terminal herd will not guess, so scripts
               need this.
+
+       --offline
+              Do not go online. 'update' keeps the index already on the
+              machine, and 'install' and 'upgrade' take packages only from
+              /var/cache/herd.
 
        --progress=STYLE
               How to draw download progress: bar (the default), pacman,
@@ -61,6 +79,7 @@ COMMANDS
                      and kernel) is registered like any other package, so
                      a plain 'herd upgrade' updates the whole machine.
        remove NAME   delete the files a package installed
+       clean         delete the packages kept in /var/cache/herd
        add PATH      send a program to the repository for review. PATH
                      is a program or #! script (installed as one file,
                      /usr/bin/NAME by default), a .tar.gz, or a
@@ -94,6 +113,7 @@ FILES
        /etc/herd.pub          Ed25519 public key, as hex
        /var/lib/herd/INDEX    the last downloaded index
        /var/lib/herd/*.files  the file list of each installed package
+       /var/cache/herd/       downloaded packages, reused when offline
        ~/.config/herd/token   the GitHub token 'add' submits with
        /var/lib/herd/reboot-required
                               written when an update replaced the kernel
