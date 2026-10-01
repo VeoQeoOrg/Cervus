@@ -25,6 +25,14 @@ log_level_t klog_get_level(void) {
 
 static volatile int g_ts_line_start = 1;
 
+static volatile int serial_owner = -1;
+
+static int serial_cpu(void) {
+    uint32_t a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    return (int)(b >> 24);
+}
+
 static void serial_log_emit(const char *buf, size_t len) {
     if (!buf || len == 0) return;
 
@@ -32,8 +40,14 @@ static void serial_log_emit(const char *buf, size_t len) {
 
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    int me = serial_cpu();
+    if (__atomic_load_n(&serial_owner, __ATOMIC_ACQUIRE) == me) {
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        return;
+    }
     while (__sync_lock_test_and_set(&serial_lock, 1))
         __asm__ volatile("pause" ::: "memory");
+    __atomic_store_n(&serial_owner, me, __ATOMIC_RELEASE);
 
     if (g_ts_line_start) {
         extern uint64_t clocksource_now_ns(void);
@@ -59,6 +73,7 @@ static void serial_log_emit(const char *buf, size_t len) {
             serial_write_port(default_serial_port, buf[i]);
     }
 
+    __atomic_store_n(&serial_owner, -1, __ATOMIC_RELEASE);
     __sync_lock_release(&serial_lock);
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
 }

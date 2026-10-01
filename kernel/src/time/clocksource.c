@@ -10,6 +10,10 @@ static clocksource_t *g_cs_current  = NULL;
 static clocksource_t *g_cs_watchdog = NULL;
 
 static volatile uint64_t g_mono_last = 0;
+static volatile uint64_t g_mono_last_ticks = 0;
+static volatile int      g_jump_pending = 0;
+static volatile int      g_reselect_pending = 0;
+static uint64_t          g_jump_from, g_jump_to;
 
 static uint64_t g_wd_last_cur = 0;
 static uint64_t g_wd_last_wd  = 0;
@@ -91,29 +95,40 @@ uint64_t clocksource_now_ns(void) {
         if (!now) now = timer_get_ticks() * 1000000ULL;
     }
 
+    uint64_t ticks = timer_get_ticks();
     uint64_t last = __atomic_load_n(&g_mono_last, __ATOMIC_RELAXED);
     while (now > last) {
-        if (last != 0 && now - last > 3600000000000ULL) {
-            static int poisoned_logged = 0;
-            if (!poisoned_logged) {
-                poisoned_logged = 1;
-                serial_printf("[time] REJECTED insane forward jump: %llu -> %llu ns\n",
-                              (unsigned long long)last, (unsigned long long)now);
+        uint64_t last_ticks = __atomic_load_n(&g_mono_last_ticks, __ATOMIC_RELAXED);
+        uint64_t elapsed = ticks > last_ticks ? (ticks - last_ticks) * 1000000ULL : 0;
+        if (last != 0 && now - last > elapsed + 3600000000000ULL) {
+            if (!__atomic_exchange_n(&g_jump_pending, 1, __ATOMIC_ACQ_REL)) {
+                g_jump_from = last;
+                g_jump_to = now;
             }
             if (cs) {
                 cs->unstable = true;
-                clocksource_select();
+                __atomic_store_n(&g_reselect_pending, 1, __ATOMIC_RELEASE);
             }
             return last;
         }
         if (__atomic_compare_exchange_n(&g_mono_last, &last, now, false,
-                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&g_mono_last_ticks, ticks, __ATOMIC_RELAXED);
             return now;
+        }
     }
     return last;
 }
 
 void clocksource_watchdog_tick(void) {
+    if (__atomic_load_n(&g_jump_pending, __ATOMIC_ACQUIRE) == 1) {
+        g_jump_pending = 2;
+        serial_printf("[time] REJECTED insane forward jump: %llu -> %llu ns\n",
+                      (unsigned long long)g_jump_from, (unsigned long long)g_jump_to);
+    }
+    if (__atomic_exchange_n(&g_reselect_pending, 0, __ATOMIC_ACQ_REL))
+        clocksource_select();
+
     clocksource_t *cur = g_cs_current;
     clocksource_t *wd  = g_cs_watchdog;
     if (!cur || !wd) return;
