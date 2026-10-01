@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define CONSOLE_ESC_MAX_PARAMS 8
+#define CONSOLE_ESC_MAX_PARAMS 16
 
 typedef struct {
     uint32_t cursor_x, cursor_y;
@@ -15,6 +15,10 @@ typedef struct {
     int      ps_state, ps_nparams, ps_cur, ps_bold, ps_reverse;
     int      ps_params[CONSOLE_ESC_MAX_PARAMS];
     uint32_t saved_cx, saved_cy;
+    int      ps_priv, ps_inter, ps_str_bel;
+    uint32_t scroll_top, scroll_bot;
+    uint32_t sc_fg, sc_bg;
+    int      sc_bold, sc_rev, sc_valid;
 } console_state_t;
 
 typedef struct {
