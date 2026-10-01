@@ -12,6 +12,7 @@
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
+#include <http.h>
 
 #define TIOCGWINSZ    0x5413
 #define TIOCSNONBLOCK 0x5481
@@ -2290,7 +2291,7 @@ static void load_packages(void) {
     g_pkgs_loaded = 1;
     g_npkgs = 0;
 
-    if (system("herd update >/dev/null 2>&1") != 0) return;
+    if (system("herd -y update </dev/null >/dev/null 2>&1") != 0) return;
 
     FILE *f = fopen("/var/lib/herd/INDEX", "r");
     if (!f) return;
@@ -2338,6 +2339,80 @@ static void packages_searching_screen(void) {
     fflush(stdout);
 }
 
+static void repo_url(char *out, size_t cap) {
+    const char *env = getenv("HERD_REPO");
+    if (env && *env) { snprintf(out, cap, "%s", env); return; }
+    out[0] = 0;
+    FILE *f = fopen("/etc/herd.conf", "r");
+    if (!f) return;
+    char line[600];
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "repo=", 5) != 0) continue;
+        p += 5;
+        p[strcspn(p, "\r\n")] = 0;
+        snprintf(out, cap, "%s", p);
+        break;
+    }
+    fclose(f);
+}
+
+static char g_offline_why[320];
+
+static void info_offline(int row, int col, int w) {
+    int r = row;
+    info_print(&r, col, w, 0, "No internet connection");
+    r++;
+    info_wrap(&r, col, w, "Extra software is fetched from the Cervus repository, so "
+                          "this step needs the internet. Skipping it is safe: the "
+                          "system is installed either way, and packages can be added "
+                          "later with herd install.");
+    r++;
+    info_print(&r, col, w, 1, "  R       check the connection again");
+    info_print(&r, col, w, 1, "  S, Esc  skip this step");
+}
+
+static int online_or_skip(void) {
+    char url[600];
+    repo_url(url, sizeof url);
+    for (;;) {
+        term_size_query();
+        hide_cursor();
+        clear_screen();
+        draw_pane_title(2, g_pane_left_col, g_pane_left_w, "Extra software");
+        go_xy(5, g_pane_left_col);
+        printf(C_GRAY "  checking the internet connection..." C_RESET);
+        draw_vsplit();
+        g_pkg_focus = -1;
+        info_box("Help", info_packages);
+        fflush(stdout);
+
+        if (net_check(url, 6000, g_offline_why, sizeof g_offline_why) == NET_ONLINE) return 1;
+
+        term_size_query();
+        clear_screen();
+        draw_pane_title(2, g_pane_left_col, g_pane_left_w, "Extra software");
+        int r = 5;
+        go_xy(r, g_pane_left_col);
+        printf(C_RED "  No internet connection" C_RESET);
+        r += 2;
+        info_wrap(&r, g_pane_left_col, g_pane_left_w, g_offline_why);
+        r++;
+        go_xy(r, g_pane_left_col);
+        printf(C_GRAY "  R checks again, S or Esc skips this step" C_RESET);
+        draw_vsplit();
+        info_box("Help", info_offline);
+        fflush(stdout);
+
+        for (;;) {
+            int k = read_key();
+            if (k == 'r' || k == 'R' || k == '\r' || k == '\n') break;
+            if (k == 's' || k == 'S' || k == KEY_ESC) return 0;
+        }
+    }
+}
+
 static int pkg_matches(const pkg_entry_t *p, const char *needle) {
     if (!needle[0]) return 1;
     return strcasestr(p->name, needle) != NULL ||
@@ -2345,6 +2420,10 @@ static int pkg_matches(const pkg_entry_t *p, const char *needle) {
 }
 
 static int choose_packages(void) {
+    if (!g_pkgs_loaded && !online_or_skip()) {
+        for (int i = 0; i < g_npkgs; i++) g_pkgs[i].chosen = 0;
+        return 0;
+    }
     packages_searching_screen();
     load_packages();
     if (g_npkgs == 0) return 0;
