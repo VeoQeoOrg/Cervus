@@ -1,5 +1,7 @@
 #ifndef _CERVUS_HTTP_H
 #define _CERVUS_HTTP_H
+
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -50,6 +52,15 @@ typedef struct {
 
 int http_request(const char *url, int out_fd, const http_opts *opts);
 int http_fetch(const char *url, int out_fd, int insecure, int head_only, int verbose);
+
+#define NET_ONLINE      0
+#define NET_NO_LINK     1
+#define NET_NO_ADDRESS  2
+#define NET_BAD_URL     3
+#define NET_NO_DNS      4
+#define NET_UNREACHABLE 5
+
+int net_check(const char *url, int timeout_ms, char *why, size_t whycap);
 
 #ifdef __cplusplus
 }
