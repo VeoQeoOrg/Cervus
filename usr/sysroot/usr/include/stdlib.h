@@ -113,6 +113,7 @@ void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
               int (*cmp)(const void *, const void *));
 
 int system(const char *cmd);
+int getloadavg(double loadavg[], int nelem);
 
 int    mkstemp(char *pattern);
 char  *mktemp(char *pattern);
