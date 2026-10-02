@@ -485,6 +485,17 @@ static int copy_file(const char *src, const char *dst, unsigned mode)
     return rc;
 }
 
+static int replace_path(const char *tmp, const char *dst)
+{
+    if (rename(tmp, dst) == 0) return 0;
+    if (errno == EISDIR || errno == ENOTEMPTY) {
+        fprintf(stderr, "herd: %s is a directory, not replacing it\n", dst);
+        return -1;
+    }
+    fprintf(stderr, "herd: cannot install %s: %s\n", dst, strerror(errno));
+    return -1;
+}
+
 static void pax_field(const char *rec, size_t n, const char *key, char *out, size_t cap)
 {
     size_t p = 0, klen = strlen(key);
@@ -564,17 +575,24 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
             fprintf(files, "d %s\n", dst);
         } else if (type == '0' || type == 0) {
             mkparents(dst);
-            int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
-            if (fd < 0) { fprintf(stderr, "herd: cannot write %s: %s\n", dst, strerror(errno)); return -1; }
+            char tmp[2100];
+            snprintf(tmp, sizeof tmp, "%s.herd-new", dst);
+            unlink(tmp);
+            int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, mode);
+            if (fd < 0) { fprintf(stderr, "herd: cannot write %s: %s\n", tmp, strerror(errno)); return -1; }
             size_t remain = (size_t)fsize, p = off;
             while (remain) {
                 size_t chunk = remain < 65536 ? remain : 65536;
                 if (p + chunk > len) chunk = len - p;
                 if (chunk == 0) break;
-                if (write(fd, tar + p, chunk) != (ssize_t)chunk) { close(fd); return -1; }
+                if (write(fd, tar + p, chunk) != (ssize_t)chunk) {
+                    fprintf(stderr, "herd: cannot write %s: %s\n", tmp, strerror(errno));
+                    close(fd); unlink(tmp); return -1;
+                }
                 p += chunk; remain -= chunk;
             }
-            close(fd);
+            fchmod(fd, mode);
+            if (close(fd) < 0 || replace_path(tmp, dst) < 0) { unlink(tmp); return -1; }
             fprintf(files, "f %s\n", dst);
         } else if (type == '1') {
             const char *lrel = linkname;
@@ -584,13 +602,20 @@ static int extract_tar(const uint8_t *tar, size_t len, FILE *files)
             snprintf(src, sizeof src, "%s/%s", g_root, lrel);
             for (char *q = src; *q; q++) if (q[0]=='/' && q[1]=='/') memmove(q, q+1, strlen(q));
             mkparents(dst);
-            unlink(dst);
-            if (copy_file(src, dst, mode) == 0) fprintf(files, "f %s\n", dst);
-            else fprintf(stderr, "herd: cannot link %s to %s\n", dst, src);
+            char tmp[2100];
+            snprintf(tmp, sizeof tmp, "%s.herd-new", dst);
+            unlink(tmp);
+            int ok = link(src, tmp) == 0;
+            if (!ok && (errno == EXDEV || errno == EPERM)) ok = copy_file(src, tmp, mode) == 0;
+            if (ok && replace_path(tmp, dst) == 0) fprintf(files, "f %s\n", dst);
+            else { unlink(tmp); fprintf(stderr, "herd: cannot link %s to %s: %s\n", dst, src, strerror(errno)); }
         } else if (type == '2') {
             mkparents(dst);
-            unlink(dst);
-            if (symlink(linkname, dst) == 0) fprintf(files, "f %s\n", dst);
+            char tmp[2100];
+            snprintf(tmp, sizeof tmp, "%s.herd-new", dst);
+            unlink(tmp);
+            if (symlink(linkname, tmp) == 0 && replace_path(tmp, dst) == 0) fprintf(files, "f %s\n", dst);
+            else { unlink(tmp); fprintf(stderr, "herd: cannot create the link %s: %s\n", dst, strerror(errno)); }
         }
         off += (size_t)((fsize + 511) & ~511ULL);
     }

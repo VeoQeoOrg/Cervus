@@ -3,7 +3,109 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <dirent.h>
 #include <cervus_util.h>
+
+static int copy_tree(const char *src, const char *dst);
+
+static int copy_file(const char *src, const char *dst, const struct stat *st)
+{
+    int in = open(src, O_RDONLY);
+    if (in < 0) return -1;
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, st->st_mode & 07777);
+    if (out < 0) { close(in); return -1; }
+    static char buf[65536];
+    ssize_t n;
+    int rc = 0;
+    while ((n = read(in, buf, sizeof buf)) > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(out, buf + off, (size_t)(n - off));
+            if (w <= 0) { rc = -1; break; }
+            off += w;
+        }
+        if (rc) break;
+    }
+    if (n < 0) rc = -1;
+    close(in);
+    if (close(out) < 0) rc = -1;
+    if (rc == 0) {
+        chmod(dst, st->st_mode & 07777);
+        if (getuid() == 0) chown(dst, st->st_uid, st->st_gid);
+        struct timespec ts[2] = { st->st_atim, st->st_mtim };
+        utimensat(AT_FDCWD, dst, ts, 0);
+    }
+    return rc;
+}
+
+static int copy_tree(const char *src, const char *dst)
+{
+    struct stat st;
+    if (lstat(src, &st) < 0) return -1;
+    if (S_ISLNK(st.st_mode)) {
+        char target[1024];
+        ssize_t n = readlink(src, target, sizeof target - 1);
+        if (n < 0) return -1;
+        target[n] = 0;
+        return symlink(target, dst);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        if (mkdir(dst, st.st_mode & 07777) < 0 && errno != EEXIST) return -1;
+        DIR *d = opendir(src);
+        if (!d) return -1;
+        struct dirent *e;
+        int rc = 0;
+        while ((e = readdir(d))) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            char s2[1024], d2[1024];
+            snprintf(s2, sizeof s2, "%s/%s", src, e->d_name);
+            snprintf(d2, sizeof d2, "%s/%s", dst, e->d_name);
+            if (copy_tree(s2, d2) < 0) { rc = -1; break; }
+        }
+        closedir(d);
+        chmod(dst, st.st_mode & 07777);
+        return rc;
+    }
+    return copy_file(src, dst, &st);
+}
+
+static int remove_tree(const char *path)
+{
+    struct stat st;
+    if (lstat(path, &st) < 0) return -1;
+    if (!S_ISDIR(st.st_mode)) return unlink(path);
+    DIR *d = opendir(path);
+    if (!d) return -1;
+    struct dirent *e;
+    int rc = 0;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p2[1024];
+        snprintf(p2, sizeof p2, "%s/%s", path, e->d_name);
+        if (remove_tree(p2) < 0) rc = -1;
+    }
+    closedir(d);
+    if (rmdir(path) < 0) rc = -1;
+    return rc;
+}
+
+static int move_across(const char *src, const char *dst)
+{
+    struct stat ds;
+    if (lstat(dst, &ds) == 0) {
+        if (S_ISDIR(ds.st_mode)) { if (rmdir(dst) < 0) return -1; }
+        else if (unlink(dst) < 0) return -1;
+    }
+    if (copy_tree(src, dst) < 0) {
+        int e = errno;
+        remove_tree(dst);
+        errno = e;
+        return -1;
+    }
+    return remove_tree(src);
+}
 
 static const char *path_basename(const char *p)
 {
@@ -74,12 +176,13 @@ int main(int argc, char **argv)
                 ssize_t r = read(0, ans, sizeof(ans) - 1);
                 if (r <= 0 || (ans[0] != 'y' && ans[0] != 'Y')) continue;
             }
-            if (force) unlink(dp);
         }
 
         if (rename(sp, dp) < 0) {
-            fprintf(stderr, "mv: cannot move '%s' to '%s'\n", argv[i], dp);
-            rc = 1; continue;
+            if (errno != EXDEV || move_across(sp, dp) < 0) {
+                fprintf(stderr, "mv: cannot move '%s' to '%s': %s\n", argv[i], dp, strerror(errno));
+                rc = 1; continue;
+            }
         }
         if (verbose) fprintf(stderr, "'%s' -> '%s'\n", argv[i], dp);
     }
