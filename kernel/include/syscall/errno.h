@@ -57,6 +57,10 @@
 #define ENOPROTOOPT   92
 #define EOPNOTSUPP    95
 #define EADDRINUSE    98
+#define EMSGSIZE     90
+#define ENETDOWN     100
+#define ENETUNREACH  101
+#define ENOBUFS      105
 #define EISCONN      106
 #define ENOTCONN     107
 #define ECONNREFUSED 111

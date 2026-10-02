@@ -69,17 +69,23 @@ int ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload, siz
         netdev_t *lo = netdev_loopback();
         if (!lo) return -1;
         dev = lo;
-    } else {
+    } else if (dst == 0xFFFFFFFFu) {
         if (!dev) return -1;
-        if (dst == 0xFFFFFFFFu) {
-            memcpy(mac, eth_broadcast, 6);
-        } else {
-            if (!dev->ip) return -1;
-            uint32_t nexthop = same_subnet(dev, dst) ? dst : dev->gateway;
-            if (arp_lookup(nexthop, mac) != 0) {
-                arp_request(dev, nexthop);
-                return -1;
-            }
+        memcpy(mac, eth_broadcast, 6);
+    } else {
+        uint32_t nexthop = 0;
+        netdev_t *out = netdev_route(dst, &nexthop);
+        if (!out) {
+            if (!dev || !dev->ip) return -1;
+            nexthop = same_subnet(dev, dst) ? dst : dev->gateway;
+            if (!nexthop) return -1;
+            out = dev;
+        }
+        dev = out;
+        src = dev->ip;
+        if (arp_lookup(nexthop, mac) != 0) {
+            arp_request(dev, nexthop);
+            return -1;
         }
     }
 

@@ -19,10 +19,10 @@ int main(int argc, char **argv) {
         } else {
             printf("no /etc/resolv.conf\n");
         }
-        net_ifcfg_t c;
-        if (netif_get(0, &c) == 0 && c.dns)
+        uint32_t dns = netif_default_dns();
+        if (dns)
             printf("(DHCP DNS: %u.%u.%u.%u)\n",
-                   (c.dns >> 24) & 0xff, (c.dns >> 16) & 0xff, (c.dns >> 8) & 0xff, c.dns & 0xff);
+                   (dns >> 24) & 0xff, (dns >> 16) & 0xff, (dns >> 8) & 0xff, dns & 0xff);
         return 0;
     }
 

@@ -44,8 +44,10 @@ netdev_t *netdev_register_named(const char *name, const uint8_t mac[ETH_ALEN], u
     d->ip6_ll[11] = 0xff; d->ip6_ll[12] = 0xfe;
     d->ip6_ll[13] = mac[3]; d->ip6_ll[14] = mac[4]; d->ip6_ll[15] = mac[5];
 
-    d->next = g_netdevs;
-    g_netdevs = d;
+    d->metric = (name[0] == 'w' && name[1] == 'l') ? 600 : 100;
+    netdev_t **pp = &g_netdevs;
+    while (*pp) pp = &(*pp)->next;
+    __atomic_store_n(pp, d, __ATOMIC_RELEASE);
     return d;
 }
 
@@ -69,6 +71,40 @@ netdev_t *netdev_loopback(void) {
     for (netdev_t *d = g_netdevs; d; d = d->next)
         if (d->is_loopback) return d;
     return NULL;
+}
+
+static int same_net(const netdev_t *d, uint32_t ip) {
+    return d->netmask && (ip & d->netmask) == (d->ip & d->netmask);
+}
+
+netdev_t *netdev_default(void) {
+    netdev_t *best = NULL;
+    for (netdev_t *d = g_netdevs; d; d = d->next) {
+        if (d->is_loopback || !d->link_up || !d->ip || !d->gateway) continue;
+        if (!best || d->metric < best->metric) best = d;
+    }
+    if (best) return best;
+    for (netdev_t *d = g_netdevs; d; d = d->next)
+        if (!d->is_loopback && d->link_up && d->ip) return d;
+    return netdev_first();
+}
+
+netdev_t *netdev_route(uint32_t dst, uint32_t *nexthop) {
+    netdev_t *best = NULL;
+    for (netdev_t *d = g_netdevs; d; d = d->next) {
+        if (d->is_loopback || !d->link_up || !d->ip || !same_net(d, dst)) continue;
+        if (!best || d->metric < best->metric) best = d;
+    }
+    if (best) {
+        if (nexthop) *nexthop = dst;
+        return best;
+    }
+    for (netdev_t *d = g_netdevs; d; d = d->next) {
+        if (d->is_loopback || !d->link_up || !d->ip || !d->gateway) continue;
+        if (!best || d->metric < best->metric) best = d;
+    }
+    if (best && nexthop) *nexthop = best->gateway;
+    return best;
 }
 
 netdev_t *netdev_get(const char *name) {
@@ -134,11 +170,6 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
 
 static void net_worker(void *arg) {
     (void)arg;
-    netdev_t *dev = netdev_first();
-    if (dev && dev->is_loopback) dev = NULL;
-
-    if (dev) dhcp_start(dev);
-
     int tick = 0;
     uint64_t next_tick = 0;
     for (;;) {
@@ -149,10 +180,8 @@ static void net_worker(void *arg) {
         if (now >= next_tick) {
             tcp_tick();
             ip_frag_tick();
-            if (++tick % 4 == 0) {
-                if (dev && !dhcp_bound()) dhcp_start(dev);
-                arp_age();
-            }
+            dhcp_tick(now);
+            if (++tick % 4 == 0) arp_age();
             next_tick = now + 250000000ULL;
         }
         task_sleep_ms(did ? 2 : 60);
@@ -178,6 +207,7 @@ int net_ifcfg_get(int index, net_ifcfg_t *out) {
     out->is_loopback = d->is_loopback;
     out->link_up = d->link_up;
     out->mtu = (int32_t)d->mtu;
+    out->is_default = (!d->is_loopback && d == netdev_default() && d->gateway) ? 1 : 0;
     memcpy(out->ip6_ll, d->ip6_ll, 16);
     return 0;
 }
@@ -187,6 +217,7 @@ int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, ui
     for (int i = 0; d && i < index; i++) d = d->next;
     if (!d) return -1;
     if (d->is_loopback) return -1;
+    if (ip) d->static_cfg = 1;
     d->ip = ip;
     if (netmask) d->netmask = netmask;
     if (gateway == 0xFFFFFFFFu) d->gateway = 0; else if (gateway) d->gateway = gateway;

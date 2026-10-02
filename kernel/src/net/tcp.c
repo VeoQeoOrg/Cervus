@@ -90,7 +90,7 @@ static spinlock_t  g_tcbs_lock;
 static uint16_t    g_eport = 40000;
 
 static uint64_t now_ms(void) { return sched_now_ns() / 1000000ull; }
-static netdev_t *tdev(void) { return netdev_first(); }
+static netdev_t *tdev(void) { return netdev_default(); }
 
 static uint32_t rcv_push(tcp_tcb_t *t, const uint8_t *data, uint32_t dlen) {
     uint32_t space = TCP_RCVBUF - t->rcv_count;
@@ -355,8 +355,8 @@ static tcp_tcb_t *tcb_find6(const uint8_t *rip6, uint16_t rport, uint16_t lport)
 }
 
 int tcp_connect_start(uint32_t ip, uint16_t port, tcp_tcb_t **out) {
-    netdev_t *dev = tdev();
-    if (!dev || !dev->ip) return -EINVAL;
+    netdev_t *dev = (ip >> 24) == 127 ? netdev_loopback() : netdev_route(ip, NULL);
+    if (!dev || !dev->ip) return -ENETUNREACH;
 
     tcp_tcb_t *t = calloc(1, sizeof(*t));
     if (!t) return -ENOMEM;

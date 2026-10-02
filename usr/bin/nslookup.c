@@ -28,10 +28,10 @@ int main(int argc, char **argv) {
             }
         }
     }
-    net_ifcfg_t c;
-    if (!shown && netif_get(0, &c) == 0 && c.dns)
+    uint32_t dns = netif_default_dns();
+    if (!shown && dns)
         printf("Server: %u.%u.%u.%u\n\n",
-               (c.dns >> 24) & 0xff, (c.dns >> 16) & 0xff, (c.dns >> 8) & 0xff, c.dns & 0xff);
+               (dns >> 24) & 0xff, (dns >> 16) & 0xff, (dns >> 8) & 0xff, dns & 0xff);
 
     in_addr_t a = inet_resolve(argv[1]);
     if (a == 0xffffffffu) { printf("** can't resolve '%s'\n", argv[1]); return 1; }

@@ -3,7 +3,7 @@
 
 #include "netdev.h"
 
-void dhcp_start(netdev_t *dev);
-int  dhcp_bound(void);
+void dhcp_tick(uint64_t now_ns);
+int  dhcp_bound(netdev_t *dev);
 
 #endif

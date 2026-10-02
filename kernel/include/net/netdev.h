@@ -31,6 +31,9 @@ struct netdev {
     uint64_t rx_frag_reasm, rx_frag_timeout, tx_fragmented;
 
     netdev_t *next;
+
+    int      metric;
+    int      static_cfg;
 };
 
 netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
@@ -42,6 +45,8 @@ netdev_t *netdev_register_named(const char *name, const uint8_t mac[ETH_ALEN], u
 netdev_t *netdev_first(void);
 netdev_t *netdev_loopback(void);
 netdev_t *netdev_get(const char *name);
+netdev_t *netdev_route(uint32_t dst, uint32_t *nexthop);
+netdev_t *netdev_default(void);
 int       netdev_transmit(netdev_t *dev, const void *frame, size_t len);
 
 void net_rx(netdev_t *dev, const void *frame, size_t len);
@@ -62,7 +67,7 @@ typedef struct {
     uint64_t rx_arp, rx_ip, rx_other, rx_not_for_us, rx_tcp_syn, rx_bad_csum, rx_frag_dropped;
     uint64_t rx_frag_reasm, rx_frag_timeout, tx_fragmented;
     int32_t  is_loopback;
-    int32_t  _pad2;
+    int32_t  is_default;
 } net_ifcfg_t;
 
 int net_ifcfg_get(int index, net_ifcfg_t *out);

@@ -177,7 +177,7 @@ int64_t sock_op_connect(vnode_t *vn, uint32_t ip, uint16_t port, int nonblock) {
 
 int64_t sock_op_sendto(vnode_t *vn, const void *buf, size_t len, uint32_t ip, uint16_t port) {
     sock_t *s = vn->fs_data;
-    netdev_t *dev = netdev_first();
+    netdev_t *dev = netdev_default();
     if (!dev) return -EINVAL;
     if (s->wr_shutdown) return -EPIPE;
 
@@ -348,7 +348,7 @@ static const uint8_t g_lo6[16] = { 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1 };
 
 int64_t sock_op_sendto6(vnode_t *vn, const void *buf, size_t len, const uint8_t ip6[16], uint16_t port) {
     sock_t *s = vn->fs_data;
-    netdev_t *dev = netdev_first();
+    netdev_t *dev = netdev_default();
     if (!dev) return -EINVAL;
     if (s->type == SOCK_STREAM) {
         if (!s->tcb) return -EINVAL;
@@ -627,7 +627,8 @@ int sock_get_name(const vnode_t *vn, int peer, uint32_t *ip, uint8_t ip6[16], ui
     *ip = 0;
     memset(ip6, 0, 16);
     if (s->connected && s->family == AF_INET) {
-        netdev_t *d = netdev_first();
+        netdev_t *d = netdev_route(s->peer_ip, NULL);
+        if (!d) d = netdev_default();
         if (d) *ip = d->ip;
         if (s->peer_ip == 0x7F000001u) *ip = 0x7F000001u;
     }

@@ -191,9 +191,14 @@ static void e1000_irq(void *ctx) {
 
 static void e1000_worker(void *arg) {
     (void)arg;
+    uint32_t tick = 0;
     for (;;) {
-        for (e1000_t *e = g_nics; e; e = e->next)
+        for (e1000_t *e = g_nics; e; e = e->next) {
             if (e->polled) e1000_rx_drain(e);
+            if ((tick % 250) == 0 && e->ndev)
+                e->ndev->link_up = (er(e, E1000_STATUS) & STATUS_LU) ? 1 : 0;
+        }
+        tick++;
         task_sleep_ms(1);
     }
 }

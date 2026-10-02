@@ -86,11 +86,8 @@ in_addr_t inet_resolve(const char *name) {
     if (direct != 0xffffffffu) return direct;
 
     uint32_t dns = resolv_conf_dns();
-    net_ifcfg_t cfg;
-    if (!dns) {
-        if (netif_get(0, &cfg) != 0 || !cfg.dns) return 0xffffffffu;
-        dns = cfg.dns;
-    }
+    if (!dns) dns = netif_default_dns();
+    if (!dns) return 0xffffffffu;
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return 0xffffffffu;

@@ -37,7 +37,7 @@ static void show(void) {
     for (int i = 0; i < 8; i++) {
         if (netif_get(i, &c) != 0) break;
         found = 1;
-        printf("%s\tlink %s  mtu %d\n", c.name, c.link_up ? "UP" : "DOWN", c.mtu);
+        printf("%s\tlink %s  mtu %d%s\n", c.name, c.link_up ? "UP" : "DOWN", c.mtu, c.is_default ? "  default route" : "");
         if (c.is_loopback) printf("\tloopback\n");
         else printf("\tether %02x:%02x:%02x:%02x:%02x:%02x\n",
                     c.mac[0], c.mac[1], c.mac[2], c.mac[3], c.mac[4], c.mac[5]);
