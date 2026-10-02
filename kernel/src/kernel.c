@@ -40,6 +40,7 @@
 #include "../include/drivers/pci.h"
 #include "../include/drivers/iommu/dmar.h"
 #include "../include/firmware/dmi.h"
+#include "../include/drivers/net/wifi.h"
 #include "../include/memory/mm.h"
 #include "../include/memory/pageref.h"
 #include "../include/memory/pagecache.h"
@@ -155,6 +156,7 @@ static void load_elf_module(void) {
     cinder_ne2000_start_worker();
     atl1c_start_worker();
     atl1e_start_worker();
+    wifi_start();
     net_start_worker();
     vfs_start_syncd();
     timer_start_recal_task();

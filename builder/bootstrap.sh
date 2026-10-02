@@ -89,10 +89,38 @@ do_cinder() {
     say "installed $CINDER_BIN"
 }
 
-[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|cinder}"
+FW_TAG=20260916
+FW_URL="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
+FW_FILES="
+rtw88/rtw8723d_fw.bin 9c64e079815a333a3f7b731be7cc0be65206ebc883891659dc8ff5ed36a5e2f5
+LICENSES/LICENCE.rtlwifi_firmware.txt a61351665b4f264f6c631364f85b907d8f8f41f8b369533ef4021765f9f3b62e
+"
+
+do_firmware() {
+    mkdir -p firmware
+    printf '%s\n' "$FW_FILES" | while read -r path sum; do
+        [ -n "$path" ] || continue
+        case "$path" in
+            LICENSES/*) dst="firmware/$(basename "$path")" ;;
+            *)          dst="firmware/$path" ;;
+        esac
+        if [ -f "$dst" ] && [ "$(sha256sum "$dst" | awk '{print $1}')" = "$sum" ]; then
+            continue
+        fi
+        mkdir -p "$(dirname "$dst")"
+        say "fetching linux-firmware $FW_TAG: $path"
+        curl -fL --retry 3 -o "$dst.part" "$FW_URL/$path?h=$FW_TAG"
+        got=$(sha256sum "$dst.part" | awk '{print $1}')
+        [ "$got" = "$sum" ] || { rm -f "$dst.part"; die "$path: checksum mismatch ($got)"; }
+        mv "$dst.part" "$dst"
+    done
+}
+
+[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|cinder|firmware}"
 case "$1" in
-    deps)   do_deps ;;
-    limine) do_limine ;;
-    cinder) do_cinder ;;
+    deps)     do_deps ;;
+    limine)   do_limine ;;
+    cinder)   do_cinder ;;
+    firmware) do_firmware ;;
     *)      die "unknown step: $1" ;;
 esac

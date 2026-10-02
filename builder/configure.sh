@@ -19,6 +19,8 @@ KERNEL_BASE="-g -O2 -pipe -Wall -Wextra -std=gnu11 -nostdinc -ffreestanding \
 -m64 -march=x86-64 -mabi=sysv -mcmodel=kernel \
 -mno-red-zone -fcf-protection=none -fno-omit-frame-pointer"
 KERNEL_CORE="$KERNEL_BASE -mgeneral-regs-only -mno-sse -mno-sse2 -mno-mmx -mno-3dnow"
+KERNEL_LINUX="$KERNEL_CORE -fno-strict-aliasing -Wno-pointer-sign -Wno-type-limits \
+-Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-maybe-uninitialized"
 KERNEL_SSE="$KERNEL_BASE -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
 KERNEL_CPP="-I kernel/src -I libc/include \
 -isystem limine-tools/freestnd-c-hdrs/include"
@@ -40,6 +42,7 @@ APP_CFLAGS_OPT="${APP_CFLAGS/-O0/-O2}"
 DEPS_STAMP=$STAMPS/deps
 LIMINE_STAMP=$STAMPS/limine
 CINDER_STAMP=$STAMPS/cinder
+FIRMWARE_STAMP=$STAMPS/firmware
 
 obj_for() {
     printf 'obj/%s/%s.o' "$2" "$(printf '%s' "$1" | tr './' '__')"
@@ -116,6 +119,12 @@ builddir = $BUILDDIR
 rule cc_core
   command = gcc $KERNEL_CORE $KERNEL_CPP -MMD -MF \$out.d -c \$in -o \$out
   description = CC(core)  \$in
+  depfile = \$out.d
+  deps = gcc
+
+rule cc_linux
+  command = gcc $KERNEL_LINUX $KERNEL_CPP -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(linux) \$in
   depfile = \$out.d
   deps = gcc
 
@@ -227,6 +236,8 @@ build $LIMINE_STAMP: bootstrap
   step = limine
 build $CINDER_STAMP: bootstrap
   step = cinder
+build $FIRMWARE_STAMP: bootstrap builder/bootstrap.sh
+  step = firmware
 
 EOF
 
@@ -292,7 +303,13 @@ for src in $(find kernel/src \( -name '*.c' -o -name '*.asm' -o -name '*.psf' -o
         *.psf) printf 'build %s: psf %s\n' "$obj" "$src" ;;
         *.cnd) printf 'build %s: cinder %s || %s\n' "$obj" "$src" "$CINDER_STAMP" ;;
         *)
-            if is_sse "$src"; then rule=cc_sse; else rule=cc_core; fi
+            if is_sse "$src"; then rule=cc_sse
+            else
+                case "$src" in
+                    kernel/src/drivers/net/wifi/rtw88/*) rule=cc_linux ;;
+                    *) rule=cc_core ;;
+                esac
+            fi
             printf 'build %s: %s %s || %s\n' "$obj" "$rule" "$src" "$DEPS_STAMP" ;;
     esac
     KOBJS="$KOBJS $obj"
@@ -303,8 +320,8 @@ printf 'build obj/kernel/ksyms.o: cc_core obj/kernel/ksyms.c || %s\n' "$DEPS_STA
 printf 'build bin/kernel: link_kernel%s obj/kernel/ksyms.o | %s\n\n' "$KOBJS" "$LINKER_SCRIPT"
 
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
-printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s builder/VERSION builder/mk_initramfs.sh | %s %s %s\n\n' \
-    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libc.so.1 $SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a $SYSLIB/libncurses.a $SYSLIB/libcurses.a $SYSLIB/libtinfo.a $SYSLIB/libutil.a" "$LIMINE_STAMP"
+printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s builder/VERSION builder/mk_initramfs.sh | %s %s %s %s\n\n' \
+    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libc.so.1 $SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a $SYSLIB/libncurses.a $SYSLIB/libcurses.a $SYSLIB/libtinfo.a $SYSLIB/libutil.a" "$LIMINE_STAMP" "$FIRMWARE_STAMP"
 
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh builder/VERSION | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"

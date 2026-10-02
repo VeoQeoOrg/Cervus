@@ -14,6 +14,7 @@
 #include "../../include/drivers/net/ne2000.h"
 #include "../../include/drivers/net/atl1c.h"
 #include "../../include/drivers/net/atl1e.h"
+#include "../../include/drivers/net/wifi.h"
 #include "../../include/sched/sched.h"
 #include "../../include/io/serial.h"
 #include <string.h>
@@ -238,4 +239,5 @@ void net_init(void) {
     cinder_ne2000_init();
     atl1c_init();
     atl1e_init();
+    wifi_init();
 }

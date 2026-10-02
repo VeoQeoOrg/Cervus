@@ -107,6 +107,12 @@ for f in "$SYSROOT"/etc/*; do
     green "sysroot etc/$(basename "$f") installed"
 done
 
+if [ -d firmware ]; then
+    mkdir -p "$RFS/lib/firmware"
+    cp -r firmware/. "$RFS/lib/firmware/"
+    green "device firmware installed into /lib/firmware"
+fi
+
 if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
     mkdir -p "$RFS/etc/ssl/certs"
     cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"
@@ -177,11 +183,19 @@ register_pkg() {
     mkdir -p "$db"
     : > "$db/$name.files"
     for dir in "$@"; do
+        case "$dir" in -*) continue ;; esac
         [ -d "$RFS$dir" ] || continue
         ( cd "$RFS" && find ".$dir" \( -type f -o -type l \) -printf 'f %p\n' ) |
             sed 's|^f \.|f |' >> "$db/$name.files"
         ( cd "$RFS" && find ".$dir" -type d -printf 'd %p\n' ) |
             sed 's|^d \.|d |' >> "$db/$name.files"
+    done
+    for dir in "$@"; do
+        case "$dir" in
+            -*) ex=${dir#-}
+                grep -v -e "^[fd] $ex\$" -e "^[fd] $ex/" "$db/$name.files" > "$db/$name.files.tmp" || true
+                mv "$db/$name.files.tmp" "$db/$name.files" ;;
+        esac
     done
     cat > "$db/$name.manifest" <<PKGEOF
 name: $name
@@ -192,16 +206,19 @@ depends: $deps
 abi: $ABI
 built: $SYSBUILT
 summary: $summary
-license: GPL-3.0
+license: ${PKG_LICENSE:-GPL-3.0}
 PKGEOF
 }
 
 register_pkg cervus-base  "the Cervus command line: every utility in /bin and /apps" libc /bin /apps /usr/share/man
-register_pkg cervus-libc  "the Cervus C library, static and shared, the dynamic loader, headers and crt0" libc /lib /usr/lib /usr/include
+register_pkg cervus-libc  "the Cervus C library, static and shared, the dynamic loader, headers and crt0" libc /lib /usr/lib /usr/include -/lib/firmware
+PKG_LICENSE="linux-firmware (redistributable, see /lib/firmware/LICENCE.*)"
+register_pkg linux-firmware "firmware for Wi-Fi and other devices, from linux-firmware" "" /lib/firmware
+PKG_LICENSE=
 register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        libc /usr/share/fonts /usr/share/consolefonts /usr/share/media
 register_pkg kernel       "the Cervus kernel and init, for the boot partition"       libc /boot
 register_pkg cervus-system "all of Cervus: kernel, command line, library and assets" \
-    "cervus-base cervus-libc cervus-media kernel"
+    "cervus-base cervus-libc cervus-media kernel linux-firmware"
 printf 'Cervus %s\n' "$SYSVER" > "$RFS/var/lib/herd/system-release"
 green "registered the base system with herd as $SYSVER"
 

@@ -741,7 +741,7 @@ static int is_system_pkg(const char *name)
 {
     return !strcmp(name, "kernel") || !strcmp(name, "cervus-base") ||
            !strcmp(name, "cervus-libc") || !strcmp(name, "cervus-media") ||
-           !strcmp(name, "cervus-system");
+           !strcmp(name, "cervus-system") || !strcmp(name, "linux-firmware");
 }
 
 static int reboot_pending(void)

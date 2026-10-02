@@ -70,9 +70,13 @@ pack_tree() {
   outdir=$1; name=$2; ver=$3; shift 3
   stage=$(mktemp -d)
   for dir in "$@"; do
+    case "$dir" in -*) continue ;; esac
     [ -d "rootfs$dir" ] || continue
     mkdir -p "$stage$(dirname "$dir")"
     cp -a "rootfs$dir" "$stage$(dirname "$dir")/"
+  done
+  for dir in "$@"; do
+    case "$dir" in -*) rm -rf "$stage${dir#-}" ;; esac
   done
   tar -C "$stage" --owner=0 --group=0 --numeric-owner \
       -czf "$outdir/$name-$ver-x86_64.tar.gz" .
@@ -133,11 +137,13 @@ publish_system() {
         "$outdir"/cervus-base-*.tar.gz "$outdir"/cervus-base-*.manifest \
         "$outdir"/cervus-libc-*.tar.gz "$outdir"/cervus-libc-*.manifest \
         "$outdir"/cervus-media-*.tar.gz "$outdir"/cervus-media-*.manifest \
-        "$outdir"/cervus-system-*.tar.gz "$outdir"/cervus-system-*.manifest
+        "$outdir"/cervus-system-*.tar.gz "$outdir"/cervus-system-*.manifest \
+        "$outdir"/linux-firmware-*.tar.gz "$outdir"/linux-firmware-*.manifest
 
   pack_tree "$outdir" kernel       "$ver" /boot
   pack_tree "$outdir" cervus-base  "$ver" /bin /apps /usr/share/man
-  pack_tree "$outdir" cervus-libc  "$ver" /lib /usr/lib /usr/include
+  pack_tree "$outdir" cervus-libc  "$ver" /lib /usr/lib /usr/include -/lib/firmware
+  pack_tree "$outdir" linux-firmware "$ver" /lib/firmware
   pack_tree "$outdir" cervus-media "$ver" /usr/share/fonts /usr/share/consolefonts /usr/share/media
 
   meta=$(mktemp -d); mkdir -p "$meta/var/lib/herd"
@@ -156,7 +162,9 @@ publish_system() {
       "the Cervus C library, static and shared, the dynamic loader, headers and crt0" GPL-3.0 "$sysbuilt"
   herd_manifest "$outdir" cervus-media "$ver" libc \
       "console and TrueType fonts, wallpapers and sounds" GPL-3.0 "$sysbuilt"
-  herd_manifest "$outdir" cervus-system "$ver" "cervus-base cervus-libc cervus-media kernel" \
+  herd_manifest "$outdir" linux-firmware "$ver" "" \
+      "firmware for Wi-Fi and other devices, from linux-firmware" "linux-firmware (redistributable, see /lib/firmware/LICENCE.*)" "$sysbuilt"
+  herd_manifest "$outdir" cervus-system "$ver" "cervus-base cervus-libc cervus-media kernel linux-firmware" \
       "all of Cervus: kernel, command line, library and assets" GPL-3.0 "$sysbuilt"
 
   ( cd "$outdir" && awk 'FNR==1 && NR!=1 {print ""} {print}' ./*.manifest > INDEX )
