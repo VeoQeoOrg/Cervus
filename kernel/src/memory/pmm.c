@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 static pmm_buddy_state_t g_buddy;
+static uint8_t *g_fstate;
 static spinlock_t g_pmm_lock = SPINLOCK_INIT;
 static volatile int g_pmm_owner = -1;
 
@@ -47,6 +48,7 @@ static inline void _fl_init(pmm_free_list_t *fl) {
 }
 
 static inline void _fl_push(pmm_free_list_t *fl, pmm_block_t *b, int order) {
+    if (g_fstate) g_fstate[_block_phys(b) >> PAGE_SHIFT] = (uint8_t)(order + 1);
     b->order        = order;
     b->next         = fl->head.next;
     b->prev         = &fl->head;
@@ -56,6 +58,7 @@ static inline void _fl_push(pmm_free_list_t *fl, pmm_block_t *b, int order) {
 }
 
 static inline void _fl_del(pmm_free_list_t *fl, pmm_block_t *b) {
+    if (g_fstate) g_fstate[_block_phys(b) >> PAGE_SHIFT] = 0;
     b->prev->next = b->next;
     b->next->prev = b->prev;
     b->next = b->prev = NULL;
@@ -78,6 +81,11 @@ static inline int _block_ptr_valid(pmm_free_list_t *fl, pmm_block_t *b) {
 }
 
 static pmm_block_t *_fl_find(pmm_free_list_t *fl, uintptr_t phys) {
+    if (g_fstate) {
+        if (phys < g_buddy.mem_start || phys >= g_buddy.mem_end) return NULL;
+        int order = (int)(fl - g_buddy.orders);
+        return g_fstate[phys >> PAGE_SHIFT] == (uint8_t)(order + 1) ? _phys_to_block(phys) : NULL;
+    }
     size_t limit = g_buddy.total_pages + 16;
     pmm_block_t *b = fl->head.next;
     while (b != &fl->head) {
@@ -184,6 +192,21 @@ void pmm_init(const boot_info_t *bi) {
 
     for (int o = 0; o < PMM_MAX_ORDER_NR; o++) _fl_init(&g_buddy.orders[o]);
 
+    size_t fstate_bytes = _align_up(g_buddy.total_pages, PAGE_SIZE);
+    uintptr_t fstate_phys = 0;
+    for (int i = 0; i < bi->mmap_count && !fstate_phys; i++) {
+        const boot_mmap_entry_t *e = &bi->mmap[i];
+        if (e->type != BOOT_MEM_USABLE) continue;
+        uintptr_t base = _align_up(e->base, PAGE_SIZE);
+        uintptr_t end  = (e->base + e->length) & ~(PAGE_SIZE - 1);
+        if (base < PMM_FREE_MIN_PHYS) base = PMM_FREE_MIN_PHYS;
+        if (end > base && end - base >= fstate_bytes) fstate_phys = base;
+    }
+    if (fstate_phys) {
+        g_fstate = (uint8_t *)(fstate_phys + g_buddy.hhdm_offset);
+        memset(g_fstate, 0, fstate_bytes);
+    }
+
     for (int i = 0; i < bi->mmap_count; i++) {
         const boot_mmap_entry_t *e = &bi->mmap[i];
         if (e->type != BOOT_MEM_USABLE) continue;
@@ -193,6 +216,10 @@ void pmm_init(const boot_info_t *bi) {
 
         if (base < PMM_FREE_MIN_PHYS) {
             base = PMM_FREE_MIN_PHYS;
+            if (base >= end) continue;
+        }
+        if (fstate_phys && base == fstate_phys) {
+            base += fstate_bytes;
             if (base >= end) continue;
         }
 

@@ -35,6 +35,7 @@ void fpu_init(void) {
     cr0 |= (1 << 1);
     cr0 &= ~(1 << 3);
     cr0 &= ~(1 << 5);
+    cr0 |= (1 << 16);
 
     asm volatile("mov %0, %%cr0" : : "r"(cr0));
 
