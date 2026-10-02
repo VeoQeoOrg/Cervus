@@ -9,6 +9,7 @@
 #include "../../include/syscall/errno.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/sched/sched.h"
+#include "../../include/memory/pagecache.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -669,19 +670,95 @@ static int set_block_num(ext2_t *fs, ext2_inode_t *di, uint32_t file_block, uint
 static const vnode_ops_t ext2_file_ops;
 static const vnode_ops_t ext2_dir_ops;
 
+static const vnode_ops_t ext2_symlink_ops;
+
+static uint8_t ft_of_mode(uint16_t mode) {
+    switch (mode & 0xF000) {
+        case EXT2_S_IFDIR: return EXT2_FT_DIR;
+        case EXT2_S_IFLNK: return EXT2_FT_SYMLINK;
+        case 0x2000:       return EXT2_FT_CHRDEV;
+        case 0x6000:       return EXT2_FT_BLKDEV;
+        case 0x1000:       return EXT2_FT_FIFO;
+        case 0xC000:       return EXT2_FT_SOCK;
+        default:           return EXT2_FT_REG_FILE;
+    }
+}
+
+static vnode_type_t vtype_of_ft(uint8_t ft) {
+    switch (ft) {
+        case EXT2_FT_DIR:     return VFS_NODE_DIR;
+        case EXT2_FT_SYMLINK: return VFS_NODE_SYMLINK;
+        case EXT2_FT_CHRDEV:  return VFS_NODE_CHARDEV;
+        case EXT2_FT_BLKDEV:  return VFS_NODE_BLKDEV;
+        case EXT2_FT_FIFO:    return VFS_NODE_PIPE;
+        default:              return VFS_NODE_FILE;
+    }
+}
+
+static bool inode_is_fast_symlink(ext2_t *fs, const ext2_inode_t *di) {
+    if ((di->i_mode & 0xF000) != EXT2_S_IFLNK) return false;
+    if (di->i_flags & EXT4_EXTENTS_FL) return false;
+    uint32_t ea = di->i_file_acl ? fs->block_size / 512 : 0;
+    return di->i_size < 60 && di->i_blocks <= ea;
+}
+
+static inline uint32_t ic_hash(uint32_t ino) {
+    return (ino * 2654435761u) % EXT2_ICACHE_BUCKETS;
+}
+
+static vnode_t *icache_find_locked(ext2_t *fs, uint32_t ino) {
+    for (ext2_vdata_t *vd = fs->icache[ic_hash(ino)]; vd; vd = vd->hnext) {
+        if (vd->ino != ino || vd->orphan) continue;
+        vnode_t *v = vd->self;
+        int c = __atomic_load_n(&v->refcount, __ATOMIC_ACQUIRE);
+        while (c > 0) {
+            if (__atomic_compare_exchange_n(&v->refcount, &c, c + 1, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                return v;
+        }
+    }
+    return NULL;
+}
+
+static bool icache_mark_orphan(ext2_t *fs, uint32_t ino) {
+    bool live = false;
+    uint64_t f = spinlock_acquire_irqsave(&fs->icache_lock);
+    for (ext2_vdata_t *vd = fs->icache[ic_hash(ino)]; vd; vd = vd->hnext) {
+        if (vd->ino != ino || vd->orphan) continue;
+        if (__atomic_load_n(&vd->self->refcount, __ATOMIC_ACQUIRE) <= 0) continue;
+        vd->orphan = 1;
+        live = true;
+    }
+    spinlock_release_irqrestore(&fs->icache_lock, f);
+    return live;
+}
+
 static vnode_t *ext2_make_vnode(ext2_t *fs, uint32_t ino, ext2_inode_t *di) {
+    uint64_t f = spinlock_acquire_irqsave(&fs->icache_lock);
+    vnode_t *hit = icache_find_locked(fs, ino);
+    spinlock_release_irqrestore(&fs->icache_lock, f);
+    if (hit) return hit;
+
     vnode_t *v = kzalloc(sizeof(vnode_t));
     if (!v) return NULL;
     ext2_vdata_t *vd = kzalloc(sizeof(ext2_vdata_t));
     if (!vd) { kfree(v); return NULL; }
-    vd->fs  = fs;
-    vd->ino = ino;
-    if ((di->i_mode & 0xF000) == EXT2_S_IFDIR) {
-        v->type = VFS_NODE_DIR;
-        v->ops  = &ext2_dir_ops;
-    } else {
-        v->type = VFS_NODE_FILE;
-        v->ops  = &ext2_file_ops;
+    vd->fs   = fs;
+    vd->ino  = ino;
+    vd->self = v;
+    switch (di->i_mode & 0xF000) {
+        case EXT2_S_IFDIR:
+            v->type = VFS_NODE_DIR;
+            v->ops  = &ext2_dir_ops;
+            break;
+        case EXT2_S_IFLNK:
+            v->type = VFS_NODE_SYMLINK;
+            v->ops  = &ext2_symlink_ops;
+            break;
+        default:
+            v->type = VFS_NODE_FILE;
+            v->ops  = &ext2_file_ops;
+            break;
     }
     v->mode     = di->i_mode & 0x0FFF;
     v->uid      = di->i_uid;
@@ -693,6 +770,16 @@ static vnode_t *ext2_make_vnode(ext2_t *fs, uint32_t ino, ext2_inode_t *di) {
     v->ctime    = (int64_t)di->i_ctime;
     v->fs_data  = vd;
     v->refcount = 1;
+
+    f = spinlock_acquire_irqsave(&fs->icache_lock);
+    hit = icache_find_locked(fs, ino);
+    if (!hit) {
+        uint32_t b = ic_hash(ino);
+        vd->hnext = fs->icache[b];
+        fs->icache[b] = vd;
+    }
+    spinlock_release_irqrestore(&fs->icache_lock, f);
+    if (hit) { kfree(vd); kfree(v); return hit; }
     return v;
 }
 
@@ -1040,13 +1127,19 @@ static int ext2_file_truncate_impl(vnode_t *node, uint64_t new_size) {
 
 static int ext2_stat(vnode_t *node, vfs_stat_t *out) {
     memset(out, 0, sizeof(*out));
+    ext2_vdata_t *svd = node->fs_data;
+    ext2_inode_t sdi;
+    if (svd && inode_read(svd->fs, svd->ino, &sdi) == 0) {
+        out->st_nlink = sdi.i_links_count;
+        out->st_blocks = sdi.i_blocks;
+    }
     out->st_ino  = node->ino;
     out->st_type = node->type;
     out->st_mode = node->mode;
     out->st_uid  = node->uid;
     out->st_gid  = node->gid;
     out->st_size = node->size;
-    out->st_blocks = (node->size + 511) / 512;
+    if (!out->st_blocks) out->st_blocks = (node->size + 511) / 512;
     out->st_atime = node->atime;
     out->st_mtime = node->mtime;
     out->st_ctime = node->ctime;
@@ -1094,8 +1187,102 @@ static int ext2_setattr(vnode_t *node) {
 }
 
 static void ext2_vnode_ref(vnode_t *node)  { (void)node; }
+
+static void ext2_release_inode(ext2_t *fs, uint32_t ino, ext2_inode_t *ci) {
+    bool is_dir = (ci->i_mode & 0xF000) == EXT2_S_IFDIR;
+    if (!inode_is_fast_symlink(fs, ci)) free_all_blocks(fs, ci);
+    else memset(ci->i_block, 0, sizeof ci->i_block);
+    int64_t now = clock_realtime_sec();
+    ci->i_size = 0;
+    ci->i_links_count = 0;
+    ci->i_dtime = now > 0 ? (uint32_t)now : 0x66000000u;
+    inode_write(fs, ino, ci);
+    free_inode(fs, ino);
+    if (is_dir) {
+        uint32_t grp = (ino - 1) / fs->sb.s_inodes_per_group;
+        if (gd(fs, grp)->bg_used_dirs_count > 0) gd(fs, grp)->bg_used_dirs_count--;
+    }
+    pagecache_invalidate_key((uintptr_t)fs, ino);
+    fs->dirty = true;
+}
+
+static void orphan_list_add(ext2_t *fs, uint32_t ino, ext2_inode_t *ci) {
+    ci->i_dtime = fs->sb.s_last_orphan;
+    fs->sb.s_last_orphan = ino;
+    inode_write(fs, ino, ci);
+    sb_flush(fs);
+    fs->dirty = true;
+}
+
+static void orphan_list_remove(ext2_t *fs, uint32_t ino) {
+    uint32_t prev = 0, cur = fs->sb.s_last_orphan;
+    for (uint32_t guard = 0; cur && guard < fs->sb.s_inodes_count; guard++) {
+        ext2_inode_t ci;
+        if (inode_read(fs, cur, &ci) < 0) return;
+        if (cur == ino) {
+            if (prev) {
+                ext2_inode_t pi;
+                if (inode_read(fs, prev, &pi) == 0) {
+                    pi.i_dtime = ci.i_dtime;
+                    inode_write(fs, prev, &pi);
+                }
+            } else {
+                fs->sb.s_last_orphan = ci.i_dtime;
+                sb_flush(fs);
+            }
+            fs->dirty = true;
+            return;
+        }
+        prev = cur;
+        cur = ci.i_dtime;
+    }
+}
+
+static void ext2_process_orphans(ext2_t *fs) {
+    uint32_t cur = fs->sb.s_last_orphan;
+    if (!cur) return;
+    int n = 0;
+    jbd2_txn_begin(fs);
+    for (uint32_t guard = 0; cur && guard < fs->sb.s_inodes_count; guard++) {
+        if (cur < EXT2_ROOT_INO || cur > fs->sb.s_inodes_count) break;
+        ext2_inode_t ci;
+        if (inode_read(fs, cur, &ci) < 0) break;
+        uint32_t next = ci.i_dtime;
+        if (ci.i_links_count == 0) {
+            ext2_release_inode(fs, cur, &ci);
+            n++;
+        }
+        cur = next;
+    }
+    fs->sb.s_last_orphan = 0;
+    sb_flush(fs);
+    jbd2_txn_end(fs);
+    fs->dirty = true;
+    if (n) serial_printf("[ext2] released %d orphaned inode(s) left by the last shutdown\n", n);
+}
+
 static void ext2_vnode_unref(vnode_t *node) {
-    if (node->fs_data) kfree(node->fs_data);
+    ext2_vdata_t *vd = node->fs_data;
+    if (!vd) { kfree(node); return; }
+    ext2_t *fs = vd->fs;
+    uint64_t f = spinlock_acquire_irqsave(&fs->icache_lock);
+    ext2_vdata_t **pp = &fs->icache[ic_hash(vd->ino)];
+    while (*pp && *pp != vd) pp = &(*pp)->hnext;
+    if (*pp) *pp = vd->hnext;
+    bool orphan = vd->orphan != 0;
+    spinlock_release_irqrestore(&fs->icache_lock, f);
+
+    if (orphan) {
+        fs_lock(fs);
+        jbd2_txn_begin(fs);
+        orphan_list_remove(fs, vd->ino);
+        ext2_inode_t ci;
+        if (inode_read(fs, vd->ino, &ci) == 0 && ci.i_links_count == 0)
+            ext2_release_inode(fs, vd->ino, &ci);
+        jbd2_txn_end(fs);
+        fs_unlock(fs);
+    }
+    kfree(vd);
     kfree(node);
 }
 
@@ -1125,6 +1312,14 @@ static int locked_setattr(vnode_t *n) {
     fs_unlock(fs); return r;
 }
 
+static int ext2_cache_id(vnode_t *node, uintptr_t *fs_out, uint64_t *id_out) {
+    ext2_vdata_t *vd = node->fs_data;
+    if (!vd) return -1;
+    *fs_out = (uintptr_t)vd->fs;
+    *id_out = vd->ino;
+    return 0;
+}
+
 static const vnode_ops_t ext2_file_ops = {
     .read     = locked_read,
     .write    = locked_write,
@@ -1133,6 +1328,7 @@ static const vnode_ops_t ext2_file_ops = {
     .setattr  = locked_setattr,
     .ref      = ext2_vnode_ref,
     .unref    = ext2_vnode_unref,
+    .cache_id = ext2_cache_id,
 };
 
 static int ext2_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
@@ -1193,7 +1389,7 @@ static int ext2_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
                 if (!skip) {
                     if (cur == index) {
                         out->d_ino = de->inode;
-                        out->d_type = (de->file_type == EXT2_FT_DIR) ? VFS_NODE_DIR : VFS_NODE_FILE;
+                        out->d_type = vtype_of_ft(de->file_type);
                         size_t n = de->name_len;
                         if (n >= VFS_MAX_NAME) n = VFS_MAX_NAME - 1;
                         memcpy(out->d_name, de->name, n);
@@ -1389,13 +1585,18 @@ static int ext2_dir_create_impl(vnode_t *dir, const char *name, uint32_t mode, v
     return 0;
 }
 
-static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
-    ext2_vdata_t *vd = dir->fs_data;
-    ext2_t *fs = vd->fs;
+typedef struct {
+    int32_t  db;
+    uint32_t off;
+    int32_t  prev_off;
+    uint8_t *bb;
+} dirpos_t;
+
+static int dir_locate(ext2_t *fs, uint32_t dir_ino, const char *name, dirpos_t *pos, int for_write) {
     ext2_inode_t di;
-    int r = inode_read(fs, vd->ino, &di);
+    int r = inode_read(fs, dir_ino, &di);
     if (r < 0) return r;
-    dir_deindex(fs, vd->ino, &di);
+    if (for_write) dir_deindex(fs, dir_ino, &di);
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
     size_t nl = strlen(name);
@@ -1406,40 +1607,18 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
         if (db <= 0) continue;
         ext2_block_read(fs, (uint32_t)db, bb);
         uint32_t off = 0;
-        ext2_dir_entry_t *prev = NULL;
+        int32_t prev = -1;
         while (off < usable) {
             ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
-            if (de->rec_len == 0) break;
+            if (de->rec_len < 8) break;
             if (de->inode != 0 && de->name_len == nl && memcmp(de->name, name, nl) == 0) {
-                uint32_t cino = de->inode;
-                ext2_inode_t ci;
-                inode_read(fs, cino, &ci);
-                bool is_dir = ((ci.i_mode & 0xF000) == EXT2_S_IFDIR);
-                free_all_blocks(fs, &ci);
-                ci.i_links_count = 0;
-                ci.i_dtime = 0x66000000u;
-                ci.i_size = 0;
-                inode_write(fs, cino, &ci);
-                free_inode(fs, cino);
-                if (prev) prev->rec_len += de->rec_len;
-                else de->inode = 0;
-                dir_tail_set(fs, vd->ino, bb);
-                ext2_block_write(fs, (uint32_t)db, bb);
-                if (is_dir) {
-                    ext2_inode_t pdi;
-                    inode_read(fs, vd->ino, &pdi);
-                    if (pdi.i_links_count > 1) pdi.i_links_count--;
-                    inode_write(fs, vd->ino, &pdi);
-                    uint32_t grp = (cino - 1) / fs->sb.s_inodes_per_group;
-                    if (gd(fs, grp)->bg_used_dirs_count > 0)
-                        gd(fs, grp)->bg_used_dirs_count--;
-                }
-                dir->size--;
-                fs->dirty = true;
-                kfree(bb);
+                pos->db = db;
+                pos->off = off;
+                pos->prev_off = prev;
+                pos->bb = bb;
                 return 0;
             }
-            prev = de;
+            prev = (int32_t)off;
             off += de->rec_len;
         }
     }
@@ -1447,58 +1626,272 @@ static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
     return -ENOENT;
 }
 
-static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
-                           vnode_t *dst_dir, const char *dst_name) {
-    ext2_vdata_t *svd = src_dir->fs_data;
-    ext2_t *fs = svd->fs;
-    vnode_t *child = NULL;
-    int r = ext2_dir_lookup(src_dir, src_name, &child);
-    if (r < 0) return r;
-    uint8_t ft = (child->type == VFS_NODE_DIR) ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
-    uint32_t cino = (uint32_t)child->ino;
-    vnode_unref(child);
-    vnode_t *ex = NULL;
-    if (ext2_dir_lookup(dst_dir, dst_name, &ex) == 0) {
-        vnode_unref(ex);
-        ext2_dir_unlink_impl(dst_dir, dst_name);
+static void dir_pos_remove(ext2_t *fs, uint32_t dir_ino, dirpos_t *pos) {
+    ext2_dir_entry_t *de = (ext2_dir_entry_t *)(pos->bb + pos->off);
+    if (pos->prev_off >= 0) {
+        ext2_dir_entry_t *pv = (ext2_dir_entry_t *)(pos->bb + pos->prev_off);
+        pv->rec_len += de->rec_len;
+    } else {
+        de->inode = 0;
     }
-    ext2_vdata_t *dvd = dst_dir->fs_data;
-    r = ext2_dir_add_entry(fs, dvd->ino, cino, ft, dst_name);
-    if (r < 0) return r;
-    ext2_inode_t sdi;
-    inode_read(fs, svd->ino, &sdi);
-    dir_deindex(fs, svd->ino, &sdi);
+    dir_tail_set(fs, dir_ino, pos->bb);
+    ext2_block_write(fs, (uint32_t)pos->db, pos->bb);
+}
+
+static bool dir_is_empty(ext2_t *fs, uint32_t dir_ino) {
+    ext2_inode_t di;
+    if (inode_read(fs, dir_ino, &di) < 0) return false;
     uint8_t *bb = kmalloc(fs->block_size);
-    if (!bb) return -ENOMEM;
-    size_t snl = strlen(src_name);
-    uint32_t susable = fs->block_size - (fs->has_csum ? 12u : 0u);
-    uint32_t nblocks = (sdi.i_size + fs->block_size - 1) / fs->block_size;
-    for (uint32_t fb = 0; fb < nblocks; fb++) {
-        int32_t db = get_block_num(fs, &sdi, fb);
+    if (!bb) return false;
+    uint32_t usable = fs->block_size - (fs->has_csum ? 12u : 0u);
+    uint32_t nblocks = (di.i_size + fs->block_size - 1) / fs->block_size;
+    bool empty = true;
+    for (uint32_t fb = 0; fb < nblocks && empty; fb++) {
+        int32_t db = get_block_num(fs, &di, fb);
         if (db <= 0) continue;
         ext2_block_read(fs, (uint32_t)db, bb);
         uint32_t off = 0;
-        ext2_dir_entry_t *prev = NULL;
-        while (off < susable) {
+        while (off < usable) {
             ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
-            if (de->rec_len == 0) break;
-            if (de->inode == cino && de->name_len == snl &&
-                memcmp(de->name, src_name, snl) == 0) {
-                if (prev) prev->rec_len += de->rec_len;
-                else de->inode = 0;
-                dir_tail_set(fs, svd->ino, bb);
-                ext2_block_write(fs, (uint32_t)db, bb);
-                kfree(bb);
-                fs->dirty = true;
-                return 0;
+            if (de->rec_len < 8) break;
+            if (de->inode != 0) {
+                bool dot = (de->name_len == 1 && de->name[0] == '.') ||
+                           (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.');
+                if (!dot) { empty = false; break; }
             }
-            prev = de;
             off += de->rec_len;
         }
     }
     kfree(bb);
+    return empty;
+}
+
+static uint32_t dir_parent(ext2_t *fs, uint32_t dir_ino) {
+    dirpos_t p;
+    if (dir_locate(fs, dir_ino, "..", &p, 0) < 0) return 0;
+    uint32_t parent = ((ext2_dir_entry_t *)(p.bb + p.off))->inode;
+    kfree(p.bb);
+    return parent;
+}
+
+static int dir_set_parent(ext2_t *fs, uint32_t dir_ino, uint32_t parent) {
+    dirpos_t p;
+    int r = dir_locate(fs, dir_ino, "..", &p, 1);
+    if (r < 0) return r;
+    ((ext2_dir_entry_t *)(p.bb + p.off))->inode = parent;
+    dir_tail_set(fs, dir_ino, p.bb);
+    ext2_block_write(fs, (uint32_t)p.db, p.bb);
+    kfree(p.bb);
+    return 0;
+}
+
+static void inode_adjust_links(ext2_t *fs, uint32_t ino, int delta) {
+    ext2_inode_t di;
+    if (inode_read(fs, ino, &di) < 0) return;
+    int n = (int)di.i_links_count + delta;
+    if (n < 0) n = 0;
+    di.i_links_count = (uint16_t)n;
+    int64_t now = clock_realtime_sec();
+    if (now > 0) di.i_ctime = (uint32_t)now;
+    inode_write(fs, ino, &di);
+}
+
+static void ext2_drop_link(ext2_t *fs, uint32_t ino, uint32_t parent_ino) {
+    ext2_inode_t ci;
+    if (inode_read(fs, ino, &ci) < 0) return;
+    bool is_dir = (ci.i_mode & 0xF000) == EXT2_S_IFDIR;
+    if (is_dir) ci.i_links_count = 0;
+    else if (ci.i_links_count > 0) ci.i_links_count--;
+    int64_t now = clock_realtime_sec();
+    if (now > 0) ci.i_ctime = (uint32_t)now;
+    if (is_dir && parent_ino) inode_adjust_links(fs, parent_ino, -1);
+    if (ci.i_links_count > 0) {
+        inode_write(fs, ino, &ci);
+        return;
+    }
+    if (icache_mark_orphan(fs, ino)) {
+        orphan_list_add(fs, ino, &ci);
+        return;
+    }
+    ext2_release_inode(fs, ino, &ci);
+}
+
+static int ext2_dir_unlink_impl(vnode_t *dir, const char *name) {
+    ext2_vdata_t *vd = dir->fs_data;
+    ext2_t *fs = vd->fs;
+    dirpos_t p;
+    int r = dir_locate(fs, vd->ino, name, &p, 1);
+    if (r < 0) return r;
+    uint32_t cino = ((ext2_dir_entry_t *)(p.bb + p.off))->inode;
+    dir_pos_remove(fs, vd->ino, &p);
+    kfree(p.bb);
+    ext2_drop_link(fs, cino, vd->ino);
+    if (dir->size) dir->size--;
     fs->dirty = true;
     return 0;
+}
+
+static bool dir_is_ancestor(ext2_t *fs, uint32_t anc, uint32_t dir_ino) {
+    uint32_t cur = dir_ino;
+    for (int depth = 0; depth < 4096; depth++) {
+        if (cur == anc) return true;
+        if (cur == EXT2_ROOT_INO) return false;
+        uint32_t up = dir_parent(fs, cur);
+        if (!up || up == cur) return false;
+        cur = up;
+    }
+    return true;
+}
+
+static int ext2_dir_rename_impl(vnode_t *src_dir, const char *src_name,
+                                vnode_t *dst_dir, const char *dst_name) {
+    ext2_vdata_t *svd = src_dir->fs_data;
+    ext2_vdata_t *dvd = dst_dir->fs_data;
+    if (!dvd || dvd->fs != svd->fs) return -EXDEV;
+    ext2_t *fs = svd->fs;
+    uint32_t sdir = svd->ino, ddir = dvd->ino;
+
+    dirpos_t sp;
+    int r = dir_locate(fs, sdir, src_name, &sp, 0);
+    if (r < 0) return r;
+    uint32_t cino = ((ext2_dir_entry_t *)(sp.bb + sp.off))->inode;
+    kfree(sp.bb);
+    ext2_inode_t ci;
+    if ((r = inode_read(fs, cino, &ci)) < 0) return r;
+    bool is_dir = (ci.i_mode & 0xF000) == EXT2_S_IFDIR;
+    uint8_t ft = ft_of_mode(ci.i_mode);
+    if (is_dir && sdir != ddir && dir_is_ancestor(fs, cino, ddir)) return -EINVAL;
+
+    dirpos_t dp;
+    if (dir_locate(fs, ddir, dst_name, &dp, 1) == 0) {
+        ext2_dir_entry_t *de = (ext2_dir_entry_t *)(dp.bb + dp.off);
+        uint32_t oino = de->inode;
+        if (oino == cino) { kfree(dp.bb); return 0; }
+        ext2_inode_t oi;
+        if ((r = inode_read(fs, oino, &oi)) < 0) { kfree(dp.bb); return r; }
+        bool odir = (oi.i_mode & 0xF000) == EXT2_S_IFDIR;
+        if (is_dir && !odir) { kfree(dp.bb); return -ENOTDIR; }
+        if (!is_dir && odir) { kfree(dp.bb); return -EISDIR; }
+        if (odir && !dir_is_empty(fs, oino)) { kfree(dp.bb); return -ENOTEMPTY; }
+        de->inode = cino;
+        de->file_type = ft;
+        dir_tail_set(fs, ddir, dp.bb);
+        ext2_block_write(fs, (uint32_t)dp.db, dp.bb);
+        kfree(dp.bb);
+        ext2_drop_link(fs, oino, ddir);
+    } else {
+        r = ext2_dir_add_entry(fs, ddir, cino, ft, dst_name);
+        if (r < 0) return r;
+        dst_dir->size++;
+    }
+
+    if (dir_locate(fs, sdir, src_name, &sp, 1) == 0) {
+        if (((ext2_dir_entry_t *)(sp.bb + sp.off))->inode == cino)
+            dir_pos_remove(fs, sdir, &sp);
+        kfree(sp.bb);
+        if (src_dir->size) src_dir->size--;
+    }
+
+    if (is_dir && sdir != ddir) {
+        dir_set_parent(fs, cino, ddir);
+        inode_adjust_links(fs, sdir, -1);
+        inode_adjust_links(fs, ddir, +1);
+    }
+    inode_adjust_links(fs, cino, 0);
+    fs->dirty = true;
+    return 0;
+}
+
+static int ext2_dir_link_impl(vnode_t *dir, const char *name, vnode_t *target) {
+    ext2_vdata_t *vd = dir->fs_data;
+    ext2_vdata_t *tvd = target ? target->fs_data : NULL;
+    if (!tvd || (target->ops != &ext2_file_ops && target->ops != &ext2_symlink_ops)) return -EXDEV;
+    if (tvd->fs != vd->fs) return -EXDEV;
+    ext2_t *fs = vd->fs;
+    dirpos_t p;
+    if (dir_locate(fs, vd->ino, name, &p, 0) == 0) { kfree(p.bb); return -EEXIST; }
+    ext2_inode_t ci;
+    int r = inode_read(fs, tvd->ino, &ci);
+    if (r < 0) return r;
+    if ((ci.i_mode & 0xF000) == EXT2_S_IFDIR) return -EPERM;
+    if (ci.i_links_count == 0) return -ENOENT;
+    if (ci.i_links_count >= 65000) return -EMLINK;
+    r = ext2_dir_add_entry(fs, vd->ino, tvd->ino, ft_of_mode(ci.i_mode), name);
+    if (r < 0) return r;
+    inode_adjust_links(fs, tvd->ino, +1);
+    dir->size++;
+    fs->dirty = true;
+    return 0;
+}
+
+static int ext2_dir_symlink_impl(vnode_t *dir, const char *name, const char *target) {
+    ext2_vdata_t *vd = dir->fs_data;
+    ext2_t *fs = vd->fs;
+    if (!name || !name[0] || !target) return -EINVAL;
+    size_t len = strlen(target);
+    if (len == 0) return -ENOENT;
+    if (len >= fs->block_size) return -ENAMETOOLONG;
+    dirpos_t p;
+    if (dir_locate(fs, vd->ino, name, &p, 0) == 0) { kfree(p.bb); return -EEXIST; }
+    int32_t ino = alloc_inode(fs);
+    if (ino < 0) return (int)ino;
+    ext2_inode_t ndi;
+    memset(&ndi, 0, sizeof(ndi));
+    int64_t now = clock_realtime_sec();
+    if (now > 0) ndi.i_atime = ndi.i_mtime = ndi.i_ctime = (uint32_t)now;
+    ndi.i_mode = EXT2_S_IFLNK | 0777;
+    ndi.i_uid  = (uint16_t)vfs_current_uid();
+    ndi.i_gid  = (uint16_t)vfs_current_uid();
+    ndi.i_links_count = 1;
+    ndi.i_size = (uint32_t)len;
+    if (len < 60) {
+        memcpy(ndi.i_block, target, len);
+    } else {
+        int32_t blk = alloc_block(fs);
+        if (blk < 0) { free_inode(fs, (uint32_t)ino); return (int)blk; }
+        uint8_t *bb = kzalloc(fs->block_size);
+        if (!bb) { free_block(fs, (uint32_t)blk); free_inode(fs, (uint32_t)ino); return -ENOMEM; }
+        memcpy(bb, target, len);
+        ext2_block_write_data(fs, (uint32_t)blk, bb);
+        kfree(bb);
+        ndi.i_block[0] = (uint32_t)blk;
+        ndi.i_blocks = fs->block_size / 512;
+    }
+    inode_write(fs, (uint32_t)ino, &ndi);
+    int r = ext2_dir_add_entry(fs, vd->ino, (uint32_t)ino, EXT2_FT_SYMLINK, name);
+    if (r < 0) {
+        if (ndi.i_blocks) free_block(fs, ndi.i_block[0]);
+        free_inode(fs, (uint32_t)ino);
+        return r;
+    }
+    dir->size++;
+    fs->dirty = true;
+    return 0;
+}
+
+static int64_t ext2_readlink_impl(vnode_t *node, char *buf, size_t bufsiz) {
+    ext2_vdata_t *vd = node->fs_data;
+    ext2_t *fs = vd->fs;
+    ext2_inode_t di;
+    int r = inode_read(fs, vd->ino, &di);
+    if (r < 0) return r;
+    size_t len = di.i_size;
+    if (inode_is_fast_symlink(fs, &di)) {
+        if (len > 60) len = 60;
+        if (len > bufsiz) len = bufsiz;
+        memcpy(buf, di.i_block, len);
+        return (int64_t)len;
+    }
+    int32_t db = get_block_num(fs, &di, 0);
+    if (db <= 0) return -EIO;
+    uint8_t *bb = kmalloc(fs->block_size);
+    if (!bb) return -ENOMEM;
+    ext2_block_read(fs, (uint32_t)db, bb);
+    if (len > fs->block_size) len = fs->block_size;
+    if (len > bufsiz) len = bufsiz;
+    memcpy(buf, bb, len);
+    kfree(bb);
+    return (int64_t)len;
 }
 
 static int ext2_dir_mkdir(vnode_t *dir, const char *name, uint32_t mode) {
@@ -1536,6 +1929,28 @@ static int ext2_dir_rename(vnode_t *src_dir, const char *src_name,
     return r;
 }
 
+static int locked_link(vnode_t *d, const char *name, vnode_t *target) {
+    ext2_t *fs = VFS_OF(d); fs_lock(fs);
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_link_impl(d, name, target);
+    jbd2_txn_end(fs);
+    fs_unlock(fs); return r;
+}
+
+static int locked_symlink(vnode_t *d, const char *name, const char *target) {
+    ext2_t *fs = VFS_OF(d); fs_lock(fs);
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_symlink_impl(d, name, target);
+    jbd2_txn_end(fs);
+    fs_unlock(fs); return r;
+}
+
+static int64_t locked_readlink(vnode_t *n, char *buf, size_t bufsiz) {
+    ext2_t *fs = VFS_OF(n); fs_lock(fs);
+    int64_t r = ext2_readlink_impl(n, buf, bufsiz);
+    fs_unlock(fs); return r;
+}
+
 static int locked_lookup(vnode_t *d, const char *name, vnode_t **out) {
     ext2_t *fs = VFS_OF(d); fs_lock(fs);
     int r = ext2_dir_lookup(d, name, out);
@@ -1563,16 +1978,28 @@ static int locked_unlink(vnode_t *d, const char *name) {
 }
 
 static const vnode_ops_t ext2_dir_ops = {
-    .lookup  = locked_lookup,
-    .readdir = locked_readdir,
-    .mkdir   = locked_mkdir,
-    .create  = locked_create,
-    .unlink  = locked_unlink,
-    .rename  = ext2_dir_rename,
-    .stat    = locked_stat,
-    .setattr = locked_setattr,
-    .ref     = ext2_vnode_ref,
-    .unref   = ext2_vnode_unref,
+    .lookup   = locked_lookup,
+    .readdir  = locked_readdir,
+    .mkdir    = locked_mkdir,
+    .create   = locked_create,
+    .unlink   = locked_unlink,
+    .rename   = ext2_dir_rename,
+    .symlink  = locked_symlink,
+    .link     = locked_link,
+    .stat     = locked_stat,
+    .setattr  = locked_setattr,
+    .ref      = ext2_vnode_ref,
+    .unref    = ext2_vnode_unref,
+    .cache_id = ext2_cache_id,
+};
+
+static const vnode_ops_t ext2_symlink_ops = {
+    .readlink = locked_readlink,
+    .stat     = locked_stat,
+    .setattr  = locked_setattr,
+    .ref      = ext2_vnode_ref,
+    .unref    = ext2_vnode_unref,
+    .cache_id = ext2_cache_id,
 };
 
 static void mkfs_write_inode(ext2_t *mfs, uint64_t off, const ext2_inode_t *in, uint32_t ino) {
@@ -1911,6 +2338,7 @@ vnode_t *ext2_mount(blkdev_t *dev) {
         }
     }
     wb_init(fs);
+    ext2_process_orphans(fs);
     ext2_inode_t root_di;
     if (inode_read(fs, EXT2_ROOT_INO, &root_di) < 0) { wb_free(fs); kfree(fs->gdt); kfree(fs); return NULL; }
     vnode_t *root = ext2_make_vnode(fs, EXT2_ROOT_INO, &root_di);

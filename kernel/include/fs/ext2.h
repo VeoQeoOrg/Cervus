@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include "../drivers/disk/blkdev.h"
 #include "vfs.h"
+#include "../sched/spinlock.h"
+
+#define EXT2_ICACHE_BUCKETS 512
 
 #define EXT2_SUPER_MAGIC    0xEF53
 #define EXT2_SUPER_OFFSET   1024
@@ -171,13 +174,18 @@ typedef struct {
     volatile int       lock_held;
     void              *lock_owner;
     int                lock_depth;
+    spinlock_t         icache_lock;
+    struct ext2_vdata *icache[EXT2_ICACHE_BUCKETS];
 } ext2_t;
 
 #define EXT4_FEATURE_INCOMPAT_CSUM_SEED 0x2000
 
-typedef struct {
-    ext2_t  *fs;
-    uint32_t ino;
+typedef struct ext2_vdata {
+    ext2_t            *fs;
+    uint32_t           ino;
+    uint8_t            orphan;
+    struct ext2_vdata *hnext;
+    struct vnode      *self;
 } ext2_vdata_t;
 
 int ext2_block_read(ext2_t *fs, uint32_t block, void *buf);
