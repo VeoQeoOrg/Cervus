@@ -24,6 +24,7 @@ typedef struct {
     char          *link_target;
 
     uint64_t ino;
+    uint32_t names;
 } ramfs_node_t;
 
 static void ramfs_free_chunks(ramfs_node_t *rn) {
@@ -178,9 +179,42 @@ static int ramfs_file_truncate(vnode_t *node, uint64_t new_size) {
             if (rn->chunks[i]) { pmm_free(rn->chunks[i], 1); rn->chunks[i] = NULL; }
         }
         if (keep < rn->chunk_count) rn->chunk_count = keep;
+        size_t tail = (size_t)(new_size % RAMFS_CHUNK_SIZE);
+        size_t last = (size_t)(new_size / RAMFS_CHUNK_SIZE);
+        if (tail && last < rn->chunk_count && rn->chunks[last])
+            memset(rn->chunks[last] + tail, 0, RAMFS_CHUNK_SIZE - tail);
+        node->size = new_size;
+    } else {
         node->size = new_size;
     }
     return 0;
+}
+
+static void touch_dir(vnode_t *dir) {
+    int64_t now = clock_realtime_sec();
+    if (now > 0) dir->mtime = dir->ctime = now;
+}
+
+static void name_added(vnode_t *node) {
+    ((ramfs_node_t *)node->fs_data)->names++;
+    int64_t now = clock_realtime_sec();
+    if (now > 0) node->ctime = now;
+}
+
+static void name_removed(vnode_t *node) {
+    ramfs_node_t *rn = node->fs_data;
+    if (rn->names) rn->names--;
+    int64_t now = clock_realtime_sec();
+    if (now > 0) node->ctime = now;
+}
+
+static uint32_t ramfs_nlink(vnode_t *node) {
+    ramfs_node_t *rn = node->fs_data;
+    if (node->type != VFS_NODE_DIR) return rn->names ? rn->names : 1;
+    uint32_t n = 2;
+    for (int i = 0; i < rn->child_count; i++)
+        if (rn->children[i].node && rn->children[i].node->type == VFS_NODE_DIR) n++;
+    return n;
 }
 
 static int ramfs_stat(vnode_t *node, vfs_stat_t *out) {
@@ -195,6 +229,7 @@ static int ramfs_stat(vnode_t *node, vfs_stat_t *out) {
     out->st_atime  = node->atime;
     out->st_mtime  = node->mtime;
     out->st_ctime  = node->ctime;
+    out->st_nlink  = ramfs_nlink(node);
     return 0;
 }
 
@@ -261,6 +296,8 @@ static int ramfs_dir_add_child(vnode_t *dir, const char *name, vnode_t *child) {
     dir->size = (uint64_t)rn->child_count;
 
     vnode_ref(child);
+    name_added(child);
+    touch_dir(dir);
     return 0;
 }
 
@@ -317,6 +354,8 @@ static int ramfs_dir_unlink(vnode_t *dir, const char *name) {
     for (int i = 0; i < rn->child_count; i++) {
         if (strcmp(rn->children[i].name, name) == 0) {
             kfree(rn->children[i].name);
+            name_removed(rn->children[i].node);
+            touch_dir(dir);
             vnode_unref(rn->children[i].node);
             for (int j = i; j < rn->child_count - 1; j++)
                 rn->children[j] = rn->children[j + 1];
@@ -410,6 +449,9 @@ static int ramfs_dir_rename(vnode_t *sdir, const char *sname, vnode_t *ddir, con
         if (old->type == VFS_NODE_DIR && !ramfs_dir_empty(old)) return -ENOTEMPTY;
         vnode_ref(node);
         drn->children[di].node = node;
+        name_added(node);
+        name_removed(old);
+        touch_dir(ddir);
         vnode_unref(old);
     } else {
         int r = ramfs_dir_add_child(ddir, dname, node);
@@ -422,6 +464,8 @@ static int ramfs_dir_rename(vnode_t *sdir, const char *sname, vnode_t *ddir, con
             srn->children[j] = srn->children[j + 1];
         srn->child_count--;
         sdir->size = (uint64_t)srn->child_count;
+        name_removed(node);
+        touch_dir(sdir);
         vnode_unref(node);
     }
     node->ctime = clock_realtime_sec();

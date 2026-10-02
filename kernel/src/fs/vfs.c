@@ -289,6 +289,8 @@ void vfs_file_free(vfs_file_t *file) {
     }
 }
 
+static void mark_modified(vnode_t *node);
+
 int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
     if (!path || !out) return -EINVAL;
 
@@ -387,7 +389,10 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         } else {
             node->size = 0;
         }
-        if (node->type == VFS_NODE_FILE) pagecache_truncated(node, 0);
+        if (node->type == VFS_NODE_FILE) {
+            pagecache_truncated(node, 0);
+            mark_modified(node);
+        }
         file->offset = 0;
     }
 
@@ -576,10 +581,12 @@ int vfs_ftruncate(vfs_file_t *file, uint64_t new_size) {
     if (!file || !file->vnode) return -EBADF;
     if (file->vnode->type == VFS_NODE_DIR) return -EISDIR;
     if (!file->vnode->ops || !file->vnode->ops->truncate) return -EINVAL;
+    uint64_t old = file->vnode->size;
     int r = file->vnode->ops->truncate(file->vnode, new_size);
     if (r == 0) {
         file->vnode->size = new_size;
         pagecache_truncated(file->vnode, new_size);
+        if (old != new_size) mark_modified(file->vnode);
     }
     return r;
 }
@@ -592,10 +599,12 @@ int vfs_truncate(const char *path, uint64_t new_size) {
     if (node->type == VFS_NODE_DIR) { vnode_unref(node); return -EISDIR; }
     if (__atomic_load_n(&node->deny_write, __ATOMIC_ACQUIRE) > 0) { vnode_unref(node); return -ETXTBSY; }
     if (!node->ops || !node->ops->truncate) { vnode_unref(node); return -EINVAL; }
+    uint64_t old = node->size;
     ret = node->ops->truncate(node, new_size);
     if (ret == 0) {
         node->size = new_size;
         pagecache_truncated(node, new_size);
+        if (old != new_size) mark_modified(node);
     }
     vnode_unref(node);
     return ret;
@@ -1056,7 +1065,19 @@ int64_t vfs_make_time(int year, int mon, int day, int hour, int min, int sec) {
 
 void vfs_set_times_node(vnode_t *node, int64_t atime, int64_t mtime) {
     if (atime > 0) node->atime = atime;
-    if (mtime > 0) { node->mtime = mtime; node->ctime = mtime; }
+    if (mtime > 0) node->mtime = mtime;
+    int64_t now = clock_realtime_sec();
+    if (now > 0) node->ctime = now;
+    else if (mtime > 0) node->ctime = mtime;
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
+}
+
+static void mark_modified(vnode_t *node) {
+    int64_t now = clock_realtime_sec();
+    if (now <= 0) return;
+    node->mtime = now;
+    node->ctime = now;
+    if (node->ops && node->ops->setattr) node->ops->setattr(node);
 }
 
 int vfs_set_times(const char *path, int64_t atime, int64_t mtime) {

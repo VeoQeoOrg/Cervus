@@ -1117,6 +1117,18 @@ static int ext2_file_truncate_impl(vnode_t *node, uint64_t new_size) {
         uint64_t freed = ext2_truncate_blocks(fs, &di, keep);
         uint64_t sectors = freed * (fs->block_size / 512);
         di.i_blocks = (di.i_blocks >= sectors) ? (uint32_t)(di.i_blocks - sectors) : 0;
+        uint32_t tail = (uint32_t)(new_size % fs->block_size);
+        if (tail) {
+            int32_t db = get_block_num(fs, &di, (uint32_t)(new_size / fs->block_size));
+            uint8_t *bb = db > 0 ? kmalloc(fs->block_size) : NULL;
+            if (bb) {
+                if (ext2_block_read(fs, (uint32_t)db, bb) == 0) {
+                    memset(bb + tail, 0, fs->block_size - tail);
+                    ext2_block_write_data(fs, (uint32_t)db, bb);
+                }
+                kfree(bb);
+            }
+        }
     }
     di.i_size = (uint32_t)new_size;
     node->size = new_size;
@@ -1155,6 +1167,9 @@ static int ext2_setattr_impl(vnode_t *node) {
     di.i_mode = (uint16_t)((di.i_mode & 0xF000) | (node->mode & 0x0FFF));
     di.i_uid  = (uint16_t)node->uid;
     di.i_gid  = (uint16_t)node->gid;
+    if (node->atime > 0) di.i_atime = (uint32_t)node->atime;
+    if (node->mtime > 0) di.i_mtime = (uint32_t)node->mtime;
+    if (node->ctime > 0) di.i_ctime = (uint32_t)node->ctime;
     inode_write(fs, vd->ino, &di);
     fs->dirty = true;
     return 0;
