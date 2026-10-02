@@ -94,9 +94,12 @@ typedef void (*sighandler_t)(int);
 #define BUS_ADRERR  2
 #define BUS_OBJERR  3
 
+#ifndef __CERVUS_SIGSET_T
+#define __CERVUS_SIGSET_T
 typedef struct {
     unsigned long __bits[2];
 } sigset_t;
+#endif
 
 union sigval {
     int   sival_int;

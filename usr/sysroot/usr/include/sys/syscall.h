@@ -204,6 +204,8 @@ extern "C" {
 #define SYS_FCHOWNAT        638
 #define SYS_UTIMENSAT       639
 #define SYS_FCHDIR          640
+#define SYS_PPOLL           641
+#define SYS_PSELECT         642
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

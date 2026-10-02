@@ -14,6 +14,13 @@ struct timespec {
 };
 #endif
 
+#ifndef __CERVUS_SIGSET_T
+#define __CERVUS_SIGSET_T
+typedef struct {
+    unsigned long __bits[2];
+} sigset_t;
+#endif
+
 #define FD_SETSIZE 1024
 
 typedef struct {
@@ -26,6 +33,8 @@ typedef struct {
 #define FD_ISSET(fd, s) (((s)->fds_bits[(fd) / 8] >> ((fd) & 7)) & 1)
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
+            const struct timespec *timeout, const sigset_t *sigmask);
 
 #ifdef __cplusplus
 }

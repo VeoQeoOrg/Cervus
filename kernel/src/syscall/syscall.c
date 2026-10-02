@@ -191,6 +191,8 @@ extern int64_t sys_listen(uint64_t, uint64_t);
 extern int64_t sys_accept(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_poll(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_ppoll(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_pselect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -299,6 +301,7 @@ W5(sys_sendto)      W5(sys_recvfrom)   W3(sys_net_ifcfg)
 W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
+W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -436,6 +439,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FCHOWNAT]        = _sys_fchownat,
     [SYS_UTIMENSAT]       = _sys_utimensat,
     [SYS_FCHDIR]          = _sys_fchdir,
+    [SYS_PPOLL]           = _sys_ppoll,
+    [SYS_PSELECT]         = _sys_pselect,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

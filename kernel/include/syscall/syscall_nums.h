@@ -214,6 +214,8 @@
 #define SYS_FCHOWNAT          638
 #define SYS_UTIMENSAT         639
 #define SYS_FCHDIR            640
+#define SYS_PPOLL             641
+#define SYS_PSELECT           642
 
 #define SYSCALL_TABLE_SIZE    768
 
