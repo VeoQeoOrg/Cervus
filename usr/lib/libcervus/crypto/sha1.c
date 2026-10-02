@@ -73,3 +73,51 @@ void sha1(const void *data, size_t n, uint8_t out[20])
     sha1_update(&c, data, n);
     sha1_final(&c, out);
 }
+
+void hmac_sha1(const uint8_t *key, size_t keylen, const uint8_t *msg, size_t msglen, uint8_t out[20])
+{
+    uint8_t k[64], tk[20], pad[64], inner[20];
+    if (keylen > 64) { sha1(key, keylen, tk); key = tk; keylen = 20; }
+    memset(k, 0, sizeof(k));
+    memcpy(k, key, keylen);
+    sha1_ctx c;
+    for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x36;
+    sha1_init(&c);
+    sha1_update(&c, pad, 64);
+    sha1_update(&c, msg, msglen);
+    sha1_final(&c, inner);
+    for (int i = 0; i < 64; i++) pad[i] = k[i] ^ 0x5c;
+    sha1_init(&c);
+    sha1_update(&c, pad, 64);
+    sha1_update(&c, inner, 20);
+    sha1_final(&c, out);
+}
+
+void pbkdf2_hmac_sha1(const uint8_t *pass, size_t passlen,
+                      const uint8_t *salt, size_t saltlen,
+                      uint32_t iters, uint8_t *out, size_t outlen)
+{
+    uint32_t block = 1;
+    size_t done = 0;
+    while (done < outlen) {
+        uint8_t in[512 + 4];
+        size_t sl = saltlen > 512 ? 512 : saltlen;
+        memcpy(in, salt, sl);
+        in[sl + 0] = (uint8_t)(block >> 24);
+        in[sl + 1] = (uint8_t)(block >> 16);
+        in[sl + 2] = (uint8_t)(block >> 8);
+        in[sl + 3] = (uint8_t)block;
+        uint8_t u[20], t[20];
+        hmac_sha1(pass, passlen, in, sl + 4, u);
+        memcpy(t, u, 20);
+        for (uint32_t i = 1; i < iters; i++) {
+            hmac_sha1(pass, passlen, u, 20, u);
+            for (int j = 0; j < 20; j++) t[j] ^= u[j];
+        }
+        size_t take = outlen - done;
+        if (take > 20) take = 20;
+        memcpy(out + done, t, take);
+        done += take;
+        block++;
+    }
+}

@@ -148,6 +148,21 @@ static void restore_console_theme(void) {
     waitpid(child, &status, 0);
 }
 
+static void start_wifi(void) {
+    struct stat st;
+    if (stat("/etc/wifi/networks", &st) != 0 || stat("/bin/wifi", &st) != 0) return;
+
+    pid_t child = fork();
+    if (child < 0) return;
+    if (child == 0) {
+        int devnull = open("/dev/null", O_WRONLY, 0);
+        if (devnull >= 0) { dup2(devnull, 1); dup2(devnull, 2); close(devnull); }
+        const char *argv[5] = { "/bin/wifi", "auto", "--wait", "20", NULL };
+        execve("/bin/wifi", (char *const *)argv, environ);
+        _exit(127);
+    }
+}
+
 static void sync_clock_from_network(void) {
     struct stat st;
     if (stat("/etc/ntp", &st) != 0 && stat("/mnt/etc/ntp", &st) != 0) return;
@@ -312,6 +327,7 @@ int main(void) {
     restore_console_font();
     restore_console_theme();
     refresh_font_cache();
+    start_wifi();
     sync_clock_from_network();
     restore_audio_settings();
 
