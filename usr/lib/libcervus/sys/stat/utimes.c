@@ -22,10 +22,8 @@ int futimens(int fd, const struct timespec times[2])
 
 int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
 {
-    (void)flags;
-    if (dirfd != AT_FDCWD && path && path[0] != '/') { errno = ENOSYS; return -1; }
-    return (int)__cervus_sys_ret(syscall3(SYS_UTIMES, path, (uint64_t)sec_of(times, 0),
-                                          (uint64_t)sec_of(times, 1)));
+    return (int)__cervus_sys_ret(syscall5(SYS_UTIMENSAT, dirfd, path, (uint64_t)sec_of(times, 0),
+                                          (uint64_t)sec_of(times, 1), flags));
 }
 
 int futimes(int fd, const struct timeval tv[2])

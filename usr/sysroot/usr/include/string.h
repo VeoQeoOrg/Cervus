@@ -45,6 +45,7 @@ char   *strsep(char **stringp, const char *delim);
 size_t  strlcpy(char *dst, const char *src, size_t size);
 size_t  strlcat(char *dst, const char *src, size_t size);
 char   *strerror(int errnum);
+int     strerror_r(int errnum, char *buf, size_t buflen);
 char   *strsignal(int sig);
 int     strverscmp(const char *a, const char *b);
 

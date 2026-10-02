@@ -1,9 +1,8 @@
 #include <unistd.h>
-#include <errno.h>
+#include <sys/syscall.h>
+#include <libcervus.h>
 
 int link(const char *oldpath, const char *newpath)
 {
-    if (!oldpath || !newpath) { errno = EFAULT; return -1; }
-    errno = EPERM;
-    return -1;
+    return (int)__cervus_sys_ret(syscall2(SYS_LINK, oldpath, newpath));
 }

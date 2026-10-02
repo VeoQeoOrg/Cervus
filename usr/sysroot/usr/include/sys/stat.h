@@ -35,6 +35,8 @@ int lchown(const char *path, uid_t owner, gid_t group);
 #define UTIME_OMIT ((1L << 30) - 2L)
 struct timespec;
 int futimens(int fd, const struct timespec times[2]);
+int mkdirat(int dirfd, const char *path, mode_t mode);
+int fchmodat(int dirfd, const char *path, mode_t mode, int flags);
 int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags);
 
 #define S_ISUID   04000
@@ -79,6 +81,7 @@ struct stat {
 #define st_ctime st_ctim.tv_sec
 
 int stat(const char *path, struct stat *out);
+int fstatat(int dirfd, const char *path, struct stat *st, int flags);
 int lstat(const char *path, struct stat *out);
 int fstat(int fd, struct stat *out);
 int mkdir(const char *path, mode_t mode);

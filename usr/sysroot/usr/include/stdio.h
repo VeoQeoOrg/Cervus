@@ -112,6 +112,8 @@ ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream);
 
 void perror(const char *msg);
 int  rename(const char *oldp, const char *newp);
+int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath);
+int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned flags);
 int  remove(const char *path);
 char *tmpnam(char *buf);
 

@@ -59,6 +59,10 @@ int creat(const char *path, mode_t mode);
 #define AT_REMOVEDIR        0x200
 #define AT_SYMLINK_FOLLOW   0x400
 #define AT_EACCESS          0x200
+#define AT_NO_AUTOMOUNT     0x800
+#define AT_EMPTY_PATH       0x1000
+
+int openat(int dirfd, const char *path, int flags, ...);
 
 #ifdef __cplusplus
 }

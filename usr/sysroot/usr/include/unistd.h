@@ -35,6 +35,12 @@ int     rmdir(const char *path);
 int     access(const char *path, int mode);
 int     chdir(const char *path);
 int     fchdir(int fd);
+int     unlinkat(int dirfd, const char *path, int flags);
+int     linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags);
+int     symlinkat(const char *target, int dirfd, const char *linkpath);
+ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t size);
+int     fchownat(int dirfd, const char *path, uid_t owner, gid_t group, int flags);
+int     faccessat(int dirfd, const char *path, int mode, int flags);
 char   *getcwd(char *buf, size_t size);
 
 int     symlink(const char *target, const char *linkpath);
