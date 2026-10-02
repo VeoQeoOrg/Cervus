@@ -47,6 +47,8 @@ typedef struct {
     } fb;
 
     uint64_t rsdp_addr;
+    uint64_t smbios_entry;
+    uint64_t efi_systab;
 
     int               mmap_count;
     boot_mmap_entry_t mmap[BOOT_MMAP_MAX];

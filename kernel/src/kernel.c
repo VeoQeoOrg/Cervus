@@ -39,6 +39,7 @@
 #include "../include/drivers/disk/partition.h"
 #include "../include/drivers/pci.h"
 #include "../include/drivers/iommu/dmar.h"
+#include "../include/firmware/dmi.h"
 #include "../include/memory/mm.h"
 #include "../include/memory/pageref.h"
 #include "../include/memory/pagecache.h"
@@ -313,6 +314,8 @@ void kmain(void) {
     acpi_init();
     acpi_print_tables();
     serial_writestring("ACPI [OK]\n");
+    kstage("dmi_init");
+    dmi_init();
     kstage("apic_init");
     apic_init();
     serial_writestring("APIC [OK]\n");

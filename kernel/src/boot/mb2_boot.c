@@ -118,6 +118,12 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
                 rsv_add(ms, (uint64_t)(me - ms));
             }
             break;
+        case 12:
+            bi->efi_systab = rd64(d);
+            break;
+        case 13:
+            if (tlen > 16) bi->smbios_entry = (uint64_t)(uintptr_t)(d + 8);
+            break;
         case 14:
         case 15:
             if (!bi->rsdp_addr) bi->rsdp_addr = (uint64_t)(uintptr_t)d;
