@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "../../include/fs/ramfs.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/memory/pmm.h"
@@ -374,7 +375,68 @@ static int ramfs_dir_symlink(vnode_t *dir, const char *name, const char *target)
     return 0;
 }
 
+static int ramfs_find(ramfs_node_t *rn, const char *name) {
+    for (int i = 0; i < rn->child_count; i++)
+        if (strcmp(rn->children[i].name, name) == 0) return i;
+    return -1;
+}
+
+static bool ramfs_subtree_has(vnode_t *root, vnode_t *needle, int depth) {
+    if (root == needle) return true;
+    if (root->type != VFS_NODE_DIR || depth > 256) return false;
+    ramfs_node_t *rn = root->fs_data;
+    for (int i = 0; i < rn->child_count; i++)
+        if (ramfs_subtree_has(rn->children[i].node, needle, depth + 1)) return true;
+    return false;
+}
+
+static bool ramfs_dir_empty(vnode_t *dir) {
+    return ((ramfs_node_t *)dir->fs_data)->child_count == 0;
+}
+
+static int ramfs_dir_rename(vnode_t *sdir, const char *sname, vnode_t *ddir, const char *dname) {
+    if (ddir->ops != sdir->ops) return -EXDEV;
+    ramfs_node_t *srn = sdir->fs_data, *drn = ddir->fs_data;
+    int si = ramfs_find(srn, sname);
+    if (si < 0) return -ENOENT;
+    vnode_t *node = srn->children[si].node;
+    if (node->type == VFS_NODE_DIR && ramfs_subtree_has(node, ddir, 0)) return -EINVAL;
+    int di = ramfs_find(drn, dname);
+    if (di >= 0) {
+        vnode_t *old = drn->children[di].node;
+        if (old == node) return 0;
+        if (node->type == VFS_NODE_DIR && old->type != VFS_NODE_DIR) return -ENOTDIR;
+        if (node->type != VFS_NODE_DIR && old->type == VFS_NODE_DIR) return -EISDIR;
+        if (old->type == VFS_NODE_DIR && !ramfs_dir_empty(old)) return -ENOTEMPTY;
+        vnode_ref(node);
+        drn->children[di].node = node;
+        vnode_unref(old);
+    } else {
+        int r = ramfs_dir_add_child(ddir, dname, node);
+        if (r < 0) return r;
+    }
+    si = ramfs_find(srn, sname);
+    if (si >= 0 && srn->children[si].node == node) {
+        kfree(srn->children[si].name);
+        for (int j = si; j < srn->child_count - 1; j++)
+            srn->children[j] = srn->children[j + 1];
+        srn->child_count--;
+        sdir->size = (uint64_t)srn->child_count;
+        vnode_unref(node);
+    }
+    node->ctime = clock_realtime_sec();
+    return 0;
+}
+
+static int ramfs_dir_link(vnode_t *dir, const char *name, vnode_t *target) {
+    if (!target || (target->ops != &ramfs_file_ops && target->ops != &ramfs_symlink_ops)) return -EXDEV;
+    if (ramfs_find(dir->fs_data, name) >= 0) return -EEXIST;
+    return ramfs_dir_add_child(dir, name, target);
+}
+
 static const vnode_ops_t ramfs_dir_ops = {
+    .rename  = ramfs_dir_rename,
+    .link    = ramfs_dir_link,
     .lookup  = ramfs_dir_lookup,
     .readdir = ramfs_dir_readdir,
     .mkdir   = ramfs_dir_mkdir,

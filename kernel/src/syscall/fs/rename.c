@@ -2,6 +2,36 @@
 #include "../../../include/fs/vfs.h"
 #include <string.h>
 
+int64_t rename_kernel_paths(const char *oldp, const char *newp)
+{
+    int ps = syscall_perm_parent(oldp, 2);
+    if (ps < 0) return ps;
+    int pd = syscall_perm_parent(newp, 2);
+    if (pd < 0) return pd;
+    int ss = syscall_perm_sticky(oldp);
+    if (ss < 0) return ss;
+    vnode_t *probe = NULL;
+    if (vfs_lookup_nofollow(newp, &probe) == 0) {
+        vnode_unref(probe);
+        int sd = syscall_perm_sticky(newp);
+        if (sd < 0) return sd;
+    }
+    return vfs_rename(oldp, newp);
+}
+
+int64_t link_kernel_paths(const char *oldp, const char *newp, int follow)
+{
+    int pd = syscall_perm_parent(newp, 2);
+    if (pd < 0) return pd;
+    if (follow) {
+        vnode_t *v = NULL;
+        int r = vfs_lookup(oldp, &v);
+        if (r < 0) return r;
+        vnode_unref(v);
+    }
+    return vfs_link(oldp, newp);
+}
+
 int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
                    uint64_t a4, uint64_t a5, uint64_t a6)
 {
@@ -11,61 +41,15 @@ int64_t sys_rename(uint64_t old_ptr, uint64_t new_ptr, uint64_t a3,
     if (rp1 < 0) return rp1;
     int rp2 = syscall_resolve_path_from_user(newp, (const char *)new_ptr, sizeof(newp));
     if (rp2 < 0) return rp2;
+    return rename_kernel_paths(oldp, newp);
+}
 
-    int ps = syscall_perm_parent(oldp, 2);
-    if (ps < 0) return ps;
-    int pd = syscall_perm_parent(newp, 2);
-    if (pd < 0) return pd;
-    int ss = syscall_perm_sticky(oldp);
-    if (ss < 0) return ss;
-    int sd = syscall_perm_sticky(newp);
-    if (sd < 0) return sd;
-
-    vnode_t *src_node = NULL;
-    int r = vfs_lookup(oldp, &src_node);
-    if (r < 0) return r;
-
-    vnode_t *dst_node = NULL;
-    if (vfs_lookup(newp, &dst_node) == 0) {
-        if (dst_node->type == VFS_NODE_DIR) {
-            const char *base = oldp;
-            for (const char *p = oldp; *p; p++) if (*p == '/') base = p + 1;
-            size_t dlen = strlen(newp);
-            if (dlen + 1 + strlen(base) < 255) {
-                if (newp[dlen - 1] != '/') { newp[dlen] = '/'; newp[dlen + 1] = '\0'; dlen++; }
-                strncat(newp, base, 254 - dlen);
-            }
-        }
-        vnode_unref(dst_node);
-    }
-
-    vfs_file_t *src_f = NULL, *dst_f = NULL;
-    r = vfs_open(oldp, O_RDONLY, 0, &src_f);
-    if (r < 0) { vnode_unref(src_node); return r; }
-    r = vfs_open(newp, O_WRONLY | O_CREAT | O_TRUNC, src_node->mode, &dst_f);
-    if (r < 0) { vfs_close(src_f); vnode_unref(src_node); return r; }
-    char buf[512]; int64_t n;
-    while ((n = vfs_read(src_f, buf, sizeof(buf))) > 0) vfs_write(dst_f, buf, (size_t)n);
-    vfs_close(src_f);
-    vfs_close(dst_f);
-    vnode_unref(src_node);
-
-    char dirp[256];
-    strncpy(dirp, oldp, 255);
-    dirp[255] = '\0';
-    char *sl = NULL;
-    for (int i = (int)strlen(dirp) - 1; i >= 0; i--)
-        if (dirp[i] == '/') { sl = &dirp[i]; break; }
-    if (sl) {
-        char nm[256];
-        strncpy(nm, sl + 1, 255);
-        if (sl == dirp) dirp[1] = '\0';
-        else            *sl = '\0';
-        vnode_t *dir = NULL;
-        if (vfs_lookup(dirp, &dir) == 0) {
-            if (dir->ops && dir->ops->unlink) dir->ops->unlink(dir, nm);
-            vnode_unref(dir);
-        }
-    }
-    return 0;
+int64_t sys_link(uint64_t old_ptr, uint64_t new_ptr)
+{
+    char oldp[VFS_MAX_PATH], newp[VFS_MAX_PATH];
+    int rp1 = syscall_resolve_path_from_user(oldp, (const char *)old_ptr, sizeof(oldp));
+    if (rp1 < 0) return rp1;
+    int rp2 = syscall_resolve_path_from_user(newp, (const char *)new_ptr, sizeof(newp));
+    if (rp2 < 0) return rp2;
+    return link_kernel_paths(oldp, newp, 0);
 }

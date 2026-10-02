@@ -1,3 +1,4 @@
+#include "../../include/memory/pagecache.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/sched/sched.h"
 #include "../../include/smp/percpu.h"
@@ -32,6 +33,7 @@ void vnode_unref(vnode_t *node) {
     if (!node) return;
     int old = __atomic_fetch_sub(&node->refcount, 1, __ATOMIC_ACQ_REL);
     if (old <= 1) {
+        if (node->type == VFS_NODE_FILE) pagecache_vnode_released(node);
         if (node->ops && node->ops->unref)
             node->ops->unref(node);
     }
@@ -278,8 +280,12 @@ void vfs_file_free(vfs_file_t *file) {
     if (!file) return;
     int old = __atomic_fetch_sub(&file->refcount, 1, __ATOMIC_ACQ_REL);
     if (old == 1) {
+        int acc = file->flags & O_ACCMODE;
+        if (file->vnode && (acc == O_WRONLY || acc == O_RDWR))
+            __atomic_fetch_sub(&file->vnode->writers, 1, __ATOMIC_ACQ_REL);
         vnode_unref(file->vnode);
         file->vnode = NULL;
+        if (file->path) { kfree(file->path); file->path = NULL; }
     }
 }
 
@@ -287,7 +293,11 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
     if (!path || !out) return -EINVAL;
 
     vnode_t *node = NULL;
-    int ret = vfs_lookup(path, &node);
+    int ret = (flags & O_NOFOLLOW) ? vfs_lookup_nofollow(path, &node) : vfs_lookup(path, &node);
+    if (ret == 0 && (flags & O_NOFOLLOW) && node->type == VFS_NODE_SYMLINK) {
+        vnode_unref(node);
+        return -ELOOP;
+    }
     if (ret == 0 && (flags & O_CREAT) && (flags & O_EXCL)) {
         vnode_unref(node);
         return -EEXIST;
@@ -340,9 +350,19 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
     }
 
     int acc = flags & O_ACCMODE;
-    if ((acc == O_WRONLY || acc == O_RDWR) && node->type == VFS_NODE_DIR) {
+    bool writing = acc == O_WRONLY || acc == O_RDWR;
+    if ((flags & O_DIRECTORY) && node->type != VFS_NODE_DIR) {
+        vnode_unref(node);
+        return -ENOTDIR;
+    }
+    if (writing && node->type == VFS_NODE_DIR) {
         vnode_unref(node);
         return -EISDIR;
+    }
+    if (writing && node->type == VFS_NODE_FILE &&
+        __atomic_load_n(&node->deny_write, __ATOMIC_ACQUIRE) > 0) {
+        vnode_unref(node);
+        return -ETXTBSY;
     }
 
     vfs_file_t *file = vfs_file_alloc();
@@ -350,10 +370,16 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         vnode_unref(node);
         return -ENFILE;
     }
+    if (writing) __atomic_fetch_add(&node->writers, 1, __ATOMIC_ACQ_REL);
 
     file->vnode  = node;
     file->flags  = flags;
     file->offset = (flags & O_APPEND) ? node->size : 0;
+    {
+        size_t pl = strlen(path);
+        file->path = kmalloc(pl + 1);
+        if (file->path) memcpy(file->path, path, pl + 1);
+    }
 
     if ((flags & O_TRUNC) && (acc == O_WRONLY || acc == O_RDWR)) {
         if (node->ops && node->ops->truncate) {
@@ -361,6 +387,7 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         } else {
             node->size = 0;
         }
+        if (node->type == VFS_NODE_FILE) pagecache_truncated(node, 0);
         file->offset = 0;
     }
 
@@ -420,9 +447,13 @@ int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
     if (file->flags & O_APPEND) file->offset = file->vnode->size;
 
     int saved = io_enter(file);
-    int64_t n = file->vnode->ops->write(file->vnode, buf, len, file->offset);
+    uint64_t at = file->offset;
+    int64_t n = file->vnode->ops->write(file->vnode, buf, len, at);
     io_leave(saved);
-    if (n > 0) file->offset += (uint64_t)n;
+    if (n > 0) {
+        if (file->vnode->type == VFS_NODE_FILE) pagecache_wrote(file->vnode, at, buf, (size_t)n);
+        file->offset += (uint64_t)n;
+    }
     return n;
 }
 
@@ -443,7 +474,9 @@ int64_t vfs_pwrite(vfs_file_t *file, const void *buf, size_t len, uint64_t offse
     vnode_type_t t = file->vnode->type;
     if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
     if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
-    return file->vnode->ops->write(file->vnode, buf, len, offset);
+    int64_t n = file->vnode->ops->write(file->vnode, buf, len, offset);
+    if (n > 0 && t == VFS_NODE_FILE) pagecache_wrote(file->vnode, offset, buf, (size_t)n);
+    return n;
 }
 
 int64_t vfs_seek(vfs_file_t *file, int64_t offset, int whence) {
@@ -544,7 +577,10 @@ int vfs_ftruncate(vfs_file_t *file, uint64_t new_size) {
     if (file->vnode->type == VFS_NODE_DIR) return -EISDIR;
     if (!file->vnode->ops || !file->vnode->ops->truncate) return -EINVAL;
     int r = file->vnode->ops->truncate(file->vnode, new_size);
-    if (r == 0) file->vnode->size = new_size;
+    if (r == 0) {
+        file->vnode->size = new_size;
+        pagecache_truncated(file->vnode, new_size);
+    }
     return r;
 }
 
@@ -554,9 +590,13 @@ int vfs_truncate(const char *path, uint64_t new_size) {
     int ret = vfs_lookup(path, &node);
     if (ret < 0) return ret;
     if (node->type == VFS_NODE_DIR) { vnode_unref(node); return -EISDIR; }
+    if (__atomic_load_n(&node->deny_write, __ATOMIC_ACQUIRE) > 0) { vnode_unref(node); return -ETXTBSY; }
     if (!node->ops || !node->ops->truncate) { vnode_unref(node); return -EINVAL; }
     ret = node->ops->truncate(node, new_size);
-    if (ret == 0) node->size = new_size;
+    if (ret == 0) {
+        node->size = new_size;
+        pagecache_truncated(node, new_size);
+    }
     vnode_unref(node);
     return ret;
 }
@@ -676,6 +716,57 @@ int vfs_symlink(const char *target, const char *linkpath) {
     ret = dir->ops->symlink(dir, name, target);
     vnode_unref(dir);
     return ret;
+}
+
+static int split_parent(const char *path, char *dirpath, char *name) {
+    size_t len = strlen(path);
+    if (len == 0 || len >= VFS_MAX_PATH) return -ENAMETOOLONG;
+    memcpy(dirpath, path, len + 1);
+    while (len > 1 && dirpath[len - 1] == '/') dirpath[--len] = '\0';
+    char *slash = strrchr(dirpath, '/');
+    if (!slash) return -EINVAL;
+    size_t nl = strlen(slash + 1);
+    if (nl == 0 || nl >= VFS_MAX_NAME) return nl ? -ENAMETOOLONG : -EBUSY;
+    memcpy(name, slash + 1, nl + 1);
+    if ((nl == 1 && name[0] == '.') || (nl == 2 && name[0] == '.' && name[1] == '.')) return -EINVAL;
+    if (slash == dirpath) dirpath[1] = '\0';
+    else *slash = '\0';
+    return 0;
+}
+
+int vfs_rename(const char *oldpath, const char *newpath) {
+    char sdirp[VFS_MAX_PATH], ddirp[VFS_MAX_PATH];
+    char sname[VFS_MAX_NAME], dname[VFS_MAX_NAME];
+    int r = split_parent(oldpath, sdirp, sname);
+    if (r < 0) return r;
+    r = split_parent(newpath, ddirp, dname);
+    if (r < 0) return r;
+    vnode_t *sdir = NULL, *ddir = NULL;
+    if ((r = vfs_lookup(sdirp, &sdir)) < 0) return r;
+    if ((r = vfs_lookup(ddirp, &ddir)) < 0) { vnode_unref(sdir); return r; }
+    if (sdir->type != VFS_NODE_DIR || ddir->type != VFS_NODE_DIR) r = -ENOTDIR;
+    else if (sdir->ops != ddir->ops) r = -EXDEV;
+    else if (!sdir->ops || !sdir->ops->rename) r = -EPERM;
+    else r = sdir->ops->rename(sdir, sname, ddir, dname);
+    vnode_unref(sdir);
+    vnode_unref(ddir);
+    return r;
+}
+
+int vfs_link(const char *oldpath, const char *newpath) {
+    char ddirp[VFS_MAX_PATH], dname[VFS_MAX_NAME];
+    int r = split_parent(newpath, ddirp, dname);
+    if (r < 0) return r;
+    vnode_t *target = NULL, *dir = NULL;
+    if ((r = vfs_lookup_nofollow(oldpath, &target)) < 0) return r;
+    if (target->type == VFS_NODE_DIR) { vnode_unref(target); return -EPERM; }
+    if ((r = vfs_lookup(ddirp, &dir)) < 0) { vnode_unref(target); return r; }
+    if (dir->type != VFS_NODE_DIR) r = -ENOTDIR;
+    else if (!dir->ops || !dir->ops->link) r = -EPERM;
+    else r = dir->ops->link(dir, dname, target);
+    vnode_unref(dir);
+    vnode_unref(target);
+    return r;
 }
 
 int64_t vfs_readlink(const char *path, char *buf, size_t bufsiz) {
