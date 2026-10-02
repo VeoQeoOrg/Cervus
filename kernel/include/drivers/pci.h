@@ -93,6 +93,9 @@ struct pci_driver {
 
     int (*probe)(pci_device_t *dev);
     int (*stop)(void);
+
+    int (*probe_ctx)(pci_device_t *dev, void *ctx);
+    void *ctx;
 };
 
 #define DRV_STATE_UNUSED   0

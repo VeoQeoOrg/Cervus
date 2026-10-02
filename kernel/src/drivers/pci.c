@@ -218,7 +218,7 @@ static void size_bars(pci_device_t *d)
 static void drv_try_one(int i, pci_device_t *d)
 {
     const pci_driver_t *drv = g_drivers[i];
-    if (!drv_matches(drv, d) || !drv->probe) return;
+    if (!drv_matches(drv, d) || (!drv->probe && !drv->probe_ctx)) return;
 
     drv_state_t *st = &g_drv_state[i];
     st->matched++;
@@ -228,7 +228,7 @@ static void drv_try_one(int i, pci_device_t *d)
         return;
     }
 
-    int r = drv->probe(d);
+    int r = drv->probe_ctx ? drv->probe_ctx(d, drv->ctx) : drv->probe(d);
     if (r == 0) {
         st->state = DRV_STATE_RUNNING;
         if (!st->started_ns) st->started_ns = sched_now_ns();
@@ -518,6 +518,9 @@ int pci_enable_msi(pci_device_t *dev, uint8_t vector, uint32_t apic_lapic_id)
     } else {
         pci_config_write16(dev->segment, dev->bus, dev->device, dev->function, off + 8, vector);
     }
+    if (ctrl & 0x0100)
+        pci_config_write32(dev->segment, dev->bus, dev->device, dev->function,
+                           off + (is64 ? 0x10 : 0x0C), 0);
     ctrl = (ctrl & ~0x0070u) | 0x0001u;
     pci_config_write16(dev->segment, dev->bus, dev->device, dev->function, off + 2, ctrl);
 
