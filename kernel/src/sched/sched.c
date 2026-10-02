@@ -1,3 +1,4 @@
+#include "../include/memory/mm.h"
 #include "../include/sched/capabilities.h"
 #include "../include/sched/sched.h"
 #include "../include/sched/spinlock.h"
@@ -265,6 +266,8 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
 
     t->pagemap = parent->pagemap;
     t->cr3     = parent->cr3;
+    t->mm      = parent->mm;
+    if (t->mm) mm_get(t->mm);
     t->brk_start   = parent->brk_start;
     t->brk_current = parent->brk_current;
     t->brk_max     = parent->brk_max;
@@ -424,8 +427,14 @@ task_t* task_fork(task_t* parent) {
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;
-    child->pagemap = vmm_clone_pagemap(parent->pagemap);
-    if (!child->pagemap) { free(child); return NULL; }
+    if (parent->mm) {
+        child->mm = mm_fork(parent->mm);
+        if (!child->mm) { free(child); return NULL; }
+        child->pagemap = child->mm->pagemap;
+    } else {
+        child->pagemap = vmm_clone_pagemap(parent->pagemap);
+        if (!child->pagemap) { free(child); return NULL; }
+    }
     child->cr3 = (uint64_t)pmm_virt_to_phys(child->pagemap->pml4);
     child->brk_start   = parent->brk_start;
     child->brk_current = parent->brk_current;
@@ -446,7 +455,8 @@ task_t* task_fork(task_t* parent) {
     atomic_init_bool(&child->on_rq, false);
     child->rsp = alloc_and_init_stack(child);
     if (!child->rsp) {
-        vmm_free_pagemap(child->pagemap);
+        if (child->mm) mm_put(child->mm);
+        else vmm_free_pagemap(child->pagemap);
         free(child);
         return NULL;
     }
@@ -508,7 +518,11 @@ void task_destroy(task_t* task) {
         task->puzzle = NULL;
     }
 
-    if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
+    if (task->mm) {
+        mm_put(task->mm);
+        task->mm = NULL;
+        task->pagemap = NULL;
+    } else if (task->pagemap && (task->flags & (TASK_FLAG_FORK | TASK_FLAG_OWN_PAGEMAP))) {
         vmm_free_pagemap(task->pagemap);
         task->pagemap = NULL;
     }
@@ -606,6 +620,26 @@ __attribute__((noreturn)) void task_exit(void)
     vfs_lock_release_owner((int)me->pid);
     vt_fb_task_exit(me);
     task_map_drop_all(me);
+
+    if (me->prof_buf) {
+        asm volatile("sti" ::: "memory");
+        profile_finish(me);
+        asm volatile("cli" ::: "memory");
+    }
+
+    if (me->puzzle) {
+        puzzle_destroy(me->puzzle);
+        me->puzzle = NULL;
+    }
+
+    if (me->mm) {
+        struct mm *m = me->mm;
+        me->mm = NULL;
+        me->pagemap = NULL;
+        asm volatile("sti" ::: "memory");
+        mm_put(m);
+        asm volatile("cli" ::: "memory");
+    }
 
     if (me->fd_table) {
         fd_table_destroy(me->fd_table);

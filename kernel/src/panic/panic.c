@@ -74,7 +74,7 @@ static int panic_try_own(void) {
 extern const struct { uint64_t addr; const char *name; } ksyms[];
 extern const unsigned long ksyms_count;
 
-static const char *ksym_lookup(uint64_t addr, uint64_t *off_out) {
+const char *ksym_lookup(uint64_t addr, uint64_t *off_out) {
     const char *best = NULL;
     uint64_t    base = 0;
     for (unsigned long i = 0; i < ksyms_count; i++) {

@@ -152,6 +152,22 @@ extern int64_t sys_getsockname(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getpeername(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_futimes(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_lchown(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_mprotect(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_link(uint64_t, uint64_t);
+extern int64_t sys_openat(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_mkdirat(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_unlinkat(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_renameat(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_linkat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_symlinkat(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_readlinkat(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fstatat(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fchmodat(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fchownat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_utimensat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_fchdir(uint64_t);
+extern int64_t sys_madvise(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_msync(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_kill(uint64_t, uint64_t);
 extern int64_t sys_rt_sigreturn(void);
 extern int64_t signal_deliver_pending(task_t *t, int64_t retval);
@@ -268,6 +284,9 @@ W0(sys_fb_acquire)  W0(sys_fb_release) W1(sys_mouse_state)
 W5(sys_setfont)
 W4(sys_rt_sigaction) W4(sys_rt_sigprocmask) W2(sys_kill) W0(sys_rt_sigreturn)
 W2(sys_rt_sigpending) W2(sys_rt_sigsuspend) W3(sys_getsockname) W3(sys_getpeername) W3(sys_futimes) W3(sys_lchown)
+W3(sys_mprotect) W3(sys_madvise) W3(sys_msync) W2(sys_link)
+W4(sys_openat) W3(sys_mkdirat) W3(sys_unlinkat) W4(sys_renameat) W5(sys_linkat) W3(sys_symlinkat)
+W4(sys_readlinkat) W4(sys_fstatat) W4(sys_fchmodat) W5(sys_fchownat) W5(sys_utimensat) W1(sys_fchdir)
 W2(sys_keymap_config)
 W4(sys_klog)
 W3(sys_puzzle)
@@ -403,6 +422,22 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETPEERNAME]       = _sys_getpeername,
     [SYS_FUTIMES]           = _sys_futimes,
     [SYS_LCHOWN]            = _sys_lchown,
+    [SYS_MPROTECT]          = _sys_mprotect,
+    [SYS_LINK]              = _sys_link,
+    [SYS_OPENAT]          = _sys_openat,
+    [SYS_MKDIRAT]         = _sys_mkdirat,
+    [SYS_UNLINKAT]        = _sys_unlinkat,
+    [SYS_RENAMEAT]        = _sys_renameat,
+    [SYS_LINKAT]          = _sys_linkat,
+    [SYS_SYMLINKAT]       = _sys_symlinkat,
+    [SYS_READLINKAT]      = _sys_readlinkat,
+    [SYS_FSTATAT]         = _sys_fstatat,
+    [SYS_FCHMODAT]        = _sys_fchmodat,
+    [SYS_FCHOWNAT]        = _sys_fchownat,
+    [SYS_UTIMENSAT]       = _sys_utimensat,
+    [SYS_FCHDIR]          = _sys_fchdir,
+    [SYS_MADVISE]           = _sys_madvise,
+    [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,

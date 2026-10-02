@@ -1,3 +1,4 @@
+#include "../../../include/memory/mm.h"
 #include "../../../include/graphics/fb/fb.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/memory/vmm.h"
@@ -79,6 +80,11 @@ int64_t sys_fb_blit(uint64_t buf_ptr, uint64_t x, uint64_t y, uint64_t w, uint64
     return (int64_t)(w * h * 4);
 }
 
+static int fb_pfn(vm_area_t *v, uint64_t off, uintptr_t *phys) {
+    *phys = (uintptr_t)v->priv_id + off;
+    return 0;
+}
+
 int64_t sys_fb_map(uint64_t out_addr_ptr)
 {
     fb_info_t *fb = global_framebuffer;
@@ -96,18 +102,12 @@ int64_t sys_fb_map(uint64_t out_addr_ptr)
     uintptr_t phys = (uintptr_t)fb->address - pmm_get_hhdm_offset();
     phys &= ~0xFFFULL;
 
-    uint64_t span = pages * 0x1000;
-    if (t->brk_max < span) return -ENOMEM;
-    uintptr_t uaddr = (t->brk_max - span) & ~0xFFFULL;
-    if (uaddr <= t->brk_current) return -ENOMEM;
-    t->brk_max = uaddr;
-
-    uint64_t vf = VMM_PRESENT | VMM_USER | VMM_WRITE | VMM_NOEXEC | VMM_SHARED
-                | VMM_PWT | VMM_PAT;
-    for (uint64_t i = 0; i < pages; i++) {
-        if (!vmm_map_page(t->pagemap, uaddr + i * 0x1000, phys + i * 0x1000, vf))
-            return -ENOMEM;
-    }
+    if (!t->mm) return -EPERM;
+    int64_t m = mm_map_pfn(t->mm, 0, pages * 0x1000, VM_READ | VM_WRITE | VM_SHARED, false,
+                           VMM_PWT | VMM_PAT, fb_pfn, NULL, NULL, NULL, phys, NULL, 0);
+    if (m < 0) return m;
+    uintptr_t uaddr = (uintptr_t)m;
+    mm_populate(t->mm, uaddr, pages * 0x1000, 1);
 
     vt_fb_mapped(t->ctty, t, uaddr, pages, phys);
 

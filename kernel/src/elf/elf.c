@@ -1,6 +1,7 @@
 #include "../../include/elf/elf.h"
 #include "../../include/memory/vmm.h"
 #include "../../include/memory/pmm.h"
+#include "../../include/memory/mm.h"
 #include "../../include/memory/paging.h"
 #include "../../include/io/serial.h"
 #include "../../include/fs/vfs.h"
@@ -9,7 +10,7 @@
 
 typedef struct {
     const uint8_t *buf;
-    vfs_file_t    *file;
+    vnode_t       *vn;
     size_t         size;
 } elf_source_t;
 
@@ -20,12 +21,11 @@ static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len
         memcpy(dst, src->buf + off, len);
         return 0;
     }
-    if (src->file) {
-        if (vfs_seek(src->file, (int64_t)off, SEEK_SET) < 0) return -1;
+    if (src->vn && src->vn->ops && src->vn->ops->read) {
         size_t done = 0;
         uint8_t *d = dst;
         while (done < len) {
-            int64_t r = vfs_read(src->file, d + done, len - done);
+            int64_t r = src->vn->ops->read(src->vn, d + done, len - done, off + done);
             if (r <= 0) return -1;
             done += (size_t)r;
         }
@@ -36,11 +36,7 @@ static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len
 
 #define ELF_PIE_BASE        0x0000000000400000ULL
 #define ELF_INTERP_BASE     0x00007F0000000000ULL
-#define ELF_USER_STACK_TOP  0x00007FFFFFFFE000ULL
 #define ELF_DEFAULT_STACK   (256 * 1024)
-
-#define PML4_KERNEL_START   256
-#define PML4_ENTRIES        512
 
 #ifndef SHF_WRITE
 #define SHF_WRITE           0x1
@@ -58,11 +54,13 @@ static inline uintptr_t page_align_down(uintptr_t addr) {
 static inline uintptr_t page_align_up(uintptr_t addr) {
     return (addr + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1);
 }
-static uint64_t phdr_flags_to_vmm(uint32_t pf) {
-    uint64_t flags = VMM_PRESENT | VMM_USER;
-    if (pf & PF_W)    flags |= VMM_WRITE;
-    if (!(pf & PF_X)) flags |= VMM_NOEXEC;
-    return flags;
+
+static uint32_t pf_to_vm(uint32_t pf) {
+    uint32_t f = 0;
+    if (pf & (PF_R | PF_X)) f |= VM_READ;
+    if (pf & PF_W) f |= VM_WRITE;
+    if (pf & PF_X) f |= VM_EXEC;
+    return f;
 }
 
 static elf_error_t elf_validate(const elf64_ehdr_t* hdr, size_t size) {
@@ -91,253 +89,178 @@ static elf_error_t elf_validate(const elf64_ehdr_t* hdr, size_t size) {
     return ELF_OK;
 }
 
-static bool ensure_page_mapped(vmm_pagemap_t* map, uintptr_t virt, uint64_t flags) {
-    uint64_t pf = 0;
-    if (vmm_get_page_flags(map, virt, &pf) && (pf & VMM_PRESENT)) {
-        return true;
+static int copy_from_source(mm_t *mm, const elf_source_t *src, uintptr_t dst,
+                            uint64_t off, size_t len) {
+    uint8_t *tmp = kmalloc(PAGE_SIZE);
+    if (!tmp) return -1;
+    while (len) {
+        size_t chunk = len < PAGE_SIZE ? len : PAGE_SIZE;
+        if (src_read(src, tmp, off, chunk) < 0 || mm_copy_to(mm, dst, tmp, chunk) < 0) {
+            kfree(tmp);
+            return -1;
+        }
+        dst += chunk; off += chunk; len -= chunk;
     }
-    void* page = pmm_alloc_zero(1);
-    if (!page) return false;
-    if (!vmm_map_page(map, virt, pmm_virt_to_phys(page), flags)) {
-        pmm_free(page, 1);
-        return false;
-    }
-    return true;
+    kfree(tmp);
+    return 0;
 }
 
-static elf_error_t load_segment(vmm_pagemap_t*      map,
-                                const elf_source_t* src,
-                                size_t              file_size,
-                                const elf64_phdr_t* phdr,
-                                uintptr_t           load_bias)
-{
-    if (phdr->p_memsz == 0) return ELF_OK;
-
-    uintptr_t virt_start = phdr->p_vaddr + load_bias;
-    uintptr_t virt_end   = virt_start + phdr->p_memsz;
-    uintptr_t page_start = page_align_down(virt_start);
-    uintptr_t page_end   = page_align_up(virt_end);
-    size_t    page_count = (page_end - page_start) / PAGE_SIZE;
-
-    if (phdr->p_filesz > 0 && phdr->p_offset + phdr->p_filesz > file_size) {
-        serial_printf("[ELF] Segment data out of file bounds\n");
-        return ELF_ERR_TOO_SMALL;
+static int zero_user(mm_t *mm, uintptr_t dst, size_t len) {
+    static const uint8_t zeros[256];
+    while (len) {
+        size_t chunk = len < sizeof zeros ? len : sizeof zeros;
+        if (mm_copy_to(mm, dst, zeros, chunk) < 0) return -1;
+        dst += chunk; len -= chunk;
     }
+    return 0;
+}
 
-    uint64_t  vmm_flags  = phdr_flags_to_vmm(phdr->p_flags);
+#define EAGER_MAX 16
 
-    for (size_t i = 0; i < page_count; i++) {
-        uintptr_t virt = page_start + i * PAGE_SIZE;
+typedef struct { uintptr_t start, end; uint32_t prot; } eager_iv_t;
 
-        uint64_t cur_flags = 0;
-        bool already_mapped =
-            vmm_get_page_flags(map, virt, &cur_flags) && (cur_flags & VMM_PRESENT);
-
-        if (!already_mapped) {
-            void* page = pmm_alloc_zero(1);
-            if (!page) {
-                serial_printf("[ELF] pmm_alloc_zero(1) failed at page %zu for vaddr 0x%llx\n",
-                              i, virt_start);
-                return ELF_ERR_NO_MEM;
-            }
-            if (!vmm_map_page(map, virt, pmm_virt_to_phys(page), vmm_flags)) {
-                serial_printf("[ELF] vmm_map_page failed: virt=0x%llx\n", virt);
-                pmm_free(page, 1);
-                return ELF_ERR_MAP_FAIL;
-            }
-        }
-
-        if (phdr->p_filesz > 0) {
-            uintptr_t pv_start = virt;
-            uintptr_t pv_end   = pv_start + PAGE_SIZE;
-            uintptr_t data_end = virt_start + phdr->p_filesz;
-            uintptr_t cp_start = (pv_start > virt_start) ? pv_start : virt_start;
-            uintptr_t cp_end   = (pv_end   < data_end)   ? pv_end   : data_end;
-
-            if (cp_start < cp_end) {
-                uintptr_t phys = 0;
-                if (!vmm_virt_to_phys(map, cp_start, &phys)) {
-                    return ELF_ERR_MAP_FAIL;
+static elf_error_t load_all_eager(mm_t *mm, const elf_source_t *src,
+                                  const elf64_ehdr_t *eh, uintptr_t bias) {
+    eager_iv_t iv[EAGER_MAX];
+    int n = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        elf64_phdr_t ph;
+        if (src_read(src, &ph, eh->e_phoff + (uint64_t)eh->e_phentsize * i, sizeof ph) < 0)
+            return ELF_ERR_TOO_SMALL;
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        if (ph.p_filesz > ph.p_memsz) return ELF_ERR_TOO_SMALL;
+        uintptr_t s0 = page_align_down(ph.p_vaddr + bias);
+        uintptr_t e0 = page_align_up(ph.p_vaddr + bias + ph.p_memsz);
+        uint32_t pr = pf_to_vm(ph.p_flags);
+        for (uintptr_t p = s0; p < e0; p += PAGE_SIZE) {
+            int k;
+            for (k = 0; k < n; k++)
+                if (p >= iv[k].start && p < iv[k].end) break;
+            if (k < n) {
+                if ((iv[k].prot | pr) != iv[k].prot) {
+                    if (iv[k].start == p && iv[k].end == p + PAGE_SIZE) { iv[k].prot |= pr; continue; }
+                    if (n + 2 > EAGER_MAX) return ELF_ERR_NO_MEM;
+                    eager_iv_t hi = { p + PAGE_SIZE, iv[k].end, iv[k].prot };
+                    iv[k].end = p;
+                    iv[n++] = (eager_iv_t){ p, p + PAGE_SIZE, iv[k].prot | pr };
+                    if (hi.start < hi.end) iv[n++] = hi;
                 }
-                phys &= ~(uintptr_t)0xFFF;
-                size_t dst_off = cp_start - pv_start;
-                size_t src_off = cp_start - virt_start;
-                if (src_read(src, (uint8_t*)pmm_phys_to_virt(phys) + dst_off,
-                             phdr->p_offset + src_off, cp_end - cp_start) < 0)
-                    return ELF_ERR_TOO_SMALL;
+                continue;
             }
+            if (n && iv[n - 1].end == p && iv[n - 1].prot == pr) { iv[n - 1].end = p + PAGE_SIZE; continue; }
+            if (n >= EAGER_MAX) return ELF_ERR_NO_MEM;
+            iv[n++] = (eager_iv_t){ p, p + PAGE_SIZE, pr };
         }
     }
-
-    LOG_D("[ELF] Segment loaded: virt=0x%llx-0x%llx flags=%s%s%s "
-                 "phys=<per-page> pages=%zu\n",
-                 virt_start, virt_end,
-                 (phdr->p_flags & PF_R) ? "R" : "-",
-                 (phdr->p_flags & PF_W) ? "W" : "-",
-                 (phdr->p_flags & PF_X) ? "X" : "-",
-                 page_count);
+    for (int k = 0; k < n; k++) {
+        if (iv[k].start >= iv[k].end) continue;
+        if (mm_map_anon(mm, iv[k].start, iv[k].end - iv[k].start, iv[k].prot | VM_READ | VM_WRITE, true) < 0)
+            return ELF_ERR_NO_MEM;
+    }
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        elf64_phdr_t ph;
+        if (src_read(src, &ph, eh->e_phoff + (uint64_t)eh->e_phentsize * i, sizeof ph) < 0)
+            return ELF_ERR_TOO_SMALL;
+        if (ph.p_type != PT_LOAD || ph.p_filesz == 0) continue;
+        if (ph.p_offset + ph.p_filesz > src->size) return ELF_ERR_TOO_SMALL;
+        if (copy_from_source(mm, src, ph.p_vaddr + bias, ph.p_offset, (size_t)ph.p_filesz) < 0)
+            return ELF_ERR_TOO_SMALL;
+    }
+    for (int k = 0; k < n; k++)
+        if (iv[k].start < iv[k].end && !(iv[k].prot & VM_WRITE))
+            mm_protect(mm, iv[k].start, iv[k].end - iv[k].start, iv[k].prot);
     return ELF_OK;
 }
 
-static uintptr_t cover_orphan_sections(vmm_pagemap_t*       map,
-                                       const elf64_ehdr_t*  ehdr,
-                                       const elf_source_t*  src,
-                                       size_t               file_size,
-                                       uintptr_t            load_bias,
-                                       uintptr_t            cur_load_end)
-{
-    if (!ehdr->e_shnum || !ehdr->e_shoff) {
-        serial_printf("[ELF] no section headers; skipping orphan-section pass\n");
-        return cur_load_end;
-    }
-    if (ehdr->e_shentsize < sizeof(elf64_shdr_t)) {
-        serial_printf("[ELF] e_shentsize=%u too small; skipping orphan-section pass\n",
-                      (unsigned)ehdr->e_shentsize);
-        return cur_load_end;
-    }
-    uint64_t sht_end = (uint64_t)ehdr->e_shoff +
-                       (uint64_t)ehdr->e_shentsize * ehdr->e_shnum;
-    if (sht_end > file_size) {
-        serial_printf("[ELF] section table out of file bounds; skip\n");
-        return cur_load_end;
-    }
+static elf_error_t load_segment(mm_t *mm, const elf_source_t *src,
+                                const elf64_phdr_t *ph, uintptr_t bias) {
+    if (ph->p_memsz == 0) return ELF_OK;
+    if (ph->p_filesz > ph->p_memsz) return ELF_ERR_TOO_SMALL;
+    if (ph->p_filesz && ph->p_offset + ph->p_filesz > src->size) return ELF_ERR_TOO_SMALL;
 
-    LOG_D("[ELF] section scan: e_shnum=%u\n", (unsigned)ehdr->e_shnum);
+    uint32_t prot = pf_to_vm(ph->p_flags);
+    uintptr_t vstart = ph->p_vaddr + bias;
+
+    uintptr_t pstart   = page_align_down(vstart);
+    uintptr_t file_end = page_align_up(vstart + ph->p_filesz);
+    uintptr_t mem_end  = page_align_up(vstart + ph->p_memsz);
+    uint64_t  foff     = ph->p_offset - (vstart - pstart);
+
+    if (ph->p_filesz) {
+        if (mm_map_file(mm, pstart, file_end - pstart, prot, true, src->vn, foff) < 0)
+            return ELF_ERR_NO_MEM;
+        uintptr_t tail = vstart + ph->p_filesz;
+        if ((tail & (PAGE_SIZE - 1)) && ph->p_memsz > ph->p_filesz) {
+            if (!(prot & VM_WRITE)) mm_protect(mm, page_align_down(tail), PAGE_SIZE, prot | VM_WRITE);
+            if (zero_user(mm, tail, page_align_up(tail) - tail) < 0) return ELF_ERR_NO_MEM;
+            if (!(prot & VM_WRITE)) mm_protect(mm, page_align_down(tail), PAGE_SIZE, prot);
+        }
+    } else {
+        file_end = pstart;
+    }
+    if (mem_end > file_end &&
+        mm_map_anon(mm, file_end, mem_end - file_end, prot, true) < 0)
+        return ELF_ERR_NO_MEM;
+    return ELF_OK;
+}
+
+static bool needs_eager(const elf_source_t *src, const elf64_ehdr_t *eh, uintptr_t bias) {
+    if (!src->vn) return true;
+    uintptr_t prev_end = 0;
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        elf64_phdr_t ph;
+        if (src_read(src, &ph, eh->e_phoff + (uint64_t)eh->e_phentsize * i, sizeof ph) < 0) return true;
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        uintptr_t v = ph.p_vaddr + bias;
+        if ((ph.p_offset ^ v) & (PAGE_SIZE - 1)) return true;
+        uintptr_t s = page_align_down(v);
+        uintptr_t e = page_align_up(v + ph.p_memsz);
+        if (s < prev_end) return true;
+        prev_end = e;
+    }
+    return false;
+}
+
+static uintptr_t cover_orphan_sections(mm_t *mm, const elf64_ehdr_t *ehdr,
+                                       const elf_source_t *src, uintptr_t load_bias,
+                                       uintptr_t cur_load_end) {
+    if (!ehdr->e_shnum || !ehdr->e_shoff) return cur_load_end;
+    if (ehdr->e_shentsize < sizeof(elf64_shdr_t)) return cur_load_end;
+    uint64_t sht_end = (uint64_t)ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * ehdr->e_shnum;
+    if (sht_end > src->size) return cur_load_end;
 
     uintptr_t new_end = cur_load_end;
-
     for (uint16_t i = 0; i < ehdr->e_shnum; i++) {
-        elf64_shdr_t shbuf;
-        if (src_read(src, &shbuf, ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * i,
-                     sizeof(shbuf)) < 0) break;
-        const elf64_shdr_t* sh = &shbuf;
+        elf64_shdr_t sh;
+        if (src_read(src, &sh, ehdr->e_shoff + (uint64_t)ehdr->e_shentsize * i, sizeof sh) < 0) break;
+        if (!(sh.sh_flags & SHF_ALLOC) || sh.sh_size == 0 || sh.sh_addr == 0) continue;
 
-        if (!(sh->sh_flags & SHF_ALLOC))                  continue;
-        if (sh->sh_size == 0)                             continue;
-        if (sh->sh_addr == 0)                             continue;
-
-        uintptr_t s_start = (uintptr_t)sh->sh_addr + load_bias;
-        uintptr_t s_end   = s_start + sh->sh_size;
+        uintptr_t s_start = (uintptr_t)sh.sh_addr + load_bias;
+        uintptr_t s_end   = s_start + sh.sh_size;
         uintptr_t p_start = page_align_down(s_start);
         uintptr_t p_end   = page_align_up(s_end);
+        uint32_t  prot    = VM_READ;
+        if (sh.sh_flags & SHF_WRITE) prot |= VM_WRITE;
+        if (sh.sh_flags & SHF_EXECINSTR) prot |= VM_EXEC;
 
-        uint64_t  flags   = VMM_PRESENT | VMM_USER;
-        if (sh->sh_flags & SHF_WRITE)        flags |= VMM_WRITE;
-        if (!(sh->sh_flags & SHF_EXECINSTR)) flags |= VMM_NOEXEC;
-
-        uintptr_t added_lo = 0;
-        uintptr_t added_hi = 0;
-        bool      have_added_range = false;
-
-        size_t added_pages = 0;
         for (uintptr_t p = p_start; p < p_end; p += PAGE_SIZE) {
-            uint64_t pf = 0;
-            if (vmm_get_page_flags(map, p, &pf) && (pf & VMM_PRESENT))
-                continue;
-            if (!ensure_page_mapped(map, p, flags)) {
-                serial_printf("[ELF] orphan-section: alloc/map failed at 0x%llx\n",
-                              (unsigned long long)p);
-                return new_end;
-            }
-            added_pages++;
-            if (!have_added_range) {
-                added_lo = p;
-                added_hi = p + PAGE_SIZE;
-                have_added_range = true;
-            } else {
-                if (p              < added_lo) added_lo = p;
-                if (p + PAGE_SIZE  > added_hi) added_hi = p + PAGE_SIZE;
-            }
+            if (mm_find_vma(mm, p)) continue;
+            if (mm_map_anon(mm, p, PAGE_SIZE, prot | VM_WRITE, true) < 0) return new_end;
+            uintptr_t cs = p > s_start ? p : s_start;
+            uintptr_t ce = (p + PAGE_SIZE) < s_end ? (p + PAGE_SIZE) : s_end;
+            if (sh.sh_type != SHT_NOBITS && ce > cs && sh.sh_offset + sh.sh_size <= src->size)
+                copy_from_source(mm, src, cs, sh.sh_offset + (cs - s_start), ce - cs);
+            if (!(prot & VM_WRITE)) mm_protect(mm, p, PAGE_SIZE, prot);
         }
-
-        if (added_pages > 0) {
-            LOG_D("[ELF] ORPHAN section #%u type=%u: virt=0x%llx-0x%llx "
-                          "added=%zu pages flags=%s%s%s\n",
-                          (unsigned)i, (unsigned)sh->sh_type,
-                          (unsigned long long)s_start,
-                          (unsigned long long)s_end,
-                          added_pages,
-                          (sh->sh_flags & SHF_ALLOC)     ? "A" : "-",
-                          (sh->sh_flags & SHF_WRITE)     ? "W" : "-",
-                          (sh->sh_flags & SHF_EXECINSTR) ? "X" : "-");
-
-            if (sh->sh_type != SHT_NOBITS && sh->sh_size > 0 && have_added_range) {
-                if (sh->sh_offset + sh->sh_size <= file_size) {
-                    for (uintptr_t p = added_lo; p < added_hi; p += PAGE_SIZE) {
-                        uintptr_t pv_end   = p + PAGE_SIZE;
-                        uintptr_t cp_start = (p > s_start) ? p : s_start;
-                        uintptr_t cp_end   = (pv_end < s_end) ? pv_end : s_end;
-                        if (cp_start >= cp_end) continue;
-                        uintptr_t phys = 0;
-                        if (!vmm_virt_to_phys(map, cp_start, &phys)) continue;
-                        phys &= ~(uintptr_t)0xFFF;
-                        size_t dst_off = cp_start - p;
-                        size_t src_off = cp_start - s_start;
-                        src_read(src, (uint8_t*)pmm_phys_to_virt(phys) + dst_off,
-                                 sh->sh_offset + src_off, cp_end - cp_start);
-                    }
-                }
-            }
-        }
-
         if (p_end > new_end) new_end = p_end;
     }
     return new_end;
 }
 
-static uintptr_t alloc_user_stack(vmm_pagemap_t* map, size_t stack_size) {
-    size_t    page_count   = page_align_up(stack_size) / PAGE_SIZE;
-    uintptr_t stack_bottom = ELF_USER_STACK_TOP - page_count * PAGE_SIZE;
-    uint64_t  flags        = VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC;
-
-    for (size_t i = 0; i < page_count; i++) {
-        void* page = pmm_alloc_zero(1);
-        if (!page) {
-            serial_printf("[ELF] Stack alloc failed at page %zu\n", i);
-            for (size_t j = 0; j < i; j++)
-                vmm_unmap_page_noflush(map, stack_bottom + j * PAGE_SIZE);
-            return 0;
-        }
-        if (!vmm_map_page(map, stack_bottom + i * PAGE_SIZE,
-                               pmm_virt_to_phys(page), flags)) {
-            serial_printf("[ELF] Stack map failed at page %zu\n", i);
-            pmm_free(page, 1);
-            for (size_t j = 0; j < i; j++)
-                vmm_unmap_page_noflush(map, stack_bottom + j * PAGE_SIZE);
-            return 0;
-        }
-    }
-
-    LOG_D("[ELF] Stack: virt=0x%llx-0x%llx (%zu KiB)\n",
-                 stack_bottom, ELF_USER_STACK_TOP,
-                 (page_count * PAGE_SIZE) / 1024);
-
-    return (ELF_USER_STACK_TOP - 8) & ~(uintptr_t)0xF;
-}
-
-static int init_stack_write(vmm_pagemap_t* map, uintptr_t uvaddr,
-                            const void* src, size_t len) {
-    const uint8_t* s = (const uint8_t*)src;
-    while (len > 0) {
-        uintptr_t page = uvaddr & ~(uintptr_t)0xFFF;
-        uintptr_t off  = uvaddr & 0xFFF;
-        uintptr_t phys = 0;
-        if (!vmm_virt_to_phys(map, page, &phys)) return -1;
-        phys &= ~(uintptr_t)0xFFF;
-        size_t chunk = 0x1000 - off;
-        if (chunk > len) chunk = len;
-        memcpy((uint8_t*)pmm_phys_to_virt(phys) + off, s, chunk);
-        uvaddr += chunk;
-        s      += chunk;
-        len    -= chunk;
-    }
-    return 0;
-}
-
-uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top) {
+uintptr_t elf_build_init_stack(mm_t *mm, uintptr_t stack_top) {
     static const char argv0[] = "init";
     uintptr_t str_addr = (stack_top - sizeof(argv0)) & ~(uintptr_t)0xF;
-    if (init_stack_write(map, str_addr, argv0, sizeof(argv0)) != 0) return 0;
+    if (mm_copy_to(mm, str_addr, argv0, sizeof(argv0)) != 0) return 0;
 
     uint64_t frame[4];
     frame[0] = 1;
@@ -345,22 +268,19 @@ uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top) {
     frame[2] = 0;
     frame[3] = 0;
 
-    uintptr_t rsp = str_addr - sizeof(frame);
-    rsp = (rsp & ~(uintptr_t)0xF);
-    if (init_stack_write(map, rsp, frame, sizeof(frame)) != 0) return 0;
+    uintptr_t rsp = (str_addr - sizeof(frame)) & ~(uintptr_t)0xF;
+    if (mm_copy_to(mm, rsp, frame, sizeof(frame)) != 0) return 0;
     return rsp;
 }
 
-static elf_error_t load_interp(vmm_pagemap_t *map, const char *path,
-                               elf_load_result_t *result)
-{
+static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *result) {
     vfs_file_t *f = NULL;
     if (vfs_open(path, 0, 0, &f) < 0 || !f) return ELF_ERR_NULL;
 
     vfs_stat_t st;
     if (vfs_fstat(f, &st) < 0) { vfs_close(f); return ELF_ERR_NULL; }
 
-    elf_source_t isrc = { .buf = NULL, .file = f, .size = (size_t)st.st_size };
+    elf_source_t isrc = { .buf = NULL, .vn = f->vnode, .size = (size_t)st.st_size };
 
     elf64_ehdr_t ehdr;
     if (src_read(&isrc, &ehdr, 0, sizeof ehdr) < 0) { vfs_close(f); return ELF_ERR_TOO_SMALL; }
@@ -369,7 +289,7 @@ static elf_error_t load_interp(vmm_pagemap_t *map, const char *path,
     if (verr != ELF_OK) { vfs_close(f); return verr; }
 
     uintptr_t bias = (ehdr.e_type == ET_DYN) ? ELF_INTERP_BASE : 0;
-    uintptr_t max_vaddr = 0;
+    bool eager = needs_eager(&isrc, &ehdr, bias);
     bool any = false;
 
     for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
@@ -378,33 +298,27 @@ static elf_error_t load_interp(vmm_pagemap_t *map, const char *path,
                      sizeof ph) < 0) { vfs_close(f); return ELF_ERR_TOO_SMALL; }
         if (ph.p_type != PT_LOAD) continue;
         any = true;
-        LOG_D("[ELF] interp seg vaddr=0x%llx filesz=0x%llx memsz=0x%llx flags=0x%x\n",
-              (unsigned long long)(ph.p_vaddr + bias),
-              (unsigned long long)ph.p_filesz,
-              (unsigned long long)ph.p_memsz, ph.p_flags);
-        elf_error_t err = load_segment(map, &isrc, isrc.size, &ph, bias);
+        if (eager) continue;
+        elf_error_t err = load_segment(mm, &isrc, &ph, bias);
         if (err != ELF_OK) { vfs_close(f); return err; }
-        uintptr_t end = ph.p_vaddr + bias + ph.p_memsz;
-        if (end > max_vaddr) max_vaddr = end;
+    }
+    if (eager && any) {
+        elf_error_t err = load_all_eager(mm, &isrc, &ehdr, bias);
+        if (err != ELF_OK) { vfs_close(f); return err; }
     }
     vfs_close(f);
 
     if (!any) return ELF_ERR_NO_LOAD;
 
-    result->has_interp  = 1;
-    result->interp_base = bias;
+    result->has_interp   = 1;
+    result->interp_base  = bias;
     result->interp_entry = ehdr.e_entry + bias;
-    result->load_end = page_align_up(max_vaddr) > result->load_end
-                     ? result->load_end : result->load_end;
-
-    LOG_D("[ELF] interpreter loaded at 0x%llx, entry 0x%llx\n",
-          (unsigned long long)bias, (unsigned long long)result->interp_entry);
     return ELF_OK;
 }
 
 static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz) {
-    elf_load_result_t result = {0};
-    size_t size = src->size;
+    elf_load_result_t result;
+    memset(&result, 0, sizeof result);
 
     elf64_ehdr_t ehdr_buf;
     if (src_read(src, &ehdr_buf, 0, sizeof(ehdr_buf)) < 0) {
@@ -413,86 +327,85 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
     }
     const elf64_ehdr_t* ehdr = &ehdr_buf;
 
-    result.error = elf_validate(ehdr, size);
+    result.error = elf_validate(ehdr, src->size);
     if (result.error != ELF_OK) {
         serial_printf("[ELF] Validation failed: %s\n", elf_strerror(result.error));
         return result;
     }
 
     uintptr_t load_bias = (ehdr->e_type == ET_DYN) ? ELF_PIE_BASE : 0;
-    if (load_bias) LOG_D("[ELF] PIE binary, bias=0x%llx\n", load_bias);
 
-    vmm_pagemap_t* map = vmm_create_pagemap();
-    if (!map) {
-        serial_printf("[ELF] vmm_create_pagemap() failed\n");
+    mm_t *mm = mm_create();
+    if (!mm) {
         result.error = ELF_ERR_NO_MEM;
         return result;
     }
-    result.pagemap = map;
+    result.mm = mm;
+    result.pagemap = mm->pagemap;
 
-    LOG_D("[ELF] Kernel PML4[256..511] inherited via vmm_create_pagemap\n");
-
+    bool eager = needs_eager(src, ehdr, load_bias);
     bool has_load = false;
     uintptr_t max_vaddr = 0;
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        elf64_phdr_t phbuf;
-        if (src_read(src, &phbuf,
-                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
-                     sizeof(phbuf)) < 0) {
+        elf64_phdr_t ph;
+        if (src_read(src, &ph, ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
+                     sizeof(ph)) < 0) {
             result.error = ELF_ERR_TOO_SMALL;
             return result;
         }
-        const elf64_phdr_t* ph = &phbuf;
-        if (ph->p_type != PT_LOAD) continue;
+        if (ph.p_type != PT_LOAD) continue;
         has_load = true;
 
-        LOG_D("[ELF] PT_LOAD[%u]: off=0x%llx vaddr=0x%llx "
-                     "filesz=0x%llx memsz=0x%llx flags=0x%x\n",
-                     i, ph->p_offset, ph->p_vaddr,
-                     ph->p_filesz, ph->p_memsz, ph->p_flags);
-
-        elf_error_t err = load_segment(map, src, size, ph, load_bias);
-        if (err != ELF_OK) {
-            result.error = err;
-            return result;
+        if (!eager) {
+            elf_error_t err = load_segment(mm, src, &ph, load_bias);
+            if (err != ELF_OK) {
+                result.error = err;
+                return result;
+            }
         }
 
         if (result.nsegments < ELF_MAX_SEGMENTS) {
             elf_segment_t* s = &result.segments[result.nsegments++];
-            s->vaddr  = ph->p_vaddr + load_bias;
-            s->offset = ph->p_offset;
-            s->filesz = ph->p_filesz;
-            s->memsz  = ph->p_memsz;
-            s->flags  = ph->p_flags;
+            s->vaddr  = ph.p_vaddr + load_bias;
+            s->offset = ph.p_offset;
+            s->filesz = ph.p_filesz;
+            s->memsz  = ph.p_memsz;
+            s->flags  = ph.p_flags;
         }
 
-        uintptr_t seg_end = ph->p_vaddr + load_bias + ph->p_memsz;
+        uintptr_t seg_end = ph.p_vaddr + load_bias + ph.p_memsz;
         if (seg_end > max_vaddr) max_vaddr = seg_end;
     }
 
     if (!has_load) { result.error = ELF_ERR_NO_LOAD; return result; }
+    if (eager) {
+        elf_error_t err = load_all_eager(mm, src, ehdr, load_bias);
+        if (err != ELF_OK) { result.error = err; return result; }
+    }
 
     result.phnum     = ehdr->e_phnum;
     result.phentsize = ehdr->e_phentsize;
     result.phdr_vaddr = 0;
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        elf64_phdr_t phbuf;
-        if (src_read(src, &phbuf,
-                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
-                     sizeof(phbuf)) < 0) break;
-        if (phbuf.p_type == PT_PHDR && !result.phdr_vaddr)
-            result.phdr_vaddr = phbuf.p_vaddr + load_bias;
-        if (phbuf.p_type == PT_TLS) {
-            result.tls_vaddr  = phbuf.p_vaddr + load_bias;
-            result.tls_filesz = phbuf.p_filesz;
-            result.tls_memsz  = phbuf.p_memsz;
-            result.tls_align  = phbuf.p_align ? phbuf.p_align : 1;
-            LOG_D("[ELF] PT_TLS vaddr=0x%llx filesz=%llu memsz=%llu align=%llu\n",
-                  (unsigned long long)result.tls_vaddr,
-                  (unsigned long long)result.tls_filesz,
-                  (unsigned long long)result.tls_memsz,
-                  (unsigned long long)result.tls_align);
+        elf64_phdr_t ph;
+        if (src_read(src, &ph, ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
+                     sizeof(ph)) < 0) break;
+        if (ph.p_type == PT_PHDR && !result.phdr_vaddr)
+            result.phdr_vaddr = ph.p_vaddr + load_bias;
+        if (ph.p_type == PT_TLS) {
+            result.tls_vaddr  = ph.p_vaddr + load_bias;
+            result.tls_filesz = ph.p_filesz;
+            result.tls_memsz  = ph.p_memsz;
+            result.tls_align  = ph.p_align ? ph.p_align : 1;
+        }
+        if (ph.p_type == PT_INTERP && !result.interp_path[0]) {
+            size_t n = ph.p_filesz;
+            if (n && n < sizeof result.interp_path &&
+                src_read(src, result.interp_path, ph.p_offset, n) == 0)
+                result.interp_path[n] = 0;
+            else
+                result.interp_path[0] = 0;
         }
     }
     if (!result.phdr_vaddr) {
@@ -507,75 +420,58 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
     }
 
     uintptr_t load_end = page_align_up(max_vaddr);
-
-    load_end = cover_orphan_sections(map, ehdr, src, size, load_bias, load_end);
+    load_end = cover_orphan_sections(mm, ehdr, src, load_bias, load_end);
 
     result.entry     = ehdr->e_entry + load_bias;
     result.load_base = load_bias;
     result.load_end  = load_end;
 
-    LOG_D("[ELF] Entry point: 0x%llx  load_end (brk_start): 0x%llx\n",
-                  result.entry, result.load_end);
-
-    char interp_path[128];
-    interp_path[0] = 0;
-    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        elf64_phdr_t phbuf;
-        if (src_read(src, &phbuf,
-                     ehdr->e_phoff + (uint64_t)ehdr->e_phentsize * i,
-                     sizeof(phbuf)) < 0) break;
-        if (phbuf.p_type != PT_INTERP) continue;
-        size_t n = phbuf.p_filesz;
-        if (n == 0 || n >= sizeof interp_path) break;
-        if (src_read(src, interp_path, phbuf.p_offset, n) < 0) break;
-        interp_path[n] = 0;
-        break;
-    }
-
-    if (interp_path[0]) {
-        LOG_D("[ELF] interpreter: %s\n", interp_path);
-        elf_error_t ierr = load_interp(map, interp_path, &result);
+    if (result.interp_path[0]) {
+        elf_error_t ierr = load_interp(mm, result.interp_path, &result);
         if (ierr != ELF_OK) {
             serial_printf("[ELF] cannot load interpreter %s: %s\n",
-                          interp_path, elf_strerror(ierr));
+                          result.interp_path, elf_strerror(ierr));
             result.error = ierr;
             return result;
         }
-        if (result.interp_base + 0x1000000ULL > load_end)
-            load_end = result.load_end;
     }
 
+    if (mm_setup_stack(mm) < 0) { result.error = ELF_ERR_NO_MEM; return result; }
     if (stack_sz == 0) stack_sz = ELF_DEFAULT_STACK;
     result.stack_size = stack_sz;
-    result.stack_top  = alloc_user_stack(map, stack_sz);
-    if (result.stack_top == 0) { result.error = ELF_ERR_NO_MEM; return result; }
-
-    LOG_D("[ELF] Load complete. entry=0x%llx stack_top=0x%llx\n",
-                 result.entry, result.stack_top);
+    result.stack_top  = (MM_STACK_TOP - 8) & ~(uintptr_t)0xF;
     return result;
 }
 
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz) {
-    elf_load_result_t result = {0};
+    elf_load_result_t result;
+    memset(&result, 0, sizeof result);
     if (!data) { result.error = ELF_ERR_NULL; return result; }
-    elf_source_t src = { .buf = (const uint8_t*)data, .file = NULL, .size = size };
+    elf_source_t src = { .buf = (const uint8_t*)data, .vn = NULL, .size = size };
     return elf_load_core(&src, stack_sz);
 }
 
-elf_load_result_t elf_load_file(void* file, size_t size, size_t stack_sz) {
-    elf_load_result_t result = {0};
-    if (!file) { result.error = ELF_ERR_NULL; return result; }
-    elf_source_t src = { .buf = NULL, .file = (vfs_file_t*)file, .size = size };
-    return elf_load_core(&src, stack_sz);
+elf_load_result_t elf_load_vnode(vnode_t* vn, size_t size, size_t stack_sz) {
+    elf_load_result_t result;
+    memset(&result, 0, sizeof result);
+    if (!vn) { result.error = ELF_ERR_NULL; return result; }
+    elf_source_t src = { .buf = NULL, .vn = vn, .size = size };
+    result = elf_load_core(&src, stack_sz);
+    result.vnode = vn;
+    result.file_size = size;
+    return result;
 }
 
 void elf_unload(elf_load_result_t* result) {
     if (!result) return;
-    if (result->pagemap) {
+    if (result->mm) {
+        mm_put(result->mm);
+        result->mm = NULL;
+        result->pagemap = NULL;
+    } else if (result->pagemap) {
         vmm_free_pagemap(result->pagemap);
         result->pagemap = NULL;
     }
-    LOG_D("[ELF] Process unloaded.\n");
 }
 
 const char* elf_strerror(elf_error_t err) {

@@ -92,6 +92,7 @@ extern "C" {
 #define SYS_KSTAT            34
 #define SYS_PREAD           122
 #define SYS_PWRITE          123
+#define SYS_LINK            124
 
 #define SYS_DBG_PRINT       512
 #define SYS_TASK_KILL       515
@@ -189,6 +190,20 @@ extern "C" {
 #define SYS_GETPEERNAME     624
 #define SYS_FUTIMES         625
 #define SYS_LCHOWN          626
+#define SYS_MADVISE         627
+#define SYS_MSYNC           628
+#define SYS_OPENAT          629
+#define SYS_MKDIRAT         630
+#define SYS_UNLINKAT        631
+#define SYS_RENAMEAT        632
+#define SYS_LINKAT          633
+#define SYS_SYMLINKAT       634
+#define SYS_READLINKAT      635
+#define SYS_FSTATAT         636
+#define SYS_FCHMODAT        637
+#define SYS_FCHOWNAT        638
+#define SYS_UTIMENSAT       639
+#define SYS_FCHDIR          640
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

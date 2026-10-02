@@ -20,6 +20,7 @@
 #define O_TRUNC     0x200
 #define O_APPEND    0x400
 #define O_DIRECTORY 0x10000
+#define O_NOFOLLOW  0x20000
 #define O_NONBLOCK  0x800
 #define O_CLOEXEC   0x80000
 
@@ -106,6 +107,8 @@ typedef struct vnode_ops {
     void    (*open_file)(vnode_t *node, struct vfs_file *file);
     int64_t (*read_file)(struct vfs_file *file, void *buf, size_t len);
     int     (*poll_file)(struct vfs_file *file, int events);
+    int     (*cache_id)(vnode_t *node, uintptr_t *fs_out, uint64_t *id_out);
+    int     (*link)    (vnode_t *dir, const char *name, vnode_t *target);
 } vnode_ops_t;
 
 struct vnode {
@@ -123,6 +126,8 @@ struct vnode {
     volatile int        refcount;
     vfs_mount_t        *mounted;
     uint64_t            rdev;
+    volatile int        deny_write;
+    volatile int        writers;
 };
 
 struct vfs_mount {
@@ -141,6 +146,7 @@ typedef struct vfs_file {
     uint64_t         offset;
     int              flags;
     volatile int     refcount;
+    char            *path;
 } vfs_file_t;
 
 typedef struct {
@@ -207,6 +213,8 @@ uint32_t vfs_current_uid(void);
 int     vfs_fsync    (vfs_file_t *file);
 int     vfs_symlink  (const char *target, const char *linkpath);
 int64_t vfs_readlink (const char *path, char *buf, size_t bufsiz);
+int     vfs_rename   (const char *oldpath, const char *newpath);
+int     vfs_link     (const char *oldpath, const char *newpath);
 int64_t vfs_ioctl  (vfs_file_t *file, uint64_t req, void *arg);
 int     vfs_io_nonblock(void);
 int     vfs_readdir(vfs_file_t *file, vfs_dirent_t *out);

@@ -8,6 +8,7 @@
 #include "../../../include/memory/pmm.h"
 #include "../../../include/panic/panic.h"
 #include "../../../include/puzzle/puzzle.h"
+#include "../../../include/memory/mm.h"
 #include <stdio.h>
 
 extern const int_desc_t __start_isr_handlers[];
@@ -189,27 +190,6 @@ static __attribute__((noreturn)) void kernel_fault_recover_or_panic(struct int_f
     kernel_panic_regs(name, regs);
 }
 
-#define USER_STACK_TOP 0x00007FFFFFFFE000ULL
-#define USER_STACK_MAX (8ULL << 20)
-
-static bool user_stack_grow(task_t *me, uint64_t addr, uint64_t err)
-{
-    if (!me || !me->pagemap || !me->is_userspace) return false;
-    if (err & 1) return false;
-    if (addr >= USER_STACK_TOP || addr < USER_STACK_TOP - USER_STACK_MAX) return false;
-
-    uintptr_t page = addr & ~0xFFFULL;
-    void *ph = pmm_alloc_zero(1);
-    if (!ph) return false;
-    if (!vmm_map_page(me->pagemap, page, pmm_virt_to_phys(ph),
-                      VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC)) {
-        pmm_free(ph, 1);
-        return false;
-    }
-    vmm_flush_local(page);
-    return true;
-}
-
 void handle_intercpu_interrupt(struct int_frame_t *regs)
 {
     if (regs->interrupt == EXCEPTION_PAGE_FAULT) {
@@ -218,13 +198,24 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         percpu_t *pc = get_percpu();
         task_t   *cur = pc ? (task_t *)pc->current_task : NULL;
         if (!cur) { uint32_t cpu = smp_cpu_index(); cur = current_task[cpu]; }
-        if ((regs->cs & 3) == 3 && user_stack_grow(cur, cr2v, regs->error))
-            return;
-        if (cur && cur->puzzle && puzzle_cow_fault(cur, cr2v, regs->error))
-            return;
-        if (cur && cur->puzzle && (regs->cs & 3) == 3 &&
-            puzzle_regenerate_fault(cur, cr2v, regs->error))
-            return;
+        if (cur && cur->mm && cr2v < MM_USER_TOP) {
+            bool fatal = false;
+            if (cur->puzzle) {
+                puzzle_cow_fault(cur, cr2v, regs->error);
+                if (!puzzle_regenerate_fault(cur, cr2v, regs->error)) fatal = true;
+            }
+            if (!fatal) {
+                int how = 0;
+                if (regs->error & 0x2)  how |= MM_FAULT_WRITE;
+                if (regs->error & 0x10) how |= MM_FAULT_EXEC;
+                if (regs->cs & 3)       how |= MM_FAULT_USER;
+                bool irq_on = (regs->rflags & 0x200) != 0;
+                if (irq_on) asm volatile("sti" ::: "memory");
+                int r = mm_fault(cur->mm, cr2v, how);
+                asm volatile("cli" ::: "memory");
+                if (r == 0) return;
+            }
+        }
     }
 
     if (regs->interrupt == 2) {

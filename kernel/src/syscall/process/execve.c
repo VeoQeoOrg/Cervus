@@ -3,126 +3,166 @@
 #include "../../../include/fs/vfs.h"
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/pmm.h"
+#include "../../../include/memory/mm.h"
 #include "../../../include/smp/percpu.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/puzzle/puzzle.h"
+#include "../../../include/drivers/random.h"
 #include <string.h>
 #include <stdlib.h>
 
-#define EXECVE_MAX_PATH   512
-#define EXECVE_MAX_ARGS   128
-#define EXECVE_MAX_ENV    128
-#define EXECVE_MAX_ARGLEN 4096
-#define AT_NULL   0
-#define AT_PHDR   3
-#define AT_PHENT  4
-#define AT_PHNUM  5
-#define AT_PAGESZ 6
-#define AT_BASE   7
-#define AT_ENTRY  9
+#define EXECVE_MAX_PATH    512
+#define EXECVE_ARG_MAX     (2u << 20)
+#define EXECVE_STRLEN_MAX  (128u << 10)
+#define EXECVE_SHEBANG_MAX 256
 
-static uintptr_t execve_build_stack(vmm_pagemap_t *map, uintptr_t stack_top,
-                                    const char *argv[], int argc,
-                                    const char *envp[], int envc,
-                                    const elf_load_result_t *elf)
-{
-    size_t str_total = 0;
-    for (int i = 0; i < argc; i++) str_total += strlen(argv[i]) + 1;
-    for (int i = 0; i < envc; i++) str_total += strlen(envp[i]) + 1;
+#define AT_NULL     0
+#define AT_PHDR     3
+#define AT_PHENT    4
+#define AT_PHNUM    5
+#define AT_PAGESZ   6
+#define AT_BASE     7
+#define AT_FLAGS    8
+#define AT_ENTRY    9
+#define AT_UID      11
+#define AT_EUID     12
+#define AT_GID      13
+#define AT_EGID     14
+#define AT_PLATFORM 15
+#define AT_HWCAP    16
+#define AT_CLKTCK   17
+#define AT_SECURE   23
+#define AT_RANDOM   25
+#define AT_HWCAP2   26
+#define AT_EXECFN   31
 
-    size_t n_auxv      = 7;
-    size_t ptr_count   = 1 + (size_t)argc + 1 + (size_t)envc + 1 + (n_auxv * 2);
-    size_t frame_bytes = ptr_count * 8;
+typedef struct {
+    char    *buf;
+    size_t   used;
+    size_t   cap;
+    size_t  *offs;
+    int      count;
+    int      ocap;
+} strvec_t;
 
-    uintptr_t aligned_top  = stack_top & ~(uintptr_t)0xF;
-    uintptr_t strings_base = (aligned_top - str_total) & ~(uintptr_t)0xF;
+static void sv_free(strvec_t *v) {
+    free(v->buf);
+    free(v->offs);
+    memset(v, 0, sizeof *v);
+}
 
-    uintptr_t candidate = strings_base - frame_bytes;
-    uintptr_t new_rsp   = ((candidate - 8) & ~(uintptr_t)0xF) + 8;
-
-    if (new_rsp + frame_bytes > strings_base) {
-        new_rsp -= 16;
+static int sv_push(strvec_t *v, const char *s, size_t len, size_t *total) {
+    if (len + 1 > EXECVE_STRLEN_MAX) return -E2BIG;
+    if (*total + len + 1 + sizeof(char *) > EXECVE_ARG_MAX) return -E2BIG;
+    if (v->used + len + 1 > v->cap) {
+        size_t nc = v->cap ? v->cap : 4096;
+        while (nc < v->used + len + 1) nc *= 2;
+        char *nb = realloc(v->buf, nc);
+        if (!nb) return -ENOMEM;
+        v->buf = nb;
+        v->cap = nc;
     }
-
-    uintptr_t page_base   = new_rsp & ~(uintptr_t)0xFFF;
-    uintptr_t page_end    = (stack_top + 0xFFFULL) & ~(uintptr_t)0xFFF;
-    size_t    total_pages = (page_end - page_base) >> 12;
-    size_t    kbuf_size   = total_pages * 0x1000;
-
-    if (new_rsp + frame_bytes > strings_base ||
-        strings_base + str_total > stack_top) {
-        return 0;
+    if (v->count + 1 > v->ocap) {
+        int no = v->ocap ? v->ocap * 2 : 64;
+        size_t *n = realloc(v->offs, (size_t)no * sizeof(size_t));
+        if (!n) return -ENOMEM;
+        v->offs = n;
+        v->ocap = no;
     }
+    memcpy(v->buf + v->used, s, len);
+    v->buf[v->used + len] = 0;
+    v->offs[v->count++] = v->used;
+    v->used += len + 1;
+    *total += len + 1 + sizeof(char *);
+    return 0;
+}
 
-    uint8_t *kbuf = (uint8_t *)malloc(kbuf_size);
-    if (!kbuf) return 0;
-    memset(kbuf, 0, kbuf_size);
-
-    uint64_t argv_user[EXECVE_MAX_ARGS + 1];
-    uint64_t envp_user[EXECVE_MAX_ENV + 1];
-    size_t   str_off = 0;
-    for (int i = 0; i < argc; i++) {
-        size_t slen = strlen(argv[i]) + 1;
-        memcpy(kbuf + (strings_base + str_off - page_base), argv[i], slen);
-        argv_user[i] = strings_base + str_off;
-        str_off += slen;
+static int copy_user_strings(strvec_t *v, uint64_t uvec, size_t *total) {
+    if (!uvec) return 0;
+    char *tmp = malloc(EXECVE_STRLEN_MAX);
+    if (!tmp) return -ENOMEM;
+    for (int i = 0; ; i++) {
+        uint64_t p = 0;
+        if (syscall_copy_from_user(&p, (const void *)(uvec + (uint64_t)i * 8), 8) < 0) { free(tmp); return -EFAULT; }
+        if (!p) break;
+        int n = syscall_strncpy_from_user(tmp, (const char *)p, EXECVE_STRLEN_MAX);
+        if (n < 0) { free(tmp); return -EFAULT; }
+        if ((size_t)n >= EXECVE_STRLEN_MAX - 1) { free(tmp); return -E2BIG; }
+        int r = sv_push(v, tmp, (size_t)n, total);
+        if (r < 0) { free(tmp); return r; }
     }
-    for (int i = 0; i < envc; i++) {
-        size_t slen = strlen(envp[i]) + 1;
-        memcpy(kbuf + (strings_base + str_off - page_base), envp[i], slen);
-        envp_user[i] = strings_base + str_off;
-        str_off += slen;
-    }
+    free(tmp);
+    return 0;
+}
 
-    uint64_t frame[512];
+static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv,
+                             const strvec_t *envp, const elf_load_result_t *elf,
+                             const char *execfn, task_t *t) {
+    static const char platform[] = "x86_64";
+    uintptr_t sp = stack_top & ~(uintptr_t)0xF;
+
+    size_t efl = strlen(execfn) + 1;
+    sp -= efl;
+    uintptr_t u_execfn = sp;
+    if (mm_copy_to(mm, u_execfn, execfn, efl) < 0) return 0;
+
+    sp -= sizeof platform;
+    uintptr_t u_platform = sp;
+    if (mm_copy_to(mm, u_platform, platform, sizeof platform) < 0) return 0;
+
+    sp &= ~(uintptr_t)0xF;
+    sp -= 16;
+    uintptr_t u_random = sp;
+    uint8_t rnd[16];
+    random_bytes(rnd, sizeof rnd);
+    if (mm_copy_to(mm, u_random, rnd, sizeof rnd) < 0) return 0;
+
+    sp -= envp->used;
+    uintptr_t u_env = sp;
+    if (envp->used && mm_copy_to(mm, u_env, envp->buf, envp->used) < 0) return 0;
+    sp -= argv->used;
+    uintptr_t u_arg = sp;
+    if (argv->used && mm_copy_to(mm, u_arg, argv->buf, argv->used) < 0) return 0;
+
+    uint64_t auxv[] = {
+        AT_PHDR,     elf->phdr_vaddr ? elf->phdr_vaddr : elf->load_base + 0x40,
+        AT_PHENT,    elf->phentsize ? elf->phentsize : 56,
+        AT_PHNUM,    elf->phnum,
+        AT_PAGESZ,   4096,
+        AT_BASE,     elf->has_interp ? elf->interp_base : 0,
+        AT_FLAGS,    0,
+        AT_ENTRY,    elf->entry,
+        AT_UID,      t->uid,
+        AT_EUID,     t->uid,
+        AT_GID,      t->gid,
+        AT_EGID,     t->gid,
+        AT_SECURE,   0,
+        AT_CLKTCK,   100,
+        AT_HWCAP,    0x178bfbff,
+        AT_HWCAP2,   0,
+        AT_RANDOM,   u_random,
+        AT_PLATFORM, u_platform,
+        AT_EXECFN,   u_execfn,
+        AT_NULL,     0,
+    };
+    size_t nauxv = sizeof auxv / sizeof auxv[0];
+    size_t nptr = 1 + (size_t)argv->count + 1 + (size_t)envp->count + 1 + nauxv;
+
+    sp -= nptr * 8;
+    sp &= ~(uintptr_t)0xF;
+
+    uint64_t *frame = malloc(nptr * 8);
+    if (!frame) return 0;
     size_t fi = 0;
-    frame[fi++] = (uint64_t)argc;
-    for (int i = 0; i < argc; i++) frame[fi++] = argv_user[i];
+    frame[fi++] = (uint64_t)argv->count;
+    for (int i = 0; i < argv->count; i++) frame[fi++] = u_arg + argv->offs[i];
     frame[fi++] = 0;
-    for (int i = 0; i < envc; i++) frame[fi++] = envp_user[i];
+    for (int i = 0; i < envp->count; i++) frame[fi++] = u_env + envp->offs[i];
     frame[fi++] = 0;
-    frame[fi++] = AT_PHDR;   frame[fi++] = elf->phdr_vaddr ? elf->phdr_vaddr
-                                                        : elf->load_base + 0x40;
-    frame[fi++] = AT_PHENT;  frame[fi++] = elf->phentsize ? elf->phentsize : 56;
-    frame[fi++] = AT_PHNUM;  frame[fi++] = elf->phnum;
-    frame[fi++] = AT_BASE;   frame[fi++] = elf->has_interp ? elf->interp_base : 0;
-    frame[fi++] = AT_ENTRY;  frame[fi++] = elf->entry;
-    frame[fi++] = AT_PAGESZ; frame[fi++] = 4096;
-    frame[fi++] = AT_NULL;   frame[fi++] = 0;
-
-    LOG_D("[execve] auxv phdr=0x%llx phnum=%u phent=%u entry=0x%llx base=0x%llx interp=%d\n",
-          (unsigned long long)(elf->phdr_vaddr ? elf->phdr_vaddr : elf->load_base + 0x40),
-          (unsigned)elf->phnum, (unsigned)elf->phentsize,
-          (unsigned long long)elf->entry,
-          (unsigned long long)elf->interp_base, elf->has_interp);
-
-    memcpy(kbuf + (new_rsp - page_base), frame, fi * 8);
-
-    for (size_t pi = 0; pi < total_pages; pi++) {
-        uintptr_t virt = page_base + pi * 0x1000;
-        uintptr_t phys = 0;
-        uint64_t  pf   = 0;
-
-        if (!vmm_get_page_flags(map, virt, &pf) || !(pf & VMM_PRESENT)) {
-            void *pg = pmm_alloc_zero(1);
-            if (!pg) { free(kbuf); return 0; }
-            phys = pmm_virt_to_phys(pg);
-            if (!vmm_map_page(map, virt, phys,
-                              VMM_PRESENT | VMM_WRITE | VMM_USER | VMM_NOEXEC)) {
-                pmm_free(pg, 1);
-                free(kbuf);
-                return 0;
-            }
-        } else {
-            if (!vmm_virt_to_phys(map, virt, &phys))
-                { free(kbuf); return 0; }
-            phys &= ~(uintptr_t)0xFFF;
-        }
-        memcpy(pmm_phys_to_virt(phys), kbuf + pi * 0x1000, 0x1000);
-    }
-
-    free(kbuf);
-    return new_rsp;
+    for (size_t i = 0; i < nauxv; i++) frame[fi++] = auxv[i];
+    int r = mm_copy_to(mm, sp, frame, nptr * 8);
+    free(frame);
+    return r < 0 ? 0 : sp;
 }
 
 static int exec_allowed(const vfs_stat_t *st, uint32_t uid, uint32_t gid)
@@ -137,6 +177,24 @@ static int exec_allowed(const vfs_stat_t *st, uint32_t uid, uint32_t gid)
     return (allowed & 1) != 0;
 }
 
+static int parse_shebang(const uint8_t *hdr, size_t n, char *interp, char *arg) {
+    size_t e = 2, li = 0;
+    char line[EXECVE_SHEBANG_MAX];
+    while (e < n && hdr[e] != '\n' && li < sizeof(line) - 1) line[li++] = (char)hdr[e++];
+    line[li] = '\0';
+    char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    int i = 0;
+    while (*p && *p != ' ' && *p != '\t' && *p != '\r' && i < EXECVE_MAX_PATH - 1) interp[i++] = *p++;
+    interp[i] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    i = 0;
+    while (*p && *p != '\r' && i < EXECVE_MAX_PATH - 1) arg[i++] = *p++;
+    while (i > 0 && (arg[i - 1] == ' ' || arg[i - 1] == '\t')) i--;
+    arg[i] = '\0';
+    return interp[0] ? 0 : -ENOEXEC;
+}
+
 int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
 {
     task_t *t = syscall_cur_task();
@@ -147,146 +205,114 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     if (rp < 0) return rp;
     if (!kpath[0]) return -ENOENT;
 
-    {
+    strvec_t argv, envp;
+    memset(&argv, 0, sizeof argv);
+    memset(&envp, 0, sizeof envp);
+    size_t total = 0;
+    int r = copy_user_strings(&argv, argv_ptr, &total);
+    if (r == 0) r = copy_user_strings(&envp, envp_ptr, &total);
+    if (r == 0 && argv.count == 0) r = sv_push(&argv, kpath, strlen(kpath), &total);
+    if (r < 0) { sv_free(&argv); sv_free(&envp); return r; }
+
+    char execfn[EXECVE_MAX_PATH];
+    strncpy(execfn, kpath, sizeof execfn - 1);
+    execfn[sizeof execfn - 1] = 0;
+
+    vfs_file_t *vfile = NULL;
+    size_t fsize = 0;
+    for (int depth = 0; ; depth++) {
         vfs_stat_t xst;
-        if (vfs_stat(kpath, &xst) == 0 && !exec_allowed(&xst, t->uid, t->gid))
+        if (vfs_stat(kpath, &xst) == 0 && !exec_allowed(&xst, t->uid, t->gid)) {
+            sv_free(&argv); sv_free(&envp);
             return -EACCES;
-    }
-
-    const char *kargv_ptrs[EXECVE_MAX_ARGS + 1];
-    char (*kargv_store)[EXECVE_MAX_ARGLEN] = malloc(EXECVE_MAX_ARGS * EXECVE_MAX_ARGLEN);
-    if (!kargv_store) return -ENOMEM;
-    int argc = 0;
-
-    if (argv_ptr) {
-        for (;;) {
-            if (argc >= EXECVE_MAX_ARGS) { free(kargv_store); return -E2BIG; }
-            uint64_t uslot = argv_ptr + (uint64_t)argc * 8;
-            uint64_t aptr  = 0;
-            if (syscall_copy_from_user(&aptr, (const void *)uslot, 8) < 0)
-                { free(kargv_store); return -EFAULT; }
-            if (!aptr) break;
-            if (syscall_strncpy_from_user(kargv_store[argc], (const char *)aptr, EXECVE_MAX_ARGLEN) < 0)
-                { free(kargv_store); return -EFAULT; }
-            kargv_ptrs[argc] = kargv_store[argc]; argc++;
         }
-    }
-    kargv_ptrs[argc] = NULL;
-    if (argc == 0) {
-        strncpy(kargv_store[0], kpath, EXECVE_MAX_ARGLEN - 1);
-        kargv_store[0][EXECVE_MAX_ARGLEN - 1] = '\0';
-        kargv_ptrs[0] = kargv_store[0]; kargv_ptrs[1] = NULL; argc = 1;
-    }
-
-    const char *kenvp_ptrs[EXECVE_MAX_ENV + 1];
-    char (*kenvp_store)[EXECVE_MAX_ARGLEN] = malloc(EXECVE_MAX_ENV * EXECVE_MAX_ARGLEN);
-    if (!kenvp_store) { free(kargv_store); return -ENOMEM; }
-    int envc = 0;
-    if (envp_ptr) {
-        for (;;) {
-            if (envc >= EXECVE_MAX_ENV) { free(kargv_store); free(kenvp_store); return -E2BIG; }
-            uint64_t uslot = envp_ptr + (uint64_t)envc * 8;
-            uint64_t eptr  = 0;
-            if (syscall_copy_from_user(&eptr, (const void *)uslot, 8) < 0)
-                { free(kargv_store); free(kenvp_store); return -EFAULT; }
-            if (!eptr) break;
-            if (syscall_strncpy_from_user(kenvp_store[envc], (const char *)eptr, EXECVE_MAX_ARGLEN) < 0)
-                { free(kargv_store); free(kenvp_store); return -EFAULT; }
-            kenvp_ptrs[envc] = kenvp_store[envc]; envc++;
-        }
-    }
-    kenvp_ptrs[envc] = NULL;
-
-    char script_path[EXECVE_MAX_PATH];
-    strncpy(script_path, kpath, sizeof(script_path) - 1);
-    script_path[sizeof(script_path) - 1] = '\0';
-    char interp_buf[EXECVE_MAX_PATH], sharg_buf[EXECVE_MAX_PATH];
-    uint8_t *elf_buf = NULL;
-    size_t   fsize   = 0;
-    int      shebang_depth = 0;
-
-    for (;;) {
-        vfs_file_t *vfile = NULL;
         int vret = vfs_open(kpath, O_RDONLY, 0, &vfile);
-        if (vret < 0) { free(kargv_store); free(kenvp_store); return (int64_t)vret; }
+        if (vret < 0) { sv_free(&argv); sv_free(&envp); return vret; }
         vfs_stat_t st;
         if (vfs_fstat(vfile, &st) < 0 || st.st_size == 0) {
-            vfs_close(vfile); free(kargv_store); free(kenvp_store); return -EIO;
+            vfs_close(vfile); sv_free(&argv); sv_free(&envp); return -ENOEXEC;
         }
         fsize = (size_t)st.st_size;
-        elf_buf = (uint8_t *)malloc(fsize);
-        if (!elf_buf) { vfs_close(vfile); free(kargv_store); free(kenvp_store); return -ENOMEM; }
-        int64_t rd = vfs_read(vfile, elf_buf, fsize);
-        vfs_close(vfile);
-        if (rd != (int64_t)fsize) { free(elf_buf); free(kargv_store); free(kenvp_store); return -EIO; }
+        uint8_t hdr[EXECVE_SHEBANG_MAX];
+        size_t want = fsize < sizeof hdr ? fsize : sizeof hdr;
+        int64_t rd = vfs_read(vfile, hdr, want);
+        if (rd < 4) { vfs_close(vfile); sv_free(&argv); sv_free(&envp); return -ENOEXEC; }
 
-        if (fsize >= 2 && elf_buf[0] == '#' && elf_buf[1] == '!') {
-            if (++shebang_depth > 4) { free(elf_buf); free(kargv_store); free(kenvp_store); return -ELOOP; }
-            char line[EXECVE_MAX_PATH];
-            size_t e = 2, li = 0;
-            while (e < fsize && elf_buf[e] != '\n' && li < sizeof(line) - 1) line[li++] = (char)elf_buf[e++];
-            line[li] = '\0';
-            free(elf_buf); elf_buf = NULL;
-
-            char *p = line;
-            while (*p == ' ' || *p == '\t') p++;
-            int i = 0;
-            while (*p && *p != ' ' && *p != '\t' && *p != '\r' && i < EXECVE_MAX_PATH - 1) interp_buf[i++] = *p++;
-            interp_buf[i] = '\0';
-            while (*p == ' ' || *p == '\t') p++;
-            i = 0;
-            while (*p && *p != '\r' && i < EXECVE_MAX_PATH - 1) sharg_buf[i++] = *p++;
-            while (i > 0 && (sharg_buf[i - 1] == ' ' || sharg_buf[i - 1] == '\t')) i--;
-            sharg_buf[i] = '\0';
-            if (!interp_buf[0]) { free(kargv_store); free(kenvp_store); return -ENOEXEC; }
-
-            const char *newv[EXECVE_MAX_ARGS + 4];
-            int ni = 0;
-            newv[ni++] = interp_buf;
-            if (sharg_buf[0]) newv[ni++] = sharg_buf;
-            newv[ni++] = script_path;
-            for (int a = 1; a < argc && ni < EXECVE_MAX_ARGS; a++) newv[ni++] = kargv_ptrs[a];
-            for (int a = 0; a < ni; a++) kargv_ptrs[a] = newv[a];
-            kargv_ptrs[ni] = NULL;
-            argc = ni;
-
-            strncpy(kpath, interp_buf, sizeof(kpath) - 1);
-            kpath[sizeof(kpath) - 1] = '\0';
+        if (hdr[0] == '#' && hdr[1] == '!') {
+            vfs_close(vfile);
+            vfile = NULL;
+            if (depth >= 4) { sv_free(&argv); sv_free(&envp); return -ELOOP; }
+            char interp[EXECVE_MAX_PATH], sharg[EXECVE_MAX_PATH];
+            if (parse_shebang(hdr, (size_t)rd, interp, sharg) < 0) {
+                sv_free(&argv); sv_free(&envp); return -ENOEXEC;
+            }
+            strvec_t na;
+            memset(&na, 0, sizeof na);
+            size_t nt = total;
+            r = sv_push(&na, interp, strlen(interp), &nt);
+            if (r == 0 && sharg[0]) r = sv_push(&na, sharg, strlen(sharg), &nt);
+            if (r == 0) r = sv_push(&na, kpath, strlen(kpath), &nt);
+            for (int a = 1; r == 0 && a < argv.count; a++)
+                r = sv_push(&na, argv.buf + argv.offs[a], strlen(argv.buf + argv.offs[a]), &nt);
+            if (r < 0) { sv_free(&na); sv_free(&argv); sv_free(&envp); return r; }
+            sv_free(&argv);
+            argv = na;
+            total = nt;
+            if (interp[0] == '/') {
+                strncpy(kpath, interp, sizeof kpath - 1);
+                kpath[sizeof kpath - 1] = 0;
+            } else {
+                rp = syscall_resolve_path_from_user(kpath, interp, sizeof kpath);
+                if (rp < 0) { sv_free(&argv); sv_free(&envp); return rp; }
+            }
             continue;
         }
-
-        if (fsize < 4 || elf_buf[0] != 0x7F || elf_buf[1] != 'E' ||
-            elf_buf[2] != 'L' || elf_buf[3] != 'F') {
-            free(elf_buf); free(kargv_store); free(kenvp_store); return -ENOEXEC;
+        if (hdr[0] != 0x7F || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F') {
+            vfs_close(vfile); sv_free(&argv); sv_free(&envp); return -ENOEXEC;
         }
         break;
     }
 
-    elf_load_result_t elf = elf_load(elf_buf, fsize, 0);
+    elf_load_result_t elf = elf_load_vnode(vfile->vnode, fsize, 0);
     if (elf.error != ELF_OK) {
-        serial_printf("[EXECVE] elf_load: %s\n", elf_strerror(elf.error));
-        if (elf.pagemap) vmm_free_pagemap(elf.pagemap);
-        free(elf_buf); free(kargv_store); free(kenvp_store); return -ENOEXEC;
+        serial_printf("[EXECVE] %s: %s\n", kpath, elf_strerror(elf.error));
+        if (elf.mm) mm_put(elf.mm);
+        vfs_close(vfile); sv_free(&argv); sv_free(&envp);
+        return -ENOEXEC;
     }
 
-    uintptr_t new_rsp = execve_build_stack(elf.pagemap, elf.stack_top, kargv_ptrs, argc, kenvp_ptrs, envc, &elf);
-    free(kargv_store);
-    free(kenvp_store);
-    if (!new_rsp) { free(elf_buf); vmm_free_pagemap(elf.pagemap); return -ENOMEM; }
+    if (mm_set_exe(elf.mm, vfile->vnode) < 0) {
+        mm_put(elf.mm);
+        vfs_close(vfile); sv_free(&argv); sv_free(&envp);
+        return -ETXTBSY;
+    }
+
+    uintptr_t new_rsp = build_stack(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn, t);
+    sv_free(&argv);
+    if (!new_rsp) {
+        mm_put(elf.mm);
+        vfs_close(vfile); sv_free(&envp);
+        return -ENOMEM;
+    }
+    mm_init_heap(elf.mm, elf.load_end);
 
     if (t->fd_table) fd_table_cloexec(t->fd_table);
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
+    mm_t *old_mm = t->mm;
     vmm_pagemap_t *old_pagemap = t->pagemap;
     uint32_t old_flags = t->flags;
 
-    t->pagemap    = elf.pagemap;
-    t->cr3        = (uint64_t)pmm_virt_to_phys(elf.pagemap->pml4);
+    if (t->puzzle) { puzzle_destroy(t->puzzle); t->puzzle = NULL; }
+
+    t->mm         = elf.mm;
+    t->pagemap    = elf.mm->pagemap;
+    t->cr3        = elf.mm->cr3;
     t->flags     |= TASK_FLAG_OWN_PAGEMAP;
     t->flags     &= ~TASK_FLAG_FORK;
-    t->brk_start  = t->brk_current = elf.load_end;
-    t->brk_max    = 0x0000700000000000ULL;
+    t->brk_start  = t->brk_current = elf.mm->brk_start;
+    t->brk_max    = MM_MMAP_TOP;
 
     t->fs_base    = 0;
     t->tls_vaddr  = elf.tls_vaddr;
@@ -307,17 +333,18 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     strncpy(t->exe, kpath, sizeof(t->exe) - 1);
     t->exe[sizeof(t->exe) - 1] = '\0';
 
-    if (t->puzzle) { puzzle_destroy(t->puzzle); t->puzzle = NULL; }
     {
         int puzzle_on = 1;
-        for (int i = 0; i < envc; i++)
-            if (strcmp(kenvp_ptrs[i], "PUZZLE=0") == 0) { puzzle_on = 0; break; }
+        for (int i = 0; i < envp.count; i++) {
+            if (strcmp(envp.buf + envp.offs[i], "PUZZLE=0") == 0) puzzle_on = 0;
+            if (strcmp(envp.buf + envp.offs[i], "CERVUS_PROFILE=1") == 0) profile_start(t);
+        }
         if (puzzle_on)
-            puzzle_create(t, &elf, t->brk_start, elf.stack_top, elf.stack_size,
-                          elf_buf, fsize);
-        else
-            free(elf_buf);
+            puzzle_create(t, &elf, elf.mm->brk_start, elf.stack_top, elf.stack_size,
+                          vfile->vnode, fsize);
     }
+    sv_free(&envp);
+    vfs_close(vfile);
 
     percpu_t *pc = get_percpu();
     if (pc) {
@@ -329,7 +356,8 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
         pc->user_saved_r11 = 0x200;
     }
 
-    if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP | TASK_FLAG_FORK)))
+    if (old_mm) mm_put(old_mm);
+    else if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP | TASK_FLAG_FORK)))
         vmm_free_pagemap(old_pagemap);
 
     asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");

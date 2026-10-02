@@ -39,6 +39,9 @@
 #include "../include/drivers/disk/partition.h"
 #include "../include/drivers/pci.h"
 #include "../include/drivers/iommu/dmar.h"
+#include "../include/memory/mm.h"
+#include "../include/memory/pageref.h"
+#include "../include/memory/pagecache.h"
 #include "../include/drivers/disk/nvme.h"
 #include "../include/drivers/usb/xhci.h"
 #include "../include/drivers/usb/ehci.h"
@@ -107,7 +110,7 @@ static void load_elf_module(void) {
 
     serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n", r.entry, r.stack_top);
 
-    uintptr_t init_rsp = elf_build_init_stack(r.pagemap, r.stack_top);
+    uintptr_t init_rsp = elf_build_init_stack(r.mm, r.stack_top);
     if (init_rsp == 0) {
         serial_writestring("[ELF] init stack build failed\n");
         return;
@@ -129,8 +132,8 @@ static void load_elf_module(void) {
         return;
     }
 
-    t->brk_start   = r.load_end;
-    t->brk_current = r.load_end;
+    t->mm = r.mm;
+    mm_init_heap(r.mm, r.load_end);
 
     int sr = vfs_init_stdio(t);
     if (sr < 0)
@@ -273,6 +276,8 @@ void kmain(void) {
     serial_writestring("Paging [OK]\n");
     vmm_init();
     vmalloc_init();
+    pageref_init();
+    pagecache_init();
     serial_writestring("VMM [OK]\n");
     if (global_framebuffer) fb_init_backbuffer(global_framebuffer);
     vt_init();

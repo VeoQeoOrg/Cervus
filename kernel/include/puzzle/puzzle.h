@@ -33,6 +33,8 @@ typedef struct {
     int32_t       lives;
     uint64_t      elf_off;
     uint64_t      file_len;
+    uint8_t      *eaten_map;
+    size_t        eaten_pages;
 } piece_t;
 
 typedef struct puzzle_undo {
@@ -44,8 +46,9 @@ typedef struct puzzle_undo {
 typedef struct puzzle_process {
     struct task     *logic;
     vmm_pagemap_t   *pagemap;
-    void            *elf_file;
-    size_t           elf_file_size;
+    struct mm       *mm;
+    struct vnode    *vnode;
+    uint64_t         file_size;
     piece_t          pieces[PUZZLE_MAX_PIECES];
     int              npieces;
     int              alive_pieces;
@@ -70,7 +73,7 @@ puzzle_process_t *puzzle_create(struct task *t,
                                 const elf_load_result_t *elf,
                                 uintptr_t heap_start,
                                 uintptr_t stack_top, size_t stack_size,
-                                void *elf_file, size_t elf_file_size);
+                                struct vnode *vn, uint64_t file_size);
 void puzzle_destroy(puzzle_process_t *pp);
 void puzzle_dump(const puzzle_process_t *pp);
 

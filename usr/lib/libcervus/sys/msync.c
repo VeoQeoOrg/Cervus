@@ -1,9 +1,8 @@
 #include <sys/mman.h>
-#include <errno.h>
+#include <sys/syscall.h>
+#include <libcervus.h>
 
 int msync(void *addr, size_t len, int flags)
 {
-    (void)len; (void)flags;
-    if (!addr) { errno = EINVAL; return -1; }
-    return 0;
+    return (int)__cervus_sys_ret(syscall3(SYS_MSYNC, addr, len, flags));
 }

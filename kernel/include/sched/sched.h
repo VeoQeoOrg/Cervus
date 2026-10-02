@@ -174,6 +174,10 @@ typedef struct task {
     uint64_t sig_saved_mask;
     uint8_t  sig_saved_valid;
     char     exe[256];
+    struct mm *mm;
+    uint64_t  *prof_buf;
+    uint32_t   prof_n;
+    char      *at_base;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -214,6 +218,9 @@ void sched_init(void);
 void sched_reschedule(void);
 void sched_print_stats(void);
 void task_yield(void);
+void profile_tick(task_t *t, uint64_t rip);
+void profile_start(task_t *t);
+void profile_finish(task_t *t);
 
 struct vnode;
 int  task_map_track(task_t *t, struct vnode *vn);

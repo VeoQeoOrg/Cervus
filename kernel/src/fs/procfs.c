@@ -1,3 +1,4 @@
+#include "../../include/memory/mm.h"
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -208,7 +209,9 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
     if (!t) return -1;
     uint64_t rss = (t->is_userspace && t->pagemap)
                  ? vmm_count_user_pages(t->pagemap) * 4096 : 0;
-    uint64_t vsz = (t->brk_max > t->brk_start) ? (t->brk_max - t->brk_start) : 0;
+    uint64_t vsz = 0;
+    struct mm *m = t->mm;
+    if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
     return snprintf(buf, max,
         "Name:    %s\n"
         "Pid:     %u\n"
@@ -303,6 +306,16 @@ static int gen_pid_puzzle(uint32_t pid, char *buf, size_t max) {
     return puzzle_format(t->puzzle, buf, max);
 }
 
+static int gen_pid_maps(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    struct mm *m = t->mm;
+    if (!m || !mm_tryget(m)) return 0;
+    int n = mm_format_maps(m, buf, max);
+    mm_put(m);
+    return n;
+}
+
 typedef int (*proc_pid_gen_fn)(uint32_t pid, char *buf, size_t max);
 
 typedef struct { const char *name; proc_pid_gen_fn gen; } proc_pid_file_t;
@@ -314,6 +327,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "fd",      gen_pid_fd      },
     { "syscall", gen_pid_syscall },
     { "puzzle",  gen_pid_puzzle  },
+    { "maps",    gen_pid_maps    },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))
 

@@ -45,6 +45,7 @@ DEFINE_IRQ(0x20, timer_handler)
 
     uint32_t cpu = smp_cpu_index();
     task_t* current = current_task[cpu];
+    if (current && current->prof_buf) profile_tick(current, frame->rip);
     percpu_t* pc = get_percpu();
 
     if (cpu == 0) ticks++;

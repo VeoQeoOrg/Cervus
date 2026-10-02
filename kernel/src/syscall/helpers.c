@@ -3,6 +3,7 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/memory/pmm.h"
+#include "../../include/memory/mm.h"
 #include <string.h>
 
 task_t *syscall_cur_task(void)
@@ -44,8 +45,12 @@ static bool uptr_range_ok(const void *ptr, size_t len, int need_write)
 
     if (len == 0) return true;
     task_t *t = syscall_cur_task();
-    if (!t || !t->pagemap) return true;
-    if (!t->is_userspace) return true;
+    if (!t || !t->is_userspace) return true;
+    if (t->mm) {
+        if (!mm_access_ok(t->mm, addr, len, need_write)) return false;
+        return mm_populate(t->mm, addr, len, need_write) == 0;
+    }
+    if (!t->pagemap) return true;
 
     uintptr_t page_start = addr & ~0xFFFULL;
     uintptr_t page_end   = (addr + len - 1) & ~0xFFFULL;
@@ -188,6 +193,7 @@ int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
     } else {
         task_t *t = syscall_cur_task();
         const char *cwd = (t && t->cwd[0]) ? t->cwd : "/";
+        if (t && t->at_base) cwd = t->at_base;
         size_t cl = 0; while (cwd[cl]) cl++;
         size_t tl = (size_t)n;
         size_t need = cl + 1 + tl + 1;

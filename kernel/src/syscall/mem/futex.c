@@ -3,14 +3,20 @@
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/memory/vmm.h"
+#include "../../../include/memory/mm.h"
 #include "../../../include/time/clocksource.h"
 #include <string.h>
 
 #define FUTEX_WAITERS_MAX 128
 
 typedef struct {
+    uint64_t space;
+    uint64_t addr;
+} futex_key_t;
+
+typedef struct {
     int       used;
-    uint64_t  key;
+    futex_key_t key;
     task_t   *task;
     int       woken;
 } futex_waiter_t;
@@ -21,16 +27,35 @@ static spinlock_t     g_futex_lock = SPINLOCK_INIT;
 extern bool signal_pending_deliverable(task_t *t);
 extern uint64_t sched_now_ns(void);
 
-static int futex_key(uint64_t uaddr, uint64_t *out)
+static int futex_key(uint64_t uaddr, futex_key_t *out)
 {
     task_t *me = syscall_cur_task();
     if (!me || !me->pagemap) return -EFAULT;
 
+    if (me->mm) {
+        kmutex_lock(&me->mm->lock);
+        vm_area_t *v = mm_find_vma(me->mm, (uintptr_t)uaddr);
+        bool shared = v && (v->flags & (VM_SHARED | VM_PFNMAP));
+        bool ok = v != NULL;
+        kmutex_unlock(&me->mm->lock);
+        if (!ok) return -EFAULT;
+        if (!shared) {
+            out->space = (uint64_t)(uintptr_t)me->mm;
+            out->addr  = uaddr;
+            return 0;
+        }
+        uintptr_t phys = 0;
+        if (mm_user_phys(me->mm, (uintptr_t)uaddr, 0, &phys) < 0) return -EFAULT;
+        out->space = 0;
+        out->addr  = phys;
+        return 0;
+    }
+
     uintptr_t phys = 0;
     if (!vmm_virt_to_phys(me->pagemap, (uintptr_t)(uaddr & ~0xFFFULL), &phys))
         return -EFAULT;
-
-    *out = (uint64_t)phys | (uaddr & 0xFFFULL);
+    out->space = 0;
+    out->addr  = (uint64_t)phys | (uaddr & 0xFFFULL);
     return 0;
 }
 
@@ -39,7 +64,7 @@ int64_t sys_futex_wait(uint64_t uaddr, uint64_t expected, uint64_t timeout_ns)
     if (uaddr & 3) return -EINVAL;
     if (!syscall_uptr_validate((void *)uaddr, sizeof(uint32_t))) return -EFAULT;
 
-    uint64_t key;
+    futex_key_t key;
     int kr = futex_key(uaddr, &key);
     if (kr < 0) return kr;
 
@@ -100,7 +125,7 @@ int64_t sys_futex_wake(uint64_t uaddr, uint64_t count, uint64_t unused)
     if (uaddr & 3) return -EINVAL;
     if (!syscall_uptr_validate((void *)uaddr, sizeof(uint32_t))) return -EFAULT;
 
-    uint64_t key;
+    futex_key_t key;
     int kr = futex_key(uaddr, &key);
     if (kr < 0) return kr;
 
@@ -109,7 +134,8 @@ int64_t sys_futex_wake(uint64_t uaddr, uint64_t count, uint64_t unused)
     int64_t woken = 0;
     uint64_t f = spinlock_acquire_irqsave(&g_futex_lock);
     for (int i = 0; i < FUTEX_WAITERS_MAX && (uint64_t)woken < count; i++) {
-        if (!g_waiters[i].used || g_waiters[i].key != key) continue;
+        if (!g_waiters[i].used || g_waiters[i].key.space != key.space ||
+            g_waiters[i].key.addr != key.addr) continue;
         if (g_waiters[i].woken) continue;
         task_t *t = g_waiters[i].task;
         g_waiters[i].woken = 1;

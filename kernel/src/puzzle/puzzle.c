@@ -4,6 +4,10 @@
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/vmm.h"
 #include "../../include/smp/percpu.h"
+#include "../../include/memory/mm.h"
+#include "../../include/memory/pageref.h"
+#include "../../include/memory/pagecache.h"
+#include "../../include/fs/vfs.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -65,6 +69,8 @@ static piece_t *add_piece(puzzle_process_t *pp, piece_kind_t kind,
     p->lives    = lives;
     p->elf_off  = elf_off;
     p->file_len = file_len;
+    p->eaten_map = NULL;
+    p->eaten_pages = 0;
     pp->alive_pieces++;
     return p;
 }
@@ -73,16 +79,18 @@ puzzle_process_t *puzzle_create(struct task *t,
                                 const elf_load_result_t *elf,
                                 uintptr_t heap_start,
                                 uintptr_t stack_top, size_t stack_size,
-                                void *elf_file, size_t elf_file_size) {
-    if (!t || !elf) return NULL;
+                                struct vnode *vn, uint64_t file_size) {
+    if (!t || !elf || !elf->mm) return NULL;
     puzzle_process_t *pp = calloc(1, sizeof(*pp));
     if (!pp) return NULL;
 
     pp->logic         = t;
-    pp->pagemap       = elf->pagemap;
-    pp->elf_file      = elf_file;
-    pp->elf_file_size = elf_file_size;
+    pp->mm            = elf->mm;
+    pp->pagemap       = elf->mm->pagemap;
+    pp->vnode         = vn;
+    pp->file_size     = file_size;
     pp->ckpt_seq      = 0;
+    if (vn) vnode_ref(vn);
 
     for (int i = 0; i < elf->nsegments; i++) {
         const elf_segment_t *s = &elf->segments[i];
@@ -123,9 +131,9 @@ static bool piece_mutable(piece_kind_t k) {
 
 static void piece_range(const puzzle_process_t *pp, const piece_t *p,
                         uintptr_t *start, uintptr_t *end) {
-    if (p->kind == PIECE_HEAP && pp->logic) {
-        *start = pp->logic->brk_start;
-        *end   = pp->logic->brk_current;
+    if (p->kind == PIECE_HEAP && pp->mm) {
+        *start = pp->mm->brk_start;
+        *end   = pp->mm->brk;
     } else {
         *start = p->va_start;
         *end   = p->va_end;
@@ -249,39 +257,46 @@ bool puzzle_cow_fault(struct task *t, uintptr_t fault_addr, uint64_t err_code) {
         pp->degraded = true;
     }
 
-    *pte |= VMM_WRITE;
-    vmm_flush_local(page);
     spinlock_release_irqrestore(&pp->lock, fl);
     return true;
 }
 
+static bool eaten_test_clear(piece_t *p, uintptr_t start, uintptr_t page) {
+    if (!p->eaten_map || page < start) return false;
+    size_t idx = (size_t)((page - start) >> 12);
+    if (idx >= p->eaten_pages) return false;
+    uint8_t bit = (uint8_t)(1u << (idx & 7));
+    if (!(p->eaten_map[idx >> 3] & bit)) return false;
+    p->eaten_map[idx >> 3] &= (uint8_t)~bit;
+    return true;
+}
+
 bool puzzle_regenerate_fault(struct task *t, uintptr_t fault_addr, uint64_t err_code) {
-    if (!g_puzzle_regen_enabled) return false;
-    if (err_code & 0x1) return false;
-    if (!t || !t->puzzle) return false;
+    if (!g_puzzle_regen_enabled) return true;
+    if (err_code & 0x1) return true;
+    if (!t || !t->puzzle) return true;
     puzzle_process_t *pp = t->puzzle;
+    if (__atomic_load_n(&pp->total_eaten, __ATOMIC_RELAXED) ==
+        __atomic_load_n(&pp->total_regens, __ATOMIC_RELAXED)) return true;
 
     uintptr_t page = fault_addr & ~(PAGE_SIZE - 1);
     uint64_t fl = spinlock_acquire_irqsave(&pp->lock);
 
     piece_t *hit = NULL;
+    uintptr_t hit_start = 0;
     for (int i = 0; i < pp->npieces; i++) {
         piece_t *p = &pp->pieces[i];
         uintptr_t start, end;
         piece_range(pp, p, &start, &end);
         start &= ~(PAGE_SIZE - 1);
         end = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-        if (page >= start && page < end) { hit = p; break; }
+        if (page >= start && page < end) { hit = p; hit_start = start; break; }
     }
-    if (!hit) { spinlock_release_irqrestore(&pp->lock, fl); return false; }
-
-    vmm_pte_t *pte = vmm_pte_lookup(pp->pagemap, page);
-    if (pte && (*pte & VMM_PRESENT)) {
+    if (!hit || !eaten_test_clear(hit, hit_start, page)) {
         spinlock_release_irqrestore(&pp->lock, fl);
-        return false;
+        return true;
     }
 
-    pp->total_eaten++;
     if (hit->lives != PIECE_LIVES_INF) {
         if (hit->lives <= 0) {
             if (hit->state != PIECE_EATEN) {
@@ -298,34 +313,12 @@ bool puzzle_regenerate_fault(struct task *t, uintptr_t fault_addr, uint64_t err_
         hit->lives--;
     }
 
-    void *frame = pmm_alloc_zero(1);
-    if (!frame) { spinlock_release_irqrestore(&pp->lock, fl); return false; }
-
-    if (pp->elf_file && hit->file_len > 0) {
-        uintptr_t fstart = hit->va_start;
-        uintptr_t fend   = hit->va_start + hit->file_len;
-        uintptr_t cs = page > fstart ? page : fstart;
-        uintptr_t ce = (page + PAGE_SIZE) < fend ? (page + PAGE_SIZE) : fend;
-        if (ce > cs) {
-            uint64_t foff = hit->elf_off + (cs - hit->va_start);
-            if (foff + (ce - cs) <= pp->elf_file_size)
-                memcpy((uint8_t *)frame + (cs - page),
-                       (uint8_t *)pp->elf_file + foff, (size_t)(ce - cs));
-        }
-    }
-
-    uint64_t flags = VMM_PRESENT | VMM_USER;
-    if (hit->prot & PF_W) flags |= VMM_WRITE;
-    vmm_map_page(pp->pagemap, page, pmm_virt_to_phys(frame), flags);
-    vmm_flush_local(page);
-
     pp->total_regens++;
     serial_printf("[puzzle] pid=%u '%s' regen %s page 0x%llx (lives=%d, total regens=%llu)\n",
                   pp->logic ? pp->logic->pid : 0,
                   pp->logic ? pp->logic->name : "?",
                   piece_kind_name(hit->kind), (unsigned long long)page,
                   hit->lives, (unsigned long long)pp->total_regens);
-
     spinlock_release_irqrestore(&pp->lock, fl);
     return true;
 }
@@ -335,8 +328,12 @@ int puzzle_eat_piece(struct task *t, int kind) {
     if (kind < 0 || kind >= PIECE_KIND_MAX) return -1;
     puzzle_process_t *pp = t->puzzle;
 
+    typedef struct { uintptr_t start, end; } rng_t;
+    rng_t ranges[PUZZLE_MAX_PIECES];
+    int nr = 0;
+    int marked = 0;
+
     uint64_t fl = spinlock_acquire_irqsave(&pp->lock);
-    int unmapped = 0;
     for (int i = 0; i < pp->npieces; i++) {
         piece_t *p = &pp->pieces[i];
         if (p->kind != (piece_kind_t)kind || p->state == PIECE_EATEN) continue;
@@ -344,66 +341,75 @@ int puzzle_eat_piece(struct task *t, int kind) {
         piece_range(pp, p, &start, &end);
         start &= ~(PAGE_SIZE - 1);
         end = (end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        if (end <= start) continue;
+        size_t npages = (size_t)((end - start) >> 12);
+        if (p->eaten_pages != npages) {
+            kfree(p->eaten_map);
+            p->eaten_map = kzalloc((npages + 7) / 8);
+            p->eaten_pages = p->eaten_map ? npages : 0;
+        }
+        if (!p->eaten_map) continue;
         for (uintptr_t va = start; va < end; va += PAGE_SIZE) {
             vmm_pte_t *pte = vmm_pte_lookup(pp->pagemap, va);
             if (!pte || !(*pte & VMM_PRESENT)) continue;
-            vmm_unmap_page(pp->pagemap, va);
-            unmapped++;
+            size_t idx = (size_t)((va - start) >> 12);
+            p->eaten_map[idx >> 3] |= (uint8_t)(1u << (idx & 7));
+            marked++;
         }
+        ranges[nr].start = start;
+        ranges[nr].end = end;
+        nr++;
     }
     spinlock_release_irqrestore(&pp->lock, fl);
+
+    for (int i = 0; i < nr; i++)
+        mm_discard(pp->mm, ranges[i].start, ranges[i].end - ranges[i].start);
+    pp->total_eaten += (uint64_t)marked;
 
     serial_printf("[puzzle] pid=%u '%s' ATE %s: unmapped %d page(s)\n",
                   pp->logic ? pp->logic->pid : 0,
                   pp->logic ? pp->logic->name : "?",
-                  piece_kind_name((piece_kind_t)kind), unmapped);
-    return unmapped;
-}
-
-static bool piece_golden_page(puzzle_process_t *pp, piece_t *p, uintptr_t page,
-                              const uint8_t **golden, uint32_t *off_in_page,
-                              uint32_t *len) {
-    if (!pp->elf_file || p->file_len == 0) return false;
-    uintptr_t fstart = p->va_start;
-    uintptr_t fend   = p->va_start + p->file_len;
-    uintptr_t cs = page > fstart ? page : fstart;
-    uintptr_t ce = (page + PAGE_SIZE) < fend ? (page + PAGE_SIZE) : fend;
-    if (ce <= cs) return false;
-    uint64_t foff = p->elf_off + (cs - p->va_start);
-    if (foff + (ce - cs) > pp->elf_file_size) return false;
-    *golden      = (const uint8_t *)pp->elf_file + foff;
-    *off_in_page = (uint32_t)(cs - page);
-    *len         = (uint32_t)(ce - cs);
-    return true;
+                  piece_kind_name((piece_kind_t)kind), marked);
+    return marked;
 }
 
 static int puzzle_guardian_scan(puzzle_process_t *pp) {
     int restored = 0;
+    if (!pp->vnode) return 0;
     uint64_t fl = spinlock_acquire_irqsave(&pp->lock);
     for (int i = 0; i < pp->npieces; i++) {
         piece_t *p = &pp->pieces[i];
         if (p->state == PIECE_EATEN) continue;
         if (p->prot & PF_W) continue;
-        if (p->file_len == 0 || !pp->elf_file) continue;
+        if (p->file_len == 0) continue;
 
         uintptr_t start = p->va_start & ~(PAGE_SIZE - 1);
-        uintptr_t end   = (p->va_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-        for (uintptr_t va = start; va < end; va += PAGE_SIZE) {
+        uintptr_t end   = (p->va_start + p->file_len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+        uint64_t  fpage = (p->elf_off - (p->va_start - start)) / PAGE_SIZE;
+        for (uintptr_t va = start; va < end; va += PAGE_SIZE, fpage++) {
             vmm_pte_t *pte = vmm_pte_lookup(pp->pagemap, va);
             if (!pte || !(*pte & VMM_PRESENT)) continue;
-            const uint8_t *golden; uint32_t off, len;
-            if (!piece_golden_page(pp, p, va, &golden, &off, &len)) continue;
-            uint8_t *cur = (uint8_t *)pmm_phys_to_virt(*pte & PUZZLE_PTE_PHYS) + off;
-            if (memcmp(cur, golden, len) != 0) {
-                memcpy(cur, golden, len);
-                pp->total_guard_restores++;
-                restored++;
-                serial_printf("[guardian] pid=%u '%s' TAMPER in %s page 0x%llx -> restored from source of truth (total %llu)\n",
-                              pp->logic ? pp->logic->pid : 0,
-                              pp->logic ? pp->logic->name : "?",
-                              piece_kind_name(p->kind), (unsigned long long)va,
-                              (unsigned long long)pp->total_guard_restores);
+            uintptr_t cur = *pte & PUZZLE_PTE_PHYS;
+            uintptr_t gold = 0;
+            if (pagecache_peek(pp->vnode, fpage, &gold) < 0) continue;
+            if (gold != cur) {
+                uintptr_t cs = va > p->va_start ? va : p->va_start;
+                uintptr_t ce = (va + PAGE_SIZE) < p->va_start + p->file_len
+                             ? (va + PAGE_SIZE) : p->va_start + p->file_len;
+                uint8_t *dst = (uint8_t *)pmm_phys_to_virt(cur) + (cs - va);
+                const uint8_t *src = (const uint8_t *)pmm_phys_to_virt(gold) + (cs - va);
+                if (ce > cs && memcmp(dst, src, (size_t)(ce - cs)) != 0) {
+                    memcpy(dst, src, (size_t)(ce - cs));
+                    pp->total_guard_restores++;
+                    restored++;
+                    serial_printf("[guardian] pid=%u '%s' TAMPER in %s page 0x%llx -> restored from source of truth (total %llu)\n",
+                                  pp->logic ? pp->logic->pid : 0,
+                                  pp->logic ? pp->logic->name : "?",
+                                  piece_kind_name(p->kind), (unsigned long long)va,
+                                  (unsigned long long)pp->total_guard_restores);
+                }
             }
+            page_unref(gold);
         }
     }
     spinlock_release_irqrestore(&pp->lock, fl);
@@ -438,6 +444,7 @@ int puzzle_tamper(struct task *t, uintptr_t addr, size_t len) {
     if (!t || !t->puzzle || len == 0) return -1;
     puzzle_process_t *pp = t->puzzle;
     uintptr_t page = addr & ~(PAGE_SIZE - 1);
+    if (mm_populate(pp->mm, page, PAGE_SIZE, 0) < 0) return -1;
     uint64_t fl = spinlock_acquire_irqsave(&pp->lock);
 
     piece_t *hit = NULL;
@@ -451,10 +458,21 @@ int puzzle_tamper(struct task *t, uintptr_t addr, size_t len) {
     vmm_pte_t *pte = vmm_pte_lookup(pp->pagemap, page);
     if (!pte || !(*pte & VMM_PRESENT)) { spinlock_release_irqrestore(&pp->lock, fl); return -1; }
 
+    uintptr_t cur = *pte & PUZZLE_PTE_PHYS;
+    if (!(*pte & VMM_SHARED) && page_refcount(cur) > 1) {
+        uintptr_t np = page_alloc_user();
+        if (!np) { spinlock_release_irqrestore(&pp->lock, fl); return -1; }
+        memcpy(pmm_phys_to_virt(np), pmm_phys_to_virt(cur), PAGE_SIZE);
+        *pte = (*pte & ~PUZZLE_PTE_PHYS) | np;
+        vmm_flush_local(page);
+        page_unref(cur);
+        cur = np;
+    }
+
     uint32_t off = (uint32_t)(addr - page);
     if (off + len > PAGE_SIZE) len = PAGE_SIZE - off;
-    uint8_t *cur = (uint8_t *)pmm_phys_to_virt(*pte & PUZZLE_PTE_PHYS) + off;
-    memset(cur, 0xEE, len);
+    uint8_t *mem = (uint8_t *)pmm_phys_to_virt(cur) + off;
+    memset(mem, 0xEE, len);
     serial_printf("[puzzle] pid=%u '%s' SELF-TAMPER: %zu bytes 0xEE at 0x%llx (%s) -- guardian should heal\n",
                   pp->logic ? pp->logic->pid : 0, pp->logic ? pp->logic->name : "?",
                   len, (unsigned long long)addr, piece_kind_name(hit->kind));
@@ -466,7 +484,11 @@ void puzzle_destroy(puzzle_process_t *pp) {
     if (!pp) return;
     puzzle_unregister(pp);
     free_undo_log(pp);
-    if (pp->elf_file) { free(pp->elf_file); pp->elf_file = NULL; }
+    for (int i = 0; i < pp->npieces; i++) {
+        kfree(pp->pieces[i].eaten_map);
+        pp->pieces[i].eaten_map = NULL;
+    }
+    if (pp->vnode) { vnode_unref(pp->vnode); pp->vnode = NULL; }
     if (pp->logic) pp->logic->puzzle = NULL;
     free(pp);
 }

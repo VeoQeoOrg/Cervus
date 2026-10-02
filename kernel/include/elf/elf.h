@@ -129,11 +129,17 @@ typedef struct {
     uint64_t        tls_filesz;
     uint64_t        tls_memsz;
     uint64_t        tls_align;
+    struct mm      *mm;
+    struct vnode   *vnode;
+    uint64_t        file_size;
+    char            interp_path[128];
 } elf_load_result_t;
 
+struct mm;
+struct vnode;
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);
-elf_load_result_t elf_load_file(void* file, size_t size, size_t stack_sz);
-uintptr_t elf_build_init_stack(vmm_pagemap_t* map, uintptr_t stack_top);
+elf_load_result_t elf_load_vnode(struct vnode* vn, size_t size, size_t stack_sz);
+uintptr_t elf_build_init_stack(struct mm* mm, uintptr_t stack_top);
 
 void elf_unload(elf_load_result_t* result);
 

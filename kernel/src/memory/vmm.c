@@ -90,6 +90,17 @@ vmm_pte_t* vmm_pte_lookup(vmm_pagemap_t* map, uintptr_t virt) {
     return &pt[pt_i];
 }
 
+vmm_pte_t* vmm_pte_ensure(vmm_pagemap_t* map, uintptr_t virt) {
+    if (!map || !map->pml4) return NULL;
+    vmm_pte_t* pdpt = get_table(map->pml4, (virt >> 39) & MASK, VMM_USER);
+    if (!pdpt) return NULL;
+    vmm_pte_t* pd = get_table(pdpt, (virt >> 30) & MASK, VMM_USER);
+    if (!pd) return NULL;
+    vmm_pte_t* pt = get_table(pd, (virt >> 21) & MASK, VMM_USER);
+    if (!pt) return NULL;
+    return &pt[(virt >> 12) & MASK];
+}
+
 void vmm_flush_local(uintptr_t virt) {
     invlpg((void*)virt);
 }

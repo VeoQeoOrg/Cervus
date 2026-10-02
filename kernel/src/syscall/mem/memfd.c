@@ -185,6 +185,22 @@ static const vnode_ops_t MEMFD_OPS = {
     .unref    = memfd_unref,
 };
 
+vnode_t *memfd_create_anon(const char *name)
+{
+    memfd_t *m = calloc(1, sizeof *m);
+    if (!m) return NULL;
+    m->lock = (spinlock_t)SPINLOCK_INIT;
+    if (name) strncpy(m->name, name, sizeof m->name - 1);
+    vnode_t *vn = calloc(1, sizeof *vn);
+    if (!vn) { free(m); return NULL; }
+    vn->type     = VFS_NODE_FILE;
+    vn->mode     = 0600;
+    vn->ops      = &MEMFD_OPS;
+    vn->fs_data  = m;
+    vn->refcount = 1;
+    return vn;
+}
+
 int64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags, uint64_t unused)
 {
     (void)unused;
