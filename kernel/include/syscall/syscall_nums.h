@@ -227,6 +227,10 @@
 #define SYS_WAITID            651
 #define SYS_GETRUSAGE         652
 #define SYS_MKNODAT           653
+#define SYS_READV             654
+#define SYS_WRITEV            655
+#define SYS_PREADV            656
+#define SYS_PWRITEV           657
 
 #define SYSCALL_TABLE_SIZE    768
 

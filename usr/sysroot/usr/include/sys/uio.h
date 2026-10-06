@@ -20,6 +20,9 @@ struct iovec {
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
 
+ssize_t preadv(int fd, const struct iovec *iov, int iovcnt, off_t off);
+ssize_t pwritev(int fd, const struct iovec *iov, int iovcnt, off_t off);
+
 #ifdef __cplusplus
 }
 #endif

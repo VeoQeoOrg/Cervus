@@ -8,6 +8,7 @@
 #include "../../include/smp/smp.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/drivers/timer.h"
+#include "../../include/syscall/syscall_nums.h"
 #include <string.h>
 
 extern void task_unblock(task_t *t);
@@ -381,7 +382,20 @@ static int pick_signal(task_t *t) {
     }
 }
 
-int64_t signal_deliver_pending(task_t *t, int64_t retval) {
+static bool syscall_restartable(uint64_t nr) {
+    switch (nr) {
+    case SYS_READ: case SYS_WRITE: case SYS_PREAD: case SYS_PWRITE:
+    case SYS_READV: case SYS_WRITEV: case SYS_PREADV: case SYS_PWRITEV:
+    case SYS_OPEN: case SYS_OPENAT: case SYS_WAIT: case SYS_WAIT4: case SYS_WAITID:
+    case SYS_ACCEPT: case SYS_CONNECT: case SYS_SENDTO: case SYS_RECVFROM:
+    case SYS_SENDMSG: case SYS_RECVMSG: case SYS_SENDFD: case SYS_RECVFD:
+    case SYS_IOCTL: case SYS_FCNTL:
+        return true;
+    }
+    return false;
+}
+
+int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
     if (!t || !t->is_userspace) return retval;
 
     int sig = pick_signal(t);
@@ -414,6 +428,11 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval) {
 
     ksiginfo_t si;
     take_signal(t, sig, &si);
+    if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(nr)) {
+        r.rax = nr;
+        r.rip -= 2;
+    }
+
     uint64_t sp, rip;
     if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
         terminate_with_report(t, SIGSEGV, &r);

@@ -230,6 +230,8 @@ void psiginfo(const siginfo_t *info, const char *msg);
 #define SIG_UNBLOCK  1
 #define SIG_SETMASK  2
 
+int siginterrupt(int sig, int flag);
+
 #ifdef __cplusplus
 }
 #endif

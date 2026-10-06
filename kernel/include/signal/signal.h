@@ -34,6 +34,13 @@ struct task;
 #define SIGURG      23
 #define SIGWINCH    28
 #define SIGIO       29
+#define SIGSTKFLT   16
+#define SIGXCPU     24
+#define SIGXFSZ     25
+#define SIGVTALRM   26
+#define SIGPROF     27
+#define SIGPWR      30
+#define SIGSYS      31
 
 #define SA_SIGINFO   0x00000004
 #define SA_ONSTACK   0x08000000
@@ -75,7 +82,7 @@ void    signal_send(struct task *t, int sig);
 void    signal_send_group(uint32_t pgid, int sig);
 void    signal_send_subtree(struct task *root, int sig);
 bool    signal_pending_deliverable(struct task *t);
-int64_t signal_deliver_pending(struct task *t, int64_t retval);
+int64_t signal_deliver_pending(struct task *t, int64_t retval, uint64_t nr);
 void    signal_send_from(struct task *t, int sig, struct task *from);
 void    signal_force_fault(struct task *t, int sig, int code, uint64_t addr, int trapno, int err);
 struct int_frame_t;
