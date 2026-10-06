@@ -214,6 +214,8 @@ static void expand_vars(const char *src, char *dst, size_t dsz) {
         }
         if (*p != '$' || in_sq) { dst[di++] = *p++; continue; }
         p++;
+        if (*p == '?') { p++; char nb[16]; snprintf(nb, sizeof nb, "%d", g_last_rc); for (char *q = nb; *q && di + 1 < dsz; q++) dst[di++] = *q; continue; }
+        if (*p == '$') { p++; char nb[16]; snprintf(nb, sizeof nb, "%d", (int)getpid()); for (char *q = nb; *q && di + 1 < dsz; q++) dst[di++] = *q; continue; }
         if (*p == '(') {
             p++;
             static char dsub_in[CSH_LINE_MAX], dsub_out[CSH_LINE_MAX];
@@ -1523,7 +1525,6 @@ static int exec_tokens(char **tok, int n) {
     return rc;
 }
 
-static char g_rcl_exp[CSH_LINE_MAX];
 static char g_rcl_work[CSH_LINE_MAX];
 static char *g_rcl_tok[CSH_MAX_TOKENS];
 
@@ -1536,17 +1537,29 @@ static int run_command_line(const char *line) {
     trim(raw);
     if (!raw[0] || raw[0] == '#') return g_last_rc;
 
-    expand_vars(raw, g_rcl_exp, CSH_LINE_MAX);
+    char split[CSH_LINE_MAX];
+    memcpy(split, raw, CSH_LINE_MAX);
 
     char *segs[64];
     csh_chain_t ops[64];
     int ns = 1;
-    segs[0] = g_rcl_exp;
+    segs[0] = split;
     ops[0]  = CSH_CH_NONE;
-    char *p = g_rcl_exp;
+    char *p = split;
     while (*p && ns < 64) {
         if (*p == '"')  { p++; while (*p && *p != '"')  p++; if (*p) p++; continue; }
         if (*p == '\'') { p++; while (*p && *p != '\'') p++; if (*p) p++; continue; }
+        if (*p == '`')  { p++; while (*p && *p != '`')  p++; if (*p) p++; continue; }
+        if (*p == '$' && p[1] == '(') {
+            int depth = 0;
+            p++;
+            while (*p) {
+                if (*p == '(') depth++;
+                else if (*p == ')' && --depth == 0) { p++; break; }
+                p++;
+            }
+            continue;
+        }
         if (*p == '&' && *(p + 1) == '&') { *p = '\0'; p += 2; ops[ns] = CSH_CH_AND; segs[ns++] = p; continue; }
         if (*p == '|' && *(p + 1) == '|') { *p = '\0'; p += 2; ops[ns] = CSH_CH_OR;  segs[ns++] = p; continue; }
         if (*p == ';') { *p = '\0'; p++; ops[ns] = CSH_CH_SEQ; segs[ns++] = p; continue; }
@@ -1572,12 +1585,14 @@ static int run_command_line(const char *line) {
             while (el > 1 && isspace((unsigned char)s[el - 2])) { s[--el - 1] = '\0'; }
         }
 
-        strncpy(g_rcl_work, s, CSH_LINE_MAX - 1);
+        char seg[CSH_LINE_MAX];
+        expand_vars(s, seg, CSH_LINE_MAX);
+        strncpy(g_rcl_work, seg, CSH_LINE_MAX - 1);
         g_rcl_work[CSH_LINE_MAX - 1] = '\0';
         int n = tokenize(g_rcl_work, g_rcl_tok, CSH_MAX_TOKENS);
         if (n <= 0) continue;
 
-        if (bg) g_bg_cmd = s;
+        if (bg) g_bg_cmd = seg;
         rc = exec_tokens(g_rcl_tok, n);
         g_bg_cmd = NULL;
     }
