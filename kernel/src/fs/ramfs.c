@@ -478,7 +478,50 @@ static int ramfs_dir_link(vnode_t *dir, const char *name, vnode_t *target) {
     return ramfs_dir_add_child(dir, name, target);
 }
 
+static const vnode_ops_t ramfs_special_ops = {
+    .stat  = ramfs_stat,
+    .ref   = ramfs_ref,
+    .unref = ramfs_unref,
+};
+
+static int ramfs_dir_mknod(vnode_t *dir, const char *name, uint32_t mode, uint64_t rdev) {
+    (void)rdev;
+    vnode_t *existing = NULL;
+    if (ramfs_dir_lookup(dir, name, &existing) == 0) {
+        vnode_unref(existing);
+        return -EEXIST;
+    }
+    vnode_t *child;
+    switch (mode & 0170000) {
+    case 0010000:
+        child = ramfs_alloc_vnode(VFS_NODE_PIPE, mode & 07777);
+        if (!child) return -ENOMEM;
+        child->ops = &ramfs_special_ops;
+        break;
+    case 0:
+    case 0100000:
+        child = ramfs_alloc_vnode(VFS_NODE_FILE, mode & 07777);
+        if (!child) return -ENOMEM;
+        child->ops = &ramfs_file_ops;
+        break;
+    default:
+        return -EPERM;
+    }
+    child->refcount = 1;
+    child->uid = vfs_current_uid();
+    child->gid = vfs_current_uid();
+    int ret = ramfs_dir_add_child(dir, name, child);
+    if (ret < 0) {
+        kfree(child->fs_data);
+        kfree(child);
+        return ret;
+    }
+    vnode_unref(child);
+    return 0;
+}
+
 static const vnode_ops_t ramfs_dir_ops = {
+    .mknod   = ramfs_dir_mknod,
     .rename  = ramfs_dir_rename,
     .link    = ramfs_dir_link,
     .lookup  = ramfs_dir_lookup,

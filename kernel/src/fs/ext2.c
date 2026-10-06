@@ -755,6 +755,10 @@ static vnode_t *ext2_make_vnode(ext2_t *fs, uint32_t ino, ext2_inode_t *di) {
             v->type = VFS_NODE_SYMLINK;
             v->ops  = &ext2_symlink_ops;
             break;
+        case 0x1000:
+            v->type = VFS_NODE_PIPE;
+            v->ops  = &ext2_file_ops;
+            break;
         default:
             v->type = VFS_NODE_FILE;
             v->ops  = &ext2_file_ops;
@@ -1600,6 +1604,41 @@ static int ext2_dir_create_impl(vnode_t *dir, const char *name, uint32_t mode, v
     return 0;
 }
 
+static int ext2_dir_mknod_impl(vnode_t *dir, const char *name, uint32_t mode) {
+    if (!name || !name[0]) return -EINVAL;
+    ext2_vdata_t *vd = dir->fs_data;
+    ext2_t *fs = vd->fs;
+    vnode_t *existing = NULL;
+    if (ext2_dir_lookup(dir, name, &existing) == 0) {
+        vnode_unref(existing);
+        return -EEXIST;
+    }
+    uint16_t type;
+    uint8_t ft;
+    switch (mode & 0170000) {
+    case 0010000: type = 0x1000;        ft = EXT2_FT_FIFO;     break;
+    case 0:
+    case 0100000: type = EXT2_S_IFREG;  ft = EXT2_FT_REG_FILE; break;
+    default:      return -EPERM;
+    }
+    int32_t ino = alloc_inode(fs);
+    if (ino < 0) return (int)ino;
+    ext2_inode_t ndi;
+    memset(&ndi, 0, sizeof(ndi));
+    int64_t now = clock_realtime_sec();
+    if (now > 0) ndi.i_atime = ndi.i_mtime = ndi.i_ctime = (uint32_t)now;
+    ndi.i_mode = (uint16_t)(type | (mode & 07777));
+    ndi.i_uid  = (uint16_t)vfs_current_uid();
+    ndi.i_gid  = (uint16_t)vfs_current_uid();
+    ndi.i_links_count = 1;
+    inode_write(fs, (uint32_t)ino, &ndi);
+    int r = ext2_dir_add_entry(fs, vd->ino, (uint32_t)ino, ft, name);
+    if (r < 0) { free_inode(fs, (uint32_t)ino); return r; }
+    fs->dirty = true;
+    dir->size++;
+    return 0;
+}
+
 typedef struct {
     int32_t  db;
     uint32_t off;
@@ -1986,6 +2025,14 @@ static int locked_create(vnode_t *d, const char *name, uint32_t mode, vnode_t **
     int r = ext2_dir_create(d, name, mode, out);
     fs_unlock(fs); return r;
 }
+static int locked_mknod(vnode_t *d, const char *name, uint32_t mode, uint64_t rdev) {
+    (void)rdev;
+    ext2_t *fs = VFS_OF(d); fs_lock(fs);
+    jbd2_txn_begin(fs);
+    int r = ext2_dir_mknod_impl(d, name, mode);
+    jbd2_txn_end(fs);
+    fs_unlock(fs); return r;
+}
 static int locked_unlink(vnode_t *d, const char *name) {
     ext2_t *fs = VFS_OF(d); fs_lock(fs);
     int r = ext2_dir_unlink(d, name);
@@ -1993,6 +2040,7 @@ static int locked_unlink(vnode_t *d, const char *name) {
 }
 
 static const vnode_ops_t ext2_dir_ops = {
+    .mknod    = locked_mknod,
     .lookup   = locked_lookup,
     .readdir  = locked_readdir,
     .mkdir    = locked_mkdir,

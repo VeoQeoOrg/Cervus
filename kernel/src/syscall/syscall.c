@@ -204,6 +204,7 @@ extern int64_t sys_sigtimedwait(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_wait4(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_waitid(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getrusage(uint64_t, uint64_t);
+extern int64_t sys_mknodat(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -315,7 +316,7 @@ W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
 W2(sys_sigaltstack) W3(sys_sigqueue)     W3(sys_sigtimedwait)
-W4(sys_wait4)       W4(sys_waitid)       W2(sys_getrusage)
+W4(sys_wait4)       W4(sys_waitid)       W2(sys_getrusage)    W4(sys_mknodat)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -465,6 +466,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_WAIT4]           = _sys_wait4,
     [SYS_WAITID]          = _sys_waitid,
     [SYS_GETRUSAGE]       = _sys_getrusage,
+    [SYS_MKNODAT]         = _sys_mknodat,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

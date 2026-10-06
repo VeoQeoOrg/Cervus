@@ -87,8 +87,11 @@ int fstat(int fd, struct stat *out);
 int mkdir(const char *path, mode_t mode);
 int mknod(const char *path, mode_t mode, dev_t dev);
 int mkfifo(const char *path, mode_t mode);
+int mknodat(int dirfd, const char *path, mode_t mode, dev_t dev);
+int mkfifoat(int dirfd, const char *path, mode_t mode);
 int chmod(const char *path, mode_t mode);
 mode_t umask(mode_t mask);
+
 
 #ifdef __cplusplus
 }

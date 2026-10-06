@@ -14,6 +14,7 @@ extern int64_t sys_mkdir(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint6
 extern int64_t sys_unlink(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_rmdir(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_symlink(uint64_t, uint64_t);
+extern int64_t sys_mknod(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_readlink(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_kstat(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_chmod(uint64_t, uint64_t);
@@ -69,6 +70,10 @@ int64_t sys_openat(uint64_t dirfd, uint64_t path, uint64_t flags, uint64_t mode)
 
 int64_t sys_mkdirat(uint64_t dirfd, uint64_t path, uint64_t mode) {
     AT_CALL(sys_mkdir(path, mode, 0, 0, 0, 0));
+}
+
+int64_t sys_mknodat(uint64_t dirfd, uint64_t path, uint64_t mode, uint64_t dev) {
+    AT_CALL(sys_mknod(path, mode, dev));
 }
 
 int64_t sys_unlinkat(uint64_t dirfd, uint64_t path, uint64_t flags) {

@@ -216,6 +216,7 @@ extern "C" {
 #define SYS_WAIT4           650
 #define SYS_WAITID          651
 #define SYS_GETRUSAGE       652
+#define SYS_MKNODAT         653
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

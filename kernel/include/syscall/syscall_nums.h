@@ -226,6 +226,7 @@
 #define SYS_WAIT4             650
 #define SYS_WAITID            651
 #define SYS_GETRUSAGE         652
+#define SYS_MKNODAT           653
 
 #define SYSCALL_TABLE_SIZE    768
 

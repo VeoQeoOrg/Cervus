@@ -79,6 +79,8 @@ int64_t vfs_boot_time(void);
 int64_t vfs_make_time(int year, int mon, int day, int hour, int min, int sec);
 int     vfs_set_times(const char *path, int64_t atime, int64_t mtime);
 
+#define VFS_PIPE_ENDPOINT (1ULL << 63)
+
 typedef struct vnode     vnode_t;
 typedef struct vfs_mount vfs_mount_t;
 
@@ -109,6 +111,7 @@ typedef struct vnode_ops {
     int     (*poll_file)(struct vfs_file *file, int events);
     int     (*cache_id)(vnode_t *node, uintptr_t *fs_out, uint64_t *id_out);
     int     (*link)    (vnode_t *dir, const char *name, vnode_t *target);
+    int     (*mknod)   (vnode_t *dir, const char *name, uint32_t mode, uint64_t rdev);
 } vnode_ops_t;
 
 struct vnode {
@@ -192,6 +195,8 @@ int     vfs_lookup (const char *path, vnode_t **out);
 int     vfs_lookup_nofollow(const char *path, vnode_t **out);
 
 int     vfs_open   (const char *path, int flags, uint32_t mode, vfs_file_t **out);
+int     vfs_mknod  (const char *path, uint32_t mode, uint64_t rdev);
+int     fifo_open  (vnode_t *node, int flags, vnode_t **out);
 void    vfs_close  (vfs_file_t *file);
 int64_t vfs_read   (vfs_file_t *file, void *buf, size_t len);
 int64_t vfs_write  (vfs_file_t *file, const void *buf, size_t len);

@@ -351,6 +351,14 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         return ret;
     }
 
+    if (node->type == VFS_NODE_PIPE && !(node->rdev & VFS_PIPE_ENDPOINT)) {
+        vnode_t *end = NULL;
+        ret = fifo_open(node, flags, &end);
+        vnode_unref(node);
+        if (ret < 0) return ret;
+        node = end;
+    }
+
     int acc = flags & O_ACCMODE;
     bool writing = acc == O_WRONLY || acc == O_RDWR;
     if ((flags & O_DIRECTORY) && node->type != VFS_NODE_DIR) {
@@ -694,6 +702,30 @@ int vfs_mkdir(const char *path, uint32_t mode) {
     if (ret < 0) return ret;
     if (!dir->ops || !dir->ops->mkdir) { vnode_unref(dir); return -ENOSYS; }
     ret = dir->ops->mkdir(dir, dirname, mode);
+    vnode_unref(dir);
+    return ret;
+}
+
+int vfs_mknod(const char *path, uint32_t mode, uint64_t rdev) {
+    if (!path) return -EINVAL;
+    char dirpath[VFS_MAX_PATH];
+    strncpy(dirpath, path, VFS_MAX_PATH - 1);
+    dirpath[VFS_MAX_PATH - 1] = '\0';
+    char *slash = strrchr(dirpath, '/');
+    if (!slash) return -EINVAL;
+    char name[VFS_MAX_NAME];
+    strncpy(name, slash + 1, VFS_MAX_NAME - 1);
+    name[VFS_MAX_NAME - 1] = '\0';
+    if (name[0] == '\0') return -EEXIST;
+    if (slash == dirpath) dirpath[1] = '\0';
+    else                  *slash     = '\0';
+
+    vnode_t *dir = NULL;
+    int ret = vfs_lookup(dirpath, &dir);
+    if (ret < 0) return ret;
+    if (dir->type != VFS_NODE_DIR) { vnode_unref(dir); return -ENOTDIR; }
+    if (!dir->ops || !dir->ops->mknod) { vnode_unref(dir); return -EPERM; }
+    ret = dir->ops->mknod(dir, name, mode, rdev);
     vnode_unref(dir);
     return ret;
 }
