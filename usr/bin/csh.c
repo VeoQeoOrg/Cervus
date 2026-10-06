@@ -1127,6 +1127,7 @@ static void help_shell(void) {
     fputs("  " C_BOLD "alias" C_RESET " N=V            shorthand      (" C_BOLD "unalias" C_RESET " N)\n", stdout);
     fputs("  " C_BOLD "history" C_RESET " [N|-c]       recent commands, or clear them\n", stdout);
     fputs("  " C_BOLD "jobs/fg/bg" C_RESET " [%N]      background jobs\n", stdout);
+    fputs("  " C_BOLD "wait" C_RESET " [%N|pid]      wait for background jobs\n", stdout);
     fputs("  " C_BOLD "color" C_RESET " / " C_BOLD "cursor" C_RESET "         input colour and cursor shape, saved\n", stdout);
     fputs("  " C_BOLD "umask" C_RESET " [NNN]          permission bits withheld from new files\n", stdout);
     fputs("  " C_BOLD "exit" C_RESET "                 leave the shell\n", stdout);
@@ -1381,6 +1382,37 @@ static int exec_tokens(char **tok, int n) {
                    g_jobs[i].running ? "Running" : "Stopped", g_jobs[i].cmd);
         rc_set(0); return 0;
     }
+    if (strcmp(tok[0], "wait") == 0) {
+        int rc = 0;
+        if (n == 1) {
+            while (g_njobs > 0) {
+                int st = 0;
+                pid_t r = waitpid(g_jobs[0].pid, &st, 0);
+                if (r < 0 && errno == EINTR) continue;
+                rc = r < 0 ? 127 : WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+                job_remove(0);
+            }
+        } else {
+            for (int a = 1; a < n; a++) {
+                pid_t pid = -1;
+                int idx = -1;
+                if (tok[a][0] == '%') {
+                    int jid = atoi(tok[a] + 1);
+                    for (int i = 0; i < g_njobs; i++) if (g_jobs[i].jid == jid) { idx = i; break; }
+                    if (idx >= 0) pid = g_jobs[idx].pid;
+                } else {
+                    pid = (pid_t)atoi(tok[a]);
+                    for (int i = 0; i < g_njobs; i++) if (g_jobs[i].pid == pid) { idx = i; break; }
+                }
+                int st = 0;
+                pid_t r = pid > 0 ? waitpid(pid, &st, 0) : -1;
+                rc = r < 0 ? 127 : WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+                if (idx >= 0) job_remove(idx);
+            }
+        }
+        rc_set(rc);
+        return rc;
+    }
     if (strcmp(tok[0], "fg") == 0) {
         int idx = -1;
         if (n > 1) {
@@ -1542,6 +1574,7 @@ static int run_command_line(const char *line) {
 
     char *segs[64];
     csh_chain_t ops[64];
+    bool bgseg[64] = { false };
     int ns = 1;
     segs[0] = split;
     ops[0]  = CSH_CH_NONE;
@@ -1563,6 +1596,18 @@ static int run_command_line(const char *line) {
         if (*p == '&' && *(p + 1) == '&') { *p = '\0'; p += 2; ops[ns] = CSH_CH_AND; segs[ns++] = p; continue; }
         if (*p == '|' && *(p + 1) == '|') { *p = '\0'; p += 2; ops[ns] = CSH_CH_OR;  segs[ns++] = p; continue; }
         if (*p == ';') { *p = '\0'; p++; ops[ns] = CSH_CH_SEQ; segs[ns++] = p; continue; }
+        if (*p == '&' && p[1] != '>' && (p == split || (p[-1] != '>' && p[-1] != '<'))) {
+            const char *q = p + 1;
+            while (isspace((unsigned char)*q)) q++;
+            if (*q) {
+                *p = '\0';
+                bgseg[ns - 1] = true;
+                p++;
+                ops[ns] = CSH_CH_SEQ;
+                segs[ns++] = p;
+                continue;
+            }
+        }
         p++;
     }
 
@@ -1577,7 +1622,7 @@ static int run_command_line(const char *line) {
             if (ops[i] == CSH_CH_AND && rc != 0) continue;
             if (ops[i] == CSH_CH_OR  && rc == 0) continue;
         }
-        int bg = 0;
+        int bg = bgseg[i] ? 1 : 0;
         size_t el = strlen(s);
         if (el > 0 && s[el - 1] == '&') {
             bg = 1;
