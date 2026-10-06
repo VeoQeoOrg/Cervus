@@ -6,6 +6,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <errno.h>
+#include <stdint.h>
 
 int h_errno;
 
@@ -61,6 +63,34 @@ struct hostent *gethostbyname(const char *name)
     g_he.h_length    = 4;
     g_he.h_addr_list = g_he_addrlist;
     return &g_he;
+}
+
+int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen,
+                    struct hostent **result, int *h_errnop)
+{
+    *result = NULL;
+    if (!name) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    size_t nl = strlen(name) + 1;
+    size_t need = 3 * sizeof(char *) + 8 + nl;
+    if (buflen < need) return ERANGE;
+    in_addr_t a = resolve_host(name);
+    if (a == (in_addr_t)-1) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    char **list = (char **)(void *)(((uintptr_t)buf + 7) & ~(uintptr_t)7);
+    char *addr = (char *)(list + 3);
+    char *nm = addr + 4;
+    memcpy(addr, &a, 4);
+    memcpy(nm, name, nl);
+    list[0] = addr;
+    list[1] = NULL;
+    list[2] = NULL;
+    ret->h_name = nm;
+    ret->h_aliases = &list[2];
+    ret->h_addrtype = AF_INET;
+    ret->h_length = 4;
+    ret->h_addr_list = list;
+    *result = ret;
+    if (h_errnop) *h_errnop = 0;
+    return 0;
 }
 
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type)

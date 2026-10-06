@@ -13,6 +13,8 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);
 
 in_addr_t inet_resolve(const char *name);
 
+int inet_aton(const char *cp, struct in_addr *inp);
+
 #ifdef __cplusplus
 }
 #endif

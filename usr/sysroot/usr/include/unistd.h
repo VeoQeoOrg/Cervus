@@ -169,6 +169,14 @@ size_t confstr(int name, char *buf, size_t len);
 void *setmode(const char *mode);
 mode_t getmode(const void *set, mode_t mode);
 
+int nice(int inc);
+int pause(void);
+#define F_ULOCK 0
+#define F_LOCK  1
+#define F_TLOCK 2
+#define F_TEST  3
+int lockf(int fd, int cmd, off_t len);
+
 #ifdef __cplusplus
 }
 #endif

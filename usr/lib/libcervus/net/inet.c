@@ -1,29 +1,62 @@
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <ctype.h>
 
-in_addr_t inet_addr(const char *cp) {
-    unsigned parts[4];
-    int pi = 0, digits = 0;
-    unsigned cur = 0;
+int inet_aton(const char *cp, struct in_addr *inp) {
+    unsigned long parts[4];
+    int n = 0;
     const char *p = cp;
     for (;;) {
-        if (*p >= '0' && *p <= '9') {
-            cur = cur * 10 + (unsigned)(*p - '0');
-            if (cur > 255) return 0xffffffffu;
-            digits = 1;
-        } else if (*p == '.' || *p == '\0') {
-            if (!digits || pi >= 4) return 0xffffffffu;
-            parts[pi++] = cur;
-            cur = 0; digits = 0;
-            if (*p == '\0') break;
-        } else {
-            return 0xffffffffu;
+        if (!isdigit((unsigned char)*p)) return 0;
+        unsigned long v = 0;
+        int base = 10;
+        if (*p == '0') {
+            p++;
+            base = 8;
+            if (*p == 'x' || *p == 'X') {
+                p++;
+                base = 16;
+                if (!isxdigit((unsigned char)*p)) return 0;
+            }
         }
-        p++;
+        for (;;) {
+            int c = (unsigned char)*p, dv;
+            if (c >= '0' && c <= '9') dv = c - '0';
+            else if (base == 16 && c >= 'a' && c <= 'f') dv = c - 'a' + 10;
+            else if (base == 16 && c >= 'A' && c <= 'F') dv = c - 'A' + 10;
+            else break;
+            if (dv >= base) return 0;
+            v = v * (unsigned long)base + (unsigned long)dv;
+            if (v > 0xffffffffUL) return 0;
+            p++;
+        }
+        if (n == 4) return 0;
+        parts[n++] = v;
+        if (*p == '.') { p++; continue; }
+        if (*p && !isspace((unsigned char)*p)) return 0;
+        break;
     }
-    if (pi != 4) return 0xffffffffu;
-    return (in_addr_t)(parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24));
+    unsigned long a;
+    switch (n) {
+    case 1: a = parts[0]; break;
+    case 2:
+        if (parts[0] > 0xff || parts[1] > 0xffffff) return 0;
+        a = parts[0] << 24 | parts[1]; break;
+    case 3:
+        if (parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xffff) return 0;
+        a = parts[0] << 24 | parts[1] << 16 | parts[2]; break;
+    default:
+        if (parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xff || parts[3] > 0xff) return 0;
+        a = parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3]; break;
+    }
+    if (inp) inp->s_addr = htonl((uint32_t)a);
+    return 1;
+}
+
+in_addr_t inet_addr(const char *cp) {
+    struct in_addr a;
+    return inet_aton(cp, &a) ? a.s_addr : (in_addr_t)0xffffffffu;
 }
 
 char *inet_ntoa(struct in_addr in) {
