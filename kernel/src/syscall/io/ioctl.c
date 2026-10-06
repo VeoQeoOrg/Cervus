@@ -14,6 +14,15 @@
 #define TIOCSWINSZ    0x5414
 #define SIOCSTTL      0x5460
 #define FIONREAD      0x541B
+#define FIONBIO       0x5421
+#define FIONCLEX      0x5450
+#define FIOCLEX       0x5451
+#define FIOASYNC      0x5452
+#define O_NONBLOCK_FL 0x800
+#define O_ASYNC_FL    0x2000
+#define FD_CLOEXEC_FL 1
+
+extern void unix_set_nonblock(vnode_t *vn, int on);
 
 #define IOCTL_TERMIOS_SIZE 48
 
@@ -43,6 +52,8 @@ static size_t ioctl_in_size(uint64_t request)
         case TCSETSF:     return IOCTL_TERMIOS_SIZE;
         case TIOCSWINSZ:  return 8;
         case TIOCSNONBLOCK: return sizeof(int);
+        case FIONBIO:
+        case FIOASYNC:    return sizeof(int);
 	case SIOCSTTL:    return sizeof(int);
         default:
             if (IOC_DIR(request) & IOC_WRITE) return IOC_SIZE(request);
@@ -78,6 +89,32 @@ int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr)
         if (syscall_copy_from_user(kbuf, (const void *)arg_ptr, in_sz) < 0) {
             r = -EFAULT; goto out;
         }
+    }
+
+    switch (request) {
+    case FIONBIO:
+        if (!arg_ptr) { r = -EFAULT; goto out; }
+        if (*(int *)kbuf) f->flags |= O_NONBLOCK_FL;
+        else f->flags &= ~O_NONBLOCK_FL;
+        unix_set_nonblock(f->vnode, (f->flags & O_NONBLOCK_FL) ? 1 : 0);
+        r = 0;
+        goto out;
+    case FIOASYNC:
+        if (!arg_ptr) { r = -EFAULT; goto out; }
+        if (*(int *)kbuf) f->flags |= O_ASYNC_FL;
+        else f->flags &= ~O_ASYNC_FL;
+        r = 0;
+        goto out;
+    case FIOCLEX:
+    case FIONCLEX: {
+        int fl = fd_get_flags(t->fd_table, (int)fd);
+        if (fl < 0) { r = fl; goto out; }
+        fl = request == FIOCLEX ? (fl | FD_CLOEXEC_FL) : (fl & ~FD_CLOEXEC_FL);
+        r = fd_set_flags(t->fd_table, (int)fd, fl);
+        goto out;
+    }
+    default:
+        break;
     }
 
     r = vfs_ioctl(f, request, arg_ptr ? (void *)kbuf : (void *)0);
