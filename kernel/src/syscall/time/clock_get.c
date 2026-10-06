@@ -1,3 +1,4 @@
+#include "../../../include/sched/capabilities.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/apic/apic.h"
 #include "../../../include/drivers/timer.h"
@@ -144,11 +145,14 @@ int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
     return syscall_copy_to_user((void *)ts_ptr, &ts, sizeof(ts));
 }
 
-int64_t sys_clock_set(uint64_t sec)
+int64_t sys_clock_set(uint64_t sec, uint64_t nsec)
 {
-    if ((int64_t)sec < 1000000000) return -EINVAL;
+    task_t *t = syscall_cur_task();
+    if (t && t->uid != 0 && !cap_has(t->capabilities, CAP_SYSADMIN)) return -EPERM;
+    if ((int64_t)sec < 1000000000 || nsec >= 1000000000ULL) return -EINVAL;
+    uint64_t now = sched_now_ns();
     g_rtc_base_sec    = (int64_t)sec;
-    g_rtc_base_ns     = sched_now_ns();
+    g_rtc_base_ns     = now > nsec ? now - nsec : 0;
     g_rtc_initialized = true;
     return 0;
 }

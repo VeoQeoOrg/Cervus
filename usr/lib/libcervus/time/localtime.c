@@ -56,8 +56,6 @@ long timezone_offset(void) { tz_load(); return g_tz_offset; }
 const char *timezone_name(void) { tz_load(); return g_tz_name; }
 
 struct tm *localtime(const time_t *t) {
-    tz_load();
-    if (!t) return gmtime(t);
-    time_t local = *t + g_tz_offset;
-    return gmtime(&local);
+    static struct tm buf;
+    return localtime_r(t, &buf);
 }

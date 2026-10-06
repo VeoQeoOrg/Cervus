@@ -74,6 +74,9 @@ static inline long difftime_l(time_t a, time_t b) { return (long)(a - b); }
 #define TIMER_ABSTIME 1
 int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem);
 
+time_t timegm(struct tm *tm);
+int clock_settime(clockid_t clk, const struct timespec *ts);
+
 #ifdef __cplusplus
 }
 #endif

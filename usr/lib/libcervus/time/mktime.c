@@ -1,21 +1,36 @@
 #include <time.h>
+#include <errno.h>
 
-extern int __cervus_is_leap(int y);
-extern const int __cervus_days_in_mon[2][12];
+extern long long __cervus_days_from_civil(long long y, int m, int d);
+extern long timezone_offset(void);
+
+static long long fields_to_seconds(const struct tm *tm)
+{
+    long long year = (long long)tm->tm_year + 1900;
+    long long mon = tm->tm_mon;
+    year += mon / 12;
+    mon %= 12;
+    if (mon < 0) { mon += 12; year--; }
+    long long days = __cervus_days_from_civil(year, (int)mon + 1, 1) + (long long)tm->tm_mday - 1;
+    return days * 86400 + (long long)tm->tm_hour * 3600 + (long long)tm->tm_min * 60 + tm->tm_sec;
+}
+
+time_t timegm(struct tm *tm)
+{
+    if (!tm) { errno = EINVAL; return (time_t)-1; }
+    time_t t = (time_t)fields_to_seconds(tm);
+    struct tm norm;
+    if (!gmtime_r(&t, &norm)) return (time_t)-1;
+    *tm = norm;
+    return t;
+}
 
 time_t mktime(struct tm *tm)
 {
-    if (!tm) return (time_t)-1;
-    int year = tm->tm_year + 1900;
-    int mon  = tm->tm_mon;
-    long days = 0;
-    for (int y = 1970; y < year; y++) days += __cervus_is_leap(y) ? 366 : 365;
-    int ly = __cervus_is_leap(year);
-    for (int m = 0; m < mon; m++) days += __cervus_days_in_mon[ly][m];
-    days += tm->tm_mday - 1;
-    long long sec = (long long)days * 86400LL
-                  + (long long)tm->tm_hour * 3600LL
-                  + (long long)tm->tm_min * 60LL
-                  + (long long)tm->tm_sec;
-    return (time_t)sec;
+    if (!tm) { errno = EINVAL; return (time_t)-1; }
+    time_t t = (time_t)(fields_to_seconds(tm) - timezone_offset());
+    struct tm norm;
+    if (!localtime_r(&t, &norm)) return (time_t)-1;
+    *tm = norm;
+    return t;
 }

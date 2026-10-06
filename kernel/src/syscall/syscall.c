@@ -205,7 +205,7 @@ extern int64_t sys_wait4(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_waitid(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getrusage(uint64_t, uint64_t);
 extern int64_t sys_mknodat(uint64_t, uint64_t, uint64_t, uint64_t);
-extern int64_t sys_clock_set(uint64_t);
+extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
 extern int64_t sys_shmget(uint64_t, uint64_t, uint64_t);
@@ -312,7 +312,7 @@ W3(sys_socket)      W3(sys_bind)       W3(sys_connect)
 W5(sys_sendto)      W5(sys_recvfrom)   W3(sys_net_ifcfg)
 W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 W1(sys_openpty)
-W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
+W3(sys_poll)        W5(sys_select)     W2(sys_clock_set)
 W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
 W2(sys_sigaltstack) W3(sys_sigqueue)     W3(sys_sigtimedwait)

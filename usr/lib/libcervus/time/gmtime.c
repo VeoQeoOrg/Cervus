@@ -1,44 +1,35 @@
 #include <time.h>
+#include <errno.h>
+#include <limits.h>
 
-extern int __cervus_is_leap(int y);
-extern const int __cervus_days_in_mon[2][12];
+extern long long __cervus_days_from_civil(long long y, int m, int d);
+extern void __cervus_civil_from_days(long long z, long long *y, int *m, int *d);
 
-static struct tm __tm_buf;
+struct tm *gmtime_r(const time_t *t, struct tm *out)
+{
+    if (!t || !out) { errno = EINVAL; return 0; }
+    long long sec = (long long)*t;
+    long long days = sec / 86400, rem = sec % 86400;
+    if (rem < 0) { rem += 86400; days--; }
+    long long y;
+    int m, d;
+    __cervus_civil_from_days(days, &y, &m, &d);
+    if (y - 1900 > INT_MAX || y - 1900 < INT_MIN) { errno = EOVERFLOW; return 0; }
+    out->tm_year = (int)(y - 1900);
+    out->tm_mon = m - 1;
+    out->tm_mday = d;
+    out->tm_hour = (int)(rem / 3600);
+    out->tm_min = (int)(rem / 60 % 60);
+    out->tm_sec = (int)(rem % 60);
+    long long wd = (days + 4) % 7;
+    out->tm_wday = (int)(wd < 0 ? wd + 7 : wd);
+    out->tm_yday = (int)(days - __cervus_days_from_civil(y, 1, 1));
+    out->tm_isdst = 0;
+    return out;
+}
 
 struct tm *gmtime(const time_t *t)
 {
-    if (!t) return (void *)0;
-    long long sec = (long long)*t;
-    long days = (long)(sec / 86400);
-    long rem  = (long)(sec % 86400);
-    if (rem < 0) { rem += 86400; days--; }
-
-    __tm_buf.tm_hour = rem / 3600;
-    rem -= __tm_buf.tm_hour * 3600;
-    __tm_buf.tm_min  = rem / 60;
-    __tm_buf.tm_sec  = rem - __tm_buf.tm_min * 60;
-
-    __tm_buf.tm_wday = (int)((days + 4) % 7);
-    if (__tm_buf.tm_wday < 0) __tm_buf.tm_wday += 7;
-
-    int year = 1970;
-    while (1) {
-        int ly = __cervus_is_leap(year);
-        int dy = ly ? 366 : 365;
-        if (days >= dy) { days -= dy; year++; }
-        else if (days < 0) { year--; days += __cervus_is_leap(year) ? 366 : 365; }
-        else break;
-    }
-    __tm_buf.tm_year = year - 1900;
-    __tm_buf.tm_yday = (int)days;
-    int ly = __cervus_is_leap(year);
-    int m = 0;
-    while (m < 12 && days >= __cervus_days_in_mon[ly][m]) {
-        days -= __cervus_days_in_mon[ly][m];
-        m++;
-    }
-    __tm_buf.tm_mon  = m;
-    __tm_buf.tm_mday = (int)days + 1;
-    __tm_buf.tm_isdst = 0;
-    return &__tm_buf;
+    static struct tm buf;
+    return gmtime_r(t, &buf);
 }
