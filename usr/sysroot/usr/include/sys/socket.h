@@ -146,6 +146,8 @@ struct cmsghdr {
 long sendmsg(int fd, const struct msghdr *msg, int flags);
 long recvmsg(int fd, struct msghdr *msg, int flags);
 
+int accept4(int fd, struct sockaddr *addr, socklen_t *len, int flags);
+
 #ifdef __cplusplus
 }
 #endif

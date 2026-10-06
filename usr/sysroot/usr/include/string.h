@@ -49,6 +49,8 @@ int     strerror_r(int errnum, char *buf, size_t buflen);
 char   *strsignal(int sig);
 int     strverscmp(const char *a, const char *b);
 
+void explicit_bzero(void *p, size_t n);
+
 #ifdef __cplusplus
 }
 #endif

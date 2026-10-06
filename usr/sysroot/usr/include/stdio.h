@@ -117,6 +117,9 @@ int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpa
 int  remove(const char *path);
 char *tmpnam(char *buf);
 
+#define L_ctermid 9
+char *ctermid(char *s);
+
 #ifdef __cplusplus
 }
 #endif

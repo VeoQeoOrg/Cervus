@@ -92,6 +92,7 @@ int mkfifoat(int dirfd, const char *path, mode_t mode);
 int chmod(const char *path, mode_t mode);
 mode_t umask(mode_t mask);
 
+int lchmod(const char *path, mode_t mode);
 
 #ifdef __cplusplus
 }

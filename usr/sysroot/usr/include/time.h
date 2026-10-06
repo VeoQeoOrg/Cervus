@@ -71,6 +71,9 @@ int clock_getres(clockid_t clk, struct timespec *res);
 
 static inline long difftime_l(time_t a, time_t b) { return (long)(a - b); }
 
+#define TIMER_ABSTIME 1
+int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem);
+
 #ifdef __cplusplus
 }
 #endif

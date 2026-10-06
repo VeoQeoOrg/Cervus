@@ -64,6 +64,15 @@ int creat(const char *path, mode_t mode);
 
 int openat(int dirfd, const char *path, int flags, ...);
 
+#define POSIX_FADV_NORMAL     0
+#define POSIX_FADV_RANDOM     1
+#define POSIX_FADV_SEQUENTIAL 2
+#define POSIX_FADV_WILLNEED   3
+#define POSIX_FADV_DONTNEED   4
+#define POSIX_FADV_NOREUSE    5
+int posix_fadvise(int fd, off_t offset, off_t len, int advice);
+int posix_fallocate(int fd, off_t offset, off_t len);
+
 #ifdef __cplusplus
 }
 #endif

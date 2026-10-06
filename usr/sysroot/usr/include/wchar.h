@@ -80,6 +80,9 @@ double             wcstod(const wchar_t *s, wchar_t **end);
 float              wcstof(const wchar_t *s, wchar_t **end);
 long double        wcstold(const wchar_t *s, wchar_t **end);
 
+struct tm;
+size_t wcsftime(wchar_t *s, size_t max, const wchar_t *fmt, const struct tm *tm);
+
 #ifdef __cplusplus
 }
 #endif

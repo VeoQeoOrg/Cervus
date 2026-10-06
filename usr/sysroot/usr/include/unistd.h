@@ -160,6 +160,12 @@ extern int   optopt;
 extern int   opterr;
 int          getopt(int argc, char *const argv[], const char *optstring);
 
+#define _CS_PATH 0
+#define _CS_POSIX_V7_LP64_OFF64_CFLAGS 1136
+#define _CS_POSIX_V7_LP64_OFF64_LDFLAGS 1137
+#define _CS_POSIX_V7_LP64_OFF64_LIBS 1138
+size_t confstr(int name, char *buf, size_t len);
+
 void *setmode(const char *mode);
 mode_t getmode(const void *set, mode_t mode);
 
