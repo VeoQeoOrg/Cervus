@@ -314,6 +314,13 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     t->brk_start  = t->brk_current = elf.mm->brk_start;
     t->brk_max    = MM_MMAP_TOP;
 
+    for (int sig = 0; sig < 32; sig++) {
+        if (t->sig_handler[sig] != 1) t->sig_handler[sig] = 0;
+        t->sig_flags[sig]    = 0;
+        t->sig_restorer[sig] = 0;
+        t->sig_mask[sig]     = 0;
+    }
+
     t->fs_base    = 0;
     t->tls_vaddr  = elf.tls_vaddr;
     t->tls_filesz = elf.tls_filesz;

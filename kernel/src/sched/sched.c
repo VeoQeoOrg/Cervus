@@ -268,6 +268,11 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->cr3     = parent->cr3;
     t->mm      = parent->mm;
     if (t->mm) mm_get(t->mm);
+    memcpy(t->sig_handler, parent->sig_handler, sizeof(t->sig_handler));
+    memcpy(t->sig_flags, parent->sig_flags, sizeof(t->sig_flags));
+    memcpy(t->sig_restorer, parent->sig_restorer, sizeof(t->sig_restorer));
+    memcpy(t->sig_mask, parent->sig_mask, sizeof(t->sig_mask));
+    t->sig_blocked = parent->sig_blocked;
     t->brk_start   = parent->brk_start;
     t->brk_current = parent->brk_current;
     t->brk_max     = parent->brk_max;
@@ -449,6 +454,17 @@ task_t* task_fork(task_t* parent) {
     child->user_saved_r14 = parent->user_saved_r14;
     child->user_saved_r15 = parent->user_saved_r15;
     child->user_saved_r11 = parent->user_saved_r11 | (1ULL << 9);
+
+    child->fs_base    = parent->fs_base;
+    child->tls_vaddr  = parent->tls_vaddr;
+    child->tls_filesz = parent->tls_filesz;
+    child->tls_memsz  = parent->tls_memsz;
+    child->tls_align  = parent->tls_align;
+    memcpy(child->sig_handler, parent->sig_handler, sizeof(child->sig_handler));
+    memcpy(child->sig_flags, parent->sig_flags, sizeof(child->sig_flags));
+    memcpy(child->sig_restorer, parent->sig_restorer, sizeof(child->sig_restorer));
+    memcpy(child->sig_mask, parent->sig_mask, sizeof(child->sig_mask));
+    child->sig_blocked = parent->sig_blocked;
 
     child->flags |= TASK_FLAG_FORK;
     atomic_init_bool(&child->on_cpu, false);
