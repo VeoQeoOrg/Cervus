@@ -122,3 +122,32 @@ int64_t sys_msync(uint64_t addr, uint64_t len, uint64_t flags)
     if (addr & 0xFFF) return -EINVAL;
     return mm_sync(t->mm, addr, len);
 }
+
+int64_t sys_mlock(uint64_t addr, uint64_t len)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->mm) return -EINVAL;
+    return mm_mlock(t->mm, addr, len, true);
+}
+
+int64_t sys_munlock(uint64_t addr, uint64_t len)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->mm) return -EINVAL;
+    return mm_mlock(t->mm, addr, len, false);
+}
+
+int64_t sys_mlockall(uint64_t flags)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->mm) return -EINVAL;
+    if (!flags || (flags & ~7ULL)) return -EINVAL;
+    return mm_mlockall(t->mm, (int)flags, true);
+}
+
+int64_t sys_munlockall(void)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->mm) return -EINVAL;
+    return mm_mlockall(t->mm, 0, false);
+}

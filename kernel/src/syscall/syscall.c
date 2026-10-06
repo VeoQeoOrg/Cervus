@@ -194,6 +194,10 @@ extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_ppoll(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_pselect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
+extern int64_t sys_mlock(uint64_t, uint64_t);
+extern int64_t sys_munlock(uint64_t, uint64_t);
+extern int64_t sys_mlockall(uint64_t);
+extern int64_t sys_munlockall(void);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
 extern int64_t sys_shmget(uint64_t, uint64_t, uint64_t);
@@ -304,6 +308,7 @@ W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
+W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 W3(sys_futex_wait)  W3(sys_futex_wake)
 W3(sys_eventfd)     W3(sys_timerfd_create)  W3(sys_timerfd_settime)
@@ -444,6 +449,10 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,
+    [SYS_MLOCK]           = _sys_mlock,
+    [SYS_MUNLOCK]         = _sys_munlock,
+    [SYS_MLOCKALL]        = _sys_mlockall,
+    [SYS_MUNLOCKALL]      = _sys_munlockall,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,
     [SYS_FB_MAP]            = _sys_fb_map,

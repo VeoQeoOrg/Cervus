@@ -19,6 +19,7 @@ struct vnode;
 #define VM_STACK      0x0080u
 #define VM_HEAP       0x0100u
 #define VM_DONTCOPY   0x0200u
+#define VM_LOCKED     0x0400u
 #define VM_PROT_MASK  (VM_READ | VM_WRITE | VM_EXEC)
 
 #define MM_USER_TOP     0x0000800000000000ULL
@@ -57,6 +58,7 @@ typedef struct mm {
     uintptr_t      brk;
     uintptr_t      mmap_top;
     struct vnode  *exe;
+    uint32_t       def_flags;
 } mm_t;
 
 #define MM_FAULT_WRITE 0x1
@@ -71,6 +73,8 @@ mm_t      *mm_fork(mm_t *parent);
 
 int        mm_fault(mm_t *mm, uintptr_t addr, int how);
 int        mm_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
+int        mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock);
+int        mm_mlockall(mm_t *mm, int flags, bool lock);
 bool       mm_access_ok(mm_t *mm, uintptr_t addr, size_t len, int write);
 int        mm_user_phys(mm_t *mm, uintptr_t addr, int write, uintptr_t *phys_out);
 

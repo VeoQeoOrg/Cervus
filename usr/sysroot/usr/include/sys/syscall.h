@@ -206,6 +206,10 @@ extern "C" {
 #define SYS_FCHDIR          640
 #define SYS_PPOLL           641
 #define SYS_PSELECT         642
+#define SYS_MLOCK           643
+#define SYS_MUNLOCK         644
+#define SYS_MLOCKALL        645
+#define SYS_MUNLOCKALL      646
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

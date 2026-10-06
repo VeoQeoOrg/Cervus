@@ -57,6 +57,15 @@ int   msync(void *addr, size_t len, int flags);
 int   munmap(void *addr, size_t len);
 int   mprotect(void *addr, size_t len, int prot);
 
+#define MCL_CURRENT 1
+#define MCL_FUTURE  2
+#define MCL_ONFAULT 4
+
+int   mlock(const void *addr, size_t len);
+int   munlock(const void *addr, size_t len);
+int   mlockall(int flags);
+int   munlockall(void);
+
 #ifdef __cplusplus
 }
 #endif

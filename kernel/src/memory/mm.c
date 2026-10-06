@@ -635,6 +635,68 @@ int mm_protect(mm_t *mm, uintptr_t addr, size_t len, uint32_t prot) {
     return 0;
 }
 
+static void populate_locked_vma(mm_t *mm, vm_area_t *v) {
+    if (v->flags & VM_PFNMAP) return;
+    int write = (v->flags & VM_WRITE) && !(v->flags & VM_SHARED);
+    for (uintptr_t p = v->start; p < v->end; p += PG) {
+        vmm_pte_t *pte = vmm_pte_lookup(mm->pagemap, p);
+        if (pte && (*pte & VMM_PRESENT) && (!write || (*pte & VMM_WRITE))) continue;
+        if (fault_locked(mm, p, write ? MM_FAULT_WRITE : 0) < 0) break;
+    }
+}
+
+int mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock) {
+    if (!mm) return -EINVAL;
+    uintptr_t start = pdown(addr);
+    uintptr_t end = addr + len;
+    if (end < addr || end > MM_USER_TOP) return -ENOMEM;
+    end = pup(end);
+    if (start == end) return 0;
+    kmutex_lock(&mm->lock);
+    uintptr_t cur = start;
+    while (cur < end) {
+        vm_area_t *v = mm_find_vma(mm, cur);
+        if (!v) { kmutex_unlock(&mm->lock); return -ENOMEM; }
+        cur = v->end;
+    }
+    vm_area_t *v = mm->vmas;
+    while (v && v->end <= start) v = v->next;
+    while (v && v->start < end) {
+        if (v->start < start) { v = vma_split(mm, v, start); if (!v) break; continue; }
+        if (v->end > end && !vma_split(mm, v, end)) break;
+        if (lock) {
+            v->flags |= VM_LOCKED;
+            populate_locked_vma(mm, v);
+        } else {
+            v->flags &= ~VM_LOCKED;
+        }
+        v = v->next;
+    }
+    kmutex_unlock(&mm->lock);
+    return 0;
+}
+
+int mm_mlockall(mm_t *mm, int flags, bool lock) {
+    if (!mm) return -EINVAL;
+    kmutex_lock(&mm->lock);
+    if (!lock) {
+        mm->def_flags &= ~VM_LOCKED;
+        for (vm_area_t *v = mm->vmas; v; v = v->next) v->flags &= ~VM_LOCKED;
+        kmutex_unlock(&mm->lock);
+        return 0;
+    }
+    if (flags & 2) mm->def_flags |= VM_LOCKED;
+    else mm->def_flags &= ~VM_LOCKED;
+    if (flags & 1) {
+        for (vm_area_t *v = mm->vmas; v; v = v->next) {
+            v->flags |= VM_LOCKED;
+            populate_locked_vma(mm, v);
+        }
+    }
+    kmutex_unlock(&mm->lock);
+    return 0;
+}
+
 int mm_sync(mm_t *mm, uintptr_t addr, size_t len) {
     if (!mm || (addr & (PG - 1))) return -EINVAL;
     uintptr_t end = addr + pup(len);
