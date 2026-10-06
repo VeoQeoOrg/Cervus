@@ -137,12 +137,6 @@ static void load_elf_module(void) {
     t->mm = r.mm;
     mm_init_heap(r.mm, r.load_end);
 
-    int sr = vfs_init_stdio(t);
-    if (sr < 0)
-        serial_printf("[VFS] vfs_init_stdio failed: %d\n", sr);
-    else
-        serial_writestring("[VFS] stdio assigned to task\n");
-
     serial_printf("[ELF] Task 'init' created: cr3=0x%llx\n", t->cr3);
 
     xhci_start_worker();

@@ -2230,7 +2230,7 @@ static int cmd_umask(int argc, char **argv) {
 static int cmd_reload(int argc, char **argv) {
     (void)argc; (void)argv;
     g_loading_rc = 1;
-    if (open("/etc/cshrc", O_RDONLY, 0) >= 0) run_rc_file("/etc/cshrc");
+    if (access("/etc/cshrc", R_OK) == 0) run_rc_file("/etc/cshrc");
     else run_rc_file("/mnt/etc/cshrc");
     if (g_cshrc_path[0]) run_rc_file(g_cshrc_path);
     g_loading_rc = 0;
@@ -2569,7 +2569,7 @@ static void interactive_init_paths(void) {
         path_join(h, ".cshrc", g_cshrc_path, sizeof(g_cshrc_path));
     }
     g_loading_rc = 1;
-    if (open("/etc/cshrc", O_RDONLY, 0) >= 0) run_rc_file("/etc/cshrc");
+    if (access("/etc/cshrc", R_OK) == 0) run_rc_file("/etc/cshrc");
     else run_rc_file("/mnt/etc/cshrc");
     if (g_cshrc_path[0]) run_rc_file(g_cshrc_path);
     g_loading_rc = 0;
