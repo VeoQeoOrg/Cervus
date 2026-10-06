@@ -312,6 +312,14 @@ void kmain(void) {
     vfs_mount("/proc", procroot);
     vfs_set_mount_info("/proc", "procfs", "procfs");
     serial_writestring("procfs [OK]\n");
+
+    vnode_t *shmroot = ramfs_create_root();
+    if (shmroot) {
+        shmroot->mode = 01777;
+        vfs_mount("/dev/shm", shmroot);
+        vfs_set_mount_info("/dev/shm", "ramfs", "ramfs");
+        vnode_unref(shmroot);
+    }
     kstage("acpi_init");
     acpi_init();
     acpi_print_tables();
