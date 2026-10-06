@@ -199,6 +199,8 @@ extern int64_t sys_munlock(uint64_t, uint64_t);
 extern int64_t sys_mlockall(uint64_t);
 extern int64_t sys_munlockall(void);
 extern int64_t sys_sigaltstack(uint64_t, uint64_t);
+extern int64_t sys_sigqueue(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_sigtimedwait(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -309,7 +311,7 @@ W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
-W2(sys_sigaltstack)
+W2(sys_sigaltstack) W3(sys_sigqueue)     W3(sys_sigtimedwait)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -454,6 +456,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_MLOCKALL]        = _sys_mlockall,
     [SYS_MUNLOCKALL]      = _sys_munlockall,
     [SYS_SIGALTSTACK]     = _sys_sigaltstack,
+    [SYS_SIGQUEUE]        = _sys_sigqueue,
+    [SYS_SIGTIMEDWAIT]    = _sys_sigtimedwait,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

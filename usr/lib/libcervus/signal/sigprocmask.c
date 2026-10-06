@@ -2,10 +2,25 @@
 #include <sys/syscall.h>
 #include <libcervus.h>
 
+#define SIGCANCEL 32
+#define SIGSETXID 33
+
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
-    return (int)__cervus_sys_ret(
-        (long)syscall4(SYS_RT_SIGPROCMASK, how, (unsigned long)set, (unsigned long)oldset, 8));
+    uint64_t mask = 0;
+    const uint64_t *p = NULL;
+    if (set) {
+        mask = set->__bits[0];
+        if (how != SIG_UNBLOCK) mask &= ~((1ULL << SIGCANCEL) | (1ULL << SIGSETXID));
+        p = &mask;
+    }
+    uint64_t old = 0;
+    long r = syscall4(SYS_RT_SIGPROCMASK, how, (unsigned long)p, oldset ? (unsigned long)&old : 0, 8);
+    if (r >= 0 && oldset) {
+        oldset->__bits[0] = old;
+        oldset->__bits[1] = 0;
+    }
+    return (int)__cervus_sys_ret(r);
 }
 
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)

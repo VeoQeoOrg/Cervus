@@ -6,7 +6,9 @@
 
 struct task;
 
-#define NSIG        32
+#define NSIG        64
+#define SIGRTMIN_K  32
+#define SIGQUEUE_MAX 64
 
 #define SIGHUP      1
 #define SIGINT      2
@@ -47,6 +49,28 @@ typedef struct {
     uint64_t mask;
 } sig_ucontext_t;
 
+#define SI_USER_CODE    0
+#define SI_QUEUE_CODE   (-1)
+#define SI_KERNEL_CODE  0x80
+#define CLD_EXITED_CODE 1
+#define CLD_KILLED_CODE 2
+#define CLD_DUMPED_CODE 3
+
+typedef struct {
+    int32_t  code;
+    uint32_t pid;
+    uint32_t uid;
+    int32_t  status;
+    uint64_t addr;
+    int32_t  trapno;
+    int32_t  err;
+    uint64_t value;
+} ksiginfo_t;
+
+int     signal_post(struct task *t, int sig, const ksiginfo_t *si);
+void    signal_send_child(struct task *parent, struct task *child);
+int64_t sys_sigqueue(uint64_t pid, uint64_t sig, uint64_t value);
+int64_t sys_sigtimedwait(uint64_t set, uint64_t info, uint64_t ts);
 void    signal_send(struct task *t, int sig);
 void    signal_send_group(uint32_t pgid, int sig);
 void    signal_send_subtree(struct task *root, int sig);

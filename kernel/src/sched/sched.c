@@ -673,7 +673,7 @@ __attribute__((noreturn)) void task_exit(void)
 
     task_t *parent = task_find_by_pid(me->ppid);
     if (parent && parent != me && parent->state != TASK_ZOMBIE && parent->state != TASK_DEAD)
-        signal_send(parent, SIGCHLD);
+        signal_send_child(parent, me);
 
     sched_reschedule();
 

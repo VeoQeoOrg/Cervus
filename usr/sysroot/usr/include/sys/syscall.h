@@ -211,6 +211,8 @@ extern "C" {
 #define SYS_MLOCKALL        645
 #define SYS_MUNLOCKALL      646
 #define SYS_SIGALTSTACK     647
+#define SYS_SIGQUEUE        648
+#define SYS_SIGTIMEDWAIT    649
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

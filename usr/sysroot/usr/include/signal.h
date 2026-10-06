@@ -44,7 +44,13 @@ typedef int sig_atomic_t;
 #define SIGPWR    30
 #define SIGSYS    31
 #define SIGPOLL   SIGIO
-#define NSIG      32
+#define NSIG      64
+#define _NSIG     NSIG
+
+int __libc_current_sigrtmin(void);
+int __libc_current_sigrtmax(void);
+#define SIGRTMIN  (__libc_current_sigrtmin())
+#define SIGRTMAX  (__libc_current_sigrtmax())
 
 typedef void (*sighandler_t)(int);
 
@@ -93,6 +99,20 @@ typedef void (*sighandler_t)(int);
 #define BUS_ADRALN  1
 #define BUS_ADRERR  2
 #define BUS_OBJERR  3
+
+#define CLD_EXITED    1
+#define CLD_KILLED    2
+#define CLD_DUMPED    3
+#define CLD_TRAPPED   4
+#define CLD_STOPPED   5
+#define CLD_CONTINUED 6
+
+#define POLL_IN  1
+#define POLL_OUT 2
+#define POLL_MSG 3
+#define POLL_ERR 4
+#define POLL_PRI 5
+#define POLL_HUP 6
 
 #ifndef __CERVUS_SIGSET_T
 #define __CERVUS_SIGSET_T
@@ -147,6 +167,11 @@ typedef struct {
 #define si_addr      _sifields._sigfault.si_addr
 #define si_band      _sifields._sigpoll.si_band
 #define si_fd        _sifields._sigpoll.si_fd
+#define si_value     _sifields._rt.si_sigval
+#define si_int       _sifields._rt.si_sigval.sival_int
+#define si_ptr       _sifields._rt.si_sigval.sival_ptr
+#define si_timerid   _sifields._timer.si_tid
+#define si_overrun   _sifields._timer.si_overrun
 
 typedef struct {
     void   *ss_sp;
@@ -188,6 +213,18 @@ int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *mask);
 int sigaltstack(const stack_t *ss, stack_t *old_ss);
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *old);
+
+struct timespec;
+int sigqueue(pid_t pid, int sig, const union sigval value);
+int sigwait(const sigset_t *set, int *sig);
+int sigwaitinfo(const sigset_t *set, siginfo_t *info);
+int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout);
+void psignal(int sig, const char *msg);
+
+#define SIG2STR_MAX 32
+int sig2str(int sig, char *str);
+int str2sig(const char *str, int *sig);
+void psiginfo(const siginfo_t *info, const char *msg);
 
 #define SIG_BLOCK    0
 #define SIG_UNBLOCK  1

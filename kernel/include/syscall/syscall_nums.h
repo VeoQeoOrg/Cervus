@@ -221,6 +221,8 @@
 #define SYS_MLOCKALL          645
 #define SYS_MUNLOCKALL        646
 #define SYS_SIGALTSTACK       647
+#define SYS_SIGQUEUE          648
+#define SYS_SIGTIMEDWAIT      649
 
 #define SYSCALL_TABLE_SIZE    768
 

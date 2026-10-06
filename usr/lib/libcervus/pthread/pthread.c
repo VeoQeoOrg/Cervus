@@ -45,7 +45,7 @@ static void futex_wake(volatile int *addr, int n)
     syscall2(SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)addr, (uint64_t)n);
 }
 
-#define SIGCANCEL 31
+#define SIGCANCEL 32
 
 static volatile int g_cancel_used;
 

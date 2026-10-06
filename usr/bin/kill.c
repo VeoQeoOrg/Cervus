@@ -9,46 +9,37 @@
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
-typedef struct { const char *name; int num; } sig_t;
-static const sig_t SIGS[] = {
-    { "HUP",   1 }, { "INT",   2 }, { "QUIT",  3 }, { "ILL",    4 },
-    { "TRAP",  5 }, { "ABRT",  6 }, { "BUS",   7 }, { "FPE",    8 },
-    { "KILL",  9 }, { "USR1", 10 }, { "SEGV", 11 }, { "USR2",  12 },
-    { "PIPE", 13 }, { "ALRM", 14 }, { "TERM", 15 }, { "STKFLT", 16 },
-    { "CHLD", 17 }, { "CONT", 18 }, { "STOP", 19 }, { "TSTP",  20 },
-    { "TTIN", 21 }, { "TTOU", 22 }, { "URG",  23 }, { "XCPU",  24 },
-    { "XFSZ", 25 }, { "VTALRM", 26 }, { "PROF", 27 }, { "WINCH", 28 },
-    { "IO",   29 }, { "PWR",  30 }, { "SYS",  31 },
-    { NULL,    0 }
-};
-
 static int signal_lookup(const char *s)
 {
-    char up[16];
+    char up[SIG2STR_MAX + 4];
     size_t n = 0;
     for (; s[n] && n < sizeof up - 1; n++) up[n] = (char)toupper((unsigned char)s[n]);
     up[n] = 0;
     if (s[n]) return -1;
     const char *p = up;
     if (!strncmp(p, "SIG", 3)) p += 3;
-    for (int i = 0; SIGS[i].name; i++) if (!strcmp(SIGS[i].name, p)) return SIGS[i].num;
-    if (!*p) return -1;
-    for (const char *q = p; *q; q++) if (!isdigit((unsigned char)*q)) return -1;
-    int v = atoi(p);
-    return v < 64 ? v : -1;
+    if (!strcmp(p, "0")) return 0;
+    int sig;
+    return str2sig(p, &sig) == 0 ? sig : -1;
 }
 
 static const char *signal_name(int num)
 {
-    for (int i = 0; SIGS[i].name; i++) if (SIGS[i].num == num) return SIGS[i].name;
-    return NULL;
+    static char buf[SIG2STR_MAX];
+    return sig2str(num, buf) == 0 ? buf : NULL;
 }
 
 static void list_signals(void)
 {
-    for (int i = 0; SIGS[i].name; i++)
-        printf("%2d) SIG%-7s%s", SIGS[i].num, SIGS[i].name, (i % 4 == 3) ? "\n" : " ");
-    putchar('\n');
+    int col = 0;
+    for (int sig = 1; sig < NSIG; sig++) {
+        char nm[SIG2STR_MAX];
+        if (sig2str(sig, nm) < 0) continue;
+        char full[SIG2STR_MAX + 4];
+        snprintf(full, sizeof full, "SIG%s", nm);
+        printf("%2d) %-13s%s", sig, full, (++col % 5 == 0) ? "\n" : " ");
+    }
+    if (col % 5) putchar('\n');
 }
 
 static const char USAGE[] =

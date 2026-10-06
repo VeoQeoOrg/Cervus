@@ -7,6 +7,7 @@
 #include "capabilities.h"
 #include "../memory/vmm.h"
 #include "../smp/smp.h"
+#include "../signal/signal.h"
 
 #ifndef __ATOMIC_RELAXED
 #define __ATOMIC_RELAXED 0
@@ -142,10 +143,6 @@ typedef struct task {
 
     uint64_t sig_pending;
     uint64_t sig_blocked;
-    uint64_t sig_handler[32];
-    uint64_t sig_flags[32];
-    uint64_t sig_restorer[32];
-    uint64_t sig_mask[32];
 
     uint64_t user_saved_rdi;
     uint64_t user_saved_rsi;
@@ -194,7 +191,22 @@ typedef struct task {
         uint64_t addr;
         int32_t  trapno;
         int32_t  err;
-    } sig_si[32];
+        uint64_t value;
+    } sig_si[NSIG];
+    uint64_t   sig_handler[NSIG];
+    uint64_t   sig_flags[NSIG];
+    uint64_t   sig_restorer[NSIG];
+    uint64_t   sig_mask[NSIG];
+    uint64_t   sig_waitset;
+    uint32_t   rtq_n;
+    uint32_t   rtq_pad;
+    struct {
+        int32_t  sig;
+        int32_t  code;
+        uint32_t pid;
+        uint32_t uid;
+        uint64_t value;
+    } rtq[SIGQUEUE_MAX];
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -220,16 +232,16 @@ _Static_assert(offsetof(task_t, user_saved_r14) == 312, "task_t: user_saved_r14"
 _Static_assert(offsetof(task_t, user_saved_r15) == 320, "task_t: user_saved_r15");
 _Static_assert(offsetof(task_t, user_saved_r11) == 328, "task_t: user_saved_r11");
 _Static_assert(offsetof(task_t, on_cpu)         == 0x158, "task_t: on_cpu — update TASK_ON_CPU_OFFSET");
-_Static_assert(offsetof(task_t, user_saved_rdi) == 1680, "task_t: user_saved_rdi — update syscall_asm.asm");
-_Static_assert(offsetof(task_t, user_saved_rsi) == 1688, "task_t: user_saved_rsi");
-_Static_assert(offsetof(task_t, user_saved_rdx) == 1696, "task_t: user_saved_rdx");
-_Static_assert(offsetof(task_t, user_saved_r10) == 1704, "task_t: user_saved_r10");
-_Static_assert(offsetof(task_t, user_saved_r8)  == 1712, "task_t: user_saved_r8");
-_Static_assert(offsetof(task_t, user_saved_r9)  == 1720, "task_t: user_saved_r9");
-_Static_assert(offsetof(task_t, user_saved_rax) == 1728, "task_t: user_saved_rax");
-_Static_assert(offsetof(task_t, user_saved_rcx) == 2176, "task_t: user_saved_rcx — update syscall_asm.asm");
-_Static_assert(offsetof(task_t, ret_iret)       == 2184, "task_t: ret_iret — update syscall_asm.asm");
-_Static_assert(offsetof(task_t, user_iret_r11)  == 2208, "task_t: user_iret_r11 — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, user_saved_rdi) == 656, "task_t: user_saved_rdi — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, user_saved_rsi) == 664, "task_t: user_saved_rsi");
+_Static_assert(offsetof(task_t, user_saved_rdx) == 672, "task_t: user_saved_rdx");
+_Static_assert(offsetof(task_t, user_saved_r10) == 680, "task_t: user_saved_r10");
+_Static_assert(offsetof(task_t, user_saved_r8)  == 688, "task_t: user_saved_r8");
+_Static_assert(offsetof(task_t, user_saved_r9)  == 696, "task_t: user_saved_r9");
+_Static_assert(offsetof(task_t, user_saved_rax) == 704, "task_t: user_saved_rax");
+_Static_assert(offsetof(task_t, user_saved_rcx) == 1152, "task_t: user_saved_rcx — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, ret_iret)       == 1160, "task_t: ret_iret — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, user_iret_r11)  == 1184, "task_t: user_iret_r11 — update syscall_asm.asm");
 
 extern task_t* ready_queues[MAX_PRIORITY + 1];
 extern task_t* current_task[MAX_CPUS];

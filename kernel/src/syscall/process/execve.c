@@ -318,7 +318,7 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     t->ss_size = 0;
     t->ss_flags = 2;
     t->ret_iret = 0;
-    for (int sig = 0; sig < 32; sig++) {
+    for (int sig = 0; sig < NSIG; sig++) {
         if (t->sig_handler[sig] != 1) t->sig_handler[sig] = 0;
         t->sig_flags[sig]    = 0;
         t->sig_restorer[sig] = 0;

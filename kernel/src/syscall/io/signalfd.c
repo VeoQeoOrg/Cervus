@@ -15,7 +15,10 @@
 
 typedef struct {
     uint64_t   mask;
-    uint32_t   queue[SFD_QUEUE];
+    struct {
+        int        sig;
+        ksiginfo_t si;
+    } queue[SFD_QUEUE];
     int        head, tail, count;
     int        nonblock;
     uint32_t   owner_pid;
@@ -64,7 +67,7 @@ static void sfd_unregister(signalfd_t *s)
     spinlock_release_irqrestore(&g_sfds_lock, f);
 }
 
-int signalfd_deliver(uint32_t pid, int sig)
+int signalfd_deliver(uint32_t pid, int sig, const ksiginfo_t *si)
 {
     if (sig < 1 || sig > 63) return 0;
 
@@ -77,7 +80,8 @@ int signalfd_deliver(uint32_t pid, int sig)
 
         uint64_t f = spinlock_acquire_irqsave(&s->lock);
         if (s->count < SFD_QUEUE) {
-            s->queue[s->tail] = (uint32_t)sig;
+            s->queue[s->tail].sig = sig;
+            s->queue[s->tail].si  = *si;
             s->tail = (s->tail + 1) % SFD_QUEUE;
             s->count++;
         }
@@ -98,39 +102,54 @@ static int64_t sfd_read(vnode_t *n, void *buf, size_t len, uint64_t off)
     signalfd_t *s = (signalfd_t *)n->fs_data;
     task_t *me = syscall_cur_task();
 
+    enum { BATCH = 8 };
+    sfd_siginfo_t out[BATCH];
     for (;;) {
         uint64_t f = spinlock_acquire_irqsave(&s->lock);
         if (s->count) {
             size_t want = len / sizeof(sfd_siginfo_t);
+            if (want > BATCH) want = BATCH;
             size_t got = 0;
-            uint8_t *dst = buf;
             while (got < want && s->count) {
-                sfd_siginfo_t si;
-                memset(&si, 0, sizeof si);
-                si.ssi_signo = s->queue[s->head];
+                sfd_siginfo_t *o = &out[got];
+                const ksiginfo_t *k = &s->queue[s->head].si;
+                memset(o, 0, sizeof *o);
+                o->ssi_signo  = (uint32_t)s->queue[s->head].sig;
+                o->ssi_code   = k->code;
+                o->ssi_pid    = k->pid;
+                o->ssi_uid    = k->uid;
+                o->ssi_status = k->status;
+                o->ssi_trapno = (uint32_t)k->trapno;
+                o->ssi_int    = (int32_t)k->value;
+                o->ssi_ptr    = k->value;
+                o->ssi_addr   = k->addr;
                 s->head = (s->head + 1) % SFD_QUEUE;
                 s->count--;
-                memcpy(dst + got * sizeof si, &si, sizeof si);
                 got++;
             }
             spinlock_release_irqrestore(&s->lock, f);
+            memcpy(buf, out, got * sizeof(sfd_siginfo_t));
             return (int64_t)(got * sizeof(sfd_siginfo_t));
         }
         if (s->nonblock) {
             spinlock_release_irqrestore(&s->lock, f);
             return -EAGAIN;
         }
-        s->waiter = me;
-        spinlock_release_irqrestore(&s->lock, f);
-
-        if (me) {
-            me->runnable = false;
-            me->state = TASK_BLOCKED;
-            sched_reschedule();
-            if (me->pending_kill) return -EINTR;
-        } else {
+        if (!me) {
+            spinlock_release_irqrestore(&s->lock, f);
             task_yield();
+            continue;
         }
+        s->waiter = me;
+        me->runnable = false;
+        me->state = TASK_BLOCKED;
+        spinlock_release_irqrestore(&s->lock, f);
+        if (me->pending_kill || signal_pending_deliverable(me)) task_unblock(me);
+        sched_reschedule();
+        f = spinlock_acquire_irqsave(&s->lock);
+        if (s->waiter == me) s->waiter = NULL;
+        spinlock_release_irqrestore(&s->lock, f);
+        if (me->pending_kill || signal_pending_deliverable(me)) return -EINTR;
     }
 }
 

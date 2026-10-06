@@ -6,6 +6,8 @@
 #include "../../include/interrupts/interrupts.h"
 #include "../../include/io/serial.h"
 #include "../../include/smp/smp.h"
+#include "../../include/sched/spinlock.h"
+#include "../../include/drivers/timer.h"
 #include <string.h>
 
 extern void task_unblock(task_t *t);
@@ -17,6 +19,15 @@ struct k_sigaction {
     uint64_t restorer;
     uint64_t mask;
 };
+
+static int sig_is_core(int sig) {
+    switch (sig) {
+        case SIGQUIT: case SIGILL: case SIGTRAP: case SIGABRT: case SIGBUS:
+        case SIGFPE: case SIGSEGV:
+            return 1;
+    }
+    return 0;
+}
 
 static int sig_default_ignore(int sig) {
     switch (sig) {
@@ -34,7 +45,7 @@ static __attribute__((noreturn)) void signal_terminate(task_t *t, int sig) {
     task_exit();
 }
 
-extern int signalfd_deliver(uint32_t pid, int sig);
+extern int signalfd_deliver(uint32_t pid, int sig, const ksiginfo_t *si);
 
 static int signal_ignored(task_t *t, int sig) {
     uint64_t h = t->sig_handler[sig];
@@ -42,19 +53,135 @@ static int signal_ignored(task_t *t, int sig) {
     return h == SIG_DFL_ADDR && sig_default_ignore(sig);
 }
 
-void signal_send(task_t *t, int sig) {
-    if (!t || sig <= 0 || sig >= NSIG) return;
-    if (sig != SIGKILL && signalfd_deliver(t->pid, sig)) return;
-    if (sig != SIGKILL && sig != SIGCONT && !(t->sig_blocked & (1ULL << sig)) && signal_ignored(t, sig))
-        return;
-    t->sig_pending |= (1ULL << sig);
+static spinlock_t g_sig_lock = SPINLOCK_INIT;
+
+int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
+    if (!t || sig <= 0 || sig >= NSIG) return -EINVAL;
+    if (sig != SIGKILL && signalfd_deliver(t->pid, sig, si)) return 0;
+    uint64_t bit = 1ULL << sig;
+    if (sig != SIGKILL && sig != SIGCONT && !(t->sig_blocked & bit) && !(t->sig_waitset & bit) &&
+        signal_ignored(t, sig))
+        return 0;
+
+    uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
+    if (sig >= SIGRTMIN_K) {
+        if (t->rtq_n >= SIGQUEUE_MAX) {
+            spinlock_release_irqrestore(&g_sig_lock, f);
+            return -EAGAIN;
+        }
+        t->rtq[t->rtq_n].sig   = sig;
+        t->rtq[t->rtq_n].code  = si->code;
+        t->rtq[t->rtq_n].pid   = si->pid;
+        t->rtq[t->rtq_n].uid   = si->uid;
+        t->rtq[t->rtq_n].value = si->value;
+        t->rtq_n++;
+    } else if (!(t->sig_pending & bit)) {
+        t->sig_si[sig].code   = si->code;
+        t->sig_si[sig].pid    = si->pid;
+        t->sig_si[sig].uid    = si->uid;
+        t->sig_si[sig].status = si->status;
+        t->sig_si[sig].addr   = si->addr;
+        t->sig_si[sig].trapno = si->trapno;
+        t->sig_si[sig].err    = si->err;
+        t->sig_si[sig].value  = si->value;
+    }
+    t->sig_pending |= bit;
     if (sig == SIGKILL) {
         t->kill_sig = SIGKILL;
         t->pending_kill = true;
     }
+    spinlock_release_irqrestore(&g_sig_lock, f);
+
     if (t->state == TASK_BLOCKED &&
-        (sig == SIGKILL || !(t->sig_blocked & (1ULL << sig))))
+        (sig == SIGKILL || !(t->sig_blocked & bit) || (t->sig_waitset & bit)))
         task_unblock(t);
+    return 0;
+}
+
+void signal_send(task_t *t, int sig) {
+    ksiginfo_t si = { .code = SI_KERNEL_CODE };
+    signal_post(t, sig, &si);
+}
+
+void signal_send_child(task_t *parent, task_t *child) {
+    ksiginfo_t si = { .pid = child->pid, .uid = child->uid };
+    if (child->term_sig) {
+        si.code   = sig_is_core(child->term_sig) ? CLD_DUMPED_CODE : CLD_KILLED_CODE;
+        si.status = child->term_sig;
+    } else {
+        si.code   = CLD_EXITED_CODE;
+        si.status = child->exit_code & 0xFF;
+    }
+    signal_post(parent, SIGCHLD, &si);
+}
+
+static void take_signal(task_t *t, int sig, ksiginfo_t *out) {
+    uint64_t bit = 1ULL << sig;
+    memset(out, 0, sizeof(*out));
+    uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
+    if (sig >= SIGRTMIN_K) {
+        int idx = -1, more = 0;
+        for (uint32_t i = 0; i < t->rtq_n; i++) {
+            if (t->rtq[i].sig != sig) continue;
+            if (idx < 0) idx = (int)i;
+            else { more = 1; break; }
+        }
+        if (idx >= 0) {
+            out->code  = t->rtq[idx].code;
+            out->pid   = t->rtq[idx].pid;
+            out->uid   = t->rtq[idx].uid;
+            out->value = t->rtq[idx].value;
+            for (uint32_t i = (uint32_t)idx; i + 1 < t->rtq_n; i++) t->rtq[i] = t->rtq[i + 1];
+            t->rtq_n--;
+        } else {
+            out->code = SI_KERNEL_CODE;
+        }
+        if (!more) t->sig_pending &= ~bit;
+    } else {
+        out->code   = t->sig_si[sig].code;
+        out->pid    = t->sig_si[sig].pid;
+        out->uid    = t->sig_si[sig].uid;
+        out->status = t->sig_si[sig].status;
+        out->addr   = t->sig_si[sig].addr;
+        out->trapno = t->sig_si[sig].trapno;
+        out->err    = t->sig_si[sig].err;
+        out->value  = t->sig_si[sig].value;
+        t->sig_pending &= ~bit;
+    }
+    spinlock_release_irqrestore(&g_sig_lock, f);
+}
+
+static void discard_signal(task_t *t, int sig) {
+    uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
+    if (sig >= SIGRTMIN_K) {
+        uint32_t w = 0;
+        for (uint32_t i = 0; i < t->rtq_n; i++)
+            if (t->rtq[i].sig != sig) t->rtq[w++] = t->rtq[i];
+        t->rtq_n = w;
+    }
+    t->sig_pending &= ~(1ULL << sig);
+    spinlock_release_irqrestore(&g_sig_lock, f);
+}
+
+static void fill_siginfo(uint8_t *info, int sig, const ksiginfo_t *si) {
+    int32_t si_signo = sig, si_errno = 0, si_code = si->code;
+    memset(info, 0, 128);
+    memcpy(info + 0, &si_signo, 4);
+    memcpy(info + 4, &si_errno, 4);
+    memcpy(info + 8, &si_code, 4);
+    bool fault = si->code > 0 && si->code != SI_KERNEL_CODE &&
+                 (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE || sig == SIGTRAP);
+    if (fault) {
+        memcpy(info + 16, &si->addr, 8);
+    } else if (sig == SIGCHLD && si->code > 0 && si->code != SI_KERNEL_CODE) {
+        memcpy(info + 16, &si->pid, 4);
+        memcpy(info + 20, &si->uid, 4);
+        memcpy(info + 24, &si->status, 4);
+    } else {
+        memcpy(info + 16, &si->pid, 4);
+        memcpy(info + 20, &si->uid, 4);
+        memcpy(info + 24, &si->value, 8);
+    }
 }
 
 void signal_kill_exit(task_t *t) {
@@ -126,44 +253,33 @@ typedef struct {
 _Static_assert(FRAME_EXT + sizeof(sig_ext_t) <= FRAME_INFO, "signal frame: ext overlaps siginfo");
 _Static_assert(FRAME_UCTX + sizeof(k_ucontext_t) <= FRAME_FPU, "signal frame: ucontext overlaps fpu");
 
-static int sig_is_core(int sig) {
-    switch (sig) {
-        case SIGQUIT: case SIGILL: case SIGTRAP: case SIGABRT: case SIGBUS:
-        case SIGFPE: case SIGSEGV:
-            return 1;
-    }
-    return 0;
-}
-
-static void record_si(task_t *t, int sig, int code, uint32_t pid, uint32_t uid) {
-    t->sig_si[sig].code   = code;
-    t->sig_si[sig].pid    = pid;
-    t->sig_si[sig].uid    = uid;
-    t->sig_si[sig].status = 0;
-    t->sig_si[sig].addr   = 0;
-    t->sig_si[sig].trapno = 0;
-    t->sig_si[sig].err    = 0;
-}
-
 void signal_send_from(task_t *t, int sig, task_t *from) {
-    if (!t || sig <= 0 || sig >= NSIG) return;
-    if (!(t->sig_pending & (1ULL << sig)))
-        record_si(t, sig, from ? 0 : 0x80, from ? from->pid : 0, from ? from->uid : 0);
-    signal_send(t, sig);
+    ksiginfo_t si = {
+        .code = from ? SI_USER_CODE : SI_KERNEL_CODE,
+        .pid  = from ? from->pid : 0,
+        .uid  = from ? from->uid : 0,
+    };
+    signal_post(t, sig, &si);
 }
 
 void signal_force_fault(task_t *t, int sig, int code, uint64_t addr, int trapno, int err) {
-    if (!t || sig <= 0 || sig >= NSIG) return;
+    if (!t || sig <= 0 || sig >= SIGRTMIN_K) return;
     uint64_t bit = 1ULL << sig;
     if ((t->sig_blocked & bit) || t->sig_handler[sig] == SIG_IGN_ADDR) {
         t->sig_blocked &= ~bit;
         t->sig_handler[sig] = SIG_DFL_ADDR;
     }
-    record_si(t, sig, code, 0, 0);
+    uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
+    t->sig_si[sig].code   = code;
+    t->sig_si[sig].pid    = 0;
+    t->sig_si[sig].uid    = 0;
+    t->sig_si[sig].status = 0;
     t->sig_si[sig].addr   = addr;
     t->sig_si[sig].trapno = trapno;
     t->sig_si[sig].err    = err;
+    t->sig_si[sig].value  = 0;
     t->sig_pending |= bit;
+    spinlock_release_irqrestore(&g_sig_lock, f);
 }
 
 static bool on_altstack(task_t *t, uint64_t sp) {
@@ -178,7 +294,8 @@ static __attribute__((noreturn)) void terminate_with_report(task_t *t, int sig, 
     signal_terminate(t, sig);
 }
 
-static int build_frame(task_t *t, int sig, sig_regs_t *r, bool full, uint64_t *new_sp, uint64_t *new_rip) {
+static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, bool full,
+                       uint64_t *new_sp, uint64_t *new_rip) {
     uint64_t h = t->sig_handler[sig];
     uint64_t restorer = t->sig_restorer[sig];
     if (!restorer) return -1;
@@ -220,18 +337,7 @@ static int build_frame(task_t *t, int sig, sig_regs_t *r, bool full, uint64_t *n
     ext->uctx  = sp + FRAME_UCTX;
     ext->info  = sp + FRAME_INFO;
 
-    uint8_t *info = f + FRAME_INFO;
-    int32_t si_signo = sig, si_errno = 0, si_code = t->sig_si[sig].code;
-    memcpy(info + 0, &si_signo, 4);
-    memcpy(info + 4, &si_errno, 4);
-    memcpy(info + 8, &si_code, 4);
-    if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL || sig == SIGFPE || sig == SIGTRAP) {
-        memcpy(info + 16, &t->sig_si[sig].addr, 8);
-    } else {
-        memcpy(info + 16, &t->sig_si[sig].pid, 4);
-        memcpy(info + 20, &t->sig_si[sig].uid, 4);
-        memcpy(info + 24, &t->sig_si[sig].status, 4);
-    }
+    fill_siginfo(f + FRAME_INFO, sig, si);
 
     k_ucontext_t *kc = (k_ucontext_t *)(f + FRAME_UCTX);
     kc->ss_sp    = t->ss_sp;
@@ -239,10 +345,10 @@ static int build_frame(task_t *t, int sig, sig_regs_t *r, bool full, uint64_t *n
     kc->ss_flags = t->ss_size ? (on_altstack(t, r->rsp) ? SS_ONSTACK_F : 0) : SS_DISABLE_F;
     memcpy(kc->gregs, r, sizeof(*r));
     kc->gregs[18] = 0x23;
-    kc->gregs[19] = (uint64_t)(int64_t)t->sig_si[sig].err;
-    kc->gregs[20] = (uint64_t)(int64_t)t->sig_si[sig].trapno;
+    kc->gregs[19] = (uint64_t)(int64_t)si->err;
+    kc->gregs[20] = (uint64_t)(int64_t)si->trapno;
     kc->gregs[21] = mask;
-    kc->gregs[22] = t->sig_si[sig].addr;
+    kc->gregs[22] = si->addr;
     kc->fpregs = sp + FRAME_FPU;
     kc->sigmask[0] = mask;
 
@@ -253,7 +359,6 @@ static int build_frame(task_t *t, int sig, sig_regs_t *r, bool full, uint64_t *n
     t->sig_blocked |= t->sig_mask[sig];
     if (!(t->sig_flags[sig] & SA_NODEFER)) t->sig_blocked |= (1ULL << sig);
     if (t->sig_flags[sig] & SA_RESETHAND)  t->sig_handler[sig] = SIG_DFL_ADDR;
-    t->sig_pending &= ~(1ULL << sig);
 
     *new_sp = sp;
     *new_rip = restorer;
@@ -265,11 +370,11 @@ static int pick_signal(task_t *t) {
         uint64_t deliverable = t->sig_pending & ~t->sig_blocked;
         if (!deliverable) return 0;
         int sig = __builtin_ctzll(deliverable);
-        if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~deliverable; return 0; }
+        if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~1ULL; continue; }
         uint64_t h = t->sig_handler[sig];
         if (sig == SIGKILL) return sig;
         if (h == SIG_IGN_ADDR || (h == SIG_DFL_ADDR && sig_default_ignore(sig))) {
-            t->sig_pending &= ~(1ULL << sig);
+            discard_signal(t, sig);
             continue;
         }
         return sig;
@@ -303,15 +408,15 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval) {
     r.rflags = t->user_saved_r11;
 
     if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
-        t->sig_pending &= ~(1ULL << sig);
+        discard_signal(t, sig);
         terminate_with_report(t, sig, &r);
     }
 
+    ksiginfo_t si;
+    take_signal(t, sig, &si);
     uint64_t sp, rip;
-    if (build_frame(t, sig, &r, t->ret_iret != 0, &sp, &rip) < 0) {
-        t->sig_pending &= ~(1ULL << sig);
+    if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
         terminate_with_report(t, SIGSEGV, &r);
-    }
     t->ret_iret = 0;
     t->user_rsp = sp;
     t->user_saved_rip = rip;
@@ -338,15 +443,15 @@ void signal_irq_return(struct int_frame_t *f) {
     r.rsp = f->rsp; r.rip = f->rip; r.rflags = f->rflags;
 
     if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
-        t->sig_pending &= ~(1ULL << sig);
+        discard_signal(t, sig);
         terminate_with_report(t, sig, &r);
     }
 
+    ksiginfo_t si;
+    take_signal(t, sig, &si);
     uint64_t sp, rip;
-    if (build_frame(t, sig, &r, true, &sp, &rip) < 0) {
-        t->sig_pending &= ~(1ULL << sig);
+    if (build_frame(t, sig, &si, &r, true, &sp, &rip) < 0)
         terminate_with_report(t, SIGSEGV, &r);
-    }
     __asm__ volatile("cli" ::: "memory");
     f->rsp = sp;
     f->rip = rip;
@@ -407,6 +512,8 @@ int64_t sys_rt_sigaction(uint64_t sig, uint64_t act, uint64_t oldact, uint64_t s
         t->sig_flags[sig]    = a->flags;
         t->sig_restorer[sig] = a->restorer;
         t->sig_mask[sig]     = m;
+        bool drop = a->handler == SIG_IGN_ADDR || (a->handler == SIG_DFL_ADDR && sig_default_ignore((int)sig));
+        if (drop) discard_signal(t, (int)sig);
         if (t->mm) {
             uint32_t pids[256];
             int n = task_collect_pids(pids, 256);
@@ -417,6 +524,7 @@ int64_t sys_rt_sigaction(uint64_t sig, uint64_t act, uint64_t oldact, uint64_t s
                 o->sig_flags[sig]    = a->flags;
                 o->sig_restorer[sig] = a->restorer;
                 o->sig_mask[sig]     = m;
+                if (drop) discard_signal(o, (int)sig);
             }
         }
     }
@@ -481,6 +589,71 @@ int64_t sys_kill(uint64_t pid_a, uint64_t sig_a) {
     }
     if (!found) return -ESRCH;
     return sent ? 0 : -EPERM;
+}
+
+int64_t sys_sigqueue(uint64_t pid_a, uint64_t sig_a, uint64_t value) {
+    int pid = (int)(int64_t)pid_a;
+    int sig = (int)sig_a;
+    if (sig < 0 || sig >= NSIG || pid <= 0) return -EINVAL;
+    task_t *me = syscall_cur_task();
+    task_t *t = task_find_by_pid((uint32_t)pid);
+    if (!t) return -ESRCH;
+    if (!signal_may_send(me, t)) return -EPERM;
+    if (sig == 0) return 0;
+    ksiginfo_t si = {
+        .code  = SI_QUEUE_CODE,
+        .pid   = me ? me->pid : 0,
+        .uid   = me ? me->uid : 0,
+        .value = value,
+    };
+    return signal_post(t, sig, &si);
+}
+
+int64_t sys_sigtimedwait(uint64_t set_ptr, uint64_t info_ptr, uint64_t ts_ptr) {
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    uint64_t set;
+    if (syscall_copy_from_user(&set, (const void *)set_ptr, sizeof(set)) < 0) return -EFAULT;
+    set &= ~((1ULL << SIGKILL) | (1ULL << SIGSTOP) | 1ULL);
+
+    uint64_t deadline = 0;
+    bool timed = false;
+    if (ts_ptr) {
+        struct { int64_t sec; int64_t nsec; } ts;
+        if (syscall_copy_from_user(&ts, (const void *)ts_ptr, sizeof(ts)) < 0) return -EFAULT;
+        if (ts.sec < 0 || ts.nsec < 0 || ts.nsec >= 1000000000LL) return -EINVAL;
+        timed = true;
+        deadline = sched_now_ns() + (uint64_t)ts.sec * 1000000000ULL + (uint64_t)ts.nsec;
+    }
+
+    for (;;) {
+        uint64_t ready = t->sig_pending & set;
+        if (ready) {
+            int sig = __builtin_ctzll(ready);
+            ksiginfo_t si;
+            take_signal(t, sig, &si);
+            if (info_ptr) {
+                uint8_t info[128];
+                fill_siginfo(info, sig, &si);
+                if (syscall_copy_to_user((void *)info_ptr, info, sizeof(info)) < 0) return -EFAULT;
+            }
+            return sig;
+        }
+        if (t->pending_kill || (t->sig_pending & ~t->sig_blocked)) return -EINTR;
+        if (timed && sched_now_ns() >= deadline) return -EAGAIN;
+
+        t->sig_waitset = set;
+        t->wakeup_time_ns = timed ? deadline : 0;
+        if (timed) sched_note_wakeup(deadline);
+        t->runnable = false;
+        t->state = TASK_BLOCKED;
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        if ((t->sig_pending & set) || (t->sig_pending & ~t->sig_blocked) || t->pending_kill)
+            task_unblock(t);
+        sched_reschedule();
+        t->sig_waitset = 0;
+        t->wakeup_time_ns = 0;
+    }
 }
 
 int64_t sys_rt_sigreturn(void) {
