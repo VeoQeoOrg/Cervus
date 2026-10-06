@@ -1,49 +1,36 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <errno.h>
-
-static int g_nice;
+#include <sys/syscall.h>
+#include <libcervus.h>
 
 int getpriority(int which, id_t who)
 {
-    if (which != PRIO_PROCESS && which != PRIO_PGRP && which != PRIO_USER) { errno = EINVAL; return -1; }
-    (void)who;
+    long r = syscall2(SYS_GETPRIORITY, (uint64_t)which, (uint64_t)who);
+    if (r < 0) { errno = (int)-r; return -1; }
     errno = 0;
-    return g_nice;
+    return 20 - (int)r;
 }
 
 int setpriority(int which, id_t who, int prio)
 {
-    if (which != PRIO_PROCESS && which != PRIO_PGRP && which != PRIO_USER) { errno = EINVAL; return -1; }
-    if (who != 0 && which == PRIO_PROCESS && who != (id_t)getpid()) { errno = ESRCH; return -1; }
-    if (prio < -20) prio = -20;
-    if (prio > 19) prio = 19;
-    if (prio < g_nice && getuid() != 0) { errno = EACCES; return -1; }
-    g_nice = prio;
-    return 0;
+    return (int)__cervus_sys_ret(syscall3(SYS_SETPRIORITY, (uint64_t)which, (uint64_t)who, (uint64_t)(int64_t)prio));
 }
 
-static rlim_t limit_of(int resource)
+int prlimit(pid_t pid, int resource, const struct rlimit *new_limit, struct rlimit *old_limit)
 {
-    switch (resource) {
-    case RLIMIT_NOFILE: return 512;
-    case RLIMIT_STACK:  return 8UL * 1024 * 1024;
-    case RLIMIT_CORE:   return 0;
-    default:            return RLIM_INFINITY;
-    }
+    return (int)__cervus_sys_ret(syscall4(SYS_PRLIMIT, (uint64_t)pid, (uint64_t)resource,
+                                          (uint64_t)new_limit, (uint64_t)old_limit));
 }
 
 int getrlimit(int resource, struct rlimit *rl)
 {
-    if (resource < 0 || resource >= RLIMIT_NLIMITS || !rl) { errno = EINVAL; return -1; }
-    rl->rlim_cur = rl->rlim_max = limit_of(resource);
-    return 0;
+    return prlimit(0, resource, NULL, rl);
 }
 
 int setrlimit(int resource, const struct rlimit *rl)
 {
-    if (resource < 0 || resource >= RLIMIT_NLIMITS || !rl || rl->rlim_cur > rl->rlim_max) { errno = EINVAL; return -1; }
-    rlim_t max = limit_of(resource);
-    if (max != RLIM_INFINITY && rl->rlim_max > max) { errno = EPERM; return -1; }
-    return 0;
+    return prlimit(0, resource, rl, NULL);
 }
+
+

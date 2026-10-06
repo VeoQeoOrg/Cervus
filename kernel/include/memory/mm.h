@@ -26,6 +26,8 @@ struct vnode;
 #define MM_MMAP_TOP     0x0000700000000000ULL
 #define MM_STACK_TOP    0x00007FFFFFFFE000ULL
 #define MM_STACK_SIZE   (8ULL << 20)
+#define MM_STACK_MIN    (128ULL << 10)
+#define MM_STACK_MAX    (1ULL << 30)
 
 typedef struct vm_area vm_area_t;
 
@@ -72,6 +74,7 @@ void       mm_put(mm_t *mm);
 mm_t      *mm_fork(mm_t *parent);
 
 int        mm_fault(mm_t *mm, uintptr_t addr, int how);
+uint64_t   mm_locked_bytes(mm_t *mm);
 int        mm_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
 int        mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock);
 int        mm_mlockall(mm_t *mm, int flags, bool lock);

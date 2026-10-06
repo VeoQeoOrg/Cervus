@@ -84,6 +84,9 @@ DEFINE_IRQ(0x20, timer_handler)
 
     if (!current) return;
 
+    if (current->is_userspace && current->rlim[RLIMIT_CPU_K].cur != RLIM_INF_K && (ticks % 100) == 0)
+        sched_check_cpu_limit(current, sched_now_ns());
+
     if (current->pending_kill && pc) {
         current->time_slice = 0;
         pc->need_resched = true;
@@ -91,7 +94,7 @@ DEFINE_IRQ(0x20, timer_handler)
         return;
     }
 
-    if (current->time_slice > 0)
+    if (current->time_slice > 0 && current->policy != SCHED_FIFO_K)
         current->time_slice--;
 
     if (current->time_slice == 0 && pc)

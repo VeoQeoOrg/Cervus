@@ -221,6 +221,14 @@ extern "C" {
 #define SYS_WRITEV          655
 #define SYS_PREADV          656
 #define SYS_PWRITEV         657
+#define SYS_GETPRIORITY     658
+#define SYS_SETPRIORITY     659
+#define SYS_PRLIMIT         660
+#define SYS_SCHED_SETAFFINITY 661
+#define SYS_SCHED_GETAFFINITY 662
+#define SYS_GETCPU          663
+#define SYS_SCHED_SETSCHED  664
+#define SYS_SCHED_GETSCHED  665
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

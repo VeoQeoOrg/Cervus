@@ -29,7 +29,7 @@
 #define SEEK_END 2
 
 #define FD_CLOEXEC  (1 << 0)
-#define TASK_MAX_FDS 256
+#define TASK_MAX_FDS 1024
 
 typedef enum {
     VFS_NODE_FILE    = 0,

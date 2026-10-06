@@ -1,3 +1,4 @@
+#include "../../include/sched/sched.h"
 #include "../../include/memory/mm.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/memory/pageref.h"
@@ -763,7 +764,11 @@ uintptr_t mm_set_brk(mm_t *mm, uintptr_t new_brk) {
 }
 
 int mm_setup_stack(mm_t *mm) {
-    int64_t r = mm_map_anon(mm, MM_STACK_TOP - MM_STACK_SIZE, MM_STACK_SIZE,
+    uint64_t size = sched_current_rlimit(RLIMIT_STACK_K);
+    if (size == RLIM_INF_K || size > MM_STACK_MAX) size = MM_STACK_MAX;
+    if (size < MM_STACK_MIN) size = MM_STACK_MIN;
+    size = (size + 0xFFFULL) & ~0xFFFULL;
+    int64_t r = mm_map_anon(mm, MM_STACK_TOP - size, size,
                             VM_READ | VM_WRITE | VM_GROWSDOWN | VM_STACK, true);
     return r < 0 ? (int)r : 0;
 }
@@ -778,6 +783,16 @@ int mm_set_exe(mm_t *mm, struct vnode *vn) {
     vnode_ref(vn);
     mm->exe = vn;
     return 0;
+}
+
+uint64_t mm_locked_bytes(mm_t *mm) {
+    if (!mm) return 0;
+    uint64_t total = 0;
+    kmutex_lock(&mm->lock);
+    for (vm_area_t *v = mm->vmas; v; v = v->next)
+        if (v->flags & VM_LOCKED) total += v->end - v->start;
+    kmutex_unlock(&mm->lock);
+    return total;
 }
 
 uint64_t mm_vm_bytes(mm_t *mm) {

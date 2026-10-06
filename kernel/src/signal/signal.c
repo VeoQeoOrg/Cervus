@@ -66,7 +66,9 @@ int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
 
     uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
     if (sig >= SIGRTMIN_K) {
-        if (t->rtq_n >= SIGQUEUE_MAX) {
+        uint64_t qlim = t->rlim[RLIMIT_SIGPENDING_K].cur;
+        if (qlim > SIGQUEUE_MAX) qlim = SIGQUEUE_MAX;
+        if (t->rtq_n >= qlim) {
             spinlock_release_irqrestore(&g_sig_lock, f);
             return -EAGAIN;
         }
@@ -426,13 +428,13 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
         terminate_with_report(t, sig, &r);
     }
 
-    ksiginfo_t si;
-    take_signal(t, sig, &si);
     if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(nr)) {
         r.rax = nr;
         r.rip -= 2;
     }
 
+    ksiginfo_t si;
+    take_signal(t, sig, &si);
     uint64_t sp, rip;
     if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
         terminate_with_report(t, SIGSEGV, &r);

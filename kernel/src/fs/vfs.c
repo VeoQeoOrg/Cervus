@@ -451,6 +451,18 @@ int64_t vfs_read(vfs_file_t *file, void *buf, size_t len) {
     return n;
 }
 
+static int fsize_check(vnode_t *n, uint64_t at, size_t *len) {
+    if (n->type != VFS_NODE_FILE) return 0;
+    uint64_t lim = sched_current_rlimit(RLIMIT_FSIZE_K);
+    if (lim == RLIM_INF_K) return 0;
+    if (at >= lim) {
+        sched_signal_current(SIGXFSZ);
+        return -EFBIG;
+    }
+    if (len && at + *len > lim) *len = (size_t)(lim - at);
+    return 0;
+}
+
 int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
     if (!file || !file->vnode) return -EBADF;
     if (len == 0) return 0;
@@ -458,6 +470,9 @@ int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
     if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
 
     if (file->flags & O_APPEND) file->offset = file->vnode->size;
+
+    int fe = fsize_check(file->vnode, file->offset, &len);
+    if (fe < 0) return fe;
 
     int saved = io_enter(file);
     uint64_t at = file->offset;
@@ -487,6 +502,8 @@ int64_t vfs_pwrite(vfs_file_t *file, const void *buf, size_t len, uint64_t offse
     vnode_type_t t = file->vnode->type;
     if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
     if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
+    int fe = fsize_check(file->vnode, offset, &len);
+    if (fe < 0) return fe;
     int64_t n = file->vnode->ops->write(file->vnode, buf, len, offset);
     if (n > 0 && t == VFS_NODE_FILE) pagecache_wrote(file->vnode, offset, buf, (size_t)n);
     return n;
@@ -589,6 +606,10 @@ int vfs_ftruncate(vfs_file_t *file, uint64_t new_size) {
     if (!file || !file->vnode) return -EBADF;
     if (file->vnode->type == VFS_NODE_DIR) return -EISDIR;
     if (!file->vnode->ops || !file->vnode->ops->truncate) return -EINVAL;
+    if (new_size > 0) {
+        int fe = fsize_check(file->vnode, new_size - 1, NULL);
+        if (fe < 0) return fe;
+    }
     uint64_t old = file->vnode->size;
     int r = file->vnode->ops->truncate(file->vnode, new_size);
     if (r == 0) {
@@ -606,6 +627,10 @@ int vfs_truncate(const char *path, uint64_t new_size) {
     if (ret < 0) return ret;
     if (node->type == VFS_NODE_DIR) { vnode_unref(node); return -EISDIR; }
     if (__atomic_load_n(&node->deny_write, __ATOMIC_ACQUIRE) > 0) { vnode_unref(node); return -ETXTBSY; }
+    if (new_size > 0) {
+        int fe = fsize_check(node, new_size - 1, NULL);
+        if (fe < 0) { vnode_unref(node); return fe; }
+    }
     if (!node->ops || !node->ops->truncate) { vnode_unref(node); return -EINVAL; }
     uint64_t old = node->size;
     ret = node->ops->truncate(node, new_size);
@@ -882,11 +907,17 @@ void fd_table_destroy(fd_table_t *table) {
     kfree(table);
 }
 
+static int fd_limit(void) {
+    uint64_t lim = sched_current_rlimit(RLIMIT_NOFILE_K);
+    return lim < TASK_MAX_FDS ? (int)lim : TASK_MAX_FDS;
+}
+
 int fd_alloc(fd_table_t *table, vfs_file_t *file, int min_fd) {
     if (!table || !file) return -EINVAL;
-    if (min_fd < 0 || min_fd >= TASK_MAX_FDS) return -EINVAL;
+    int lim = fd_limit();
+    if (min_fd < 0 || min_fd >= lim) return -EINVAL;
     uint64_t f = spinlock_acquire_irqsave(&table->lock);
-    for (int i = min_fd; i < TASK_MAX_FDS; i++) {
+    for (int i = min_fd; i < lim; i++) {
         if (!table->entries[i].file) {
             table->entries[i].file     = file;
             table->entries[i].fd_flags = 0;
@@ -929,7 +960,7 @@ int fd_close(fd_table_t *table, int fd) {
 int fd_dup2(fd_table_t *table, int oldfd, int newfd) {
     if (!table) return -EBADF;
     if (oldfd < 0 || oldfd >= TASK_MAX_FDS) return -EBADF;
-    if (newfd < 0 || newfd >= TASK_MAX_FDS) return -EBADF;
+    if (newfd < 0 || newfd >= fd_limit()) return -EBADF;
     if (oldfd == newfd) return newfd;
 
     uint64_t f = spinlock_acquire_irqsave(&table->lock);

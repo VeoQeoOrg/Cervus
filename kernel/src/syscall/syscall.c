@@ -209,6 +209,14 @@ extern int64_t sys_readv(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_writev(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_preadv(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_pwritev(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_getpriority(uint64_t, uint64_t);
+extern int64_t sys_setpriority(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_prlimit(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_sched_setaffinity(uint64_t, uint64_t);
+extern int64_t sys_sched_getaffinity(uint64_t);
+extern int64_t sys_getcpu(void);
+extern int64_t sys_sched_setscheduler(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_sched_getscheduler(uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -321,6 +329,10 @@ W5(sys_ppoll)       W6(sys_pselect)
 W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
 W2(sys_sigaltstack) W3(sys_sigqueue)     W3(sys_sigtimedwait)
 W4(sys_wait4)       W4(sys_waitid)       W2(sys_getrusage)    W4(sys_mknodat)
+W3(sys_readv)       W3(sys_writev)       W4(sys_preadv)       W4(sys_pwritev)
+W2(sys_getpriority) W3(sys_setpriority)  W4(sys_prlimit)
+W2(sys_sched_setaffinity) W1(sys_sched_getaffinity) W0(sys_getcpu)
+W3(sys_sched_setscheduler) W2(sys_sched_getscheduler)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -329,7 +341,6 @@ W3(sys_eventfd)     W3(sys_timerfd_create)  W3(sys_timerfd_settime)
 W4(sys_timerfd_settime2) W2(sys_timerfd_gettime)
 W3(sys_epoll_create) W3(sys_epoll_ctl)      W3(sys_epoll_wait)
 W3(sys_socketpair)  W3(sys_memfd_create)
-W3(sys_readv)       W3(sys_writev)       W4(sys_preadv)       W4(sys_pwritev)
 W3(sys_sendmsg)     W3(sys_recvmsg)
 W3(sys_mount9)
 W1(sys_audio_open)  W2(sys_audio_write)  W0(sys_audio_close)
@@ -472,6 +483,18 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_WAITID]          = _sys_waitid,
     [SYS_GETRUSAGE]       = _sys_getrusage,
     [SYS_MKNODAT]         = _sys_mknodat,
+    [SYS_READV]           = _sys_readv,
+    [SYS_WRITEV]          = _sys_writev,
+    [SYS_PREADV]          = _sys_preadv,
+    [SYS_PWRITEV]         = _sys_pwritev,
+    [SYS_GETPRIORITY]     = _sys_getpriority,
+    [SYS_SETPRIORITY]     = _sys_setpriority,
+    [SYS_PRLIMIT]         = _sys_prlimit,
+    [SYS_SCHED_SETAFFINITY] = _sys_sched_setaffinity,
+    [SYS_SCHED_GETAFFINITY] = _sys_sched_getaffinity,
+    [SYS_GETCPU]          = _sys_getcpu,
+    [SYS_SCHED_SETSCHED]  = _sys_sched_setscheduler,
+    [SYS_SCHED_GETSCHED]  = _sys_sched_getscheduler,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,
@@ -483,10 +506,6 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_MOUSE_STATE]       = _sys_mouse_state,
     [SYS_KEYMAP_CONFIG]     = _sys_keymap_config,
     [SYS_KLOG]              = _sys_klog,
-    [SYS_READV]           = _sys_readv,
-    [SYS_WRITEV]          = _sys_writev,
-    [SYS_PREADV]          = _sys_preadv,
-    [SYS_PWRITEV]         = _sys_pwritev,
     [SYS_PUZZLE]            = _sys_puzzle,
     [SYS_SPEC]              = _sys_spec,
     [SYS_AUTH]              = _sys_auth,

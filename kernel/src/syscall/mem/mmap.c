@@ -50,6 +50,8 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
         fixed = true;
     }
     if (fixed && (hint & 0xFFFULL)) return -EINVAL;
+    uint64_t as = t->rlim[RLIMIT_AS_K].cur;
+    if (as != RLIM_INF_K && mm_vm_bytes(t->mm) + ((length + 0xFFF) & ~0xFFFULL) > as) return -ENOMEM;
 
     uint32_t vmf = prot_to_vm(prot);
     if (type == MAP_SHARED) vmf |= VM_SHARED;
@@ -127,6 +129,11 @@ int64_t sys_mlock(uint64_t addr, uint64_t len)
 {
     task_t *t = syscall_cur_task();
     if (!t || !t->mm) return -EINVAL;
+    if (t->uid != 0) {
+        uint64_t lim = t->rlim[RLIMIT_MEMLOCK_K].cur;
+        if (lim == 0) return -EPERM;
+        if (lim != RLIM_INF_K && mm_locked_bytes(t->mm) + len > lim) return -ENOMEM;
+    }
     return mm_mlock(t->mm, addr, len, true);
 }
 
@@ -142,6 +149,11 @@ int64_t sys_mlockall(uint64_t flags)
     task_t *t = syscall_cur_task();
     if (!t || !t->mm) return -EINVAL;
     if (!flags || (flags & ~7ULL)) return -EINVAL;
+    if (t->uid != 0) {
+        uint64_t lim = t->rlim[RLIMIT_MEMLOCK_K].cur;
+        if (lim == 0) return -EPERM;
+        if (lim != RLIM_INF_K && (flags & 1) && mm_vm_bytes(t->mm) > lim) return -ENOMEM;
+    }
     return mm_mlockall(t->mm, (int)flags, true);
 }
 

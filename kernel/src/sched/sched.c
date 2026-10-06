@@ -261,6 +261,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->cpu_id          = (uint32_t)-1;
     t->time_slice      = parent->time_slice_init;
     t->time_slice_init = parent->time_slice_init;
+    task_inherit_limits(t, parent);
     memcpy(t->cwd, parent->cwd, sizeof(t->cwd));
     strncpy(t->name, parent->name, sizeof(t->name) - 1);
 
@@ -316,6 +317,106 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     pid_register(t);
     enqueue_global(t);
     return t;
+}
+
+static const uint32_t g_nice_weight[40] = {
+    88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916,
+    9548, 7620, 6100, 4904, 3906, 3121, 2501, 1991, 1586, 1277,
+    1024, 820, 655, 526, 423, 335, 272, 215, 172, 137,
+    110, 87, 70, 56, 45, 36, 29, 23, 18, 15,
+};
+
+void task_apply_nice(task_t *t)
+{
+    if (t->nice < -20) t->nice = -20;
+    if (t->nice > 19) t->nice = 19;
+    uint64_t ts = (uint64_t)TASK_DEFAULT_TIMESLICE * g_nice_weight[t->nice + 20] / 1024;
+    if (ts < 1) ts = 1;
+    if (ts > 20 * TASK_DEFAULT_TIMESLICE) ts = 20 * TASK_DEFAULT_TIMESLICE;
+    t->time_slice_init = (int)ts;
+    if (t->time_slice > t->time_slice_init) t->time_slice = t->time_slice_init;
+}
+
+void task_rlimits_default(task_t *t)
+{
+    for (int i = 0; i < RLIMIT_COUNT; i++) {
+        t->rlim[i].cur = RLIM_INF_K;
+        t->rlim[i].max = RLIM_INF_K;
+    }
+    t->rlim[RLIMIT_STACK_K].cur = 8ULL << 20;
+    t->rlim[RLIMIT_CORE_K].cur = 0;
+    t->rlim[RLIMIT_NOFILE_K].cur = TASK_MAX_FDS;
+    t->rlim[RLIMIT_NOFILE_K].max = TASK_MAX_FDS;
+    t->rlim[RLIMIT_MEMLOCK_K].cur = 8ULL << 20;
+    t->rlim[RLIMIT_MEMLOCK_K].max = 8ULL << 20;
+    t->rlim[RLIMIT_SIGPENDING_K].cur = SIGQUEUE_MAX;
+    t->rlim[RLIMIT_SIGPENDING_K].max = SIGQUEUE_MAX;
+    t->rlim[RLIMIT_MSGQUEUE_K].cur = 819200;
+    t->rlim[RLIMIT_MSGQUEUE_K].max = 819200;
+    t->rlim[RLIMIT_NICE_K].cur = 0;
+    t->rlim[RLIMIT_NICE_K].max = 0;
+    t->rlim[RLIMIT_RTPRIO_K].cur = 0;
+    t->rlim[RLIMIT_RTPRIO_K].max = 0;
+    t->nice = 0;
+    t->xcpu_sent = 0;
+}
+
+void task_inherit_limits(task_t *dst, const task_t *src)
+{
+    memcpy(dst->rlim, src->rlim, sizeof(dst->rlim));
+    dst->nice = src->nice;
+    dst->xcpu_sent = 0;
+    dst->policy = src->policy;
+    dst->rt_prio = src->rt_prio;
+}
+
+void task_apply_policy(task_t *t)
+{
+    switch (t->policy) {
+    case SCHED_FIFO_K:
+    case SCHED_RR_K:
+        t->priority = DEFAULT_PRIORITY + 1 + (t->rt_prio - 1) * (MAX_PRIORITY - DEFAULT_PRIORITY - 1) / 98;
+        break;
+    case SCHED_IDLE_K:
+        t->priority = 1;
+        break;
+    default:
+        t->priority = DEFAULT_PRIORITY;
+        break;
+    }
+}
+
+void sched_signal_current(int sig)
+{
+    percpu_t *pc = get_percpu();
+    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    if (t && t->is_userspace) signal_send(t, sig);
+}
+
+uint64_t sched_current_rlimit(int res)
+{
+    percpu_t *pc = get_percpu();
+    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    if (!t || !t->is_userspace || res < 0 || res >= RLIMIT_COUNT) return RLIM_INF_K;
+    return t->rlim[res].cur;
+}
+
+void sched_check_cpu_limit(task_t *t, uint64_t now_ns)
+{
+    if (!t || !t->is_userspace) return;
+    uint64_t cur = t->rlim[RLIMIT_CPU_K].cur;
+    if (cur == RLIM_INF_K) return;
+    uint64_t run = t->total_runtime + (now_ns > t->run_start_ns ? now_ns - t->run_start_ns : 0);
+    uint64_t secs = run / 1000000000ULL;
+    uint64_t max = t->rlim[RLIMIT_CPU_K].max;
+    if (max != RLIM_INF_K && secs >= max) {
+        if (!t->pending_kill) signal_send(t, SIGKILL);
+        return;
+    }
+    if (secs >= cur + t->xcpu_sent) {
+        t->xcpu_sent++;
+        signal_send(t, SIGXCPU);
+    }
 }
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority) {
@@ -378,6 +479,7 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
     t->cpu_id          = (uint32_t)-1;
     t->time_slice      = TASK_DEFAULT_TIMESLICE;
     t->time_slice_init = TASK_DEFAULT_TIMESLICE;
+    task_rlimits_default(t);
     t->rip             = entry;
     t->is_userspace    = TASK_TYPE_USER;
     t->user_rsp        = user_rsp;
@@ -432,6 +534,7 @@ task_t* task_fork(task_t* parent) {
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;
+    task_inherit_limits(child, parent);
     if (parent->mm) {
         child->mm = mm_fork(parent->mm);
         if (!child->mm) { free(child); return NULL; }
@@ -564,6 +667,17 @@ void task_reparent(task_t* child, task_t* new_parent) {
     child->ppid    = new_parent->pid;
     child->sibling = new_parent->children;
     new_parent->children = child;
+}
+
+int task_count_uid(uint32_t uid) {
+    int n = 0;
+    uint64_t f = spinlock_acquire_irqsave(&pid_lock);
+    for (uint32_t i = 1; i < MAX_PIDS; i++) {
+        task_t *t = pid_table[i];
+        if (t && t->is_userspace && t->uid == uid && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) n++;
+    }
+    spinlock_release_irqrestore(&pid_lock, f);
+    return n;
 }
 
 void task_wakeup_waiters(uint32_t pid) {

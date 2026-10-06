@@ -56,6 +56,25 @@ typedef enum {
 #define DEFAULT_PRIORITY       16
 #define TASK_DEFAULT_TIMESLICE 10
 
+#define RLIMIT_CPU_K        0
+#define RLIMIT_FSIZE_K      1
+#define RLIMIT_DATA_K       2
+#define RLIMIT_STACK_K      3
+#define RLIMIT_CORE_K       4
+#define RLIMIT_RSS_K        5
+#define RLIMIT_NPROC_K      6
+#define RLIMIT_NOFILE_K     7
+#define RLIMIT_MEMLOCK_K    8
+#define RLIMIT_AS_K         9
+#define RLIMIT_LOCKS_K      10
+#define RLIMIT_SIGPENDING_K 11
+#define RLIMIT_MSGQUEUE_K   12
+#define RLIMIT_NICE_K       13
+#define RLIMIT_RTPRIO_K     14
+#define RLIMIT_RTTIME_K     15
+#define RLIMIT_COUNT        16
+#define RLIM_INF_K          (~0ULL)
+
 typedef struct task {
     uint64_t rsp;
     uint64_t rip;
@@ -210,6 +229,15 @@ typedef struct task {
     uint64_t   maxrss_bytes;
     uint64_t   child_runtime_ns;
     uint64_t   child_maxrss_bytes;
+    int32_t    nice;
+    uint32_t   xcpu_sent;
+    uint8_t    policy;
+    uint8_t    rt_prio;
+    uint16_t   policy_pad;
+    struct {
+        uint64_t cur;
+        uint64_t max;
+    } rlim[RLIMIT_COUNT];
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -267,6 +295,20 @@ void     task_set_itimer(task_t *t, uint64_t value_ns, uint64_t interval_ns,
                          uint64_t *old_value_ns, uint64_t *old_interval_ns);
 void sched_note_wakeup(uint64_t deadline_ns);
 void task_sample_rss(task_t *t);
+void task_rlimits_default(task_t *t);
+void task_inherit_limits(task_t *dst, const task_t *src);
+void task_apply_nice(task_t *t);
+void task_apply_policy(task_t *t);
+
+#define SCHED_OTHER_K 0
+#define SCHED_FIFO_K  1
+#define SCHED_RR_K    2
+#define SCHED_BATCH_K 3
+#define SCHED_IDLE_K  5
+uint64_t sched_current_rlimit(int res);
+void sched_signal_current(int sig);
+int task_count_uid(uint32_t uid);
+void sched_check_cpu_limit(task_t *t, uint64_t now_ns);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
 task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg, int priority, uint64_t affinity);
