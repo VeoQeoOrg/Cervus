@@ -116,6 +116,8 @@ typedef struct {
     uint32_t   *hash;
     int         relocated;
     int         inited;
+    uintptr_t   map_start;
+    uintptr_t   map_end;
 } object_t;
 
 static object_t g_objs[MAX_OBJECTS];
@@ -366,6 +368,8 @@ static long find_library(char *full, size_t cap, const char *name, const object_
     return search_list(full, cap, "/lib:/usr/lib", name, NULL, 0);
 }
 
+static uintptr_t g_map_lo, g_map_hi;
+
 static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *req, char *full, size_t cap)
 {
     long fd = find_library(full, cap, path, req);
@@ -396,6 +400,8 @@ static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *
     if (area <= 0) { g_fail = "out of memory mapping"; sys1(SYS_CLOSE, fd); return 0; }
 
     uintptr_t base = (uintptr_t)area - lo;
+    g_map_lo = (uintptr_t)area;
+    g_map_hi = (uintptr_t)area + span;
 
     for (int i = 0; i < eh.e_phnum; i++) {
         sys3(SYS_SEEK, fd, (long)(eh.e_phoff + (uint64_t)eh.e_phentsize * i), 0);
@@ -447,6 +453,8 @@ static void load_needed(object_t *o)
         no->path = paths[g_nobjs - 1];
         no->base = base;
         no->dyn  = ndyn;
+        no->map_start = g_map_lo;
+        no->map_end   = g_map_hi;
         no->relocated = 0;
         scan_dynamic(no);
         load_needed(no);
@@ -454,10 +462,18 @@ static void load_needed(object_t *o)
 }
 
 typedef struct {
+    const char *fname;
+    void       *fbase;
+    const char *sname;
+    void       *saddr;
+} dl_info_t;
+
+typedef struct {
     void *(*open)(const char *path, int flags);
     void *(*sym)(void *handle, const char *name);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
+    int   (*addr)(const void *addr, dl_info_t *info);
 } dl_ops_t;
 
 typedef void (*init_fn_t)(int, char **, char **);
@@ -513,6 +529,8 @@ static void *ld_dlopen(const char *path, int flags)
     g_nobjs++;
     o->base = base;
     o->dyn  = dyn;
+    o->map_start = g_map_lo;
+    o->map_end   = g_map_hi;
     scan_dynamic(o);
     load_needed(o);
 
@@ -540,7 +558,40 @@ static int ld_dlclose(void *handle)
     return 0;
 }
 
-static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose, ld_init_libs };
+static const char *g_prog_path;
+
+static int ld_dladdr(const void *addr, dl_info_t *info)
+{
+    uintptr_t a = (uintptr_t)addr;
+    for (int i = 0; i < g_nobjs; i++) {
+        object_t *o = &g_objs[i];
+        if (a < o->map_start || a >= o->map_end) continue;
+        info->fname = i == 0 ? (g_prog_path ? g_prog_path : "") : o->path;
+        info->fbase = (void *)o->map_start;
+        info->sname = 0;
+        info->saddr = 0;
+        uint32_t nsym = o->hash ? o->hash[1] : 0;
+        uintptr_t best = 0;
+        for (uint32_t k = 1; o->symtab && o->strtab && k < nsym; k++) {
+            sym_t *s = &o->symtab[k];
+            if (s->st_shndx == SHN_UNDEF || !s->st_value) continue;
+            uint8_t type = s->st_info & 0xf;
+            if (type != 1 && type != 2) continue;
+            uintptr_t sa = o->base + s->st_value;
+            if (sa > a) continue;
+            if (s->st_size && a >= sa + s->st_size) continue;
+            if (sa >= best) {
+                best = sa;
+                info->sname = o->strtab + s->st_name;
+                info->saddr = (void *)sa;
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose, ld_init_libs, ld_dladdr };
 
 uintptr_t ld_start_c(uint64_t *sp)
 {
@@ -562,6 +613,7 @@ uintptr_t ld_start_c(uint64_t *sp)
     auxv++;
 
     uintptr_t phdr = 0, entry = 0, interp_base = 0;
+    const char *execfn = 0;
     uint64_t phnum = 0, phent = 56;
 
     for (uint64_t *a = auxv; a[0] != AT_NULL; a += 2) {
@@ -571,6 +623,7 @@ uintptr_t ld_start_c(uint64_t *sp)
             case AT_PHENT: phent = a[1]; break;
             case AT_ENTRY: entry = (uintptr_t)a[1]; break;
             case AT_BASE:  interp_base = (uintptr_t)a[1]; break;
+            case 31:       execfn = (const char *)a[1]; break;
             default: break;
         }
     }
@@ -591,6 +644,16 @@ uintptr_t ld_start_c(uint64_t *sp)
     if (!exec_dyn) return entry;
 
     if (exec_dyn) {
+        uintptr_t plo = ~(uintptr_t)0, phi = 0;
+        for (uint64_t i = 0; i < phnum; i++) {
+            phdr_t *p = (phdr_t *)(phdr + i * phent);
+            if (p->p_type != PT_LOAD) continue;
+            if (exec_base + p->p_vaddr < plo) plo = exec_base + p->p_vaddr;
+            if (exec_base + p->p_vaddr + p->p_memsz > phi) phi = exec_base + p->p_vaddr + p->p_memsz;
+        }
+        g_objs[0].map_start = plo & ~(uintptr_t)0xFFF;
+        g_objs[0].map_end   = phi;
+        g_prog_path = execfn ? execfn : (argc ? argv[0] : 0);
         g_objs[0].name = "the program";
         g_objs[0].base = exec_base;
         g_objs[0].dyn  = exec_dyn;

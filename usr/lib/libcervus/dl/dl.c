@@ -43,3 +43,9 @@ char *dlerror(void)
     g_err = NULL;
     return e;
 }
+
+int dladdr(const void *addr, Dl_info *info)
+{
+    if (!__cervus_dl_ops || !__cervus_dl_ops->addr || !info) return 0;
+    return __cervus_dl_ops->addr(addr, info);
+}

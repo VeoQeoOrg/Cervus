@@ -140,6 +140,7 @@ typedef struct {
     void *(*sym)(void *handle, const char *name);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
+    int   (*addr)(const void *addr, void *info);
 } __cervus_dl_ops_t;
 
 extern __cervus_dl_ops_t *__cervus_dl_ops;
