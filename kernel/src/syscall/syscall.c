@@ -171,6 +171,7 @@ extern int64_t sys_msync(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_kill(uint64_t, uint64_t);
 extern int64_t sys_rt_sigreturn(void);
 extern int64_t signal_deliver_pending(task_t *t, int64_t retval);
+extern void signal_kill_exit(task_t *t) __attribute__((noreturn));
 extern int64_t sys_mouse_state(uint64_t);
 extern int64_t sys_keymap_config(uint64_t, uint64_t);
 extern int64_t sys_klog(uint64_t, uint64_t, uint64_t, uint64_t);
@@ -193,11 +194,12 @@ extern int64_t sys_poll(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_ppoll(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_pselect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_mlock(uint64_t, uint64_t);
 extern int64_t sys_munlock(uint64_t, uint64_t);
 extern int64_t sys_mlockall(uint64_t);
 extern int64_t sys_munlockall(void);
+extern int64_t sys_sigaltstack(uint64_t, uint64_t);
+extern int64_t sys_clock_set(uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
 extern int64_t sys_shmget(uint64_t, uint64_t, uint64_t);
@@ -306,9 +308,10 @@ W2(sys_listen)      W3(sys_accept)     W5(sys_net_ifset)
 W1(sys_openpty)
 W3(sys_poll)        W5(sys_select)     W1(sys_clock_set)
 W5(sys_ppoll)       W6(sys_pselect)
+W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
+W2(sys_sigaltstack)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
-W2(sys_mlock)       W2(sys_munlock)    W1(sys_mlockall)   W0(sys_munlockall)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
 W3(sys_futex_wait)  W3(sys_futex_wake)
 W3(sys_eventfd)     W3(sys_timerfd_create)  W3(sys_timerfd_settime)
@@ -446,13 +449,14 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_FCHDIR]          = _sys_fchdir,
     [SYS_PPOLL]           = _sys_ppoll,
     [SYS_PSELECT]         = _sys_pselect,
-    [SYS_MADVISE]           = _sys_madvise,
-    [SYS_MSYNC]             = _sys_msync,
-    [SYS_READLINK]          = _sys_readlink,
     [SYS_MLOCK]           = _sys_mlock,
     [SYS_MUNLOCK]         = _sys_munlock,
     [SYS_MLOCKALL]        = _sys_mlockall,
     [SYS_MUNLOCKALL]      = _sys_munlockall,
+    [SYS_SIGALTSTACK]     = _sys_sigaltstack,
+    [SYS_MADVISE]           = _sys_madvise,
+    [SYS_MSYNC]             = _sys_msync,
+    [SYS_READLINK]          = _sys_readlink,
     [SYS_FB_INFO]           = _sys_fb_info,
     [SYS_FB_BLIT]           = _sys_fb_blit,
     [SYS_FB_MAP]            = _sys_fb_map,
@@ -575,12 +579,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 
     task_t *me = syscall_cur_task();
     if (me) me->in_syscall = false;
-    if (me && me->pending_kill) {
-        me->pending_kill = false;
-        me->exit_code = 130;
-        vmm_switch_pagemap(vmm_get_kernel_pagemap());
-        task_exit();
-    }
+    if (me && me->pending_kill) signal_kill_exit(me);
     if (me && nr != SYS_RT_SIGRETURN)
         ret = signal_deliver_pending(me, ret);
     return ret;

@@ -465,6 +465,9 @@ task_t* task_fork(task_t* parent) {
     memcpy(child->sig_restorer, parent->sig_restorer, sizeof(child->sig_restorer));
     memcpy(child->sig_mask, parent->sig_mask, sizeof(child->sig_mask));
     child->sig_blocked = parent->sig_blocked;
+    child->ss_sp       = parent->ss_sp;
+    child->ss_size     = parent->ss_size;
+    child->ss_flags    = parent->ss_flags;
 
     child->flags |= TASK_FLAG_FORK;
     atomic_init_bool(&child->on_cpu, false);
@@ -688,7 +691,7 @@ void task_kill(task_t* target) {
 
     LOG_D("[KILL] task_kill pid=%u state=%d cpu=%u\n",
                   target->pid, (int)target->state, lapic_get_id());
-    target->exit_code = 130;
+    target->kill_sig = SIGINT;
     target->pending_kill = true;
 
     if (target->state == TASK_BLOCKED) {

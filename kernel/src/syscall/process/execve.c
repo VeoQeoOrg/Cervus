@@ -314,6 +314,10 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     t->brk_start  = t->brk_current = elf.mm->brk_start;
     t->brk_max    = MM_MMAP_TOP;
 
+    t->ss_sp = 0;
+    t->ss_size = 0;
+    t->ss_flags = 2;
+    t->ret_iret = 0;
     for (int sig = 0; sig < 32; sig++) {
         if (t->sig_handler[sig] != 1) t->sig_handler[sig] = 0;
         t->sig_flags[sig]    = 0;

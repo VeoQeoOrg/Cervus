@@ -1,3 +1,4 @@
+#include "../../../include/signal/signal.h"
 #include "../../../include/interrupts/interrupts.h"
 #include "../../../include/io/serial.h"
 #include "../../../include/interrupts/isr.h"
@@ -151,7 +152,10 @@ static __attribute__((noreturn)) void kill_current_task(int exit_code) {
     percpu_t *pc = get_percpu();
     task_t   *me = pc ? (task_t *)pc->current_task : NULL;
     if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
-    if (me) me->exit_code = exit_code;
+    if (me) {
+        me->exit_code = exit_code;
+        if (exit_code > 128 && exit_code < 128 + 64) me->term_sig = exit_code - 128;
+    }
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
     task_exit();
 }
@@ -190,6 +194,66 @@ static __attribute__((noreturn)) void kernel_fault_recover_or_panic(struct int_f
     kernel_panic_regs(name, regs);
 }
 
+static task_t *isr_current(void) {
+    percpu_t *pc = get_percpu();
+    task_t   *me = pc ? (task_t *)pc->current_task : NULL;
+    if (!me) { uint32_t cpu = smp_cpu_index(); me = current_task[cpu]; }
+    return me;
+}
+
+static int simd_code(void) {
+    uint32_t mx = 0;
+    asm volatile("stmxcsr %0" : "=m"(mx));
+    uint32_t hit = mx & ~(mx >> 7) & 0x3f;
+    if (hit & 0x01) return 7;
+    if (hit & 0x04) return 3;
+    if (hit & 0x08) return 4;
+    if (hit & 0x10) return 5;
+    if (hit & 0x20) return 6;
+    if (hit & 0x02) return 7;
+    return 0;
+}
+
+static bool user_exception_to_signal(struct int_frame_t *regs) {
+    task_t *me = isr_current();
+    if (!me || !me->is_userspace) return false;
+    int sig, code = 0x80;
+    uint64_t addr = regs->rip;
+    switch (regs->interrupt) {
+        case EXCEPTION_DIVIDE_ERROR:          sig = SIGFPE;  code = 1; break;
+        case EXCEPTION_DEBUG:                 sig = SIGTRAP; code = 2; break;
+        case EXCEPTION_BREAKPOINT:            sig = SIGTRAP; code = 1; break;
+        case EXCEPTION_OVERFLOW:
+        case EXCEPTION_BOUND_RANGE:           sig = SIGSEGV; addr = 0; break;
+        case EXCEPTION_INVALID_OPCODE:        sig = SIGILL;  code = 2; break;
+        case EXCEPTION_DEVICE_NOT_AVAILABLE:
+        case EXCEPTION_X87_FPU_ERROR:         sig = SIGFPE;  code = 0x80; break;
+        case EXCEPTION_SIMD_FPU_EXCEPTION:    sig = SIGFPE;  code = simd_code(); break;
+        case EXCEPTION_ALIGNMENT_CHECK:       sig = SIGBUS;  code = 1; break;
+        case EXCEPTION_SEGMENT_NOT_PRESENT:
+        case EXCEPTION_STACK_SEGMENT_FAULT:   sig = SIGBUS;  addr = 0; break;
+        case EXCEPTION_GENERAL_PROTECTION_FAULT: sig = SIGSEGV; addr = 0; break;
+        case EXCEPTION_PAGE_FAULT: {
+            uint64_t cr2v = 0;
+            asm volatile("mov %%cr2, %0" : "=r"(cr2v));
+            sig = SIGSEGV;
+            addr = cr2v;
+            code = (me->mm && cr2v < MM_USER_TOP && mm_find_vma(me->mm, cr2v)) ? 2 : 1;
+            break;
+        }
+        default:
+            return false;
+    }
+    if (me->sig_handler[sig] == SIG_DFL_ADDR || (me->sig_blocked & (1ULL << sig))) {
+        serial_printf("[ISR] %s in userspace: task='%s' pid=%u rip=0x%llx addr=0x%llx err=0x%llx -> signal %d\n",
+                      exception_names[regs->interrupt], me->name, me->pid,
+                      regs->rip, addr, regs->error, sig);
+        dump_rip_bytes_safe(regs->rip);
+    }
+    signal_force_fault(me, sig, code, addr, (int)regs->interrupt, (int)regs->error);
+    return true;
+}
+
 void handle_intercpu_interrupt(struct int_frame_t *regs)
 {
     if (regs->interrupt == EXCEPTION_PAGE_FAULT) {
@@ -224,6 +288,8 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         }
         kernel_panic_regs("Non-Maskable Interrupt (hardware)", regs);
     }
+
+    if ((regs->cs & 3) == 3 && user_exception_to_signal(regs)) return;
 
     serial_force_unlock();
     registers_dump(regs);
@@ -317,7 +383,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
 }
 
 DEFINE_ISR(0x3, isr_breakpoint) {
-    (void)frame;
+    if ((frame->cs & 3) == 3 && user_exception_to_signal(frame)) return;
     serial_printf("Breakpoint hit\n");
 }
 

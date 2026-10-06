@@ -506,7 +506,7 @@ static int run_shell(ssh_t *s, uint32_t client_chan, uint32_t cli_window,
         if (w==pid) {
             for (;;) { long m=read(outr,buf,sizeof buf); if (m<=0) break;
                 uint8_t p[16384+16]; size_t pi=0; p8(p,&pi,MSG_CHANNEL_DATA); p32(p,&pi,client_chan); pstr(p,&pi,buf,(size_t)m); ssh_send(s,p,pi); }
-            exit_status=WEXITSTATUS(st);
+            exit_status=WIFEXITED(st)?WEXITSTATUS(st):128+WTERMSIG(st);
             uint8_t p[64]; size_t pi=0;
             p8(p,&pi,MSG_CHANNEL_REQUEST); p32(p,&pi,client_chan); pcstr(p,&pi,"exit-status"); p8(p,&pi,0); p32(p,&pi,(uint32_t)exit_status);
             ssh_send(s,p,pi);

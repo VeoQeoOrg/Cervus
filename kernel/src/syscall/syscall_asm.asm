@@ -38,6 +38,9 @@ TASK_USER_SAVED_R10 equ 1704
 TASK_USER_SAVED_R8  equ 1712
 TASK_USER_SAVED_R9  equ 1720
 TASK_USER_SAVED_RAX equ 1728
+TASK_USER_SAVED_RCX equ 2176
+TASK_RET_IRET       equ 2184
+TASK_USER_IRET_R11  equ 2208
 
 syscall_entry:
     swapgs
@@ -67,6 +70,7 @@ syscall_entry:
     push r15
     push rbp
 
+    sub  rsp, 8
     push r9
     mov  rcx, rdx
     mov  r9,  r8
@@ -76,7 +80,7 @@ syscall_entry:
     mov  rdi, rax
     call syscall_handler_c
 
-    add  rsp, 8
+    add  rsp, 16
     pop  rbp
     pop  r15
     pop  r14
@@ -91,7 +95,9 @@ syscall_entry:
     je   .no_resched
     mov  byte [gs:PERCPU_NEED_RESCHED], 0
     push rax
+    sub  rsp, 8
     call sched_reschedule
+    add  rsp, 8
     pop  rax
     jmp  .check_resched
 
@@ -121,6 +127,9 @@ syscall_entry:
 .msg_zero_rip: db "sysret: user_saved_rip=0 — would fault at NULL", 0
 .rip_ok:
     mov  [rax + TASK_USER_SAVED_RAX], r10
+
+    cmp  dword [rax + TASK_RET_IRET], 0
+    jne  .iret_return
 
     mov  rsp, [rax + TASK_USER_RSP]
     mov  rcx, [rax + TASK_USER_SAVED_RIP]
@@ -153,6 +162,34 @@ syscall_entry:
 
     swapgs
     o64 sysret
+
+.iret_return:
+    mov  dword [rax + TASK_RET_IRET], 0
+    push qword 0x1B
+    push qword [rax + TASK_USER_RSP]
+    mov  r11, [rax + TASK_USER_SAVED_R11]
+    and  r11, 0x00000000003C0FFF
+    or   r11, 0x0000000000000202
+    push r11
+    push qword 0x23
+    push qword [rax + TASK_USER_SAVED_RIP]
+    mov  rcx, [rax + TASK_USER_SAVED_RCX]
+    mov  r11, [rax + TASK_USER_IRET_R11]
+    mov  rbp, [rax + TASK_USER_SAVED_RBP]
+    mov  rbx, [rax + TASK_USER_SAVED_RBX]
+    mov  r12, [rax + TASK_USER_SAVED_R12]
+    mov  r13, [rax + TASK_USER_SAVED_R13]
+    mov  r14, [rax + TASK_USER_SAVED_R14]
+    mov  r15, [rax + TASK_USER_SAVED_R15]
+    mov  rdi, [rax + TASK_USER_SAVED_RDI]
+    mov  rsi, [rax + TASK_USER_SAVED_RSI]
+    mov  rdx, [rax + TASK_USER_SAVED_RDX]
+    mov  r10, [rax + TASK_USER_SAVED_R10]
+    mov  r8,  [rax + TASK_USER_SAVED_R8]
+    mov  r9,  [rax + TASK_USER_SAVED_R9]
+    mov  rax, [rax + TASK_USER_SAVED_RAX]
+    swapgs
+    iretq
 
 .sysret_bad_rip:
     extern sysret_bad_rip_panic

@@ -178,6 +178,23 @@ typedef struct task {
     uint64_t  *prof_buf;
     uint32_t   prof_n;
     char      *at_base;
+    uint64_t   user_saved_rcx;
+    uint32_t   ret_iret;
+    uint32_t   ss_flags;
+    uint64_t   ss_sp;
+    uint64_t   ss_size;
+    uint64_t   user_iret_r11;
+    int32_t    term_sig;
+    int32_t    kill_sig;
+    struct {
+        int32_t  code;
+        uint32_t pid;
+        uint32_t uid;
+        int32_t  status;
+        uint64_t addr;
+        int32_t  trapno;
+        int32_t  err;
+    } sig_si[32];
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -210,6 +227,9 @@ _Static_assert(offsetof(task_t, user_saved_r10) == 1704, "task_t: user_saved_r10
 _Static_assert(offsetof(task_t, user_saved_r8)  == 1712, "task_t: user_saved_r8");
 _Static_assert(offsetof(task_t, user_saved_r9)  == 1720, "task_t: user_saved_r9");
 _Static_assert(offsetof(task_t, user_saved_rax) == 1728, "task_t: user_saved_rax");
+_Static_assert(offsetof(task_t, user_saved_rcx) == 2176, "task_t: user_saved_rcx — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, ret_iret)       == 2184, "task_t: ret_iret — update syscall_asm.asm");
+_Static_assert(offsetof(task_t, user_iret_r11)  == 2208, "task_t: user_iret_r11 — update syscall_asm.asm");
 
 extern task_t* ready_queues[MAX_PRIORITY + 1];
 extern task_t* current_task[MAX_CPUS];

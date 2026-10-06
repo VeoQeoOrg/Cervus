@@ -478,7 +478,7 @@ static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
     for (int i = 0; i < nseg; i++) {
         int st = 0;
         waitpid(pids[i], &st, 0);
-        if (i == nseg - 1) last_rc = (st >> 8) & 0xFF;
+        if (i == nseg - 1) last_rc = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
     }
     return last_rc;
 }
@@ -625,7 +625,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     int status = 0;
     waitpid(child, &status, 0);
     cd_on_exit_take();
-    return (status >> 8) & 0xFF;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
 static int cond_is_test_op(const char *op) {
@@ -1393,7 +1393,7 @@ static int exec_tokens(char **tok, int n) {
         job_remove(idx);
         int status = 0;
         waitpid(pid, &status, 0);
-        int rc = (status >> 8) & 0xFF;
+        int rc = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
         rc_set(rc);
         return rc;
     }

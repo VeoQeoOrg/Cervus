@@ -137,6 +137,7 @@ typedef struct {
             long     si_band;
             int      si_fd;
         } _sigpoll;
+        int _pad[28];
     } _sifields;
 } siginfo_t;
 
@@ -155,6 +156,11 @@ typedef struct {
 
 #define SS_ONSTACK 1
 #define SS_DISABLE 2
+#define MINSIGSTKSZ 2048
+#define SIGSTKSZ    8192
+
+#define TRAP_BRKPT 1
+#define TRAP_TRACE 2
 
 struct sigaction {
     union {
@@ -180,6 +186,7 @@ int sigismember(const sigset_t *set, int sig);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *mask);
+int sigaltstack(const stack_t *ss, stack_t *old_ss);
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *old);
 
 #define SIG_BLOCK    0

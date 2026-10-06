@@ -1,6 +1,7 @@
 section .text
 extern base_trap
 extern sched_reschedule
+extern signal_irq_return
 extern get_percpu
 
 PERCPU_NEED_RESCHED equ 40
@@ -34,42 +35,61 @@ common_stub:
     mov ds, ax
     mov es, ax
     mov rdi, rsp
+    mov rbx, rsp
+    and rsp, -16
     call base_trap
+    mov rsp, rbx
 
-    pop rax
-    mov ds, ax
-    mov es, ax
-
-    mov rax, [rsp + 18*8]
+    mov rax, [rsp + 19*8]
     and rax, 3
-    jz .kernel_resched
+    jz .kernel_pop_ds
 
+    mov rbx, rsp
+    and rsp, -16
 .check_resched:
     call get_percpu
     test rax, rax
-    jz .do_swapgs
+    jz .user_signals
     cmp byte [rax + PERCPU_NEED_RESCHED], 0
-    je .do_swapgs
+    je .user_signals
     mov byte [rax + PERCPU_NEED_RESCHED], 0
     call sched_reschedule
     jmp .check_resched
 
-.do_swapgs:
+.user_signals:
+    mov rdi, rbx
+    call signal_irq_return
+    mov rsp, rbx
+    pop rax
+    mov ds, ax
+    mov es, ax
     swapgs
     jmp .kernel_exit
+
+.kernel_pop_ds:
+    pop rax
+    mov ds, ax
+    mov es, ax
+    jmp .kernel_resched
 
 .kernel_resched:
     mov rax, [rsp + 15*8]
     cmp rax, 32
     jb .kernel_check_cs
+    mov rbx, rsp
+    and rsp, -16
     call get_percpu
     test rax, rax
-    jz .kernel_check_cs
+    jz .kernel_resched_none
     cmp byte [rax + PERCPU_NEED_RESCHED], 0
-    je .kernel_check_cs
+    je .kernel_resched_none
     mov byte [rax + PERCPU_NEED_RESCHED], 0
     call sched_reschedule
+    mov rsp, rbx
     jmp .kernel_resched
+
+.kernel_resched_none:
+    mov rsp, rbx
 
 .kernel_check_cs:
     mov rax, [rsp + 18*8]

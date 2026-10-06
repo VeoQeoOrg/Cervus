@@ -34,6 +34,7 @@ struct task;
 #define SIGIO       29
 
 #define SA_SIGINFO   0x00000004
+#define SA_ONSTACK   0x08000000
 #define SA_RESTART   0x10000000
 #define SA_NODEFER   0x40000000
 #define SA_RESETHAND 0x80000000
@@ -51,6 +52,12 @@ void    signal_send_group(uint32_t pgid, int sig);
 void    signal_send_subtree(struct task *root, int sig);
 bool    signal_pending_deliverable(struct task *t);
 int64_t signal_deliver_pending(struct task *t, int64_t retval);
+void    signal_send_from(struct task *t, int sig, struct task *from);
+void    signal_force_fault(struct task *t, int sig, int code, uint64_t addr, int trapno, int err);
+struct int_frame_t;
+void    signal_irq_return(struct int_frame_t *f);
+__attribute__((noreturn)) void signal_kill_exit(struct task *t);
+int64_t sys_sigaltstack(uint64_t ss, uint64_t old);
 
 int64_t sys_rt_sigaction(uint64_t sig, uint64_t act, uint64_t oldact, uint64_t sigsetsize);
 int64_t sys_rt_sigprocmask(uint64_t how, uint64_t set, uint64_t oldset, uint64_t sigsetsize);

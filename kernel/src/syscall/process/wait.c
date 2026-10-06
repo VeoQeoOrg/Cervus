@@ -47,7 +47,7 @@ retry:;
     }
 
     if (status_ptr) {
-        int status = (zombie->exit_code & 0xFF) << 8;
+        int status = zombie->term_sig ? (zombie->term_sig & 0x7F) : (zombie->exit_code & 0xFF) << 8;
         if (syscall_copy_to_user((void *)status_ptr, &status, sizeof(int)) < 0) return -EFAULT;
     }
     uint32_t zpid = zombie->pid;

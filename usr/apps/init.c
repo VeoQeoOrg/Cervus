@@ -63,7 +63,7 @@ static int launch_installer_boot(void) {
     waitpid(child, &status, 0);
     fputs("\x1b[?25h\x1b[2J\x1b[H", stdout);
     fflush(stdout);
-    return (status >> 8) & 0xFF;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
 static void restore_console_font(void) {

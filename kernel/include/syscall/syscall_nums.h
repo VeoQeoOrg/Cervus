@@ -220,6 +220,7 @@
 #define SYS_MUNLOCK           644
 #define SYS_MLOCKALL          645
 #define SYS_MUNLOCKALL        646
+#define SYS_SIGALTSTACK       647
 
 #define SYSCALL_TABLE_SIZE    768
 
