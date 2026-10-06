@@ -77,7 +77,7 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
     "$SRC/$GCC/configure" --target=$TARGET --prefix="$PREFIX" \
         --with-sysroot="$SYSROOT" --disable-nls --disable-werror \
         --enable-languages=c,c++ --disable-multilib --disable-shared \
-        --disable-threads --disable-libssp --disable-libgomp \
+        --enable-threads=posix --enable-default-pie --disable-libssp --disable-libgomp \
         --disable-libatomic --disable-libquadmath --disable-libvtv \
         --disable-libstdcxx-pch --disable-libstdcxx-verbose --disable-tls --with-newlib \
         --enable-initfini-array CFLAGS_FOR_TARGET="-g -O2 -fPIC" CXXFLAGS_FOR_TARGET="-g -O2 -fPIC" \
