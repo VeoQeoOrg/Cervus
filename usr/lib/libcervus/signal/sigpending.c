@@ -11,5 +11,8 @@ int sigpending(sigset_t *set)
 
 int sigsuspend(const sigset_t *mask)
 {
-    return (int)__cervus_sys_ret((long)syscall2(SYS_RT_SIGSUSPEND, (unsigned long)mask, 8));
+    int __cp = __cervus_cp_enter();
+    int __r = (int)__cervus_sys_ret((long)syscall2(SYS_RT_SIGSUSPEND, (unsigned long)mask, 8));
+    __cervus_cp_leave(__cp);
+    return __r;
 }

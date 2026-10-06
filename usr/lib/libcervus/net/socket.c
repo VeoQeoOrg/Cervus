@@ -12,7 +12,10 @@ int bind(int fd, const struct sockaddr *addr, socklen_t addrlen) {
 }
 
 int connect(int fd, const struct sockaddr *addr, socklen_t addrlen) {
-    return (int)__cervus_sys_ret(syscall3(SYS_CONNECT, fd, addr, addrlen));
+    int __cp = __cervus_cp_enter();
+    int __r = (int)__cervus_sys_ret(syscall3(SYS_CONNECT, fd, addr, addrlen));
+    __cervus_cp_leave(__cp);
+    return __r;
 }
 
 int listen(int fd, int backlog) {
@@ -20,19 +23,28 @@ int listen(int fd, int backlog) {
 }
 
 int accept(int fd, struct sockaddr *addr, socklen_t *addrlen) {
-    return (int)__cervus_sys_ret(syscall3(SYS_ACCEPT, fd, addr, addrlen));
+    int __cp = __cervus_cp_enter();
+    int __r = (int)__cervus_sys_ret(syscall3(SYS_ACCEPT, fd, addr, addrlen));
+    __cervus_cp_leave(__cp);
+    return __r;
 }
 
 ssize_t sendto(int fd, const void *buf, size_t len, int flags,
                const struct sockaddr *dest, socklen_t addrlen) {
     (void)flags;
-    return (ssize_t)__cervus_sys_ret(syscall5(SYS_SENDTO, fd, buf, len, dest, addrlen));
+    int __cp = __cervus_cp_enter();
+    ssize_t __r = (ssize_t)__cervus_sys_ret(syscall5(SYS_SENDTO, fd, buf, len, dest, addrlen));
+    __cervus_cp_leave(__cp);
+    return __r;
 }
 
 ssize_t recvfrom(int fd, void *buf, size_t len, int flags,
                  struct sockaddr *src, socklen_t *addrlen) {
     (void)flags;
-    return (ssize_t)__cervus_sys_ret(syscall5(SYS_RECVFROM, fd, buf, len, src, addrlen));
+    int __cp = __cervus_cp_enter();
+    ssize_t __r = (ssize_t)__cervus_sys_ret(syscall5(SYS_RECVFROM, fd, buf, len, src, addrlen));
+    __cervus_cp_leave(__cp);
+    return __r;
 }
 
 ssize_t send(int fd, const void *buf, size_t len, int flags) {

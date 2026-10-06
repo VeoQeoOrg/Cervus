@@ -144,6 +144,9 @@ typedef struct {
 } __cervus_dl_ops_t;
 
 extern __cervus_dl_ops_t *__cervus_dl_ops;
+
+int  __cervus_cp_enter(void);
+void __cervus_cp_leave(int old);
 typedef struct {
     void (**preinit_start)(int, char **, char **);
     void (**preinit_end)(int, char **, char **);

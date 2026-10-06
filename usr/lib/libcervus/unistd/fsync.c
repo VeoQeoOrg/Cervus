@@ -4,10 +4,16 @@
 
 int fsync(int fd)
 {
-    return (int)__cervus_sys_ret(syscall1(SYS_FSYNC, fd));
+    int __cp = __cervus_cp_enter();
+    int __r = (int)__cervus_sys_ret(syscall1(SYS_FSYNC, fd));
+    __cervus_cp_leave(__cp);
+    return __r;
 }
 
 int fdatasync(int fd)
 {
-    return (int)__cervus_sys_ret(syscall1(SYS_FDATASYNC, fd));
+    int __cp = __cervus_cp_enter();
+    int __r = (int)__cervus_sys_ret(syscall1(SYS_FDATASYNC, fd));
+    __cervus_cp_leave(__cp);
+    return __r;
 }

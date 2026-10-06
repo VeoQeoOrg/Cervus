@@ -54,6 +54,28 @@ int  pthread_create(pthread_t *th, const pthread_attr_t *attr,
 int  pthread_join(pthread_t th, void **retval);
 int  pthread_detach(pthread_t th);
 void pthread_exit(void *retval) __attribute__((noreturn));
+
+#define PTHREAD_CANCEL_ENABLE       0
+#define PTHREAD_CANCEL_DISABLE      1
+#define PTHREAD_CANCEL_DEFERRED     0
+#define PTHREAD_CANCEL_ASYNCHRONOUS 1
+#define PTHREAD_CANCELED            ((void *)-1)
+
+int  pthread_cancel(pthread_t th);
+int  pthread_setcancelstate(int state, int *oldstate);
+int  pthread_setcanceltype(int type, int *oldtype);
+void pthread_testcancel(void);
+int  pthread_kill(pthread_t th, int sig);
+
+struct __pthread_cleanup {
+    void (*fn)(void *);
+    void *arg;
+    struct __pthread_cleanup *next;
+};
+void __pthread_cleanup_push(struct __pthread_cleanup *c, void (*fn)(void *), void *arg);
+void __pthread_cleanup_pop(struct __pthread_cleanup *c, int execute);
+#define pthread_cleanup_push(fn, arg) do { struct __pthread_cleanup __pcb; __pthread_cleanup_push(&__pcb, (fn), (arg));
+#define pthread_cleanup_pop(execute) __pthread_cleanup_pop(&__pcb, (execute)); } while (0)
 pthread_t pthread_self(void);
 int  pthread_equal(pthread_t a, pthread_t b);
 

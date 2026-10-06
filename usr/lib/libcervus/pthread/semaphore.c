@@ -1,3 +1,5 @@
+#include <libcervus.h>
+#include <pthread.h>
 #include <semaphore.h>
 #include <errno.h>
 #include <time.h>
@@ -53,6 +55,12 @@ int sem_trywait(sem_t *sem)
     return -1;
 }
 
+static void sem_unwait(void *p)
+{
+    sem_t *sem = p;
+    __atomic_sub_fetch(&sem->__waiters, 1, __ATOMIC_ACQ_REL);
+}
+
 static int sem_wait_ns(sem_t *sem, clockid_t clock, const struct timespec *abstime)
 {
     for (;;) {
@@ -68,8 +76,12 @@ static int sem_wait_ns(sem_t *sem, clockid_t clock, const struct timespec *absti
             timeout = (uint64_t)left;
         }
         __atomic_add_fetch(&sem->__waiters, 1, __ATOMIC_ACQ_REL);
+        struct __pthread_cleanup cb;
+        __pthread_cleanup_push(&cb, sem_unwait, sem);
+        int cp = __cervus_cp_enter();
         long r = sem_futex_wait(&sem->__value, 0, timeout);
-        __atomic_sub_fetch(&sem->__waiters, 1, __ATOMIC_ACQ_REL);
+        __cervus_cp_leave(cp);
+        __pthread_cleanup_pop(&cb, 1);
         if (r == -EINTR) { errno = EINTR; return -1; }
         if (r == -ETIMEDOUT && sem_trywait(sem) != 0) { errno = ETIMEDOUT; return -1; }
     }

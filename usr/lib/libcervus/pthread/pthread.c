@@ -8,12 +8,18 @@
 #include <libcervus.h>
 #include <sched.h>
 #include <time.h>
+#include <signal.h>
 
 #define TH_RUNNING  0
 #define TH_DONE     1
 
 struct __pthread {
     volatile int  done;
+    volatile int  cancel_pending;
+    int           cancel_state;
+    int           cancel_type;
+    volatile int  in_cp;
+    struct __pthread_cleanup *cleanup;
     volatile int  detached;
     void         *retval;
     void         *(*fn)(void *);
@@ -39,12 +45,138 @@ static void futex_wake(volatile int *addr, int n)
     syscall2(SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)addr, (uint64_t)n);
 }
 
+#define SIGCANCEL 31
+
+static volatile int g_cancel_used;
+
+static void run_cleanup(struct __pthread *th)
+{
+    while (th->cleanup) {
+        struct __pthread_cleanup *c = th->cleanup;
+        th->cleanup = c->next;
+        c->fn(c->arg);
+    }
+}
+
+void __pthread_cleanup_push(struct __pthread_cleanup *c, void (*fn)(void *), void *arg)
+{
+    struct __pthread *th = pthread_self();
+    c->fn = fn;
+    c->arg = arg;
+    c->next = th->cleanup;
+    th->cleanup = c;
+}
+
+void __pthread_cleanup_pop(struct __pthread_cleanup *c, int execute)
+{
+    struct __pthread *th = pthread_self();
+    th->cleanup = c->next;
+    if (execute) c->fn(c->arg);
+}
+
+static void cancel_handler(int sig)
+{
+    (void)sig;
+    struct __pthread *th = pthread_self();
+    if (!th->cancel_pending || th->cancel_state != PTHREAD_CANCEL_ENABLE) return;
+    if (th->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS || th->in_cp) {
+        th->in_cp = 0;
+        th->cancel_state = PTHREAD_CANCEL_DISABLE;
+        pthread_exit(PTHREAD_CANCELED);
+    }
+}
+
+int __cervus_cp_enter(void)
+{
+    struct __pthread *th = pthread_self();
+    if (th->cancel_pending && th->cancel_state == PTHREAD_CANCEL_ENABLE) {
+        th->cancel_state = PTHREAD_CANCEL_DISABLE;
+        pthread_exit(PTHREAD_CANCELED);
+    }
+    int old = th->in_cp;
+    th->in_cp = 1;
+    return old;
+}
+
+void __cervus_cp_leave(int old)
+{
+    pthread_self()->in_cp = old;
+}
+
+void pthread_testcancel(void)
+{
+    if (!__atomic_load_n(&g_cancel_used, __ATOMIC_RELAXED)) return;
+    struct __pthread *th = pthread_self();
+    if (th->cancel_pending && th->cancel_state == PTHREAD_CANCEL_ENABLE) {
+        th->cancel_state = PTHREAD_CANCEL_DISABLE;
+        pthread_exit(PTHREAD_CANCELED);
+    }
+}
+
+int pthread_setcancelstate(int state, int *old)
+{
+    if (state != PTHREAD_CANCEL_ENABLE && state != PTHREAD_CANCEL_DISABLE) return EINVAL;
+    struct __pthread *th = pthread_self();
+    if (old) *old = th->cancel_state;
+    th->cancel_state = state;
+    if (state == PTHREAD_CANCEL_ENABLE && th->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS)
+        pthread_testcancel();
+    return 0;
+}
+
+int pthread_setcanceltype(int type, int *old)
+{
+    if (type != PTHREAD_CANCEL_DEFERRED && type != PTHREAD_CANCEL_ASYNCHRONOUS) return EINVAL;
+    struct __pthread *th = pthread_self();
+    if (old) *old = th->cancel_type;
+    th->cancel_type = type;
+    if (type == PTHREAD_CANCEL_ASYNCHRONOUS) pthread_testcancel();
+    return 0;
+}
+
+int pthread_kill(pthread_t th, int sig)
+{
+    if (!th) return ESRCH;
+    if (__atomic_load_n(&th->done, __ATOMIC_ACQUIRE) == TH_DONE) return ESRCH;
+    if (sig < 0 || sig >= 64) return EINVAL;
+    if (!sig) return 0;
+    int saved = errno;
+    int r = kill(th->tid, sig);
+    int e = errno;
+    errno = saved;
+    return r < 0 ? e : 0;
+}
+
+int pthread_cancel(pthread_t th)
+{
+    if (!th) return ESRCH;
+    if (!__atomic_exchange_n(&g_cancel_used, 1, __ATOMIC_ACQ_REL)) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = cancel_handler;
+        sigaction(SIGCANCEL, &sa, NULL);
+    }
+    __atomic_store_n(&th->cancel_pending, 1, __ATOMIC_RELEASE);
+    if (th == pthread_self()) {
+        if (th->cancel_state == PTHREAD_CANCEL_ENABLE && th->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS) {
+            th->cancel_state = PTHREAD_CANCEL_DISABLE;
+            pthread_exit(PTHREAD_CANCELED);
+        }
+        return 0;
+    }
+    if (th->cancel_state == PTHREAD_CANCEL_ENABLE &&
+        __atomic_load_n(&th->done, __ATOMIC_ACQUIRE) != TH_DONE && th->tid > 0)
+        kill(th->tid, SIGCANCEL);
+    return 0;
+}
+
 void __cervus_thread_entry(struct __pthread *th)
 {
     __cervus_tls_set(th->tls);
     th->tid = (int)getpid();
     void *r = th->fn(th->arg);
 
+    run_cleanup(th);
     __cervus_pthread_key_cleanup();
     th->retval = r;
     __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
@@ -112,8 +244,11 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
 int pthread_join(pthread_t th, void **retval)
 {
     if (!th) return EINVAL;
+    if (th == pthread_self()) return EDEADLK;
+    int cp = __cervus_cp_enter();
     while (__atomic_load_n(&th->done, __ATOMIC_ACQUIRE) != TH_DONE)
         futex_wait(&th->done, TH_RUNNING);
+    __cervus_cp_leave(cp);
 
     if (retval) *retval = th->retval;
 
@@ -136,6 +271,7 @@ int pthread_detach(pthread_t th)
 void pthread_exit(void *retval)
 {
     struct __pthread *th = pthread_self();
+    if (th) run_cleanup(th);
     __cervus_pthread_key_cleanup();
     if (th) {
         th->retval = retval;
@@ -312,13 +448,22 @@ int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *a)
 }
 int pthread_cond_destroy(pthread_cond_t *c) { if (c) cond_clock_set(c, CLOCK_REALTIME); return 0; }
 
+static void cond_relock(void *m)
+{
+    pthread_mutex_lock(m);
+}
+
 int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 {
     if (!c || !m) return EINVAL;
     int seq = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
+    struct __pthread_cleanup cb;
+    __pthread_cleanup_push(&cb, cond_relock, m);
     pthread_mutex_unlock(m);
+    int cp = __cervus_cp_enter();
     futex_wait(&c->seq, seq);
-    pthread_mutex_lock(m);
+    __cervus_cp_leave(cp);
+    __pthread_cleanup_pop(&cb, 1);
     return 0;
 }
 
@@ -472,9 +617,13 @@ int pthread_cond_clockwait(pthread_cond_t *c, pthread_mutex_t *m, int clock, con
     int64_t left = (int64_t)(abstime->tv_sec - now.tv_sec) * 1000000000LL + (abstime->tv_nsec - now.tv_nsec);
     if (left <= 0) return ETIMEDOUT;
     int seq = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
+    struct __pthread_cleanup cb;
+    __pthread_cleanup_push(&cb, cond_relock, m);
     pthread_mutex_unlock(m);
+    int cp = __cervus_cp_enter();
     long r = (long)syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)&c->seq, (uint64_t)(unsigned)seq, (uint64_t)left);
-    pthread_mutex_lock(m);
+    __cervus_cp_leave(cp);
+    __pthread_cleanup_pop(&cb, 1);
     if (r == -ETIMEDOUT && __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE) == seq) return ETIMEDOUT;
     return 0;
 }
