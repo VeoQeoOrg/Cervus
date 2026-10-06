@@ -651,6 +651,7 @@ __attribute__((noreturn)) void task_exit(void)
         me->puzzle = NULL;
     }
 
+    task_sample_rss(me);
     if (me->mm) {
         struct mm *m = me->mm;
         me->mm = NULL;

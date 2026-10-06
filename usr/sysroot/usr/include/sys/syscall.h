@@ -213,6 +213,9 @@ extern "C" {
 #define SYS_SIGALTSTACK     647
 #define SYS_SIGQUEUE        648
 #define SYS_SIGTIMEDWAIT    649
+#define SYS_WAIT4           650
+#define SYS_WAITID          651
+#define SYS_GETRUSAGE       652
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

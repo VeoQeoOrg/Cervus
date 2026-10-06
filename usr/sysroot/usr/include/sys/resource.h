@@ -9,6 +9,7 @@ extern "C" {
 
 #define RUSAGE_SELF      0
 #define RUSAGE_CHILDREN (-1)
+#define RUSAGE_THREAD    1
 
 struct rusage {
     struct timeval ru_utime;

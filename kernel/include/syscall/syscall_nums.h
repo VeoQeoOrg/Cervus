@@ -223,6 +223,9 @@
 #define SYS_SIGALTSTACK       647
 #define SYS_SIGQUEUE          648
 #define SYS_SIGTIMEDWAIT      649
+#define SYS_WAIT4             650
+#define SYS_WAITID            651
+#define SYS_GETRUSAGE         652
 
 #define SYSCALL_TABLE_SIZE    768
 

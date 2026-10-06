@@ -207,6 +207,9 @@ typedef struct task {
         uint32_t uid;
         uint64_t value;
     } rtq[SIGQUEUE_MAX];
+    uint64_t   maxrss_bytes;
+    uint64_t   child_runtime_ns;
+    uint64_t   child_maxrss_bytes;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -263,6 +266,7 @@ uint64_t task_set_alarm(task_t *t, uint64_t seconds);
 void     task_set_itimer(task_t *t, uint64_t value_ns, uint64_t interval_ns,
                          uint64_t *old_value_ns, uint64_t *old_interval_ns);
 void sched_note_wakeup(uint64_t deadline_ns);
+void task_sample_rss(task_t *t);
 
 task_t* task_create(const char* name, void (*entry)(void*), void* arg, int priority);
 task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg, int priority, uint64_t affinity);
