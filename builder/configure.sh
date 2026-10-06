@@ -33,6 +33,12 @@ LIBCERVUS_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector \
 
 LIBCERVUS_CFLAGS_OPT="${LIBCERVUS_CFLAGS/-O0/-O2}"
 
+LIBM_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -I usr/lib/libcervus/math/internal \
+-include usr/lib/libcervus/math/internal/features.h \
+-ffp-contract=off -frounding-math -fexcess-precision=standard -fno-strict-aliasing \
+-Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
+-Wno-unused-but-set-variable -Wno-implicit-fallthrough"
+
 APP_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
 -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2 -mno-red-zone -O0 -g \
 -nostdinc -isystem usr/sysroot/usr/include -Wl,-Ttext-segment=0x401000"
@@ -174,6 +180,22 @@ rule cc_lib_opt
   depfile = \$out.d
   deps = gcc
 
+rule cc_libm
+  command = gcc $LIBM_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(libm)  \$in
+  depfile = \$out.d
+  deps = gcc
+
+rule cc_libm_pic
+  command = gcc $LIBM_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(libm*) \$in
+  depfile = \$out.d
+  deps = gcc
+
+rule as_lib
+  command = gcc -c -Wa,--noexecstack \$in -o \$out
+  description = AS(lib)   \$in
+
 rule cc_app
   command = gcc $APP_CFLAGS -MMD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
   description = CCLD(app) \$out
@@ -198,7 +220,7 @@ rule ar
 
 rule so_libc
   command = gcc -shared -nostdlib -Wl,--hash-style=sysv -Wl,-soname,libc.so.1 -Wl,-z,defs -Wl,-z,noexecstack \
-    -Wl,--strip-debug -o \$out -Wl,--whole-archive \$in -Wl,--no-whole-archive && printf 'INPUT(libc.so.1)\\n' > \$dev
+    -Wl,--strip-debug -Wl,--exclude-libs,libgcc.a -o \$out -Wl,--whole-archive \$in -Wl,--no-whole-archive -lgcc && printf 'INPUT(libc.so.1)\\n' > \$dev
   description = SHLIB     \$out
 
 rule link_kernel
@@ -243,10 +265,21 @@ EOF
 
 LIB_OBJS=""
 PIC_OBJS=""
-for src in $(find usr/lib/libcervus -name '*.c' | sort); do
+for src in $(find usr/lib/libcervus -name '*.c' -o -name '*.s' | sort); do
+    case "$src" in
+        usr/lib/libcervus/math/*.c)
+            base=${src#usr/lib/libcervus/math/}
+            case "$base" in */*) ;; *)
+                base=${base%.c}
+                [ -e "usr/lib/libcervus/math/x86_64/$base.c" ] && continue
+                [ -e "usr/lib/libcervus/math/x86_64/$base.s" ] && continue ;;
+            esac ;;
+    esac
     obj=$(obj_for "$src" libcervus)
     case "$src" in
-        */image/*|*/gl/*|*/compress/inflate.c|*/math/trig.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
+        *.s) rule=as_lib; picrule=as_lib ;;
+        */math/*|*/complex/*|*/fenv/*) rule=cc_libm; picrule=cc_libm_pic ;;
+        */image/*|*/gl/*|*/compress/inflate.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
             rule=cc_lib_opt; picrule=cc_lib_pic_opt ;;
         *) rule=cc_lib; picrule=cc_lib_pic ;;
     esac

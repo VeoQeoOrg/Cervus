@@ -1,38 +1,34 @@
-#include <math.h>
-#include <stdint.h>
+#include "libm.h"
 
-static int m_small(double x)
-{
-    return x > -9.007199254740992e15 && x < 9.007199254740992e15;
-}
-
-double floor(double x)
-{
-    if (!m_small(x)) return x;
-    int64_t i = (int64_t)x;
-    return (double)(i - (x < (double)i));
-}
-
-double ceil(double x)
-{
-    if (!m_small(x)) return x;
-    int64_t i = (int64_t)x;
-    return (double)(i + (x > (double)i));
-}
+#if FLT_EVAL_METHOD==0 || FLT_EVAL_METHOD==1
+#define EPS DBL_EPSILON
+#elif FLT_EVAL_METHOD==2
+#define EPS LDBL_EPSILON
+#endif
+static const double_t toint = 1/EPS;
 
 double round(double x)
 {
-    if (!m_small(x)) return x;
-    return (x >= 0.0) ? floor(x + 0.5) : ceil(x - 0.5);
-}
+	union {double f; uint64_t i;} u = {x};
+	int e = u.i >> 52 & 0x7ff;
+	double_t y;
 
-double sqrt(double x)
-{
-    double r;
-    __asm__ volatile ("sqrtsd %1, %0" : "=x"(r) : "x"(x));
-    return r;
+	if (e >= 0x3ff+52)
+		return x;
+	if (u.i >> 63)
+		x = -x;
+	if (e < 0x3ff-1) {
+		FORCE_EVAL(x + toint);
+		return 0*u.f;
+	}
+	y = x + toint - toint - x;
+	if (y > 0.5)
+		y = y + x - 1;
+	else if (y <= -0.5)
+		y = y + x + 1;
+	else
+		y = y + x;
+	if (u.i >> 63)
+		y = -y;
+	return y;
 }
-
-float floorf(float x) { return (float)floor((double)x); }
-float ceilf(float x)  { return (float)ceil((double)x); }
-float sqrtf(float x)  { return (float)sqrt((double)x); }
