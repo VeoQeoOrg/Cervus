@@ -160,6 +160,9 @@ extern int   optopt;
 extern int   opterr;
 int          getopt(int argc, char *const argv[], const char *optstring);
 
+void *setmode(const char *mode);
+mode_t getmode(const void *set, mode_t mode);
+
 #ifdef __cplusplus
 }
 #endif

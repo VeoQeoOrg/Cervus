@@ -1,81 +1,77 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <ftw.h>
+#include <unistd.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
+#include <cervus_util.h>
 
-static int is_octal(const char *s) {
-    if (!s[0]) return 0;
-    for (const char *p = s; *p; p++) if (*p < '0' || *p > '7') return 0;
-    return 1;
-}
+static const char USAGE[] =
+    "Usage: chmod [-R] mode file ...\n"
+    "Change file permissions.\n\n"
+    "  -R    change files and directories recursively\n\n"
+    "MODE is octal (644) or symbolic: [ugoa]*[+-=][rwxXst]* or [+-=][ugo],\n"
+    "comma separated, for example u+x, go-w, a=rX, u=g.\n";
 
-static int apply_symbolic(const char *spec, unsigned *mode) {
-    const char *p = spec;
-    while (*p) {
-        unsigned who = 0;
-        while (*p == 'u' || *p == 'g' || *p == 'o' || *p == 'a') {
-            if      (*p == 'u') who |= 0700;
-            else if (*p == 'g') who |= 0070;
-            else if (*p == 'o') who |= 0007;
-            else                who |= 0777;
-            p++;
-        }
-        if (who == 0) who = 0777;
-        char op = *p;
-        if (op != '+' && op != '-' && op != '=') return -1;
-        p++;
-        unsigned perm = 0;
-        while (*p == 'r' || *p == 'w' || *p == 'x' || *p == 'X') {
-            if      (*p == 'r') perm |= 4;
-            else if (*p == 'w') perm |= 2;
-            else                perm |= 1;
-            p++;
-        }
-        unsigned bits = 0;
-        if (who & 0700) bits |= perm << 6;
-        if (who & 0070) bits |= perm << 3;
-        if (who & 0007) bits |= perm;
-        bits &= who;
-        if      (op == '+') *mode |= bits;
-        else if (op == '-') *mode &= ~bits;
-        else                *mode = (*mode & ~who) | bits;
-        if (*p == ',') p++;
-        else if (*p) return -1;
+static void *g_set;
+static int g_rc;
+
+static int apply(const char *path, const struct stat *st)
+{
+    mode_t m = getmode(g_set, st->st_mode);
+    if (chmod(path, m & 07777) < 0) {
+        fprintf(stderr, "chmod: cannot change '%s': %s\n", path, strerror(errno));
+        g_rc = 1;
     }
     return 0;
 }
 
-int main(int argc, char **argv) {
-    if (argc < 3) {
-        fprintf(stderr, "usage: chmod <mode> <file>...\n  mode: octal (644) or symbolic (+x, u+x, go-w, a=rx)\n");
-        return 1;
+static int visit(const char *path, const struct stat *st, int type, struct FTW *f)
+{
+    (void)f;
+    if (type == FTW_SL) return 0;
+    if (type == FTW_NS) {
+        fprintf(stderr, "chmod: cannot access '%s'\n", path);
+        g_rc = 1;
+        return 0;
     }
-    const char *spec = argv[1];
-    int octal = is_octal(spec);
-    long omode = 0;
-    if (octal) {
-        omode = strtol(spec, NULL, 8);
-        if (omode < 0 || omode > 07777) { fprintf(stderr, "chmod: invalid mode '%s'\n", spec); return 1; }
-    }
+    if (type == FTW_DNR) fprintf(stderr, "chmod: cannot read directory '%s'\n", path), g_rc = 1;
+    return apply(path, st);
+}
 
-    int rc = 0;
-    for (int i = 2; i < argc; i++) {
-        unsigned m;
-        if (octal) {
-            m = (unsigned)omode;
-        } else {
-            struct stat st;
-            if (stat(argv[i], &st) != 0) { fprintf(stderr, "chmod: cannot stat '%s'\n", argv[i]); rc = 1; continue; }
-            m = st.st_mode & 07777;
-            if (apply_symbolic(spec, &m) != 0) { fprintf(stderr, "chmod: invalid mode '%s'\n", spec); return 1; }
+int main(int argc, char **argv)
+{
+    if (cervus_check_help_version(argc, argv, USAGE, "chmod")) return 0;
+    int recursive = 0, i = 1;
+    for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
+        if (!strcmp(argv[i], "--")) { i++; break; }
+        if (!strcmp(argv[i], "-R")) { recursive = 1; continue; }
+        if (strspn(argv[i] + 1, "rwxXstugo") == strlen(argv[i] + 1) || strchr(argv[i] + 1, ',')) break;
+        fprintf(stderr, "chmod: unknown option '%s'\n", argv[i]);
+        fputs(USAGE, stderr);
+        return 2;
+    }
+    if (argc - i < 2) { fputs(USAGE, stderr); return 2; }
+    g_set = setmode(argv[i]);
+    if (!g_set) { fprintf(stderr, "chmod: invalid mode '%s'\n", argv[i]); return 2; }
+
+    for (i++; i < argc; i++) {
+        struct stat st;
+        if (stat(argv[i], &st) < 0) {
+            fprintf(stderr, "chmod: cannot access '%s': %s\n", argv[i], strerror(errno));
+            g_rc = 1;
+            continue;
         }
-        long r = syscall2(SYS_CHMOD, (uint64_t)(uintptr_t)argv[i], (uint64_t)m);
-        if (r < 0) {
-            fprintf(stderr, "chmod: cannot change '%s': %s\n", argv[i],
-                    r == -13 ? "permission denied" : r == -2 ? "no such file" : "error");
-            rc = 1;
+        if (recursive && S_ISDIR(st.st_mode)) {
+            if (nftw(argv[i], visit, 32, FTW_PHYS) < 0) {
+                fprintf(stderr, "chmod: cannot walk '%s': %s\n", argv[i], strerror(errno));
+                g_rc = 1;
+            }
+        } else {
+            apply(argv[i], &st);
         }
     }
-    return rc;
+    free(g_set);
+    return g_rc;
 }
