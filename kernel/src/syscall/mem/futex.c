@@ -4,6 +4,7 @@
 #include "../../../include/sched/sched.h"
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/mm.h"
+#include "../../../include/memory/pmm.h"
 #include "../../../include/time/clocksource.h"
 #include <string.h>
 
@@ -59,6 +60,15 @@ static int futex_key(uint64_t uaddr, futex_key_t *out)
     return 0;
 }
 
+static bool futex_peek(task_t *me, uint64_t uaddr, uint32_t *out)
+{
+    uintptr_t phys = 0;
+    if (!vmm_virt_to_phys(me->pagemap, (uintptr_t)(uaddr & ~0xFFFULL), &phys)) return false;
+    const volatile uint32_t *p = pmm_phys_to_virt((phys & ~0xFFFULL) + (uaddr & 0xFFFULL));
+    *out = __atomic_load_n(p, __ATOMIC_ACQUIRE);
+    return true;
+}
+
 int64_t sys_futex_wait(uint64_t uaddr, uint64_t expected, uint64_t timeout_ns)
 {
     if (uaddr & 3) return -EINVAL;
@@ -71,12 +81,13 @@ int64_t sys_futex_wait(uint64_t uaddr, uint64_t expected, uint64_t timeout_ns)
     task_t *me = syscall_cur_task();
     if (!me) return -EFAULT;
 
-    uint64_t f = spinlock_acquire_irqsave(&g_futex_lock);
-
+    uint64_t f;
     uint32_t seen = 0;
-    if (syscall_copy_from_user(&seen, (void *)uaddr, sizeof seen) < 0) {
+    for (int tries = 0; ; tries++) {
+        f = spinlock_acquire_irqsave(&g_futex_lock);
+        if (futex_peek(me, uaddr, &seen)) break;
         spinlock_release_irqrestore(&g_futex_lock, f);
-        return -EFAULT;
+        if (tries >= 3 || !syscall_uptr_validate((void *)uaddr, sizeof(uint32_t))) return -EFAULT;
     }
     if (seen != (uint32_t)expected) {
         spinlock_release_irqrestore(&g_futex_lock, f);
