@@ -2,20 +2,18 @@
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <time.h>
+#include <sys/resource.h>
 
 clock_t times(struct tms *buf)
 {
-    cervus_task_info_t info;
-    clock_t used = 0;
-
-    if (syscall2(SYS_TASK_INFO, 0, (unsigned long)&info) >= 0)
-        used = (clock_t)(info.total_runtime_ns / 1000ULL);
-
     if (buf) {
-        buf->tms_utime  = used;
-        buf->tms_stime  = 0;
-        buf->tms_cutime = 0;
-        buf->tms_cstime = 0;
+        struct rusage self, kids;
+        getrusage(RUSAGE_SELF, &self);
+        getrusage(RUSAGE_CHILDREN, &kids);
+        buf->tms_utime  = (clock_t)(self.ru_utime.tv_sec * 1000000L + self.ru_utime.tv_usec);
+        buf->tms_stime  = (clock_t)(self.ru_stime.tv_sec * 1000000L + self.ru_stime.tv_usec);
+        buf->tms_cutime = (clock_t)(kids.ru_utime.tv_sec * 1000000L + kids.ru_utime.tv_usec);
+        buf->tms_cstime = (clock_t)(kids.ru_stime.tv_sec * 1000000L + kids.ru_stime.tv_usec);
     }
     return (clock_t)((uint64_t)syscall0(SYS_UPTIME) / 1000ULL);
 }

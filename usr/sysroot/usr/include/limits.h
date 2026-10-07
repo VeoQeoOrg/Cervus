@@ -34,6 +34,7 @@ extern "C" {
 
 #define PATH_MAX    512
 #define NAME_MAX    255
+#define PIPE_BUF    4096
 
 #ifdef __cplusplus
 }
