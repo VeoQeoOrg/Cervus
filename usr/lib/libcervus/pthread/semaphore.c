@@ -4,6 +4,15 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
 static long sem_futex_wait(volatile int *addr, int expected, uint64_t timeout_ns)
 {
@@ -108,24 +117,121 @@ int sem_getvalue(sem_t *sem, int *value)
     return 0;
 }
 
+#define SEM_REG_MAX 64
+
+static struct {
+    char   name[NAME_MAX + 1];
+    sem_t *sem;
+    int    refs;
+} g_sems[SEM_REG_MAX];
+static pthread_mutex_t g_sem_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int sem_path(const char *name, char *out, size_t cap)
+{
+    while (*name == '/') name++;
+    size_t n = strlen(name);
+    if (!n || n > NAME_MAX - 4 || strchr(name, '/')) { errno = EINVAL; return -1; }
+    if (n + 14 > cap) { errno = ENAMETOOLONG; return -1; }
+    memcpy(out, "/dev/shm/sem.", 13);
+    memcpy(out + 13, name, n + 1);
+    return 0;
+}
+
+static sem_t *map_sem(int fd)
+{
+    void *p = mmap(NULL, sizeof(sem_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    return p == MAP_FAILED ? SEM_FAILED : (sem_t *)p;
+}
+
 sem_t *sem_open(const char *name, int oflag, ...)
 {
-    (void)name;
-    (void)oflag;
-    errno = ENOSYS;
-    return SEM_FAILED;
+    char path[NAME_MAX + 16];
+    if (!name || sem_path(name, path, sizeof path) < 0) return SEM_FAILED;
+    mode_t mode = 0;
+    unsigned value = 0;
+    if (oflag & O_CREAT) {
+        va_list ap;
+        va_start(ap, oflag);
+        mode = (mode_t)va_arg(ap, unsigned);
+        value = va_arg(ap, unsigned);
+        va_end(ap);
+        if (value > SEM_VALUE_MAX) { errno = EINVAL; return SEM_FAILED; }
+    }
+
+    pthread_mutex_lock(&g_sem_lock);
+    for (int i = 0; i < SEM_REG_MAX; i++) {
+        if (g_sems[i].sem && !strcmp(g_sems[i].name, path + 13)) {
+            if ((oflag & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) break;
+            g_sems[i].refs++;
+            pthread_mutex_unlock(&g_sem_lock);
+            return g_sems[i].sem;
+        }
+    }
+
+    sem_t *sem = SEM_FAILED;
+    for (;;) {
+        if (!(oflag & O_EXCL)) {
+            int fd = open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+            if (fd >= 0) {
+                sem = map_sem(fd);
+                close(fd);
+                break;
+            }
+            if (errno != ENOENT || !(oflag & O_CREAT)) break;
+        }
+        char tmp[] = "/dev/shm/sem.tmpXXXXXX";
+        int fd = mkstemp(tmp);
+        if (fd < 0) break;
+        sem_t init;
+        sem_init(&init, 1, value);
+        if (fchmod(fd, mode & 0777) < 0 || write(fd, &init, sizeof init) != (ssize_t)sizeof init) {
+            close(fd); unlink(tmp); break;
+        }
+        if (link(tmp, path) == 0) {
+            sem = map_sem(fd);
+            close(fd);
+            unlink(tmp);
+            break;
+        }
+        int e = errno;
+        close(fd);
+        unlink(tmp);
+        if (e != EEXIST || (oflag & O_EXCL)) { errno = e; break; }
+    }
+
+    if (sem != SEM_FAILED) {
+        int slot = -1;
+        for (int i = 0; i < SEM_REG_MAX; i++) if (!g_sems[i].sem) { slot = i; break; }
+        if (slot >= 0) {
+            snprintf(g_sems[slot].name, sizeof g_sems[slot].name, "%s", path + 13);
+            g_sems[slot].sem = sem;
+            g_sems[slot].refs = 1;
+        }
+    }
+    pthread_mutex_unlock(&g_sem_lock);
+    return sem;
 }
 
 int sem_close(sem_t *sem)
 {
-    (void)sem;
-    errno = ENOSYS;
+    pthread_mutex_lock(&g_sem_lock);
+    for (int i = 0; i < SEM_REG_MAX; i++) {
+        if (g_sems[i].sem != sem) continue;
+        if (--g_sems[i].refs == 0) {
+            g_sems[i].sem = NULL;
+            munmap(sem, sizeof(sem_t));
+        }
+        pthread_mutex_unlock(&g_sem_lock);
+        return 0;
+    }
+    pthread_mutex_unlock(&g_sem_lock);
+    errno = EINVAL;
     return -1;
 }
 
 int sem_unlink(const char *name)
 {
-    (void)name;
-    errno = ENOSYS;
-    return -1;
+    char path[NAME_MAX + 16];
+    if (!name || sem_path(name, path, sizeof path) < 0) return -1;
+    return unlink(path);
 }
