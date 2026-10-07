@@ -40,8 +40,6 @@ time_t time(time_t *t);
 clock_t clock(void);
 
 struct tm *localtime(const time_t *t);
-long        timezone_offset(void);
-const char *timezone_name(void);
 void        tzset(void);
 extern char *tzname[2];
 extern long  timezone;

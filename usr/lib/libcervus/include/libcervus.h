@@ -170,7 +170,6 @@ typedef struct {
 
 void __cervus_run_init(int argc, char **argv, char **envp, const __cervus_image_t *img);
 
-int __cervus_is_leap(int y);
 extern const int __cervus_days_in_mon[2][12];
 
 #endif

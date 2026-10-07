@@ -108,6 +108,12 @@ for f in "$SYSROOT"/etc/*; do
     green "sysroot etc/$(basename "$f") installed"
 done
 
+if [ -d zoneinfo ]; then
+    mkdir -p "$RFS/usr/share/zoneinfo"
+    cp -r zoneinfo/. "$RFS/usr/share/zoneinfo/"
+    green "time zone database installed into /usr/share/zoneinfo"
+fi
+
 if [ -d firmware ]; then
     mkdir -p "$RFS/lib/firmware"
     cp -r firmware/. "$RFS/lib/firmware/"
@@ -217,9 +223,12 @@ PKG_LICENSE="linux-firmware (redistributable, see /lib/firmware/LICENCE.*)"
 register_pkg linux-firmware "firmware for Wi-Fi and other devices, from linux-firmware" "" /lib/firmware
 PKG_LICENSE=
 register_pkg cervus-media "console and TrueType fonts, wallpapers and sounds"        libc /usr/share/fonts /usr/share/consolefonts /usr/share/media
+PKG_LICENSE="public domain (IANA tz database, see /usr/share/zoneinfo/LICENSE)"
+register_pkg tzdata      "the IANA time zone database, compiled for /usr/share/zoneinfo" "" /usr/share/zoneinfo
+PKG_LICENSE=
 register_pkg kernel       "the Cervus kernel and init, for the boot partition"       libc /boot
 register_pkg cervus-system "all of Cervus: kernel, command line, library and assets" \
-    "cervus-base cervus-libc cervus-media kernel linux-firmware"
+    "cervus-base cervus-libc cervus-media kernel linux-firmware tzdata"
 printf 'Cervus %s\n' "$SYSVER" > "$RFS/var/lib/herd/system-release"
 green "registered the base system with herd as $SYSVER"
 

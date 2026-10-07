@@ -116,11 +116,33 @@ do_firmware() {
     done
 }
 
-[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|cinder|firmware}"
+TZDATA_VERSION=2026e
+TZDATA_SHA256=b26882805f26aac59d5b222978e6580484b834ccdc98be89df2f05a6dc53a652
+TZDATA_URL="https://data.iana.org/time-zones/releases/tzdata${TZDATA_VERSION}.tar.gz"
+
+do_zoneinfo() {
+    command -v zic >/dev/null 2>&1 || die "zic not found: install your distribution's time zone compiler (glibc or tzdata tools)"
+    src=$(mktemp -d)
+    say "fetching tzdata $TZDATA_VERSION"
+    curl -fL --retry 3 -o "$src/tzdata.tar.gz" "$TZDATA_URL"
+    got=$(sha256sum "$src/tzdata.tar.gz" | awk '{print $1}')
+    [ "$got" = "$TZDATA_SHA256" ] || { rm -rf "$src"; die "tzdata: checksum mismatch ($got)"; }
+    tar -xzf "$src/tzdata.tar.gz" -C "$src"
+    rm -rf zoneinfo
+    mkdir -p zoneinfo
+    (cd "$src" && zic -b slim -d "$ROOT/zoneinfo" \
+        africa antarctica asia australasia europe northamerica southamerica etcetera backward factory)
+    cp "$src/zone.tab" "$src/zone1970.tab" "$src/iso3166.tab" "$src/LICENSE" zoneinfo/
+    rm -rf "$src"
+    say "zoneinfo $TZDATA_VERSION compiled"
+}
+
+[ $# -eq 1 ] || die "usage: bootstrap.sh {deps|limine|cinder|firmware|zoneinfo}"
 case "$1" in
     deps)     do_deps ;;
     limine)   do_limine ;;
     cinder)   do_cinder ;;
     firmware) do_firmware ;;
+    zoneinfo) do_zoneinfo ;;
     *)      die "unknown step: $1" ;;
 esac

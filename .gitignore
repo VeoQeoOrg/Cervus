@@ -15,6 +15,7 @@ OS-TREE.txt
 linker-scripts/
 /bin/
 /firmware/
+/zoneinfo/
 /obj/
 iso_root/
 rootfs/

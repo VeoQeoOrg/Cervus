@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <libcervus.h>
 
+void __cervus_tm_zone(const struct tm *tm, long *gmtoff, const char **zone);
+
 static const char *const g_wday[7] = {
     "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 };
@@ -149,14 +151,18 @@ static void convert(out_t *o, char conv, char flag, int width, const struct tm *
         case 'y': put_num(o, ((year % 100) + 100) % 100, width ? width : 2, numpad); break;
         case 'Y': put_num(o, year, width ? width : (year >= 0 ? 4 : 0), numpad); break;
         case 'z': {
-            long off = timezone_offset();
+            long off;
+            const char *zn;
+            __cervus_tm_zone(tm, &off, &zn);
             put(o, off < 0 ? '-' : '+');
             if (off < 0) off = -off;
             put_num(o, (off / 3600) * 100 + (off / 60) % 60, 4, '0');
             break;
         }
         case 'Z': {
-            const char *z = timezone_name();
+            long zoff;
+            const char *z;
+            __cervus_tm_zone(tm, &zoff, &z);
             size_t len = 0;
             while (z && z[len]) len++;
             put_str(o, z ? z : "", len, width, spcpad, upper);

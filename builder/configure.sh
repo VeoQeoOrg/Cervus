@@ -39,7 +39,7 @@ LIBM_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -I usr/lib/libcervus/math/internal
 -Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
 -Wno-unused-but-set-variable -Wno-implicit-fallthrough"
 
-LIBNET_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -fno-strict-aliasing \
+MUSL_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -fno-strict-aliasing \
 -Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
 -Wno-implicit-fallthrough -Wno-maybe-uninitialized -Wno-unterminated-string-initialization"
 
@@ -53,6 +53,7 @@ DEPS_STAMP=$STAMPS/deps
 LIMINE_STAMP=$STAMPS/limine
 CINDER_STAMP=$STAMPS/cinder
 FIRMWARE_STAMP=$STAMPS/firmware
+ZONEINFO_STAMP=$STAMPS/zoneinfo
 
 obj_for() {
     printf 'obj/%s/%s.o' "$2" "$(printf '%s' "$1" | tr './' '__')"
@@ -184,14 +185,14 @@ rule cc_lib_opt
   depfile = \$out.d
   deps = gcc
 
-rule cc_libnet
-  command = gcc $LIBNET_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
-  description = CC(net)   \$in
+rule cc_musl
+  command = gcc $MUSL_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(musl)  \$in
   depfile = \$out.d
 
-rule cc_libnet_pic
-  command = gcc $LIBNET_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
-  description = CC(net*)  \$in
+rule cc_musl_pic
+  command = gcc $MUSL_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(musl*) \$in
   depfile = \$out.d
 
 rule cc_libm
@@ -274,6 +275,8 @@ build $CINDER_STAMP: bootstrap
   step = cinder
 build $FIRMWARE_STAMP: bootstrap builder/bootstrap.sh
   step = firmware
+build $ZONEINFO_STAMP: bootstrap builder/bootstrap.sh
+  step = zoneinfo
 
 EOF
 
@@ -293,7 +296,7 @@ for src in $(find usr/lib/libcervus -name '*.c' -o -name '*.s' | sort); do
     case "$src" in
         *.s) rule=as_lib; picrule=as_lib ;;
         */math/*|*/complex/*|*/fenv/*) rule=cc_libm; picrule=cc_libm_pic ;;
-        */net/resolv/*) rule=cc_libnet; picrule=cc_libnet_pic ;;
+        */net/resolv/*|*/time/tz/*) rule=cc_musl; picrule=cc_musl_pic ;;
         */image/*|*/gl/*|*/compress/inflate.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
             rule=cc_lib_opt; picrule=cc_lib_pic_opt ;;
         *) rule=cc_lib; picrule=cc_lib_pic ;;
@@ -369,7 +372,7 @@ printf 'build bin/kernel: link_kernel%s obj/kernel/ksyms.o | %s\n\n' "$KOBJS" "$
 
 SYSROOT_DATA=$(find usr/sysroot/usr/share usr/sysroot/etc -type f 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
 printf 'build initramfs.tar: initramfs bin/kernel usr/apps/init.elf%s %s builder/VERSION builder/mk_initramfs.sh | %s %s %s %s\n\n' \
-    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libc.so.1 $SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a $SYSLIB/libncurses.a $SYSLIB/libcurses.a $SYSLIB/libtinfo.a $SYSLIB/libutil.a" "$LIMINE_STAMP" "$FIRMWARE_STAMP"
+    "$ALL_ELFS" "$SYSROOT_DATA" "$LIBCERVUS_A" "$SYSLIB/libc.so.1 $SYSLIB/libm.a $SYSLIB/libdl.a $SYSLIB/libpthread.a $SYSLIB/librt.a $SYSLIB/libc.a $SYSLIB/libncurses.a $SYSLIB/libcurses.a $SYSLIB/libtinfo.a $SYSLIB/libutil.a" "$LIMINE_STAMP" "$FIRMWARE_STAMP $ZONEINFO_STAMP"
 
 printf 'build %s/iso.stamp: iso bin/kernel initramfs.tar usr/apps/init.elf builder/mk_iso.sh builder/VERSION | %s\n' \
     "$BUILDDIR" "$LIMINE_STAMP"
