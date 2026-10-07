@@ -20,8 +20,6 @@ bool avx2_supported(void);
 void sse_init(void);
 void sse_set_mxcsr(uint32_t mxcsr);
 uint32_t sse_get_mxcsr(void);
-void sse_memcpy_fast(void* dest, const void* src, size_t n);
-void sse_memset_fast(void* dest, int value, size_t n);
 bool mmx_supported(void);
 void mmx_enter(void);
 void mmx_exit(void);

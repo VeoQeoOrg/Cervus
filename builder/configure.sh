@@ -25,7 +25,7 @@ KERNEL_SSE="$KERNEL_BASE -msse -msse2 -mfpmath=sse -mno-mmx -mno-3dnow"
 KERNEL_CPP="-I kernel/src -I libc/include \
 -isystem limine-tools/freestnd-c-hdrs/include"
 
-SSE_FILES="sse.c fpu.c fabs.c pow.c pow10.c serial.c snprintf.c printf.c"
+SSE_FILES="fabs.c pow.c pow10.c"
 
 LIBCERVUS_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector \
 -mno-red-zone -fno-pie -fno-pic -O0 -g -Wall -Wextra \
