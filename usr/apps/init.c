@@ -12,6 +12,8 @@
 #include <stddef.h>
 
 #include <errno.h>
+#include <time.h>
+#include <sys/time.h>
 
 #define NVT 12
 #define C_RESET  "\x1b[0m"
@@ -199,6 +201,77 @@ static void read_default_shell(void) {
     }
 }
 
+static int read_small(const char *path, char *buf, size_t cap) {
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, buf, cap - 1);
+    close(fd);
+    if (n < 0) return -1;
+    buf[n] = 0;
+    return (int)n;
+}
+
+static void migrate_timezone(const char *etc) {
+    char path[64], lt[64], line[128];
+    snprintf(lt, sizeof lt, "%s/localtime", etc);
+    snprintf(path, sizeof path, "%s/timezone", etc);
+    struct stat st;
+    if (lstat(lt, &st) == 0) return;
+    if (read_small(path, line, sizeof line) <= 0) return;
+    char *nl = strchr(line, '\n');
+    if (nl) *nl = 0;
+    char *sp = strchr(line, ' ');
+    long minutes = 0;
+    int has_minutes = 0;
+    if (sp) { *sp = 0; minutes = strtol(sp + 1, NULL, 10); has_minutes = 1; }
+    char zone[128];
+    snprintf(zone, sizeof zone, "/usr/share/zoneinfo/%s", line);
+    if (!line[0] || stat(zone, &st) != 0) return;
+    if (symlink(zone, lt) != 0) return;
+    if (has_minutes && minutes == 0 && strcmp(line, "UTC") != 0) {
+        char adj[64];
+        snprintf(adj, sizeof adj, "%s/adjtime", etc);
+        int fd = open(adj, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd >= 0) {
+            static const char body[] = "0.0 0 0.0\n0\nLOCAL\n";
+            write(fd, body, sizeof body - 1);
+            close(fd);
+        }
+    }
+    unlink(path);
+}
+
+static void rtc_local_to_utc(const char *etc) {
+    char adj[64], buf[256];
+    snprintf(adj, sizeof adj, "%s/adjtime", etc);
+    if (read_small(adj, buf, sizeof buf) <= 0) return;
+    char *l3 = strchr(buf, '\n');
+    if (l3) l3 = strchr(l3 + 1, '\n');
+    if (!l3 || strncmp(l3 + 1, "LOCAL", 5) != 0) return;
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return;
+    time_t wall = tv.tv_sec;
+    struct tm tm;
+    if (!gmtime_r(&wall, &tm)) return;
+    tm.tm_isdst = -1;
+    time_t utc = mktime(&tm);
+    if (utc == (time_t)-1 || utc == wall) return;
+    tv.tv_sec = utc;
+    settimeofday(&tv, NULL);
+}
+
+static void setup_time_zone(int disk_mounted) {
+    const char *etc = disk_mounted ? "/mnt/etc" : "/etc";
+    migrate_timezone(etc);
+    if (disk_mounted) {
+        struct stat st;
+        if (lstat("/mnt/etc/localtime", &st) == 0 && lstat("/etc/localtime", &st) != 0)
+            symlink("/mnt/etc/localtime", "/etc/localtime");
+    }
+    tzset();
+    rtc_local_to_utc(etc);
+}
+
 static void boot_setup(void) {
     static const char *const DISK_PREFIXES[] = { "nvme0n1", "sda", "hda" };
 
@@ -267,6 +340,8 @@ static void boot_setup(void) {
         setenv("PATH", "/bin:/apps:/usr/bin", 1);
         setenv("MODE", "live", 1);
     }
+
+    setup_time_zone(disk_mounted);
 
     read_default_shell();
     setenv("SHELL", g_shell, 1);

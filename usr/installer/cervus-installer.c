@@ -1416,13 +1416,20 @@ static void apply_accounts(const account_cfg_t *a) {
     if (fd >= 0) { if (sn > 0) write(fd, su, (size_t)sn); close(fd); }
 
     {
-        char tz[128];
-        int tn = snprintf(tz, sizeof tz, "%s %d\n",
-                          TZONES[g_tz_index].zone,
-                          g_rtc_is_local ? 0 : TZONES[g_tz_index].minutes);
+        char zone[160];
+        snprintf(zone, sizeof zone, "/usr/share/zoneinfo/%s", TZONES[g_tz_index].zone);
         unlink("/mnt/root/etc/timezone");
-        fd = open("/mnt/root/etc/timezone", O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) { write(fd, tz, (size_t)tn); close(fd); }
+        unlink("/mnt/root/etc/localtime");
+        symlink(zone, "/mnt/root/etc/localtime");
+        static const char adj_utc[]   = "0.0 0 0.0\n0\nUTC\n";
+        static const char adj_local[] = "0.0 0 0.0\n0\nLOCAL\n";
+        unlink("/mnt/root/etc/adjtime");
+        fd = open("/mnt/root/etc/adjtime", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            if (g_rtc_is_local) write(fd, adj_local, sizeof adj_local - 1);
+            else                write(fd, adj_utc, sizeof adj_utc - 1);
+            close(fd);
+        }
     }
 
     ensure_dir("/mnt/root/home");
@@ -1813,19 +1820,16 @@ static void info_bootloader(int row, int col, int w) {
 
 
 static void info_timezone(int row, int col, int w) {
-    info_print(&row, col, w, 1, "Which offset from UTC this machine");
-    info_print(&row, col, w, 1, "should use when showing the time.");
+    info_print(&row, col, w, 1, "Which time zone this machine is in.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 1, "The hardware clock is left on UTC, and");
-    info_print(&row, col, w, 1, "this offset is applied when a time is");
-    info_print(&row, col, w, 1, "displayed - by the clock, by ls and by");
-    info_print(&row, col, w, 1, "the file manager.");
+    info_print(&row, col, w, 1, "The zone comes from the IANA time zone");
+    info_print(&row, col, w, 1, "database, so summer time and past rule");
+    info_print(&row, col, w, 1, "changes are applied automatically. The");
+    info_print(&row, col, w, 1, "offset shown is the standard one.");
     info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 1, "There is no daylight saving rule, so a");
-    info_print(&row, col, w, 1, "summer offset has to be picked by hand.");
-    info_print(&row, col, w, 1, "");
-    info_print(&row, col, w, 1, "It can be changed later by editing");
-    info_print(&row, col, w, 1, "/etc/timezone.");
+    info_print(&row, col, w, 1, "It can be changed later by pointing");
+    info_print(&row, col, w, 1, "/etc/localtime at another file under");
+    info_print(&row, col, w, 1, "/usr/share/zoneinfo.");
 }
 
 static void info_rtcmode(int row, int col, int w) {
