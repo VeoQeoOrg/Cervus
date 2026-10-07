@@ -13,6 +13,10 @@
 #define TH_RUNNING  0
 #define TH_DONE     1
 
+#define DS_JOINABLE 0
+#define DS_DETACHED 1
+#define DS_EXITING  2
+
 struct __pthread {
     volatile int  done;
     volatile int  cancel_pending;
@@ -20,7 +24,9 @@ struct __pthread {
     int           cancel_type;
     volatile int  in_cp;
     struct __pthread_cleanup *cleanup;
-    volatile int  detached;
+    volatile int  dstate;
+    volatile int  tid_word;
+    struct __pthread *next_zombie;
     void         *retval;
     void         *(*fn)(void *);
     void         *arg;
@@ -170,29 +176,87 @@ int pthread_cancel(pthread_t th)
     return 0;
 }
 
-void __cervus_thread_entry(struct __pthread *th)
-{
-    __cervus_tls_set(th->tls);
-    th->tid = (int)getpid();
-    void *r = th->fn(th->arg);
+static struct __pthread *g_zombies;
 
+__attribute__((noreturn)) static void unmap_and_exit(void *stk, size_t sz)
+{
+    __asm__ volatile(
+        "syscall\n\t"
+        "mov %3, %%eax\n\t"
+        "xor %%edi, %%edi\n\t"
+        "syscall\n\t"
+        "1: jmp 1b"
+        :: "a"((long)SYS_MUNMAP), "D"(stk), "S"(sz), "i"(SYS_THREAD_EXIT)
+        : "rcx", "r11", "memory");
+    __builtin_unreachable();
+}
+
+static void wait_gone(struct __pthread *th)
+{
+    for (;;) {
+        int v = __atomic_load_n(&th->tid_word, __ATOMIC_ACQUIRE);
+        if (!v) return;
+        futex_wait(&th->tid_word, v);
+    }
+}
+
+static void release(struct __pthread *th)
+{
+    void *stk = th->stack;
+    size_t sz = th->stacksize;
+    void *tls = th->tls;
+    free(th);
+    __cervus_tls_free(tls);
+    if (stk) munmap(stk, sz);
+}
+
+static void reap_zombies(void)
+{
+    struct __pthread *list = __atomic_exchange_n(&g_zombies, NULL, __ATOMIC_ACQ_REL);
+    while (list) {
+        struct __pthread *th = list;
+        list = th->next_zombie;
+        if (__atomic_load_n(&th->tid_word, __ATOMIC_ACQUIRE)) {
+            th->next_zombie = __atomic_load_n(&g_zombies, __ATOMIC_RELAXED);
+            while (!__atomic_compare_exchange_n(&g_zombies, &th->next_zombie, th, 0,
+                                                __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
+            continue;
+        }
+        void *tls = th->tls;
+        free(th);
+        __cervus_tls_free(tls);
+    }
+}
+
+__attribute__((noreturn)) static void thread_finish(struct __pthread *th, void *retval)
+{
     run_cleanup(th);
     __cervus_pthread_key_cleanup();
-    th->retval = r;
+    th->retval = retval;
     __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
     futex_wake(&th->done, 1);
 
-    if (__atomic_load_n(&th->detached, __ATOMIC_ACQUIRE)) {
+    int st = DS_JOINABLE;
+    if (!__atomic_compare_exchange_n(&th->dstate, &st, DS_EXITING, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         void *stk = th->stack;
         size_t sz = th->stacksize;
-        void *mytls = th->tls;
-        free(th);
-        __cervus_tls_free(mytls);
-        if (stk) munmap(stk, sz);
+        th->stack = NULL;
+        th->next_zombie = __atomic_load_n(&g_zombies, __ATOMIC_RELAXED);
+        while (!__atomic_compare_exchange_n(&g_zombies, &th->next_zombie, th, 0,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {}
+        unmap_and_exit(stk, sz);
     }
 
     syscall1(SYS_THREAD_EXIT, 0);
     for (;;) {}
+}
+
+void __cervus_thread_entry(struct __pthread *th)
+{
+    __cervus_tls_set(th->tls);
+    th->tid = (int)getpid();
+    thread_finish(th, th->fn(th->arg));
 }
 
 extern void __cervus_thread_trampoline(void);
@@ -204,6 +268,8 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
 
     size_t ssz = (attr && attr->stacksize) ? attr->stacksize : DEFAULT_STACK;
     ssz = (ssz + 0xFFF) & ~(size_t)0xFFF;
+
+    reap_zombies();
 
     struct __pthread *th = calloc(1, sizeof(*th));
     if (!th) return EAGAIN;
@@ -221,15 +287,16 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     th->stack = stk;
     th->stacksize = ssz;
     th->done = TH_RUNNING;
-    th->detached = (attr && attr->detachstate == PTHREAD_CREATE_DETACHED);
+    th->dstate = (attr && attr->detachstate == PTHREAD_CREATE_DETACHED) ? DS_DETACHED : DS_JOINABLE;
+    th->tid_word = -1;
 
     uintptr_t top = ((uintptr_t)stk + ssz) & ~(uintptr_t)0xF;
     uint64_t *sp = (uint64_t *)top;
     *--sp = (uint64_t)(uintptr_t)th;
 
-    long tid = syscall3(SYS_THREAD_CREATE,
+    long tid = syscall4(SYS_THREAD_CREATE,
                         (uint64_t)(uintptr_t)__cervus_thread_trampoline,
-                        (uint64_t)(uintptr_t)sp, 0);
+                        (uint64_t)(uintptr_t)sp, 0, (uint64_t)(uintptr_t)&th->tid_word);
     if (tid < 0) {
         munmap(stk, ssz);
         __cervus_tls_free(th->tls);
@@ -245,32 +312,36 @@ int pthread_join(pthread_t th, void **retval)
 {
     if (!th) return EINVAL;
     if (th == pthread_self()) return EDEADLK;
+    if (th == &g_main) return EINVAL;
     int cp = __cervus_cp_enter();
     while (__atomic_load_n(&th->done, __ATOMIC_ACQUIRE) != TH_DONE)
         futex_wait(&th->done, TH_RUNNING);
     __cervus_cp_leave(cp);
+    wait_gone(th);
 
     if (retval) *retval = th->retval;
-
-    void *stk = th->stack;
-    size_t sz = th->stacksize;
-    void *tls = th->tls;
-    free(th);
-    __cervus_tls_free(tls);
-    if (stk) munmap(stk, sz);
+    release(th);
+    reap_zombies();
     return 0;
 }
 
 int pthread_detach(pthread_t th)
 {
-    if (!th) return EINVAL;
-    __atomic_store_n(&th->detached, 1, __ATOMIC_RELEASE);
+    if (!th || th == &g_main) return EINVAL;
+    int st = DS_JOINABLE;
+    if (__atomic_compare_exchange_n(&th->dstate, &st, DS_DETACHED, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        return 0;
+    if (st == DS_DETACHED) return EINVAL;
+    wait_gone(th);
+    release(th);
     return 0;
 }
 
 void pthread_exit(void *retval)
 {
     struct __pthread *th = pthread_self();
+    if (th && th != &g_main) thread_finish(th, retval);
     if (th) run_cleanup(th);
     __cervus_pthread_key_cleanup();
     if (th) {
