@@ -130,6 +130,7 @@ typedef struct rtl8169 {
     spinlock_t        lock;
 
     struct rtl8169   *next;
+    volatile uint16_t irq_pending;
 } rtl8169_t;
 
 static rtl8169_t *g_nics;
@@ -338,8 +339,16 @@ static void rtl_irq(void *ctx) {
     rtl8169_t *r = ctx;
     uint16_t st = r16(r, R_ISR);
     w16(r, R_ISR, st);
+    __atomic_or_fetch(&r->irq_pending, st, __ATOMIC_RELEASE);
+    netdev_rx_schedule(r->ndev);
+}
+
+static int rtl_rx_poll(netdev_t *nd) {
+    rtl8169_t *r = nd->priv;
+    uint16_t st = __atomic_exchange_n(&r->irq_pending, 0, __ATOMIC_ACQ_REL);
     if (st & ISR_LINKCHG) rtl_link_update(r);
     rtl_rx_drain(r);
+    return 0;
 }
 
 static void rtl_worker(void *arg) {
@@ -590,6 +599,7 @@ static int rtl_probe(pci_device_t *dev) {
 
     r->ndev = netdev_register(mac, 1500, rtl_transmit, r);
     if (!r->ndev) { free(r); return -1; }
+    r->ndev->rx_poll = rtl_rx_poll;
     r->ndev->link_up = 0;
     rtl_link_update(r);
 

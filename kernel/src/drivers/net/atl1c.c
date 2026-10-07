@@ -192,6 +192,7 @@ typedef struct atl1c_dev {
     int vector;
 
     struct atl1c_dev *next;
+    volatile int irq_masked;
 } atl1c_t;
 
 static atl1c_t *g_nics;
@@ -468,8 +469,15 @@ static void atl1c_irq(void *ctx) {
     uint32_t isr = ar32(a, ATL_ISR);
     if (!isr) return;
     aw32(a, ATL_ISR, ATL_ISR_DIS_INT);
+    __atomic_store_n(&a->irq_masked, 1, __ATOMIC_RELEASE);
+    netdev_rx_schedule(a->ndev);
+}
+
+static int atl1c_rx_poll(netdev_t *nd) {
+    atl1c_t *a = nd->priv;
     atl1c_rx_drain(a);
-    aw32(a, ATL_ISR, 0);
+    if (__atomic_exchange_n(&a->irq_masked, 0, __ATOMIC_ACQ_REL)) aw32(a, ATL_ISR, 0);
+    return 0;
 }
 
 static void atl1c_worker(void *arg) {
@@ -562,6 +570,7 @@ static int atl1c_probe(pci_device_t *dev) {
 
     a->ndev = netdev_register(mac, 1500, atl1c_transmit, a);
     if (!a->ndev) { free(a); return -1; }
+    a->ndev->rx_poll = atl1c_rx_poll;
 
     a->next = g_nics;
     g_nics = a;

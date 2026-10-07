@@ -16,6 +16,7 @@
 #include "../../include/drivers/net/atl1e.h"
 #include "../../include/drivers/net/wifi.h"
 #include "../../include/sched/sched.h"
+#include "../../include/sched/waitq.h"
 #include "../../include/io/serial.h"
 #include <string.h>
 #include <stdlib.h>
@@ -169,12 +170,34 @@ void net_rx(netdev_t *dev, const void *frame, size_t len) {
     }
 }
 
+static spinlock_t   g_net_lock = SPINLOCK_INIT;
+static waitq_t      g_net_wq;
+static volatile int g_net_kick;
+
+void netdev_rx_schedule(netdev_t *dev) {
+    if (dev) __atomic_store_n(&dev->rx_sched, 1, __ATOMIC_RELEASE);
+    uint64_t f = spinlock_acquire_irqsave(&g_net_lock);
+    g_net_kick = 1;
+    waitq_wake_all(&g_net_wq);
+    spinlock_release_irqrestore(&g_net_lock, f);
+}
+
+static int net_poll_devices(void) {
+    int did = 0;
+    for (netdev_t *d = g_netdevs; d; d = d->next) {
+        if (!d->rx_poll || !__atomic_exchange_n(&d->rx_sched, 0, __ATOMIC_ACQ_REL)) continue;
+        if (d->rx_poll(d) > 0) did = 1;
+    }
+    return did;
+}
+
 static void net_worker(void *arg) {
     (void)arg;
     int tick = 0;
     uint64_t next_tick = 0;
     for (;;) {
         int did = loopback_drain(8192) > 0;
+        if (net_poll_devices()) did = 1;
 
         uint64_t now = sched_now_ns();
         if (now >= next_tick) {
@@ -184,7 +207,16 @@ static void net_worker(void *arg) {
             if (++tick % 4 == 0) arp_age();
             next_tick = now + 250000000ULL;
         }
-        task_sleep_ms(did ? 2 : 60);
+
+        uint64_t f = spinlock_acquire_irqsave(&g_net_lock);
+        if (g_net_kick) {
+            g_net_kick = 0;
+            spinlock_release_irqrestore(&g_net_lock, f);
+            continue;
+        }
+        uint64_t wake = now + (did ? 2000000ULL : 60000000ULL);
+        if (wake > next_tick) wake = next_tick;
+        waitq_block(&g_net_wq, &g_net_lock, f, wake);
     }
 }
 

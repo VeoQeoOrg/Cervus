@@ -34,6 +34,9 @@ struct netdev {
 
     int      metric;
     int      static_cfg;
+
+    int    (*rx_poll)(netdev_t *dev);
+    volatile int rx_sched;
 };
 
 netdev_t *netdev_register(const uint8_t mac[ETH_ALEN], uint32_t mtu,
@@ -50,6 +53,7 @@ netdev_t *netdev_default(void);
 int       netdev_transmit(netdev_t *dev, const void *frame, size_t len);
 
 void net_rx(netdev_t *dev, const void *frame, size_t len);
+void netdev_rx_schedule(netdev_t *dev);
 
 void net_init(void);
 void net_start_worker(void);

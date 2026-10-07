@@ -206,6 +206,8 @@ typedef struct atl1e_dev {
     uint32_t   isr_seen;
     spinlock_t lock;
     struct atl1e_dev *next;
+    volatile uint32_t irq_pending;
+    volatile int irq_masked;
 } atl1e_t;
 
 static atl1e_t *g_nics;
@@ -586,9 +588,18 @@ static void atl1e_irq(void *ctx) {
     uint32_t isr = ar32(a, ATE_ISR);
     if (!isr) return;
     aw32(a, ATE_ISR, isr | ISR_DIS_INT);
+    __atomic_or_fetch(&a->irq_pending, isr, __ATOMIC_RELEASE);
+    __atomic_store_n(&a->irq_masked, 1, __ATOMIC_RELEASE);
+    netdev_rx_schedule(a->ndev);
+}
+
+static int atl1e_rx_poll(netdev_t *nd) {
+    atl1e_t *a = nd->priv;
+    uint32_t isr = __atomic_exchange_n(&a->irq_pending, 0, __ATOMIC_ACQ_REL);
     if (isr & (ISR_RX_PKT | ISR_HOST_RXF0_OV | ISR_HW_RXF_OV))
         atl1e_rx_drain(a);
-    aw32(a, ATE_ISR, 0);
+    if (__atomic_exchange_n(&a->irq_masked, 0, __ATOMIC_ACQ_REL)) aw32(a, ATE_ISR, 0);
+    return 0;
 }
 
 static void atl1e_report(atl1e_t *a) {
@@ -684,6 +695,7 @@ static int atl1e_probe(pci_device_t *dev) {
 
     a->ndev = netdev_register(mac, ATE_MAX_FRAME, atl1e_transmit, a);
     if (!a->ndev) { free(a); return -1; }
+    a->ndev->rx_poll = atl1e_rx_poll;
     a->next = g_nics;
     g_nics = a;
 

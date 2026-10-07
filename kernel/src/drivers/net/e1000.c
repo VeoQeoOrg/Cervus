@@ -136,14 +136,15 @@ static void read_mac(e1000_t *e, uint8_t mac[6]) {
     }
 }
 
-static void e1000_rx_drain(e1000_t *e) {
+static int e1000_rx_drain(e1000_t *e) {
     uint8_t buf[E1000_BUFSZ];
+    int n = 0;
     for (;;) {
         uint64_t f = spinlock_acquire_irqsave(&e->lock);
         uint32_t i = e->rx_cur;
         if (!(e->rx[i].status & RXD_STAT_DD)) {
             spinlock_release_irqrestore(&e->lock, f);
-            return;
+            return n;
         }
         uint16_t len = e->rx[i].length;
         if (len > E1000_BUFSZ) len = E1000_BUFSZ;
@@ -154,7 +155,12 @@ static void e1000_rx_drain(e1000_t *e) {
         spinlock_release_irqrestore(&e->lock, f);
 
         net_rx(e->ndev, buf, len);
+        n++;
     }
+}
+
+static int e1000_rx_poll(netdev_t *nd) {
+    return e1000_rx_drain(nd->priv);
 }
 
 static int e1000_transmit(netdev_t *nd, const void *frame, size_t len) {
@@ -186,7 +192,7 @@ static int e1000_transmit(netdev_t *nd, const void *frame, size_t len) {
 static void e1000_irq(void *ctx) {
     e1000_t *e = ctx;
     (void)er(e, E1000_ICR);
-    e1000_rx_drain(e);
+    netdev_rx_schedule(e->ndev);
 }
 
 static void e1000_worker(void *arg) {
@@ -274,6 +280,7 @@ static int e1000_probe(pci_device_t *dev) {
 
     e->ndev = netdev_register(mac, 1500, e1000_transmit, e);
     if (!e->ndev) { free(e); return -1; }
+    e->ndev->rx_poll = e1000_rx_poll;
     e->ndev->link_up = (er(e, E1000_STATUS) & STATUS_LU) ? 1 : 0;
 
     e->next = g_nics;
