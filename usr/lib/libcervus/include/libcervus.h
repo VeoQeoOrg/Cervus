@@ -29,13 +29,20 @@ int    __cervus_tls_set(void *tp);
 void   __cervus_tls_free(void *tp);
 void   __cervus_tls_init(void);
 
-#define __CERVUS_TCB_SELF   2
-#define __CERVUS_TCB_KEYS   3
-#define __CERVUS_TCB_ERRNO  4
-#define __CERVUS_TCB_HERRNO 5
-#define __CERVUS_TCB_ERRVAL 6
-#define __CERVUS_TCB_HERRVAL 7
-#define __CERVUS_TCB_SLOTS  8
+#define __CERVUS_TCB_DTV     1
+#define __CERVUS_TCB_SELF    2
+#define __CERVUS_TCB_KEYS    3
+#define __CERVUS_TCB_ERRNO   4
+#define __CERVUS_TCB_GUARD   5
+#define __CERVUS_TCB_PGUARD  6
+#define __CERVUS_TCB_HERRNO  7
+#define __CERVUS_TCB_RAW     8
+#define __CERVUS_TCB_ERRVAL  9
+#define __CERVUS_TCB_HERRVAL 10
+#define __CERVUS_TCB_LINK    11
+#define __CERVUS_TCB_SLOTS   12
+
+extern unsigned long *__cervus_auxv;
 
 
 extern int __cervus_tls_live;
@@ -148,12 +155,38 @@ int  __cervus_exit_push(void (*fn)(void *), void *arg, void *dso, int plain);
 void __cervus_run_exit_fns(void *dso);
 
 typedef struct {
+    uintptr_t image;
+    size_t    filesz, memsz, align;
+    size_t    offset;
+    int       is_static;
+} __cervus_tls_mod_t;
+
+typedef struct {
+    size_t              nmods;
+    size_t              static_size;
+    size_t              static_align;
+    size_t              static_used;
+    uint64_t            gen;
+    __cervus_tls_mod_t *mods;
+} __cervus_tls_layout_t;
+
+struct dl_phdr_info;
+
+typedef struct {
     void *(*open)(const char *path, int flags);
     void *(*sym)(void *handle, const char *name, const void *caller);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
     int   (*addr)(const void *addr, void *info);
+    const __cervus_tls_layout_t *(*tls)(void);
+    int   (*iterate)(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data);
 } __cervus_dl_ops_t;
+
+void __cervus_dl_lock(void);
+void __cervus_dl_unlock(void);
+void __cervus_tls_static_init(size_t modid);
+void *__cervus_tls_block(size_t modid);
+void  __cervus_auxv_init(char **envp);
 
 extern __cervus_dl_ops_t *__cervus_dl_ops;
 

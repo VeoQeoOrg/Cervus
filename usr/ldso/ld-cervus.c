@@ -18,6 +18,7 @@ typedef unsigned long      size_t;
 #define PT_LOAD    1
 #define PT_PHDR    6
 #define PT_DYNAMIC 2
+#define PT_TLS     7
 
 #define DT_NULL    0
 #define DT_NEEDED  1
@@ -48,8 +49,14 @@ typedef unsigned long      size_t;
 #define R_X86_64_GLOB_DAT  6
 #define R_X86_64_JUMP_SLOT 7
 #define R_X86_64_RELATIVE  8
+#define R_X86_64_DTPMOD64  16
+#define R_X86_64_DTPOFF64  17
+#define R_X86_64_TPOFF64   18
+#define R_X86_64_TLSDESC   36
+#define R_X86_64_IRELATIVE 37
 
 #define SHN_UNDEF 0
+#define STT_TLS   6
 #define STB_WEAK  2
 
 #define O_RDONLY 0
@@ -106,11 +113,42 @@ typedef struct {
 
 #define MAX_OBJECTS 512
 #define MAX_NEEDED  64
+#define MAX_TLS_MODS 256
+#define TLS_SURPLUS  4096
+
+typedef struct {
+    uintptr_t image;
+    size_t    filesz, memsz, align;
+    size_t    offset;
+    int       is_static;
+} tls_mod_t;
+
+typedef struct {
+    size_t     nmods;
+    size_t     static_size;
+    size_t     static_align;
+    size_t     static_used;
+    uint64_t   gen;
+    tls_mod_t *mods;
+} tls_layout_t;
+
+static tls_mod_t    g_tls_mods[MAX_TLS_MODS + 1];
+static tls_layout_t g_tls = { 0, 0, 16, 0, 1, g_tls_mods };
+
+typedef struct {
+    const phdr_t *phdr;
+    uint16_t      phnum;
+    uintptr_t     tls_image;
+    size_t        tls_filesz, tls_memsz, tls_align;
+} map_info_t;
 
 typedef struct {
     const char *name;
     const char *path;
     uintptr_t   base;
+    const phdr_t *phdr;
+    uint16_t    phnum;
+    size_t      tls_modid;
     dyn_t      *dyn;
     const char *strtab;
     sym_t      *symtab;
@@ -220,13 +258,73 @@ static sym_t *lookup_in(object_t *o, const char *name) {
     return NULL;
 }
 
-static uintptr_t resolve(const char *name, object_t *skip) {
+static sym_t *resolve_sym(const char *name, object_t *skip, object_t **def) {
     for (int i = 0; i < g_nobjs; i++) {
         if (&g_objs[i] == skip) continue;
         sym_t *s = lookup_in(&g_objs[i], name);
-        if (s) return g_objs[i].base + s->st_value;
+        if (s) { *def = &g_objs[i]; return s; }
     }
-    return 0;
+    return NULL;
+}
+
+static uintptr_t resolve(const char *name, object_t *skip) {
+    object_t *d;
+    sym_t *s = resolve_sym(name, skip, &d);
+    return s ? d->base + s->st_value : 0;
+}
+
+static size_t align_up(size_t v, size_t a) {
+    if (a < 1) a = 1;
+    return (v + a - 1) & ~(a - 1);
+}
+
+static size_t tls_place(size_t used, const tls_mod_t *m) {
+    size_t first = (size_t)(-m->image) & (m->align - 1);
+    size_t need = used + m->memsz;
+    return align_up(need > first ? need - first : 0, m->align) + first;
+}
+
+static size_t g_static_pending[MAX_TLS_MODS];
+static size_t g_npending;
+
+static void tls_register(object_t *o, const map_info_t *mi, int at_start) {
+    o->tls_modid = 0;
+    if (!mi->tls_memsz) return;
+    if (g_tls.nmods >= MAX_TLS_MODS) ld_die("too many modules with thread-local storage", o->name);
+    size_t id = ++g_tls.nmods;
+    tls_mod_t *m = &g_tls_mods[id];
+    m->image  = mi->tls_image;
+    m->filesz = mi->tls_filesz;
+    m->memsz  = mi->tls_memsz;
+    m->align  = mi->tls_align ? mi->tls_align : 1;
+    m->offset = 0;
+    m->is_static = 0;
+    o->tls_modid = id;
+    if (at_start) {
+        size_t off = tls_place(g_tls.static_used, m);
+        m->offset = off;
+        m->is_static = 1;
+        g_tls.static_used = off;
+        if (m->align > g_tls.static_align) g_tls.static_align = m->align;
+    }
+    g_tls.gen++;
+}
+
+static size_t tls_static_offset(object_t *o) {
+    if (!o->tls_modid) ld_die("initial-exec TLS reference to a module without TLS", o->name);
+    tls_mod_t *m = &g_tls_mods[o->tls_modid];
+    if (__atomic_load_n(&m->is_static, __ATOMIC_ACQUIRE) == 1) return m->offset;
+    size_t off = tls_place(g_tls.static_used, m);
+    if (off > g_tls.static_size || m->align > g_tls.static_align)
+        ld_die("no static TLS space left for", o->name);
+    m->offset = off;
+    int expect = 0;
+    if (!__atomic_compare_exchange_n(&m->is_static, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+        ld_die("thread-local storage is already dynamic, cannot use initial-exec TLS in", o->name);
+    g_tls.static_used = off;
+    g_static_pending[g_npending++] = o->tls_modid;
+    g_tls.gen++;
+    return off;
 }
 
 static void unresolved_call(void)
@@ -265,9 +363,33 @@ static void apply_relocations(object_t *o)
                 continue;
             }
             if (type == R_X86_64_NONE) continue;
+            if (type == R_X86_64_IRELATIVE) {
+                *slot = ((uintptr_t (*)(void))(o->base + (uint64_t)r->r_addend))();
+                continue;
+            }
+            if (type == R_X86_64_TLSDESC) ld_die("TLS descriptors are not supported, rebuild with -mtls-dialect=gnu", o->name);
 
             const char *nm = (o->symtab && o->strtab)
                            ? o->strtab + o->symtab[si].st_name : "";
+
+            if (type == R_X86_64_DTPMOD64 || type == R_X86_64_DTPOFF64 || type == R_X86_64_TPOFF64) {
+                object_t *def = o;
+                uint64_t symoff = 0;
+                if (si) {
+                    sym_t *ts = resolve_sym(nm, NULL, &def);
+                    if (!ts) {
+                        sym_t *own = o->symtab ? &o->symtab[si] : NULL;
+                        if (own && own->st_shndx != SHN_UNDEF) { ts = own; def = o; }
+                    }
+                    if (!ts) ld_die("undefined thread-local symbol", nm);
+                    symoff = ts->st_value;
+                }
+                if (type == R_X86_64_DTPMOD64)      *slot = def->tls_modid;
+                else if (type == R_X86_64_DTPOFF64) *slot = symoff + (uint64_t)r->r_addend;
+                else *slot = symoff + (uint64_t)r->r_addend - tls_static_offset(def);
+                continue;
+            }
+
             uintptr_t val = resolve(nm, type == R_X86_64_COPY ? o : NULL);
             if (!val) {
                 sym_t *own = (o->symtab && si) ? &o->symtab[si] : NULL;
@@ -373,8 +495,13 @@ static long find_library(char *full, size_t cap, const char *name, const object_
 
 static uintptr_t g_map_lo, g_map_hi;
 
-static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *req, char *full, size_t cap)
+static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *req, char *full, size_t cap,
+                             map_info_t *mi)
 {
+    mi->phdr = NULL;
+    mi->phnum = 0;
+    mi->tls_image = 0;
+    mi->tls_filesz = mi->tls_memsz = mi->tls_align = 0;
     long fd = find_library(full, cap, path, req);
     if (fd < 0) { g_fail = "cannot find library"; return 0; }
 
@@ -405,12 +532,23 @@ static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *
     uintptr_t base = (uintptr_t)area - lo;
     g_map_lo = (uintptr_t)area;
     g_map_hi = (uintptr_t)area + span;
+    uint64_t phbytes = (uint64_t)eh.e_phentsize * eh.e_phnum;
 
     for (int i = 0; i < eh.e_phnum; i++) {
         sys3(SYS_SEEK, fd, (long)(eh.e_phoff + (uint64_t)eh.e_phentsize * i), 0);
         if (sys3(SYS_READ, fd, (long)&ph, sizeof ph) != (long)sizeof ph) break;
         if (ph.p_type == PT_DYNAMIC) *dyn_out = (dyn_t *)(base + ph.p_vaddr);
+        if (ph.p_type == PT_TLS) {
+            mi->tls_image  = base + ph.p_vaddr;
+            mi->tls_filesz = ph.p_filesz;
+            mi->tls_memsz  = ph.p_memsz;
+            mi->tls_align  = ph.p_align;
+        }
         if (ph.p_type != PT_LOAD) continue;
+        if (!mi->phdr && eh.e_phoff >= ph.p_offset && eh.e_phoff + phbytes <= ph.p_offset + ph.p_filesz) {
+            mi->phdr = (const phdr_t *)(base + ph.p_vaddr + (eh.e_phoff - ph.p_offset));
+            mi->phnum = eh.e_phnum;
+        }
         if (ph.p_filesz) {
             sys3(SYS_SEEK, fd, (long)ph.p_offset, 0);
             uint64_t done = 0;
@@ -425,11 +563,23 @@ static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *
         for (uint64_t z = ph.p_filesz; z < ph.p_memsz; z++) *zero++ = 0;
     }
 
+    if (!mi->phdr && eh.e_phentsize == sizeof(phdr_t)) {
+        long copy = sys6(SYS_MMAP, 0, (long)((phbytes + 0xFFF) & ~0xFFFul), PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (copy > 0) {
+            sys3(SYS_SEEK, fd, (long)eh.e_phoff, 0);
+            if (sys3(SYS_READ, fd, copy, (long)phbytes) == (long)phbytes) {
+                mi->phdr = (const phdr_t *)copy;
+                mi->phnum = eh.e_phnum;
+            }
+        }
+    }
+
     sys1(SYS_CLOSE, fd);
     return base;
 }
 
-static void load_needed(object_t *o)
+static void load_needed(object_t *o, int at_start)
 {
     for (dyn_t *d = o->dyn; d && d->d_tag != DT_NULL; d++) {
         if (d->d_tag != DT_NEEDED) continue;
@@ -450,7 +600,8 @@ static void load_needed(object_t *o)
         ld_copy(names[g_nobjs], name, sizeof names[0]);
 
         dyn_t *ndyn = NULL;
-        uintptr_t base = map_library(names[g_nobjs], &ndyn, o, paths[g_nobjs], sizeof paths[0]);
+        map_info_t mi;
+        uintptr_t base = map_library(names[g_nobjs], &ndyn, o, paths[g_nobjs], sizeof paths[0], &mi);
         if (!base) ld_die(g_fail, names[g_nobjs]);
         if (!ndyn) ld_die("library has no dynamic section", names[g_nobjs]);
 
@@ -463,8 +614,11 @@ static void load_needed(object_t *o)
         no->map_start = g_map_lo;
         no->map_end   = g_map_hi;
         no->relocated = 0;
+        no->phdr  = mi.phdr;
+        no->phnum = mi.phnum;
+        tls_register(no, &mi, at_start);
         scan_dynamic(no);
-        load_needed(no);
+        load_needed(no, at_start);
     }
 }
 
@@ -476,12 +630,28 @@ typedef struct {
 } dl_info_t;
 
 typedef struct {
+    uintptr_t     addr;
+    const char   *name;
+    const phdr_t *phdr;
+    uint16_t      phnum;
+    unsigned long long adds, subs;
+    size_t        tls_modid;
+    void         *tls_data;
+} dl_phdr_info_t;
+
+typedef int (*phdr_cb_t)(dl_phdr_info_t *info, size_t size, void *data);
+
+typedef struct {
     void *(*open)(const char *path, int flags);
     void *(*sym)(void *handle, const char *name, const void *caller);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
     int   (*addr)(const void *addr, dl_info_t *info);
+    const tls_layout_t *(*tls)(void);
+    int   (*iterate)(phdr_cb_t cb, void *data);
 } dl_ops_t;
+
+static unsigned long long g_adds;
 
 typedef void (*init_fn_t)(int, char **, char **);
 
@@ -529,7 +699,8 @@ static void *ld_dlopen(const char *path, int flags)
     static char dl_paths[MAX_OBJECTS][256];
     static char dl_names[MAX_OBJECTS][256];
     dyn_t *dyn = NULL;
-    uintptr_t base = map_library(path, &dyn, &g_objs[0], dl_paths[g_nobjs], sizeof dl_paths[0]);
+    map_info_t mi;
+    uintptr_t base = map_library(path, &dyn, &g_objs[0], dl_paths[g_nobjs], sizeof dl_paths[0], &mi);
     if (!base || !dyn) return 0;
     object_t *o = &g_objs[g_nobjs];
     ld_copy(dl_names[g_nobjs], path, sizeof dl_names[0]);
@@ -540,10 +711,20 @@ static void *ld_dlopen(const char *path, int flags)
     o->dyn  = dyn;
     o->map_start = g_map_lo;
     o->map_end   = g_map_hi;
+    o->phdr  = mi.phdr;
+    o->phnum = mi.phnum;
+    tls_register(o, &mi, 0);
     scan_dynamic(o);
-    load_needed(o);
+    load_needed(o, 0);
+    g_adds += (unsigned long long)(g_nobjs - first);
 
+    g_npending = 0;
     for (int i = g_nobjs - 1; i >= first; i--) apply_relocations(&g_objs[i]);
+    if (g_npending) {
+        void (*hook)(size_t) = (void (*)(size_t))resolve("__cervus_tls_static_init", NULL);
+        for (size_t i = 0; i < g_npending; i++) if (hook) hook(g_static_pending[i]);
+        g_npending = 0;
+    }
     for (int i = g_nobjs - 1; i >= first; i--) run_init(&g_objs[i]);
     return o;
 }
@@ -555,16 +736,28 @@ static int object_of(uintptr_t a)
     return -1;
 }
 
+static void *sym_addr(object_t *o, sym_t *s)
+{
+    if ((s->st_info & 0xf) != STT_TLS) return (void *)(o->base + s->st_value);
+    void *(*gta)(size_t *) = (void *(*)(size_t *))resolve("__tls_get_addr", NULL);
+    if (!gta || !o->tls_modid) return 0;
+    size_t ti[2] = { o->tls_modid, s->st_value };
+    return gta(ti);
+}
+
 static void *ld_dlsym(void *handle, const char *name, const void *caller)
 {
     if (!name) return 0;
-    if (!handle || handle == (void *)&g_objs[0])
-        return (void *)resolve(name, 0);
+    if (!handle || handle == (void *)&g_objs[0]) {
+        object_t *d;
+        sym_t *s = resolve_sym(name, NULL, &d);
+        return s ? sym_addr(d, s) : 0;
+    }
     if (handle == (void *)-1) {
         int from = object_of((uintptr_t)caller);
         for (int i = from + 1; i < g_nobjs; i++) {
             sym_t *s = lookup_in(&g_objs[i], name);
-            if (s) return (void *)(g_objs[i].base + s->st_value);
+            if (s) return sym_addr(&g_objs[i], s);
         }
         return 0;
     }
@@ -579,7 +772,7 @@ static void *ld_dlsym(void *handle, const char *name, const void *caller)
     while (head < tail) {
         object_t *o = &g_objs[queue[head++]];
         sym_t *s = lookup_in(o, name);
-        if (s) return (void *)(o->base + s->st_value);
+        if (s) return sym_addr(o, s);
         for (int k = 0; k < o->nneeded; k++) {
             int d = o->needed[k];
             if (!seen[d]) { seen[d] = 1; queue[tail++] = (short)d; }
@@ -627,7 +820,31 @@ static int ld_dladdr(const void *addr, dl_info_t *info)
     return 0;
 }
 
-static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose, ld_init_libs, ld_dladdr };
+static const tls_layout_t *ld_tls(void)
+{
+    return &g_tls;
+}
+
+static int ld_iterate(phdr_cb_t cb, void *data)
+{
+    for (int i = 0; i < g_nobjs; i++) {
+        object_t *o = &g_objs[i];
+        dl_phdr_info_t info;
+        info.addr = o->base;
+        info.name = i == 0 ? "" : o->path;
+        info.phdr = o->phdr;
+        info.phnum = o->phnum;
+        info.adds = g_adds;
+        info.subs = 0;
+        info.tls_modid = o->tls_modid;
+        info.tls_data = 0;
+        int r = cb(&info, sizeof info, data);
+        if (r) return r;
+    }
+    return 0;
+}
+
+static dl_ops_t g_dl_ops = { ld_dlopen, ld_dlsym, ld_dlclose, ld_init_libs, ld_dladdr, ld_tls, ld_iterate };
 
 uintptr_t ld_start_c(uint64_t *sp)
 {
@@ -679,6 +896,20 @@ uintptr_t ld_start_c(uint64_t *sp)
 
     if (!exec_dyn) return entry;
 
+    map_info_t emi;
+    emi.phdr = (const phdr_t *)phdr;
+    emi.phnum = (uint16_t)phnum;
+    emi.tls_image = 0;
+    emi.tls_filesz = emi.tls_memsz = emi.tls_align = 0;
+    for (uint64_t i = 0; i < phnum; i++) {
+        phdr_t *p = (phdr_t *)(phdr + i * phent);
+        if (p->p_type != PT_TLS) continue;
+        emi.tls_image  = exec_base + p->p_vaddr;
+        emi.tls_filesz = p->p_filesz;
+        emi.tls_memsz  = p->p_memsz;
+        emi.tls_align  = p->p_align;
+    }
+
     if (exec_dyn) {
         uintptr_t plo = ~(uintptr_t)0, phi = 0;
         for (uint64_t i = 0; i < phnum; i++) {
@@ -695,8 +926,14 @@ uintptr_t ld_start_c(uint64_t *sp)
         g_objs[0].dyn  = exec_dyn;
         g_nobjs = 1;
         g_objs[0].inited = 1;
+        g_objs[0].phdr = emi.phdr;
+        g_objs[0].phnum = emi.phnum;
+        tls_register(&g_objs[0], &emi, 1);
         scan_dynamic(&g_objs[0]);
-        load_needed(&g_objs[0]);
+        load_needed(&g_objs[0], 1);
+        g_adds = (unsigned long long)g_nobjs;
+        g_tls.static_size = align_up(g_tls.static_used, 64) + TLS_SURPLUS;
+        if (g_tls.static_align < 64) g_tls.static_align = 64;
 
         for (int i = g_nobjs - 1; i >= 0; i--) apply_relocations(&g_objs[i]);
 
