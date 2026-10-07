@@ -79,9 +79,9 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
         --enable-languages=c,c++ --disable-multilib --disable-shared \
         --enable-threads=posix --enable-default-pie --disable-libssp --disable-libgomp \
         --disable-libatomic --disable-libquadmath --disable-libvtv \
-        --disable-libstdcxx-pch --disable-libstdcxx-verbose --disable-tls --with-newlib \
+        --disable-libstdcxx-pch --disable-libstdcxx-verbose --with-newlib \
         --enable-initfini-array CFLAGS_FOR_TARGET="-g -O2 -fPIC" CXXFLAGS_FOR_TARGET="-g -O2 -fPIC" \
-        CXX="g++ -std=gnu++17" CXXFLAGS_FOR_BUILD="-std=gnu++17 -O2" \
+        CXX="g++ -std=gnu++17" CXXFLAGS_FOR_BUILD="-std=gnu++17 -O2" gcc_cv_libc_provides_ssp=yes \
         >config.log 2>&1
     say "building gcc (all-gcc, $JOBS jobs)"
     make -j"$JOBS" all-gcc >build.log 2>&1

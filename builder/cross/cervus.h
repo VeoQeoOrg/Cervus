@@ -13,6 +13,9 @@
 #undef LINK_SPEC
 #define LINK_SPEC "%{rdynamic:--export-dynamic} %{shared:-shared --hash-style=sysv;static|no-pie:-static %{!Ttext-segment*:%{!Wl,-Ttext-segment*:-Ttext-segment=0x401000}};:--export-dynamic --hash-style=sysv -dynamic-linker /lib/ld-cervus.elf}"
 
+#undef TARGET_THREAD_SSP_OFFSET
+#define TARGET_THREAD_SSP_OFFSET (TARGET_64BIT ? 0x28 : 0x14)
+
 #undef TARGET_ASM_FILE_END
 #define TARGET_ASM_FILE_END file_end_indicate_exec_stack
 
