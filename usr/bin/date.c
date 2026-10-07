@@ -1,98 +1,105 @@
 #include <stdio.h>
-#include <stdint.h>
-#include <sys/cervus.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/stat.h>
 
-static const int MDAYS[12] = {31,28,31,30,31,30,31,31,30,31,30,31};
-static const char *MNAME[12] = {
-    "Jan","Feb","Mar","Apr","May","Jun",
-    "Jul","Aug","Sep","Oct","Nov","Dec"
-};
-static const char *WDAY[7] = {"Thu","Fri","Sat","Sun","Mon","Tue","Wed"};
-
-static int is_leap(int y) { return (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0); }
-static int bcd2bin(int v) { return (v & 0x0F) + ((v >> 4) * 10); }
-
-static int cmos_read(int reg)
+static void usage(void)
 {
-    if (cervus_ioport_write(0x70, 1, (uint32_t)(reg & 0x7F)) < 0) return -1;
-    return (int)(cervus_ioport_read(0x71, 1) & 0xFF);
-}
-static void cmos_wait_ready(void)
-{
-    for (int i = 0; i < 2000; i++) {
-        cervus_ioport_write(0x70, 1, 0x0A);
-        uint32_t sta = cervus_ioport_read(0x71, 1);
-        if (!(sta & 0x80)) return;
-    }
+    fputs("usage: date [-u] [-d @SECONDS | -r FILE] [+FORMAT]\n"
+          "       date [-u] MMDDhhmm[[CC]YY][.ss]\n", stderr);
+    exit(1);
 }
 
-static int64_t rtc_read_unix(void)
+static int two(const char *s)
 {
-    cmos_wait_ready();
-    int sec  = cmos_read(0x00);
-    int min  = cmos_read(0x02);
-    int hour = cmos_read(0x04);
-    int mday = cmos_read(0x07);
-    int mon  = cmos_read(0x08);
-    int year = cmos_read(0x09);
-    if (sec < 0 || min < 0 || hour < 0 || mday < 0 || mon < 0 || year < 0) return 0;
+    if (!isdigit((unsigned char)s[0]) || !isdigit((unsigned char)s[1])) return -1;
+    return (s[0] - '0') * 10 + (s[1] - '0');
+}
 
-    cervus_ioport_write(0x70, 1, 0x0B);
-    int regb        = (int)cervus_ioport_read(0x71, 1);
-    int binary_mode = (regb >= 0) && (regb & 0x04);
-    int hour24      = (regb >= 0) && (regb & 0x02);
-
-    if (!binary_mode) {
-        sec  = bcd2bin(sec);
-        min  = bcd2bin(min);
-        mday = bcd2bin(mday);
-        mon  = bcd2bin(mon);
-        year = bcd2bin(year);
-        if (!hour24 && (hour & 0x80)) hour = bcd2bin(hour & 0x7F) + 12;
-        else                           hour = bcd2bin(hour);
+static int set_clock(const char *arg)
+{
+    char buf[32];
+    snprintf(buf, sizeof buf, "%s", arg);
+    int ss = 0;
+    char *dot = strchr(buf, '.');
+    if (dot) {
+        *dot = 0;
+        if (strlen(dot + 1) != 2 || (ss = two(dot + 1)) < 0 || ss > 60) return -1;
     }
-    year += (year < 70) ? 2000 : 1900;
-    if (sec < 0 || sec > 59 || min < 0 || min > 59)   return 0;
-    if (hour < 0 || hour > 23)                         return 0;
-    if (mday < 1 || mday > 31)                         return 0;
-    if (mon  < 1 || mon  > 12)                         return 0;
-    if (year < 2000)                                   return 0;
+    size_t n = strlen(buf);
+    if (n != 8 && n != 10 && n != 12) return -1;
+    for (size_t i = 0; i < n; i++) if (!isdigit((unsigned char)buf[i])) return -1;
 
-    int64_t days = 0;
-    for (int y = 1970; y < year; y++) days += is_leap(y) ? 366 : 365;
-    for (int m = 1; m < mon; m++) days += MDAYS[m-1] + (m == 2 && is_leap(year) ? 1 : 0);
-    days += mday - 1;
-    return days * 86400LL + (int64_t)hour * 3600LL + (int64_t)min * 60LL + (int64_t)sec;
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int mon = two(buf), mday = two(buf + 2), hour = two(buf + 4), min = two(buf + 6);
+    if (n == 12) {
+        tm.tm_year = two(buf + 8) * 100 + two(buf + 10) - 1900;
+    } else if (n == 10) {
+        int yy = two(buf + 8);
+        tm.tm_year = (yy < 69 ? 2000 + yy : 1900 + yy) - 1900;
+    }
+    if (mon < 1 || mon > 12 || mday < 1 || mday > 31 || hour > 23 || min > 59) return -1;
+    tm.tm_mon = mon - 1;
+    tm.tm_mday = mday;
+    tm.tm_hour = hour;
+    tm.tm_min = min;
+    tm.tm_sec = ss;
+    tm.tm_isdst = -1;
+    time_t t = mktime(&tm);
+    if (t == (time_t)-1) return -1;
+    struct timespec ts = { t, 0 };
+    if (clock_settime(CLOCK_REALTIME, &ts) != 0) {
+        fprintf(stderr, "date: cannot set the clock: %s\n", strerror(errno));
+        exit(1);
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
-    int64_t t = rtc_read_unix();
-    if (t <= 0) {
-        uint64_t up = cervus_uptime_ns() / 1000000000ULL;
-        fputs("  RTC not available.\n", stdout);
-        printf("  Uptime: %lus\n", (unsigned long)up);
-        return 0;
+    const char *fmt = "%a %b %e %H:%M:%S %Z %Y";
+    const char *when = NULL, *ref = NULL;
+    int i = 1;
+    for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
+        if (!strcmp(argv[i], "--")) { i++; break; }
+        if (!strcmp(argv[i], "-u")) { setenv("TZ", "UTC0", 1); continue; }
+        if (!strcmp(argv[i], "-d") && i + 1 < argc) { when = argv[++i]; continue; }
+        if (!strcmp(argv[i], "-r") && i + 1 < argc) { ref = argv[++i]; continue; }
+        usage();
     }
-    int     wday = (int)((t / 86400 + 4) % 7);
-    int64_t days = t / 86400;
-    int64_t rem  = t % 86400;
-    if (rem < 0) { rem += 86400; days--; }
-    int hour = (int)(rem / 3600);
-    int min  = (int)((rem % 3600) / 60);
-    int sec  = (int)(rem % 60);
+    tzset();
 
-    int year = 1970;
-    while (1) { int dy = is_leap(year) ? 366 : 365; if (days < dy) break; days -= dy; year++; }
-    int mon = 0;
-    while (mon < 12) {
-        int dm = MDAYS[mon] + (mon == 1 && is_leap(year) ? 1 : 0);
-        if (days < dm) break;
-        days -= dm; mon++;
+    time_t t = time(NULL);
+    if (when) {
+        char *end;
+        if (when[0] != '@') { fprintf(stderr, "date: unsupported date '%s'\n", when); return 1; }
+        long long v = strtoll(when + 1, &end, 10);
+        if (end == when + 1 || *end) { fprintf(stderr, "date: invalid date '%s'\n", when); return 1; }
+        t = (time_t)v;
+    } else if (ref) {
+        struct stat st;
+        if (stat(ref, &st) != 0) { fprintf(stderr, "date: %s: %s\n", ref, strerror(errno)); return 1; }
+        t = st.st_mtime;
     }
-    int mday = (int)days + 1;
-    printf("  %s %s %2d %02d:%02d:%02d UTC %04d\n",
-           WDAY[wday], MNAME[mon], mday, hour, min, sec, year);
+
+    for (; i < argc; i++) {
+        if (argv[i][0] == '+') { fmt = argv[i] + 1; continue; }
+        if (when || ref || i + 1 != argc) usage();
+        if (set_clock(argv[i]) != 0) { fprintf(stderr, "date: invalid date '%s'\n", argv[i]); return 1; }
+        t = time(NULL);
+    }
+
+    struct tm tm;
+    if (!localtime_r(&t, &tm)) { fprintf(stderr, "date: time out of range\n"); return 1; }
+    char out[1024];
+    size_t n = strftime(out, sizeof out, fmt, &tm);
+    if (n == 0 && fmt[0]) { fprintf(stderr, "date: format too long\n"); return 1; }
+    fwrite(out, 1, n, stdout);
+    putchar('\n');
     return 0;
 }

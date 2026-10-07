@@ -1,12 +1,34 @@
 NAME
-       date - print the current date and time
+       date - print or set the system date and time
 
 SYNOPSIS
-       date
+       date [-u] [-d @SECONDS | -r FILE] [+FORMAT]
+       date [-u] MMDDhhmm[[CC]YY][.ss]
 
 DESCRIPTION
-       Prints the date and time in UTC as read from the real-time
-       clock. If no RTC is available the uptime is printed instead.
+       Prints the current time in the local time zone, using the
+       default format "%a %b %e %H:%M:%S %Z %Y" or FORMAT, which takes
+       the conversions of strftime(3).
+
+       Given MMDDhhmm with an optional year and seconds, sets the
+       system clock to that local time instead. Setting the clock
+       needs the right to change the time.
+
+OPTIONS
+       -u          Use Coordinated Universal Time instead of the local
+                   time zone.
+       -d @SECONDS Show the time SECONDS after the Epoch.
+       -r FILE     Show the modification time of FILE.
+
+ENVIRONMENT
+       TZ          The time zone, as a zone name such as Europe/Berlin
+                   from /usr/share/zoneinfo or a POSIX rule such as
+                   EST5EDT,M3.2.0,M11.1.0. Without it /etc/localtime is
+                   used.
+
+FILES
+       /etc/localtime        the system time zone
+       /usr/share/zoneinfo   the time zone database
 
 SEE ALSO
-       ntpdate(1), uptime(1)
+       ntpdate(1), uptime(1), strftime(3)
