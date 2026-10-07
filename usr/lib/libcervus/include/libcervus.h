@@ -137,7 +137,7 @@ void __cervus_run_exit_fns(void *dso);
 
 typedef struct {
     void *(*open)(const char *path, int flags);
-    void *(*sym)(void *handle, const char *name);
+    void *(*sym)(void *handle, const char *name, const void *caller);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
     int   (*addr)(const void *addr, void *info);

@@ -32,7 +32,7 @@ void *dlsym(void *handle, const char *name)
         g_err = "this program is linked statically; there is no loader to call";
         return NULL;
     }
-    void *p = __cervus_dl_ops->sym(handle, name);
+    void *p = __cervus_dl_ops->sym(handle, name, __builtin_return_address(0));
     if (!p) g_err = "no such symbol";
     return p;
 }

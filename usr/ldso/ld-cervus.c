@@ -104,7 +104,8 @@ typedef struct {
 #define ELF64_R_SYM(i)  ((uint32_t)((i) >> 32))
 #define ELF64_R_TYPE(i) ((uint32_t)(i))
 
-#define MAX_OBJECTS 64
+#define MAX_OBJECTS 512
+#define MAX_NEEDED  64
 
 typedef struct {
     const char *name;
@@ -118,6 +119,8 @@ typedef struct {
     int         inited;
     uintptr_t   map_start;
     uintptr_t   map_end;
+    int         nneeded;
+    short       needed[MAX_NEEDED];
 } object_t;
 
 static object_t g_objs[MAX_OBJECTS];
@@ -432,10 +435,13 @@ static void load_needed(object_t *o)
         if (d->d_tag != DT_NEEDED) continue;
         const char *name = o->strtab + d->d_val;
 
-        int already = 0;
+        int already = -1;
         for (int i = 0; i < g_nobjs; i++)
-            if (g_objs[i].name && ld_streq(g_objs[i].name, name)) { already = 1; break; }
-        if (already) continue;
+            if (g_objs[i].name && ld_streq(g_objs[i].name, name)) { already = i; break; }
+        if (already >= 0) {
+            if (o->nneeded < MAX_NEEDED) o->needed[o->nneeded++] = (short)already;
+            continue;
+        }
 
         if (g_nobjs >= MAX_OBJECTS) ld_die("too many libraries", name);
 
@@ -448,6 +454,7 @@ static void load_needed(object_t *o)
         if (!base) ld_die(g_fail, names[g_nobjs]);
         if (!ndyn) ld_die("library has no dynamic section", names[g_nobjs]);
 
+        if (o->nneeded < MAX_NEEDED) o->needed[o->nneeded++] = (short)g_nobjs;
         object_t *no = &g_objs[g_nobjs++];
         no->name = names[g_nobjs - 1];
         no->path = paths[g_nobjs - 1];
@@ -470,7 +477,7 @@ typedef struct {
 
 typedef struct {
     void *(*open)(const char *path, int flags);
-    void *(*sym)(void *handle, const char *name);
+    void *(*sym)(void *handle, const char *name, const void *caller);
     int   (*close)(void *handle);
     void  (*init)(int argc, char **argv, char **envp);
     int   (*addr)(const void *addr, dl_info_t *info);
@@ -520,11 +527,13 @@ static void *ld_dlopen(const char *path, int flags)
 
     int first = g_nobjs;
     static char dl_paths[MAX_OBJECTS][256];
+    static char dl_names[MAX_OBJECTS][256];
     dyn_t *dyn = NULL;
     uintptr_t base = map_library(path, &dyn, &g_objs[0], dl_paths[g_nobjs], sizeof dl_paths[0]);
     if (!base || !dyn) return 0;
     object_t *o = &g_objs[g_nobjs];
-    o->name = path;
+    ld_copy(dl_names[g_nobjs], path, sizeof dl_names[0]);
+    o->name = dl_names[g_nobjs];
     o->path = dl_paths[g_nobjs];
     g_nobjs++;
     o->base = base;
@@ -539,17 +548,44 @@ static void *ld_dlopen(const char *path, int flags)
     return o;
 }
 
-static void *ld_dlsym(void *handle, const char *name)
+static int object_of(uintptr_t a)
+{
+    for (int i = 0; i < g_nobjs; i++)
+        if (a >= g_objs[i].map_start && a < g_objs[i].map_end) return i;
+    return -1;
+}
+
+static void *ld_dlsym(void *handle, const char *name, const void *caller)
 {
     if (!name) return 0;
-    if (!handle) {
-        uintptr_t a = resolve(name, 0);
-        return (void *)a;
+    if (!handle || handle == (void *)&g_objs[0])
+        return (void *)resolve(name, 0);
+    if (handle == (void *)-1) {
+        int from = object_of((uintptr_t)caller);
+        for (int i = from + 1; i < g_nobjs; i++) {
+            sym_t *s = lookup_in(&g_objs[i], name);
+            if (s) return (void *)(g_objs[i].base + s->st_value);
+        }
+        return 0;
     }
-    object_t *o = handle;
-    sym_t *s = lookup_in(o, name);
-    if (!s) return 0;
-    return (void *)(o->base + s->st_value);
+    object_t *root = handle;
+    if (root < &g_objs[0] || root >= &g_objs[g_nobjs]) return 0;
+    static unsigned char seen[MAX_OBJECTS];
+    static short queue[MAX_OBJECTS];
+    for (int i = 0; i < g_nobjs; i++) seen[i] = 0;
+    int head = 0, tail = 0;
+    queue[tail++] = (short)(root - g_objs);
+    seen[root - g_objs] = 1;
+    while (head < tail) {
+        object_t *o = &g_objs[queue[head++]];
+        sym_t *s = lookup_in(o, name);
+        if (s) return (void *)(o->base + s->st_value);
+        for (int k = 0; k < o->nneeded; k++) {
+            int d = o->needed[k];
+            if (!seen[d]) { seen[d] = 1; queue[tail++] = (short)d; }
+        }
+    }
+    return 0;
 }
 
 static int ld_dlclose(void *handle)
