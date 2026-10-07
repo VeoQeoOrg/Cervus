@@ -239,6 +239,7 @@ typedef struct task {
         uint64_t max;
     } rlim[RLIMIT_COUNT];
     volatile int32_t irq_nest;
+    uint64_t   clear_tid;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)

@@ -6,12 +6,13 @@
 #include <string.h>
 
 extern task_t *task_spawn_thread(task_t *parent, uintptr_t entry,
-                                 uintptr_t stack_top, uint64_t arg);
+                                 uintptr_t stack_top, uint64_t arg, uint64_t clear_tid);
+extern void thread_clear_tid(task_t *who);
 
 int64_t sys_thread_create(uint64_t entry, uint64_t stack_top, uint64_t arg,
                           uint64_t a4, uint64_t a5, uint64_t a6)
 {
-    (void)a4; (void)a5; (void)a6;
+    (void)a5; (void)a6;
 
     task_t *me = syscall_cur_task();
     if (!me || !me->is_userspace) return -EPERM;
@@ -22,7 +23,10 @@ int64_t sys_thread_create(uint64_t entry, uint64_t stack_top, uint64_t arg,
     if (!syscall_uptr_validate_write((const void *)(uintptr_t)(stack_top - 16), 16))
         return -EFAULT;
 
-    task_t *th = task_spawn_thread(me, (uintptr_t)entry, (uintptr_t)stack_top, arg);
+    if (a4 && ((a4 & 3) || !syscall_uptr_validate_write((const void *)(uintptr_t)a4, sizeof(uint32_t))))
+        return -EFAULT;
+
+    task_t *th = task_spawn_thread(me, (uintptr_t)entry, (uintptr_t)stack_top, arg, a4);
     if (!th) return -ENOMEM;
     return (int64_t)th->pid;
 }
@@ -32,7 +36,10 @@ int64_t sys_thread_exit(uint64_t code, uint64_t a2, uint64_t a3,
 {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     task_t *me = syscall_cur_task();
-    if (me) me->exit_code = (int)(code & 0xFF);
+    if (me) {
+        me->exit_code = (int)(code & 0xFF);
+        thread_clear_tid(me);
+    }
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
     task_exit();
     return 0;

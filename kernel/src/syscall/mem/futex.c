@@ -60,11 +60,12 @@ static int futex_key(uint64_t uaddr, futex_key_t *out)
     return 0;
 }
 
+static volatile uint32_t *futex_word(task_t *me, uint64_t uaddr, bool write, uintptr_t *phys_out);
+
 static bool futex_peek(task_t *me, uint64_t uaddr, uint32_t *out)
 {
-    uintptr_t phys = 0;
-    if (!vmm_virt_to_phys(me->pagemap, (uintptr_t)(uaddr & ~0xFFFULL), &phys)) return false;
-    const volatile uint32_t *p = pmm_phys_to_virt((phys & ~0xFFFULL) + (uaddr & 0xFFFULL));
+    volatile uint32_t *p = futex_word(me, uaddr, false, NULL);
+    if (!p) return false;
     *out = __atomic_load_n(p, __ATOMIC_ACQUIRE);
     return true;
 }
@@ -130,6 +131,62 @@ int64_t sys_futex_wait(uint64_t uaddr, uint64_t expected, uint64_t timeout_ns)
     return 0;
 }
 
+static int64_t futex_wake_key(const futex_key_t *key, uint64_t count)
+{
+    int64_t woken = 0;
+    uint64_t f = spinlock_acquire_irqsave(&g_futex_lock);
+    for (int i = 0; i < FUTEX_WAITERS_MAX && (uint64_t)woken < count; i++) {
+        if (!g_waiters[i].used || g_waiters[i].key.space != key->space ||
+            g_waiters[i].key.addr != key->addr) continue;
+        if (g_waiters[i].woken) continue;
+        task_t *t = g_waiters[i].task;
+        g_waiters[i].woken = 1;
+        if (t) {
+            t->wakeup_time_ns = 0;
+            task_unblock(t);
+        }
+        woken++;
+    }
+    spinlock_release_irqrestore(&g_futex_lock, f);
+    return woken;
+}
+
+static volatile uint32_t *futex_word(task_t *me, uint64_t uaddr, bool write, uintptr_t *phys_out)
+{
+    uintptr_t phys = 0;
+    uint64_t flags = 0;
+    if (!vmm_virt_to_phys(me->pagemap, (uintptr_t)(uaddr & ~0xFFFULL), &phys)) return NULL;
+    if (write && (!vmm_virt_flags(me->pagemap, (uintptr_t)(uaddr & ~0xFFFULL), &flags) || !(flags & VMM_WRITE)))
+        return NULL;
+    phys = (phys & ~0xFFFULL) + (uaddr & 0xFFFULL);
+    if (phys_out) *phys_out = phys;
+    return pmm_phys_to_virt(phys);
+}
+
+void thread_clear_tid(task_t *me)
+{
+    uint64_t uaddr = me ? me->clear_tid : 0;
+    if (!uaddr || !me->pagemap) return;
+    me->clear_tid = 0;
+
+    uintptr_t phys = 0;
+    volatile uint32_t *w = futex_word(me, uaddr, true, &phys);
+    if (!w && syscall_uptr_validate_write((const void *)(uintptr_t)uaddr, sizeof(uint32_t)))
+        w = futex_word(me, uaddr, true, &phys);
+    if (!w) return;
+    __atomic_store_n(w, 0, __ATOMIC_RELEASE);
+
+    futex_key_t key;
+    if (me->mm) {
+        key.space = (uint64_t)(uintptr_t)me->mm;
+        key.addr  = uaddr;
+    } else {
+        key.space = 0;
+        key.addr  = phys;
+    }
+    futex_wake_key(&key, UINT64_MAX);
+}
+
 int64_t sys_futex_wake(uint64_t uaddr, uint64_t count, uint64_t unused)
 {
     (void)unused;
@@ -141,24 +198,7 @@ int64_t sys_futex_wake(uint64_t uaddr, uint64_t count, uint64_t unused)
     if (kr < 0) return kr;
 
     if (count == 0) count = 1;
-
-    int64_t woken = 0;
-    uint64_t f = spinlock_acquire_irqsave(&g_futex_lock);
-    for (int i = 0; i < FUTEX_WAITERS_MAX && (uint64_t)woken < count; i++) {
-        if (!g_waiters[i].used || g_waiters[i].key.space != key.space ||
-            g_waiters[i].key.addr != key.addr) continue;
-        if (g_waiters[i].woken) continue;
-        task_t *t = g_waiters[i].task;
-        g_waiters[i].woken = 1;
-        if (t) {
-            t->wakeup_time_ns = 0;
-            task_unblock(t);
-        }
-        woken++;
-    }
-    spinlock_release_irqrestore(&g_futex_lock, f);
-
-    return woken;
+    return futex_wake_key(&key, count);
 }
 
 void futex_task_exit(task_t *who)

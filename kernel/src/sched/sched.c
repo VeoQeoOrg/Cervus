@@ -240,7 +240,7 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
 }
 
 task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
-                          uintptr_t stack_top, uint64_t arg) {
+                          uintptr_t stack_top, uint64_t arg, uint64_t clear_tid) {
     if (!parent || !parent->pagemap) return NULL;
 
     task_t* t = calloc(1, sizeof(task_t));
@@ -315,6 +315,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     }
 
     pid_register(t);
+    t->clear_tid = clear_tid;
     enqueue_global(t);
     return t;
 }
@@ -725,6 +726,9 @@ __attribute__((noreturn)) void task_exit(void)
 
     extern void futex_task_exit(task_t *who);
     futex_task_exit(me);
+
+    extern void thread_clear_tid(task_t *who);
+    thread_clear_tid(me);
 
     extern void audio_task_exit(void *who);
     audio_task_exit(me);
