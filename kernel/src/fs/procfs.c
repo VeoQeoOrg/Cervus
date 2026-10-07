@@ -249,6 +249,7 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
     if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
     return snprintf(buf, max,
         "Name:    %s\n"
+        "Tgid:    %u\n"
         "Pid:     %u\n"
         "PPid:    %u\n"
         "PGid:    %u\n"
@@ -259,12 +260,14 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
         "Prio:    %d\n"
         "VmSize:  %llu kB\n"
         "VmRSS:   %llu kB\n"
-        "Runtime: %llu ns\n",
-        t->name, t->pid, t->ppid, t->pgid, t->sid, t->uid, t->gid,
+        "Runtime: %llu ns\n"
+        "Threads: %d\n",
+        t->name, task_tgid(t), t->pid, task_leader(t)->ppid, t->pgid, t->sid, t->uid, t->gid,
         state_name(t->state), t->priority,
         (unsigned long long)(vsz / 1024),
         (unsigned long long)(rss / 1024),
-        (unsigned long long)t->total_runtime);
+        (unsigned long long)t->total_runtime,
+        task_leader(t)->group_live > 0 ? (int)task_leader(t)->group_live : 1);
 }
 
 static int gen_pid_syscall(uint32_t pid, char *buf, size_t max) {
@@ -619,8 +622,12 @@ static int procroot_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
         strncpy(out->d_name, "net", VFS_MAX_NAME - 1);
         return 0;
     }
-    uint32_t pids[256];
-    int npids = task_collect_pids(pids, 256);
+    uint32_t all[256], pids[256];
+    int nall = task_collect_pids(all, 256), npids = 0;
+    for (int i = 0; i < nall; i++) {
+        task_t *t = task_find_by_pid(all[i]);
+        if (t && task_leader(t) == t) pids[npids++] = all[i];
+    }
     uint64_t pidx = index - PROC_NFILES - 1;
     if (pidx >= (uint64_t)npids) return -ENOENT;
     out->d_ino  = pids[pidx];

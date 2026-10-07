@@ -239,6 +239,8 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
     return t;
 }
 
+static spinlock_t g_group_lock = SPINLOCK_INIT;
+
 task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
                           uintptr_t stack_top, uint64_t arg, uint64_t clear_tid) {
     if (!parent || !parent->pagemap) return NULL;
@@ -248,7 +250,10 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->pid = task_alloc_pid();
     if (!t->pid) { free(t); return NULL; }
 
-    t->ppid            = parent->pid;
+    task_t* leader     = task_leader(parent);
+    t->ppid            = leader->ppid;
+    t->tgid            = task_tgid(parent);
+    t->group_leader    = leader;
     t->pgid            = parent->pgid;
     t->sid             = parent->sid;
     t->uid             = parent->uid;
@@ -302,20 +307,31 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
 
     t->state    = TASK_READY;
     t->runnable = true;
-    t->parent   = parent;
+    t->parent   = NULL;
     t->create_time_ns = sched_now_ns();
 
     (void)arg;
 
     {
-        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
-        t->sibling       = parent->children;
-        parent->children = t;
-        spinlock_release_irqrestore(&children_lock, _cf);
+        uint64_t _gf = spinlock_acquire_irqsave(&g_group_lock);
+        if (!leader->group_live) leader->group_live = 1;
+        leader->group_live++;
+        t->group_next      = leader->group_next;
+        leader->group_next = t;
+        if (leader->group_exiting) {
+            t->group_killed = 1;
+            t->kill_sig     = SIGKILL;
+            t->pending_kill = true;
+        }
+        spinlock_release_irqrestore(&g_group_lock, _gf);
     }
 
     pid_register(t);
     t->clear_tid = clear_tid;
+    if (clear_tid) {
+        extern void thread_set_tid(task_t *parent, uint64_t uaddr, uint32_t tid);
+        thread_set_tid(parent, clear_tid, t->pid);
+    }
     enqueue_global(t);
     return t;
 }
@@ -520,7 +536,8 @@ task_t* task_fork(task_t* parent) {
     if (!child) return NULL;
     child->pid = task_alloc_pid();
     if (!child->pid) { free(child); return NULL; }
-    child->ppid            = parent->pid;
+    task_t* leader         = task_leader(parent);
+    child->ppid            = task_tgid(parent);
     child->pgid            = parent->pgid;
     child->sid             = parent->sid;
     child->priority        = parent->priority;
@@ -596,13 +613,13 @@ task_t* task_fork(task_t* parent) {
 
     child->state    = TASK_READY;
     child->runnable = true;
-    child->parent   = parent;
+    child->parent   = leader;
     child->create_time_ns = sched_now_ns();
 
     {
         uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
-        child->sibling   = parent->children;
-        parent->children = child;
+        child->sibling   = leader->children;
+        leader->children = child;
         spinlock_release_irqrestore(&children_lock, _cf);
     }
 
@@ -710,6 +727,174 @@ extern void tty_reset_nonblock(void);
 extern void tty_clear_nonblock_owner(task_t *who);
 extern void tty_restore_sane(task_t *who);
 
+static int group_detach(task_t* me)
+{
+    task_t* leader = task_leader(me);
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    if (!leader->group_live) {
+        spinlock_release_irqrestore(&g_group_lock, f);
+        return -1;
+    }
+    if (leader != me) {
+        task_t** pp = &leader->group_next;
+        while (*pp && *pp != me) pp = &(*pp)->group_next;
+        if (*pp) *pp = me->group_next;
+        me->group_next = NULL;
+    }
+    int live = --leader->group_live;
+    spinlock_release_irqrestore(&g_group_lock, f);
+    return live;
+}
+
+static void group_report(task_t* leader)
+{
+    if (leader->group_exiting) {
+        leader->exit_code = leader->group_exit_code;
+        leader->term_sig  = leader->group_term_sig;
+    }
+
+    task_t* init = task_find_by_pid(1);
+    if (init && init != leader) {
+        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
+        task_t* child = leader->children;
+        leader->children = NULL;
+        while (child) {
+            task_t* sib = child->sibling;
+            task_reparent(child, init);
+            child = sib;
+        }
+        spinlock_release_irqrestore(&children_lock, _cf);
+    }
+
+    task_wakeup_waiters(leader->pid);
+
+    task_t *parent = task_find_by_pid(leader->ppid);
+    if (parent && parent != leader && parent->state != TASK_ZOMBIE && parent->state != TASK_DEAD)
+        signal_send_child(parent, leader);
+}
+
+static void group_mark_kill(task_t* t)
+{
+    if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD) return;
+    t->group_killed = 1;
+    if (t->pending_kill) return;
+    t->kill_sig     = SIGKILL;
+    t->pending_kill = true;
+    if (t->state == TASK_BLOCKED) {
+        t->wakeup_time_ns = 0;
+        task_unblock(t);
+    }
+    if (!(t->flags & TASK_FLAG_STARTED)) return;
+    for (uint32_t cpu = 0; cpu < smp_get_cpu_count(); cpu++) {
+        if (current_task[cpu] == t) {
+            extern uint32_t smp_get_lapic_id_for_cpu(uint32_t);
+            ipi_reschedule_cpu(smp_get_lapic_id_for_cpu(cpu));
+        }
+    }
+}
+
+int task_group_kill_others(task_t* me)
+{
+    task_t* leader = task_leader(me);
+    int n = 0;
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    if (leader != me && leader->state != TASK_ZOMBIE) { group_mark_kill(leader); n++; }
+    for (task_t* t = leader->group_next; t; t = t->group_next)
+        if (t != me) { group_mark_kill(t); n++; }
+    spinlock_release_irqrestore(&g_group_lock, f);
+    return n;
+}
+
+void task_group_exit(task_t* me, int exit_code, int term_sig)
+{
+    if (me->group_killed) return;
+    task_t* leader = task_leader(me);
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    if (!leader->group_live) {
+        spinlock_release_irqrestore(&g_group_lock, f);
+        return;
+    }
+    if (!leader->group_exiting) {
+        leader->group_exiting   = 1;
+        leader->group_exit_code = exit_code;
+        leader->group_term_sig  = term_sig;
+    }
+    spinlock_release_irqrestore(&g_group_lock, f);
+    task_group_kill_others(me);
+}
+
+int task_exec_dethread(task_t* t)
+{
+    task_t* leader = task_leader(t);
+    if (!__atomic_load_n(&leader->group_live, __ATOMIC_ACQUIRE)) return 0;
+    task_group_kill_others(t);
+    while (__atomic_load_n(&leader->group_live, __ATOMIC_ACQUIRE) > 1) {
+        if (t->pending_kill) return -EINTR;
+        task_yield();
+    }
+    if (leader != t)
+        while (atomic_load_bool_acq(&leader->on_cpu)) task_yield();
+
+    uint64_t gf = spinlock_acquire_irqsave(&g_group_lock);
+    leader->group_next = NULL;
+    leader->group_live = 0;
+    t->group_next      = NULL;
+    t->group_live      = 0;
+    t->group_exiting   = 0;
+    t->group_leader    = NULL;
+    t->tgid            = 0;
+    spinlock_release_irqrestore(&g_group_lock, gf);
+    if (leader == t) return 0;
+
+    uint64_t pf = spinlock_acquire_irqsave(&pid_lock);
+    uint32_t lpid = leader->pid, tpid = t->pid;
+    pid_table[lpid] = t;
+    pid_table[tpid] = leader;
+    t->pid      = lpid;
+    leader->pid = tpid;
+    spinlock_release_irqrestore(&pid_lock, pf);
+
+    uint64_t cf = spinlock_acquire_irqsave(&children_lock);
+    t->ppid   = leader->ppid;
+    t->parent = leader->parent;
+    if (t->parent) {
+        task_t** pp = &t->parent->children;
+        while (*pp && *pp != leader) pp = &(*pp)->sibling;
+        if (*pp) *pp = t;
+    }
+    t->sibling      = leader->sibling;
+    leader->sibling = NULL;
+    leader->parent  = NULL;
+    t->children     = leader->children;
+    leader->children = NULL;
+    for (task_t* c = t->children; c; c = c->sibling) c->parent = t;
+    spinlock_release_irqrestore(&children_lock, cf);
+
+    task_destroy(leader);
+    return 0;
+}
+
+task_t* task_group_pick(task_t* leader, int sig)
+{
+    uint64_t bit = 1ULL << sig;
+    task_t* pick = NULL;
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    bool leader_alive = leader->state != TASK_ZOMBIE && leader->state != TASK_DEAD;
+    if (leader_alive && (!(leader->sig_blocked & bit) || (leader->sig_waitset & bit))) {
+        pick = leader;
+    } else {
+        task_t* fallback = leader_alive ? leader : NULL;
+        for (task_t* t = leader->group_next; t; t = t->group_next) {
+            if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD) continue;
+            if (!fallback) fallback = t;
+            if (!(t->sig_blocked & bit) || (t->sig_waitset & bit)) { pick = t; break; }
+        }
+        if (!pick) pick = fallback;
+    }
+    spinlock_release_irqrestore(&g_group_lock, f);
+    return pick;
+}
+
 __attribute__((noreturn)) void task_exit(void)
 {
     asm volatile("cli");
@@ -738,19 +923,6 @@ __attribute__((noreturn)) void task_exit(void)
 
     extern void seat_task_exit(uint32_t pid);
     seat_task_exit(me->pid);
-
-    task_t* init = task_find_by_pid(1);
-    if (init && init != me) {
-        uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
-        task_t* child = me->children;
-        me->children = NULL;
-        while (child) {
-            task_t* sib = child->sibling;
-            task_reparent(child, init);
-            child = sib;
-        }
-        spinlock_release_irqrestore(&children_lock, _cf);
-    }
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
@@ -784,15 +956,17 @@ __attribute__((noreturn)) void task_exit(void)
         me->fd_table = NULL;
     }
 
+    task_t *leader = task_leader(me);
     me->runnable = false;
     me->state = TASK_ZOMBIE;
     me->cr3 = 0;
 
-    task_wakeup_waiters(me->pid);
-
-    task_t *parent = task_find_by_pid(me->ppid);
-    if (parent && parent != me && parent->state != TASK_ZOMBIE && parent->state != TASK_DEAD)
-        signal_send_child(parent, me);
+    int live = group_detach(me);
+    if (leader != me) {
+        if (live == 0) group_report(leader);
+    } else if (live <= 0) {
+        group_report(me);
+    }
 
     sched_reschedule();
 
@@ -993,7 +1167,7 @@ void sched_reschedule(void) {
 
     if (old && old != &idle_tasks[cpu]) {
         if (old->state == TASK_ZOMBIE) {
-            if (old->parent == NULL) {
+            if (old->parent == NULL && old->group_live <= 0) {
                 percpu_t* pc = get_percpu();
                 if (pc) pc->deferred_free_task = old;
             }

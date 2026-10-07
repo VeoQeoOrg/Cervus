@@ -3,5 +3,11 @@
 int64_t sys_getpid(void)
 {
     task_t *t = syscall_cur_task();
+    return t ? (int64_t)task_tgid(t) : -ESRCH;
+}
+
+int64_t sys_gettid(void)
+{
+    task_t *t = syscall_cur_task();
     return t ? (int64_t)t->pid : -ESRCH;
 }

@@ -3,5 +3,5 @@
 int64_t sys_getppid(void)
 {
     task_t *t = syscall_cur_task();
-    return t ? (int64_t)t->ppid : -ESRCH;
+    return t ? (int64_t)task_leader(t)->ppid : -ESRCH;
 }

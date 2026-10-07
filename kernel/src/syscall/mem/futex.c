@@ -163,6 +163,14 @@ static volatile uint32_t *futex_word(task_t *me, uint64_t uaddr, bool write, uin
     return pmm_phys_to_virt(phys);
 }
 
+void thread_set_tid(task_t *parent, uint64_t uaddr, uint32_t tid)
+{
+    volatile uint32_t *w = futex_word(parent, uaddr, true, NULL);
+    if (!w && syscall_uptr_validate_write((const void *)(uintptr_t)uaddr, sizeof(uint32_t)))
+        w = futex_word(parent, uaddr, true, NULL);
+    if (w) __atomic_store_n(w, tid, __ATOMIC_RELEASE);
+}
+
 void thread_clear_tid(task_t *me)
 {
     uint64_t uaddr = me ? me->clear_tid : 0;

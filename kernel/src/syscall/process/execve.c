@@ -309,6 +309,12 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     }
     mm_init_heap(elf.mm, elf.load_end);
 
+    if (task_exec_dethread(t) < 0) {
+        mm_put(elf.mm);
+        vfs_close(vfile); sv_free(&envp);
+        return -EINTR;
+    }
+
     if (t->fd_table) fd_table_cloexec(t->fd_table);
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());

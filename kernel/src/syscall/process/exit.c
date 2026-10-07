@@ -5,7 +5,10 @@
 int64_t sys_exit(uint64_t code)
 {
     task_t *t = syscall_cur_task();
-    if (t) t->exit_code = (int)(uint8_t)code;
+    if (t) {
+        t->exit_code = (int)(uint8_t)code;
+        task_group_exit(t, (int)(uint8_t)code, 0);
+    }
     serial_printf("[SYSCALL] exit(%llu) task='%s' pid=%u\n",
                   code, t ? t->name : "?", t ? t->pid : 0);
     vmm_switch_pagemap(vmm_get_kernel_pagemap());

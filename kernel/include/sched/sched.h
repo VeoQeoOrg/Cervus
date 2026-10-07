@@ -240,7 +240,18 @@ typedef struct task {
     } rlim[RLIMIT_COUNT];
     volatile int32_t irq_nest;
     uint64_t   clear_tid;
+    uint32_t   tgid;
+    struct task *group_leader;
+    struct task *group_next;
+    volatile int32_t group_live;
+    volatile int32_t group_exiting;
+    int32_t    group_exit_code;
+    int32_t    group_term_sig;
+    volatile int32_t group_killed;
 } task_t;
+
+static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }
+static inline uint32_t task_tgid(const task_t *t) { return t->tgid ? t->tgid : t->pid; }
 
 #define TASK_FLAG_TRACE          (1 << 0)
 #define TASK_FLAG_VFORK          (1 << 1)
@@ -335,6 +346,10 @@ extern spinlock_t children_lock;
 void    task_wakeup_waiters(uint32_t pid);
 void    task_unblock(task_t* t);
 bool    task_is_idle(const task_t* t);
+void    task_group_exit(task_t* me, int exit_code, int term_sig);
+int     task_group_kill_others(task_t* me);
+task_t* task_group_pick(task_t* leader, int sig);
+int     task_exec_dethread(task_t* t);
 void    sched_wakeup_sleepers(uint64_t now_ns);
 task_t* task_find_foreground(void);
 void task_set_foreground(uint32_t pid);

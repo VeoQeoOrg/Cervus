@@ -110,8 +110,9 @@ static void reap(task_t *parent, task_t *zombie)
 
 static int64_t do_wait(int idtype, uint32_t id, int options, wait_result_t *res)
 {
-    task_t *parent = syscall_cur_task();
-    if (!parent) return -ESRCH;
+    task_t *self = syscall_cur_task();
+    if (!self) return -ESRCH;
+    task_t *parent = task_leader(self);
     if (idtype == P_PGID_K && id == 0) id = parent->pgid;
 
     for (;;) {
@@ -122,6 +123,7 @@ static int64_t do_wait(int idtype, uint32_t id, int options, wait_result_t *res)
             if (!child_selected(parent, c, idtype, id)) continue;
             any = true;
             if (c->state != TASK_ZOMBIE) continue;
+            if (__atomic_load_n(&c->group_live, __ATOMIC_ACQUIRE) > 0) continue;
             if (__atomic_load_n(&c->on_cpu._val, __ATOMIC_ACQUIRE)) { busy = true; continue; }
             zombie = c;
             break;
@@ -138,14 +140,14 @@ static int64_t do_wait(int idtype, uint32_t id, int options, wait_result_t *res)
         if (busy) { task_yield(); continue; }
         if (options & WNOHANG_K) return 0;
 
-        parent->wait_for_pid = idtype == P_PID_K ? id : (uint32_t)-1;
-        parent->runnable = false;
-        parent->state    = TASK_BLOCKED;
+        self->wait_for_pid = idtype == P_PID_K ? id : (uint32_t)-1;
+        self->runnable = false;
+        self->state    = TASK_BLOCKED;
         if (idtype == P_PID_K) task_set_foreground(id);
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        if (parent->pending_kill || signal_pending_deliverable(parent)) task_unblock(parent);
+        if (self->pending_kill || signal_pending_deliverable(self)) task_unblock(self);
         sched_reschedule();
-        if (parent->pending_kill || signal_pending_deliverable(parent)) return -EINTR;
+        if (self->pending_kill || signal_pending_deliverable(self)) return -EINTR;
     }
 }
 

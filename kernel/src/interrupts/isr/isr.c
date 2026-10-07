@@ -155,6 +155,7 @@ static __attribute__((noreturn)) void kill_current_task(int exit_code) {
     if (me) {
         me->exit_code = exit_code;
         if (exit_code > 128 && exit_code < 128 + 64) me->term_sig = exit_code - 128;
+        task_group_exit(me, exit_code, me->term_sig);
     }
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
     task_exit();

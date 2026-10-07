@@ -220,6 +220,8 @@ extern int64_t sys_sched_getscheduler(uint64_t, uint64_t);
 extern int64_t sys_sendto_flags(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_recvfrom_flags(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_accept4(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_gettid(void);
+extern int64_t sys_tgkill(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -337,6 +339,7 @@ W2(sys_getpriority) W3(sys_setpriority)  W4(sys_prlimit)
 W2(sys_sched_setaffinity) W1(sys_sched_getaffinity) W0(sys_getcpu)
 W3(sys_sched_setscheduler) W2(sys_sched_getscheduler)
 W6(sys_sendto_flags) W6(sys_recvfrom_flags) W4(sys_accept4)
+W0(sys_gettid) W3(sys_tgkill)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -502,6 +505,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_SENDTO_FLAGS]    = _sys_sendto_flags,
     [SYS_RECVFROM_FLAGS]  = _sys_recvfrom_flags,
     [SYS_ACCEPT4]         = _sys_accept4,
+    [SYS_GETTID]          = _sys_gettid,
+    [SYS_TGKILL]          = _sys_tgkill,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

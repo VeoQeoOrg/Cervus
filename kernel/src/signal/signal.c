@@ -42,6 +42,7 @@ static int sig_default_ignore(int sig) {
 static __attribute__((noreturn)) void signal_terminate(task_t *t, int sig) {
     t->term_sig  = sig;
     t->exit_code = 128 + sig;
+    task_group_exit(t, 128 + sig, sig);
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
     task_exit();
 }
@@ -203,7 +204,9 @@ void signal_send_group(uint32_t pgid, int sig) {
     int n = task_collect_pids(pids, 256);
     for (int i = 0; i < n; i++) {
         task_t *t = task_find_by_pid(pids[i]);
-        if (t && t->pgid == pgid) signal_send(t, sig);
+        if (!t || t->pgid != pgid || task_leader(t) != t) continue;
+        task_t *to = task_group_pick(t, sig);
+        if (to) signal_send(to, sig);
     }
 }
 
@@ -586,8 +589,10 @@ int64_t sys_kill(uint64_t pid_a, uint64_t sig_a) {
     if (pid > 0) {
         task_t *t = task_find_by_pid((uint32_t)pid);
         if (!t) return -ESRCH;
-        if (!signal_may_send(me, t)) return -EPERM;
-        if (sig != 0) signal_send_from(t, sig, me);
+        task_t *to = task_group_pick(task_leader(t), sig);
+        if (!to) return -ESRCH;
+        if (!signal_may_send(me, to)) return -EPERM;
+        if (sig != 0) signal_send_from(to, sig, me);
         return 0;
     }
 
@@ -601,15 +606,31 @@ int64_t sys_kill(uint64_t pid_a, uint64_t sig_a) {
     int found = 0, sent = 0;
     for (int i = 0; i < n; i++) {
         task_t *t = task_find_by_pid(pids[i]);
-        if (t && t->pgid == pgid) {
+        if (t && t->pgid == pgid && task_leader(t) == t) {
+            task_t *to = task_group_pick(t, sig);
+            if (!to) continue;
             found = 1;
-            if (!signal_may_send(me, t)) continue;
+            if (!signal_may_send(me, to)) continue;
             sent = 1;
-            if (sig != 0) signal_send_from(t, sig, me);
+            if (sig != 0) signal_send_from(to, sig, me);
         }
     }
     if (!found) return -ESRCH;
     return sent ? 0 : -EPERM;
+}
+
+int64_t sys_tgkill(uint64_t tgid_a, uint64_t tid_a, uint64_t sig_a) {
+    int tgid = (int)(int64_t)tgid_a;
+    int tid  = (int)(int64_t)tid_a;
+    int sig  = (int)sig_a;
+    if (sig < 0 || sig >= NSIG || tid <= 0 || tgid < -1 || tgid == 0) return -EINVAL;
+    task_t *me = syscall_cur_task();
+    task_t *t = task_find_by_pid((uint32_t)tid);
+    if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) return -ESRCH;
+    if (tgid > 0 && task_tgid(t) != (uint32_t)tgid) return -ESRCH;
+    if (!signal_may_send(me, t)) return -EPERM;
+    if (sig != 0) signal_send_from(t, sig, me);
+    return 0;
 }
 
 int64_t sys_sigqueue(uint64_t pid_a, uint64_t sig_a, uint64_t value) {
