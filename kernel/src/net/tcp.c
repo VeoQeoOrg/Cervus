@@ -573,7 +573,7 @@ static const uint8_t tcp_lo6[16] = { 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,1 };
 
 int tcp_connect6_start(const uint8_t dst6[16], uint16_t port, uint16_t lport, const tcp_opts_t *o, tcp_tcb_t **out) {
     netdev_t *dev = tdev();
-    if (!dev) return -ENETUNREACH;
+    if (!dev || !ipv6_reachable(dst6)) return -ENETUNREACH;
     int local = memcmp(dst6, tcp_lo6, 16) == 0 || memcmp(dst6, dev->ip6_ll, 16) == 0;
 
     tcp_tcb_t *t = tcb_alloc(o);

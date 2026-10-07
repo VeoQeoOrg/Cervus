@@ -303,6 +303,7 @@ int64_t sock_op_connect(vnode_t *vn, const sock_addr_t *a, int nonblock) {
             return st;
         }
         if (a->family != s->family) return -EAFNOSUPPORT;
+        if (s->family == AF_INET6 && !ipv6_reachable(a->ip6)) return -ENETUNREACH;
         int64_t b = autobind(s);
         if (b < 0) return b;
         tcp_opts_t o;
@@ -325,6 +326,7 @@ int64_t sock_op_connect(vnode_t *vn, const sock_addr_t *a, int nonblock) {
         return 0;
     }
     if (a->family != s->family) return -EAFNOSUPPORT;
+    if (s->family == AF_INET6 && !ipv6_reachable(a->ip6)) return -ENETUNREACH;
     if (s->type == SOCK_DGRAM) {
         int64_t b = autobind(s);
         if (b < 0) return b;
@@ -353,6 +355,7 @@ static int64_t dgram_send(sock_t *s, const void *buf, size_t len, const sock_add
         ip = s->peer_ip; ip6 = s->peer_ip6; port = s->peer_port;
     }
     if (s->type == SOCK_DGRAM && len > UDP_MAX_PAYLOAD) return -EMSGSIZE;
+    if (s->family == AF_INET6 && !ipv6_reachable(ip6)) return -ENETUNREACH;
     if (s->family == AF_INET && ip == 0xFFFFFFFFu && !s->opt_broadcast) return -EACCES;
 
     if (s->type == SOCK_DGRAM && !s->bound) {

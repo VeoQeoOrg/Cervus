@@ -163,3 +163,12 @@ void ipv6_rx(netdev_t *dev, const uint8_t *smac, const uint8_t *pkt, size_t len)
 }
 
 void ipv6_get_lladdr(netdev_t *dev, uint8_t out[16]) { memcpy(out, dev->ip6_ll, 16); }
+
+int ipv6_reachable(const uint8_t *dst) {
+    if (is_lo6(dst)) return 1;
+    if (dst[0] == 0xfe && (dst[1] & 0xc0) == 0x80) return 1;
+    if (dst[0] == 0xff && (dst[1] & 0x0f) <= 2) return 1;
+    for (netdev_t *d = netdev_first(); d; d = d->next)
+        if (memcmp(d->ip6_ll, dst, 16) == 0) return 1;
+    return 0;
+}

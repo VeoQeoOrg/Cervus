@@ -11,5 +11,6 @@ int  ipv6_output(netdev_t *dev, const uint8_t *src, const uint8_t *dst,
 void ipv6_resolve(netdev_t *dev, const uint8_t *target);
 int  ipv6_loopback_drain_one(void);
 void ipv6_get_lladdr(netdev_t *dev, uint8_t out[16]);
+int  ipv6_reachable(const uint8_t *dst);
 
 #endif
