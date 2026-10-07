@@ -17,6 +17,7 @@
 #include "../../include/syscall/errno.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define UDP_RMEM_DEF   212992u
 #define UDP_WMEM_DEF   212992u
@@ -99,6 +100,12 @@ static int interrupted(task_t *me) {
     return me && (me->pending_kill || signal_pending_deliverable(me));
 }
 
+static struct {
+    uint64_t in_dgrams, no_ports, rcvbuf_errors, out_dgrams;
+} g_ustat;
+
+#define USTAT(f) __atomic_add_fetch(&g_ustat.f, 1, __ATOMIC_RELAXED)
+
 static uint32_t udp_rcv_limit(const sock_t *s) {
     return s->sk_rcvbuf ? s->sk_rcvbuf : UDP_RMEM_DEF;
 }
@@ -118,8 +125,10 @@ static void sock_enqueue2(sock_t *s, uint32_t ip, const uint8_t *ip6, uint16_t p
     if (s->dq_bytes + len > udp_rcv_limit(s) && s->dq_head) {
         spinlock_release_irqrestore(&s->lock, f);
         free(d);
+        if (s->type == SOCK_DGRAM) USTAT(rcvbuf_errors);
         return;
     }
+    if (s->type == SOCK_DGRAM) USTAT(in_dgrams);
     if (s->dq_tail) s->dq_tail->next = d; else s->dq_head = d;
     s->dq_tail = d;
     s->dq_bytes += (uint32_t)len;
@@ -147,6 +156,7 @@ int sock_udp_input(uint32_t src_ip, uint16_t src_port, uint16_t dst_port,
         }
     }
     spinlock_release_irqrestore(&g_socks_lock, g);
+    if (!hit) USTAT(no_ports);
     return hit != NULL;
 }
 
@@ -370,7 +380,10 @@ static int64_t dgram_send(sock_t *s, const void *buf, size_t len, const sock_add
         if (r == 0) break;
         task_sleep_ms(5);
     }
-    if (r == 0) loopback_drain_all();
+    if (r == 0) {
+        if (s->type == SOCK_DGRAM) USTAT(out_dgrams);
+        loopback_drain_all();
+    }
     return (r == 0) ? (int64_t)len : -EHOSTUNREACH;
 }
 
@@ -936,4 +949,47 @@ int sock_get_name(const vnode_t *vn, int peer, sock_addr_t *out)
     }
     out->port = s->local_port;
     return 0;
+}
+
+int sock_proc_udp(char *buf, size_t max, int family) {
+    int v6 = family == AF_INET6;
+    int n = snprintf(buf, max, v6
+        ? "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n"
+        : "   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n");
+    int idx = 0;
+    uint64_t g = spinlock_acquire_irqsave(&g_socks_lock);
+    for (sock_t *s = g_socks; s && (size_t)n + 256 < max; s = s->next) {
+        if (s->type != SOCK_DGRAM || (s->family == AF_INET6) != v6) continue;
+        uint64_t f = spinlock_acquire_irqsave(&s->lock);
+        uint32_t rxq = s->dq_bytes;
+        spinlock_release_irqrestore(&s->lock, f);
+        int st = s->connected ? 0x01 : 0x07;
+        if (v6) {
+            uint32_t l[4], r[4];
+            memcpy(l, s->local_ip6, 16);
+            memcpy(r, s->peer_ip6, 16);
+            n += snprintf(buf + n, max - (size_t)n,
+                          "%5d: %08X%08X%08X%08X:%04X %08X%08X%08X%08X:%04X %02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %016lX %u\n",
+                          idx, l[0], l[1], l[2], l[3], s->local_port, r[0], r[1], r[2], r[3],
+                          s->connected ? s->peer_port : 0, st, 0u, rxq, 0, 0ul, 0u, 0u, 0, 0ul, 2, 0ul, 0u);
+        } else {
+            n += snprintf(buf + n, max - (size_t)n,
+                          "%5d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %016lX %u\n",
+                          idx, __builtin_bswap32(s->local_ip), s->local_port,
+                          __builtin_bswap32(s->connected ? s->peer_ip : 0), s->connected ? s->peer_port : 0,
+                          st, 0u, rxq, 0, 0ul, 0u, 0u, 0, 0ul, 2, 0ul, 0u);
+        }
+        idx++;
+    }
+    spinlock_release_irqrestore(&g_socks_lock, g);
+    return n;
+}
+
+int sock_proc_udp_snmp(char *buf, size_t max) {
+    return snprintf(buf, max,
+        "Udp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors SndbufErrors InCsumErrors IgnoredMulti MemErrors\n"
+        "Udp: %lu %lu %lu %lu %lu 0 0 0 0\n",
+        (unsigned long)g_ustat.in_dgrams, (unsigned long)g_ustat.no_ports,
+        (unsigned long)g_ustat.rcvbuf_errors, (unsigned long)g_ustat.out_dgrams,
+        (unsigned long)g_ustat.rcvbuf_errors);
 }

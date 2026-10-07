@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "../../include/fs/vfs.h"
 #include "../../include/net/socket.h"
+#include "../../include/net/tcp.h"
 #include "../../include/fs/procfs.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/smp/smp.h"
@@ -155,23 +156,57 @@ static proc_file_t g_proc_files[] = {
 static vnode_t g_proc_root;
 static uint64_t g_proc_ino = 1;
 
+static int gen_net_tcp(char *buf, size_t max)  { return tcp_proc_list(buf, max, AF_INET); }
+static int gen_net_tcp6(char *buf, size_t max) { return tcp_proc_list(buf, max, AF_INET6); }
+static int gen_net_udp(char *buf, size_t max)  { return sock_proc_udp(buf, max, AF_INET); }
+static int gen_net_udp6(char *buf, size_t max) { return sock_proc_udp(buf, max, AF_INET6); }
+
+static int gen_net_snmp(char *buf, size_t max) {
+    int n = tcp_proc_snmp(buf, max);
+    if (n < 0 || (size_t)n >= max) return n;
+    return n + sock_proc_udp_snmp(buf + n, max - (size_t)n);
+}
+
+static int gen_net_netstat(char *buf, size_t max) { return tcp_proc_netstat(buf, max); }
+
+static proc_file_t g_proc_net_files[] = {
+    { "tcp",  gen_net_tcp,  {0} },
+    { "tcp6", gen_net_tcp6, {0} },
+    { "udp",  gen_net_udp,  {0} },
+    { "udp6", gen_net_udp6, {0} },
+    { "snmp", gen_net_snmp, {0} },
+    { "netstat", gen_net_netstat, {0} },
+};
+#define PROC_NET_NFILES (sizeof(g_proc_net_files) / sizeof(g_proc_net_files[0]))
+
+static vnode_t g_proc_net_dir;
+
+#define PROC_BIG_MAX 65536
+
 static int64_t procfile_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     proc_file_t *pf = (proc_file_t *)node->fs_data;
-    char tmp[PROC_BUF_MAX];
-    int total = pf->gen(tmp, sizeof(tmp));
+    char *tmp = kmalloc(PROC_BIG_MAX);
+    if (!tmp) return -ENOMEM;
+    int total = pf->gen(tmp, PROC_BIG_MAX);
     if (total < 0) total = 0;
-    if ((size_t)total > sizeof(tmp)) total = sizeof(tmp);
-    if (offset >= (uint64_t)total) return 0;
-    size_t avail = (size_t)total - (size_t)offset;
-    if (len > avail) len = avail;
-    memcpy(buf, tmp + offset, len);
-    return (int64_t)len;
+    if (total > PROC_BIG_MAX) total = PROC_BIG_MAX;
+    int64_t r = 0;
+    if (offset < (uint64_t)total) {
+        size_t avail = (size_t)total - (size_t)offset;
+        if (len > avail) len = avail;
+        memcpy(buf, tmp + offset, len);
+        r = (int64_t)len;
+    }
+    kfree(tmp);
+    return r;
 }
 
 static int procfile_stat(vnode_t *node, vfs_stat_t *out) {
     proc_file_t *pf = (proc_file_t *)node->fs_data;
-    char tmp[PROC_BUF_MAX];
-    int total = pf->gen(tmp, sizeof(tmp));
+    char *tmp = kmalloc(PROC_BIG_MAX);
+    if (!tmp) return -ENOMEM;
+    int total = pf->gen(tmp, PROC_BIG_MAX);
+    kfree(tmp);
     if (total < 0) total = 0;
     memset(out, 0, sizeof(*out));
     out->st_ino  = node->ino;
@@ -504,8 +539,53 @@ static int make_piddir(uint32_t pid, vnode_t **out) {
     return 0;
 }
 
+static int procnet_lookup(vnode_t *dir, const char *name, vnode_t **out) {
+    (void)dir;
+    for (size_t i = 0; i < PROC_NET_NFILES; i++) {
+        if (strcmp(g_proc_net_files[i].name, name) == 0) {
+            vnode_ref(&g_proc_net_files[i].vnode);
+            *out = &g_proc_net_files[i].vnode;
+            return 0;
+        }
+    }
+    return -ENOENT;
+}
+
+static int procnet_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+    (void)dir;
+    if (index >= PROC_NET_NFILES) return -ENOENT;
+    out->d_ino  = g_proc_net_files[index].vnode.ino;
+    out->d_type = (uint8_t)VFS_NODE_FILE;
+    strncpy(out->d_name, g_proc_net_files[index].name, VFS_MAX_NAME - 1);
+    out->d_name[VFS_MAX_NAME - 1] = '\0';
+    return 0;
+}
+
+static int procnet_stat(vnode_t *node, vfs_stat_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->st_ino  = node->ino;
+    out->st_type = VFS_NODE_DIR;
+    out->st_mode = 0555;
+    out->st_size = PROC_NET_NFILES;
+    out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
+    return 0;
+}
+
+static const vnode_ops_t procnet_ops = {
+    .lookup  = procnet_lookup,
+    .readdir = procnet_readdir,
+    .stat    = procnet_stat,
+    .ref     = proc_ref,
+    .unref   = proc_unref,
+};
+
 static int procroot_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     (void)dir;
+    if (strcmp(name, "net") == 0) {
+        vnode_ref(&g_proc_net_dir);
+        *out = &g_proc_net_dir;
+        return 0;
+    }
     for (size_t i = 0; i < PROC_NFILES; i++) {
         if (strcmp(g_proc_files[i].name, name) == 0) {
             vnode_ref(&g_proc_files[i].vnode);
@@ -533,9 +613,15 @@ static int procroot_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
         out->d_name[VFS_MAX_NAME - 1] = '\0';
         return 0;
     }
+    if (index == PROC_NFILES) {
+        out->d_ino  = g_proc_net_dir.ino;
+        out->d_type = (uint8_t)VFS_NODE_DIR;
+        strncpy(out->d_name, "net", VFS_MAX_NAME - 1);
+        return 0;
+    }
     uint32_t pids[256];
     int npids = task_collect_pids(pids, 256);
-    uint64_t pidx = index - PROC_NFILES;
+    uint64_t pidx = index - PROC_NFILES - 1;
     if (pidx >= (uint64_t)npids) return -ENOENT;
     out->d_ino  = pids[pidx];
     out->d_type = (uint8_t)VFS_NODE_DIR;
@@ -577,6 +663,23 @@ vnode_t *procfs_create_root(void) {
         v->ino      = g_proc_ino++;
         v->ops      = &procfile_ops;
         v->fs_data  = &g_proc_files[i];
+        v->refcount = 1;
+    }
+
+    memset(&g_proc_net_dir, 0, sizeof(g_proc_net_dir));
+    g_proc_net_dir.type     = VFS_NODE_DIR;
+    g_proc_net_dir.mode     = 0555;
+    g_proc_net_dir.ino      = g_proc_ino++;
+    g_proc_net_dir.ops      = &procnet_ops;
+    g_proc_net_dir.refcount = 1;
+    for (size_t i = 0; i < PROC_NET_NFILES; i++) {
+        vnode_t *v = &g_proc_net_files[i].vnode;
+        memset(v, 0, sizeof(*v));
+        v->type     = VFS_NODE_FILE;
+        v->mode     = 0444;
+        v->ino      = g_proc_ino++;
+        v->ops      = &procfile_ops;
+        v->fs_data  = &g_proc_net_files[i];
         v->refcount = 1;
     }
 

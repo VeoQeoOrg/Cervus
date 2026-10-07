@@ -56,5 +56,8 @@ int         tcp_accept(tcp_tcb_t *lst, int flags, uint64_t timeout_ms, tcp_tcb_t
 void        tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, size_t len);
 void        tcp6_rx(netdev_t *dev, const uint8_t *src6, const uint8_t *dst6, const uint8_t *seg, size_t len);
 void        tcp_tick(void);
+int         tcp_proc_list(char *buf, size_t max, int family);
+int         tcp_proc_snmp(char *buf, size_t max);
+int         tcp_proc_netstat(char *buf, size_t max);
 
 #endif

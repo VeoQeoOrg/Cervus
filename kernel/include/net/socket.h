@@ -93,6 +93,8 @@ int  sock_udp6_input(const uint8_t *src6, uint16_t src_port, uint16_t dst_port,
                      const uint8_t *data, size_t len);
 void sock_icmp_input(uint32_t src_ip, const uint8_t *data, size_t len);
 uint16_t sock_alloc_ephemeral_port(void);
+int      sock_proc_udp(char *buf, size_t max, int family);
+int      sock_proc_udp_snmp(char *buf, size_t max);
 
 struct task;
 vnode_t *net_sock_from_fd(struct task *t, int fd, vfs_file_t **out_file, int64_t *err);

@@ -15,6 +15,7 @@
 #include "../../include/fs/poll.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define TH_FIN 0x01
 #define TH_SYN 0x02
@@ -40,6 +41,7 @@ enum { TCP_CLOSED, TCP_LISTEN, TCP_SYN_SENT, TCP_SYN_RCVD, TCP_ESTABLISHED,
 #define TCP_OOO_MAX      16
 #define TCP_STACK_SEG    1520
 #define TCP_SOMAXCONN    4096
+#define TCP_RCV_SLACK    (1u << TCP_WSCALE)
 
 typedef struct tcp_ooo {
     uint32_t seq;
@@ -55,9 +57,11 @@ struct tcp_tcb {
     uint32_t  local_ip, remote_ip;
     uint16_t  local_port, remote_port;
 
-    uint32_t  iss, snd_una, snd_nxt;
+    uint32_t  iss, snd_una, snd_nxt, snd_max;
     uint32_t  rcv_nxt;
-    uint32_t  snd_wnd;
+    uint32_t  snd_wnd, max_wnd;
+    int       probe_due, persist_backoff;
+    uint64_t  persist_ms;
 
     uint8_t   snd_wscale, rcv_wscale;
     uint8_t   wscale_ok;
@@ -74,10 +78,12 @@ struct tcp_tcb {
     uint32_t  snd_cap, snd_head, snd_buflen, snd_lim;
     int       snd_locked;
     int       pend_syn, pend_fin, fin_sent;
+    uint32_t  fin_seq;
     int       nodelay;
+    int       tx_busy, tx_again;
 
     uint8_t  *rcvbuf;
-    uint32_t  rcv_cap, rcv_head, rcv_count;
+    uint32_t  rcv_cap, rcv_size, rcv_head, rcv_count;
     uint32_t  rcv_adv;
     int       fin_seen, reset, app_closed;
     int       err;
@@ -106,6 +112,14 @@ struct tcp_tcb {
 
 static tcp_tcb_t  *g_tcbs;
 static spinlock_t  g_tcbs_lock;
+
+static struct {
+    uint64_t active_opens, passive_opens, attempt_fails, estab_resets;
+    uint64_t in_segs, out_segs, retrans_segs, in_errs, out_rsts;
+    uint64_t timeouts, fast_retrans, ofo_queue, ofo_drop, rcvq_drop, win_probe, keepalive;
+} g_tstat;
+
+#define TSTAT(f) __atomic_add_fetch(&g_tstat.f, 1, __ATOMIC_RELAXED)
 
 static uint64_t now_ms(void) { return sched_now_ns() / 1000000ull; }
 static netdev_t *tdev(void) { return netdev_default(); }
@@ -137,13 +151,17 @@ static void ring_get(const uint8_t *ring, uint32_t cap, uint32_t pos, uint8_t *d
 }
 
 static uint32_t rcv_window(const tcp_tcb_t *t) {
-    return t->rcv_cap - t->rcv_count;
+    return t->rcv_count < t->rcv_cap ? t->rcv_cap - t->rcv_count : 0;
+}
+
+static uint32_t rcv_space(const tcp_tcb_t *t) {
+    return t->rcv_size - t->rcv_count;
 }
 
 static uint32_t rcv_push(tcp_tcb_t *t, const uint8_t *data, uint32_t dlen) {
-    uint32_t space = rcv_window(t);
+    uint32_t space = rcv_space(t);
     uint32_t n = dlen < space ? dlen : space;
-    if (n) ring_put(t->rcvbuf, t->rcv_cap, (t->rcv_head + t->rcv_count) % t->rcv_cap, data, n);
+    if (n) ring_put(t->rcvbuf, t->rcv_size, (t->rcv_head + t->rcv_count) % t->rcv_size, data, n);
     t->rcv_count += n;
     t->rcv_nxt += n;
     return n;
@@ -162,8 +180,9 @@ static void ooo_free_all(tcp_tcb_t *t) {
 
 static void ooo_insert(tcp_tcb_t *t, uint32_t seq, const uint8_t *data, uint32_t dlen) {
     uint32_t ahead = seq - t->rcv_nxt;
-    uint32_t wnd = rcv_window(t);
-    if (ahead >= wnd) return;
+    uint32_t wnd = (int32_t)(t->rcv_adv - t->rcv_nxt) > 0 ? t->rcv_adv - t->rcv_nxt : 0;
+    if (wnd > rcv_space(t)) wnd = rcv_space(t);
+    if (ahead >= wnd) { TSTAT(ofo_drop); return; }
     if (dlen > wnd - ahead) dlen = wnd - ahead;
 
     int count = 0;
@@ -171,7 +190,8 @@ static void ooo_insert(tcp_tcb_t *t, uint32_t seq, const uint8_t *data, uint32_t
         if (q->seq == seq && q->len >= dlen) return;
         count++;
     }
-    if (count >= TCP_OOO_MAX) return;
+    if (count >= TCP_OOO_MAX) { TSTAT(ofo_drop); return; }
+    TSTAT(ofo_queue);
 
     tcp_ooo_t *n = calloc(1, sizeof(*n));
     if (!n) return;
@@ -272,12 +292,20 @@ static void tcp_rtt_update(tcp_tcb_t *t, int32_t sample) {
 }
 
 static void tcp_loss(tcp_tcb_t *t) {
-    uint32_t inflight = t->snd_nxt - t->snd_una;
+    uint32_t inflight = t->snd_max - t->snd_una;
     uint32_t half = inflight / 2;
     if (half < 2 * t->smss) half = 2 * t->smss;
     t->ssthresh = half;
     t->cwnd = t->smss;
     t->dupacks = 0;
+}
+
+static int fin_acked(const tcp_tcb_t *t) {
+    return t->fin_sent && (int32_t)(t->snd_una - t->fin_seq) > 0;
+}
+
+static void advance_max(tcp_tcb_t *t) {
+    if ((int32_t)(t->snd_nxt - t->snd_max) > 0) t->snd_max = t->snd_nxt;
 }
 
 static void tcb_wake(tcp_tcb_t *t) {
@@ -329,27 +357,41 @@ static void tcp_emit(tcp_tcb_t *t, uint8_t *seg, uint32_t hlen, uint32_t seq, ui
     netdev_t *dev = tdev();
     if (!dev) return;
 
+    uint64_t lf = spinlock_acquire_irqsave(&t->lock);
+    uint32_t ackno = t->rcv_nxt;
     wr16be(seg + 0, t->local_port);
     wr16be(seg + 2, t->remote_port);
     wr32be(seg + 4, seq);
-    wr32be(seg + 8, (flags & TH_ACK) ? t->rcv_nxt : 0);
+    wr32be(seg + 8, (flags & TH_ACK) ? ackno : 0);
     seg[12] = (uint8_t)((hlen / 4) << 4);
     seg[13] = flags;
 
-    uint32_t win = t->rcvbuf ? rcv_window(t) : 0;
-    uint32_t adv;
+    uint32_t avail = t->rcvbuf ? rcv_window(t) : 0;
+    uint32_t space = t->rcvbuf ? rcv_space(t) : 0;
+    if (!(flags & TH_SYN) && avail < t->rcv_cap / 2 && avail < t->mss) avail = 0;
+    uint32_t keep = (int32_t)(t->rcv_adv - t->rcv_nxt) > 0 ? t->rcv_adv - t->rcv_nxt : 0;
+    uint32_t win, adv;
     if (flags & TH_SYN) {
-        if (win > 65535) win = 65535;
+        win = avail > 65535 ? 65535 : avail;
         adv = win;
     } else {
-        win >>= t->rcv_wscale;
+        uint32_t sh = t->rcv_wscale;
+        uint32_t unit = 1u << sh;
+        uint32_t k = (keep + unit - 1) >> sh;
+        if ((k << sh) > space) k = keep >> sh;
+        win = avail >> sh;
+        if (k > win) win = k;
         if (win > 65535) win = 65535;
-        adv = win << t->rcv_wscale;
+        adv = win << sh;
     }
-    if (!(flags & TH_RST)) t->rcv_adv = t->rcv_nxt + adv;
+    if ((flags & TH_ACK) && !(flags & TH_RST) && (int32_t)(t->rcv_nxt + adv - t->rcv_adv) > 0)
+        t->rcv_adv = t->rcv_nxt + adv;
+    spinlock_release_irqrestore(&t->lock, lf);
     wr16be(seg + 14, (uint16_t)win);
     wr16be(seg + 16, 0);
     wr16be(seg + 18, 0);
+    TSTAT(out_segs);
+    if (flags & TH_RST) TSTAT(out_rsts);
 
     if (t->family == AF_INET6) {
         wr16be(seg + 16, tcp6_csum(t->laddr6, t->raddr6, seg, hlen + dlen));
@@ -461,7 +503,8 @@ static tcp_tcb_t *tcb_alloc(const tcp_opts_t *o) {
     tcp_tcb_t *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
     t->rcv_cap = (o && o->rcvbuf) ? o->rcvbuf : TCP_RMEM_DEF;
-    t->rcvbuf = malloc(t->rcv_cap);
+    t->rcv_size = t->rcv_cap + TCP_RCV_SLACK;
+    t->rcvbuf = malloc(t->rcv_size);
     if (!t->rcvbuf) { free(t); return NULL; }
     if (o && o->sndbuf) { t->snd_lim = o->sndbuf; t->snd_locked = 1; }
     else                t->snd_lim = TCP_WMEM_DEF;
@@ -496,6 +539,7 @@ static void syn_start(tcp_tcb_t *t) {
     t->iss = new_iss(0xa5a5 ^ ((uint32_t)t->local_port << 16) ^ t->remote_port);
     t->snd_una = t->iss;
     t->snd_nxt = t->iss + 1;
+    t->snd_max = t->snd_nxt;
     t->state = TCP_SYN_SENT;
     t->pend_syn = 1;
     t->rexmit_ms = now_ms() + t->rto_ms;
@@ -518,6 +562,7 @@ int tcp_connect_start(uint32_t ip, uint16_t port, uint16_t lport, const tcp_opts
     tcp_rto_init(t, mss_for(dev, 0));
     syn_start(t);
     tcb_link(t);
+    TSTAT(active_opens);
 
     tcp_output(t, t->iss, TH_SYN);
     *out = t;
@@ -543,6 +588,7 @@ int tcp_connect6_start(const uint8_t dst6[16], uint16_t port, uint16_t lport, co
     tcp_rto_init(t, mss_for(local ? netdev_loopback() : dev, 1));
     syn_start(t);
     tcb_link(t);
+    TSTAT(active_opens);
 
     tcp_output(t, t->iss, TH_SYN);
     *out = t;
@@ -613,65 +659,97 @@ static void tcp_try_send(tcp_tcb_t *t) {
     uint8_t stackseg[TCP_STACK_SEG];
     uint8_t *heap = NULL;
     uint32_t heapcap = 0;
+    uint64_t f = spinlock_acquire_irqsave(&t->lock);
+    if (t->tx_busy) {
+        t->tx_again = 1;
+        spinlock_release_irqrestore(&t->lock, f);
+        return;
+    }
+    t->tx_busy = 1;
+    t->tx_again = 0;
     for (;;) {
-        uint64_t f = spinlock_acquire_irqsave(&t->lock);
-        if (!send_open(t->state) || t->reset) {
-            spinlock_release_irqrestore(&t->lock, f);
-            break;
-        }
-        uint32_t inflight = t->snd_nxt - t->snd_una;
-        uint32_t unsent = (t->snd_buflen > inflight) ? (t->snd_buflen - inflight) : 0;
-        uint32_t wnd = t->snd_wnd;
-        uint32_t cw = t->cwnd < wnd ? t->cwnd : wnd;
-        uint32_t room = (inflight < cw) ? (cw - inflight) : 0;
-        if (wnd == 0 && inflight == 0 && unsent) room = 1;
-        uint32_t n = unsent;
-        if (n > room) n = room;
-        if (n > t->smss) n = t->smss;
-        if (n && n < t->smss && n == unsent && inflight && !t->nodelay && !t->pend_fin) n = 0;
-
-        if (n > 0) {
-            uint8_t *seg = stackseg;
-            if (20 + n > sizeof stackseg) {
-                if (20 + n > heapcap) {
-                    uint32_t want = 20 + t->smss;
-                    spinlock_release_irqrestore(&t->lock, f);
-                    free(heap);
-                    heap = malloc(want);
-                    heapcap = heap ? want : 0;
-                    if (!heap) break;
-                    continue;
+        if (send_open(t->state) && !t->reset) {
+            uint32_t inflight = t->snd_nxt - t->snd_una;
+            uint32_t unsent = (t->snd_buflen > inflight) ? (t->snd_buflen - inflight) : 0;
+            uint32_t wnd = t->snd_wnd;
+            uint32_t cw = t->cwnd < wnd ? t->cwnd : wnd;
+            uint32_t room = (inflight < cw) ? (cw - inflight) : 0;
+            if (wnd) {
+                t->probe_due = 0;
+                t->persist_ms = 0;
+                t->persist_backoff = 0;
+            } else if (inflight == 0 && unsent) {
+                if (t->probe_due) {
+                    room = 1;
+                    t->probe_due = 0;
+                } else if (!t->persist_ms) {
+                    uint64_t back = (uint64_t)t->rto_ms << (t->persist_backoff > 9 ? 9 : t->persist_backoff);
+                    if (back > TCP_RTO_MAX) back = TCP_RTO_MAX;
+                    t->persist_ms = now_ms() + back;
                 }
-                seg = heap;
             }
-            ring_get(t->sndbuf, t->snd_cap, (t->snd_head + inflight) % t->snd_cap, seg + 20, n);
-            uint32_t seq = t->snd_nxt;
-            t->snd_nxt += n;
-            if (!t->rtt_timing) {
-                t->rtt_timing = 1;
-                t->rtt_seq = seq;
-                t->rtt_start = now_ms();
+            uint32_t n = unsent;
+            if (n > room) n = room;
+            if (n > t->smss) n = t->smss;
+            if (n && n < t->smss && n == unsent && inflight && !t->nodelay && !t->pend_fin) n = 0;
+            if (n && n < t->smss && n < unsent && inflight && n < t->max_wnd / 2) n = 0;
+
+            if (n > 0) {
+                uint8_t *seg = stackseg;
+                if (20 + n > sizeof stackseg) {
+                    if (20 + n > heapcap) {
+                        uint32_t want = 20 + t->smss;
+                        spinlock_release_irqrestore(&t->lock, f);
+                        free(heap);
+                        heap = malloc(want);
+                        heapcap = heap ? want : 0;
+                        f = spinlock_acquire_irqsave(&t->lock);
+                        if (!heap) break;
+                        continue;
+                    }
+                    seg = heap;
+                }
+                ring_get(t->sndbuf, t->snd_cap, (t->snd_head + inflight) % t->snd_cap, seg + 20, n);
+                uint32_t seq = t->snd_nxt;
+                int fresh = (int32_t)(t->snd_nxt - t->snd_max) >= 0;
+                t->snd_nxt += n;
+                advance_max(t);
+                if (fresh && !t->rtt_timing) {
+                    t->rtt_timing = 1;
+                    t->rtt_seq = seq;
+                    t->rtt_start = now_ms();
+                }
+                if (!fresh) TSTAT(retrans_segs);
+                if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + t->rto_ms;
+                uint8_t fl = TH_ACK | (n == unsent ? TH_PSH : 0);
+                spinlock_release_irqrestore(&t->lock, f);
+                tcp_emit(t, seg, 20, seq, fl, n);
+                f = spinlock_acquire_irqsave(&t->lock);
+                continue;
             }
-            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + t->rto_ms;
-            uint8_t fl = TH_ACK | (n == unsent ? TH_PSH : 0);
-            spinlock_release_irqrestore(&t->lock, f);
-            tcp_emit(t, seg, 20, seq, fl, n);
+
+            if (t->pend_fin && t->snd_buflen == 0 && t->snd_una == t->snd_nxt && !fin_acked(t) &&
+                (!t->fin_sent || t->snd_nxt == t->fin_seq)) {
+                if (!t->fin_sent) t->fin_seq = t->snd_nxt;
+                t->fin_sent = 1;
+                uint32_t seq = t->snd_nxt;
+                t->snd_nxt += 1;
+                advance_max(t);
+                if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + t->rto_ms;
+                spinlock_release_irqrestore(&t->lock, f);
+                tcp_output(t, seq, TH_ACK | TH_FIN);
+                f = spinlock_acquire_irqsave(&t->lock);
+                continue;
+            }
+        }
+        if (t->tx_again) {
+            t->tx_again = 0;
             continue;
         }
-
-        if (t->pend_fin && !t->fin_sent && t->snd_buflen == 0 && t->snd_una == t->snd_nxt) {
-            t->fin_sent = 1;
-            uint32_t seq = t->snd_nxt;
-            t->snd_nxt += 1;
-            if (t->rexmit_ms == 0) t->rexmit_ms = now_ms() + t->rto_ms;
-            spinlock_release_irqrestore(&t->lock, f);
-            tcp_output(t, seq, TH_ACK | TH_FIN);
-            break;
-        }
-
-        spinlock_release_irqrestore(&t->lock, f);
         break;
     }
+    t->tx_busy = 0;
+    spinlock_release_irqrestore(&t->lock, f);
     free(heap);
 }
 
@@ -768,14 +846,14 @@ int64_t tcp_recv(tcp_tcb_t *t, void *buf, size_t len, int flags, uint64_t timeou
             if (t->rcv_count >= target || (t->rcv_count && (t->fin_seen || t->reset ||
                                                             (flags & TCP_IO_NONBLOCK)))) {
                 uint32_t n = t->rcv_count < len ? t->rcv_count : (uint32_t)len;
-                ring_get(t->rcvbuf, t->rcv_cap, t->rcv_head, dst, n);
+                ring_get(t->rcvbuf, t->rcv_size, t->rcv_head, dst, n);
                 spinlock_release_irqrestore(&t->lock, f);
                 return (int64_t)n;
             }
         } else if (t->rcv_count > 0) {
             uint32_t n = t->rcv_count < len - got ? t->rcv_count : (uint32_t)(len - got);
-            ring_get(t->rcvbuf, t->rcv_cap, t->rcv_head, dst + got, n);
-            t->rcv_head = (t->rcv_head + n) % t->rcv_cap;
+            ring_get(t->rcvbuf, t->rcv_size, t->rcv_head, dst + got, n);
+            t->rcv_head = (t->rcv_head + n) % t->rcv_size;
             t->rcv_count -= n;
             got += n;
             int upd = window_update_due(t);
@@ -835,7 +913,7 @@ void tcp_abort(tcp_tcb_t *t) {
     uint64_t f = spinlock_acquire_irqsave(&t->lock);
     int st = t->state;
     int send_rst = !t->reset && st != TCP_CLOSED && st != TCP_LISTEN && st != TCP_TIME_WAIT && st != TCP_SYN_SENT;
-    uint32_t seq = t->snd_nxt;
+    uint32_t seq = t->snd_max;
     t->state = TCP_CLOSED;
     t->reset = 1;
     t->pend_syn = 0;
@@ -888,7 +966,7 @@ void tcp_set_opts(tcp_tcb_t *t, const tcp_opts_t *o) {
     if (!t || !o) return;
     uint8_t *nb = NULL;
     uint32_t want = o->rcvbuf;
-    if (!t->is_listener && want) nb = malloc(want);
+    if (!t->is_listener && want) nb = malloc(want + TCP_RCV_SLACK);
 
     uint64_t f = spinlock_acquire_irqsave(&t->lock);
     if (t->is_listener) {
@@ -901,10 +979,11 @@ void tcp_set_opts(tcp_tcb_t *t, const tcp_opts_t *o) {
         if (o->ka_cnt) t->ka_cnt = o->ka_cnt;
         if (o->sndbuf) { t->snd_lim = o->sndbuf; t->snd_locked = 1; }
         if (nb && want != t->rcv_cap && want >= t->rcv_count) {
-            if (t->rcv_count) ring_get(t->rcvbuf, t->rcv_cap, t->rcv_head, nb, t->rcv_count);
+            if (t->rcv_count) ring_get(t->rcvbuf, t->rcv_size, t->rcv_head, nb, t->rcv_count);
             uint8_t *old = t->rcvbuf;
             t->rcvbuf = nb;
             t->rcv_cap = want;
+            t->rcv_size = want + TCP_RCV_SLACK;
             t->rcv_head = 0;
             nb = old;
         }
@@ -1074,10 +1153,13 @@ static void tcp_child(tcp_tcb_t *lst, netdev_t *dev, int family,
     tcp_parse_opts(c, seg, doff);
     if (!c->wscale_ok) { c->snd_wscale = 0; c->rcv_wscale = 0; }
     c->snd_wnd = rd16be(seg + 14);
+    c->max_wnd = c->snd_wnd;
     c->rcv_nxt = rd32be(seg + 4) + 1;
+    c->rcv_adv = c->rcv_nxt;
     c->iss = new_iss(0x5a5a ^ ((uint32_t)sport << 16) ^ c->local_port);
     c->snd_una = c->iss;
     c->snd_nxt = c->iss + 1;
+    c->snd_max = c->snd_nxt;
     c->state = TCP_SYN_RCVD;
     c->pend_syn = 1;
     c->listener = lst;
@@ -1126,6 +1208,8 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
         }
         if (!t->err && !t->app_closed && st != TCP_CLOSED && st != TCP_TIME_WAIT)
             t->err = st == TCP_SYN_SENT ? ECONNREFUSED : st == TCP_CLOSE_WAIT ? EPIPE : ECONNRESET;
+        if (st == TCP_SYN_SENT || st == TCP_SYN_RCVD) TSTAT(attempt_fails);
+        else if (st == TCP_ESTABLISHED || st == TCP_CLOSE_WAIT) TSTAT(estab_resets);
         t->reset = 1;
         t->state = TCP_CLOSED;
         t->pend_syn = 0;
@@ -1140,8 +1224,10 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
             tcp_parse_opts(t, seg, doff);
             if (!t->wscale_ok) { t->snd_wscale = 0; t->rcv_wscale = 0; }
             t->rcv_nxt = seq + 1;
+            t->rcv_adv = t->rcv_nxt;
             t->snd_una = ack;
             t->snd_wnd = win;
+            t->max_wnd = win;
             t->pend_syn = 0;
             t->state = TCP_ESTABLISHED;
             handshake_done(t);
@@ -1172,9 +1258,11 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
         }
         t->snd_una = ack;
         t->snd_wnd = (uint32_t)win << t->snd_wscale;
+        if (t->snd_wnd > t->max_wnd) t->max_wnd = t->snd_wnd;
         t->pend_syn = 0;
         t->state = TCP_ESTABLISHED;
         handshake_done(t);
+        TSTAT(passive_opens);
         spinlock_release_irqrestore(&t->lock, f);
         enqueue_accept(t);
         f = spinlock_acquire_irqsave(&t->lock);
@@ -1189,11 +1277,11 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
     if (flags & TH_ACK) {
         uint32_t new_wnd = (uint32_t)win << t->snd_wscale;
         uint32_t old_wnd = t->snd_wnd;
-        if ((int32_t)(ack - t->snd_una) > 0 && (int32_t)(ack - t->snd_nxt) <= 0) {
+        if ((int32_t)(ack - t->snd_una) > 0 && (int32_t)(ack - t->snd_max) <= 0) {
             uint32_t adv = ack - t->snd_una;
             uint32_t data_acked = adv;
-            if (t->fin_sent && ack == t->snd_nxt) data_acked = adv - 1;
             if (data_acked > t->snd_buflen) data_acked = t->snd_buflen;
+            if ((int32_t)(ack - t->snd_nxt) > 0) t->snd_nxt = ack;
             if (data_acked) {
                 t->snd_head = (t->snd_head + data_acked) % t->snd_cap;
                 t->snd_buflen -= data_acked;
@@ -1216,32 +1304,35 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
             t->dupacks = 0;
             t->snd_una = ack;
             t->snd_wnd = new_wnd;
+            if (new_wnd > t->max_wnd) t->max_wnd = new_wnd;
             t->retries = 0;
-            t->rexmit_ms = (t->snd_una == t->snd_nxt) ? 0 : (now_ms() + t->rto_ms);
+            t->rexmit_ms = (t->snd_una == t->snd_max) ? 0 : (now_ms() + t->rto_ms);
             tcb_wake(t);
         } else if (ack == t->snd_una) {
-            int outstanding = t->snd_nxt != t->snd_una;
+            int outstanding = t->snd_max != t->snd_una;
             if (new_wnd != old_wnd) {
                 t->snd_wnd = new_wnd;
+                if (new_wnd > t->max_wnd) t->max_wnd = new_wnd;
                 t->dupacks = 0;
+                if (t->snd_una == t->snd_max) t->rexmit_ms = 0;
                 tcb_wake(t);
             } else if (dlen == 0 && outstanding && new_wnd != 0 && !(flags & (TH_SYN | TH_FIN))) {
                 if (++t->dupacks == 3) {
+                    TSTAT(fast_retrans);
                     tcp_loss(t);
                     t->cwnd = t->ssthresh + 3 * t->smss;
                     t->snd_nxt = t->snd_una;
-                    t->fin_sent = 0;
                     t->rtt_timing = 0;
                     t->rexmit_ms = now_ms() + t->rto_ms;
                 }
             }
             if (new_wnd == 0 && outstanding) t->retries = 0;
-        } else if ((int32_t)(ack - t->snd_nxt) > 0) {
+        } else if ((int32_t)(ack - t->snd_max) > 0) {
             spinlock_release_irqrestore(&t->lock, f);
             tcp_output(t, t->snd_nxt, TH_ACK);
             return;
         }
-        if (t->fin_sent && t->snd_una == t->snd_nxt) {
+        if (fin_acked(t)) {
             if (t->state == TCP_FIN_WAIT1) t->state = TCP_FIN_WAIT2;
             else if (t->state == TCP_LAST_ACK) { t->state = TCP_CLOSED; t->rexmit_ms = 0; tcb_wake(t); }
         }
@@ -1251,7 +1342,7 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
                    t->state == TCP_FIN_WAIT2);
 
     if (dlen > 0 && data_ok && t->app_closed && t->state != TCP_ESTABLISHED) {
-        uint32_t rseq = t->snd_nxt;
+        uint32_t rseq = t->snd_max;
         t->state = TCP_CLOSED;
         t->reset = 1;
         t->rexmit_ms = 0;
@@ -1269,7 +1360,8 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
             return;
         }
         if (off >= 0) {
-            rcv_push(t, data + off, dlen - (uint32_t)off);
+            uint32_t want = dlen - (uint32_t)off;
+            if (rcv_push(t, data + off, want) < want) TSTAT(rcvq_drop);
             ooo_drain(t);
             tcb_wake(t);
         } else {
@@ -1287,7 +1379,7 @@ static void tcp_input(tcp_tcb_t *t, const uint8_t *seg, size_t len) {
             t->state = TCP_CLOSE_WAIT;
         } else {
             t->state = TCP_TIME_WAIT;
-            t->rexmit_ms = 0;
+            if (fin_acked(t)) t->rexmit_ms = 0;
             t->close_ms = now_ms();
         }
         tcb_wake(t);
@@ -1326,8 +1418,10 @@ void tcp_rx(netdev_t *dev, uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
     if (len < 20) return;
     if (!tcp_csum_ok(src_ip, dst_ip, seg, len)) {
         if (dev) dev->rx_bad_csum++;
+        TSTAT(in_errs);
         return;
     }
+    TSTAT(in_segs);
     if (dev && (seg[13] & TH_SYN) && !(seg[13] & TH_ACK)) dev->rx_tcp_syn++;
     uint16_t sport = rd16be(seg + 0);
     uint16_t dport = rd16be(seg + 2);
@@ -1354,8 +1448,10 @@ void tcp6_rx(netdev_t *dev, const uint8_t *src6, const uint8_t *dst6, const uint
     if (len < 20) return;
     if (rd16be(seg + 16) != 0 && tcp6_csum(src6, dst6, seg, len) != 0) {
         if (dev) dev->rx_bad_csum++;
+        TSTAT(in_errs);
         return;
     }
+    TSTAT(in_segs);
     uint16_t sport = rd16be(seg + 0);
     uint16_t dport = rd16be(seg + 2);
     uint8_t  flags = seg[13];
@@ -1403,6 +1499,8 @@ void tcp_tick(void) {
             t->state != TCP_CLOSED && t->state != TCP_TIME_WAIT && !t->is_listener) {
             int limit = t->pend_syn ? TCP_SYN_RETRIES : TCP_RETRIES2;
             if (++t->retries > limit) {
+                if (t->pend_syn) TSTAT(attempt_fails);
+                else if (t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT) TSTAT(estab_resets);
                 if (!t->err && !t->app_closed) t->err = ETIMEDOUT;
                 t->reset = 1;
                 t->state = TCP_CLOSED;
@@ -1420,16 +1518,30 @@ void tcp_tick(void) {
                     spinlock_release_irqrestore(&t->lock, f);
                     tcp_output(t, seq, syn_ack ? (TH_SYN | TH_ACK) : TH_SYN);
                 } else {
-                    tcp_loss(t);
+                    int persist = t->snd_wnd == 0 && t->snd_max - t->snd_una <= 1;
+                    if (persist) {
+                        t->retries--;
+                        t->rexmit_ms = 0;
+                    } else {
+                        TSTAT(timeouts);
+                        tcp_loss(t);
+                    }
                     t->snd_nxt = t->snd_una;
-                    t->fin_sent = 0;
                     spinlock_release_irqrestore(&t->lock, f);
                     tcp_try_send(t);
                 }
             }
+        } else if (!reap && t->persist_ms && nowt >= t->persist_ms && !t->is_listener &&
+                   (t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT)) {
+            t->persist_ms = 0;
+            if (t->persist_backoff < 16) t->persist_backoff++;
+            t->probe_due = 1;
+            TSTAT(win_probe);
+            spinlock_release_irqrestore(&t->lock, f);
+            tcp_try_send(t);
         } else if (!reap && t->ka_on && !t->is_listener && t->rexmit_ms == 0 &&
                    (t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT) &&
-                   t->snd_una == t->snd_nxt &&
+                   t->snd_una == t->snd_max &&
                    nowt - t->last_rx_ms >= (uint64_t)t->ka_idle * 1000ull +
                                            (uint64_t)t->ka_probes * t->ka_intvl * 1000ull) {
             if (t->ka_probes >= t->ka_cnt) {
@@ -1440,6 +1552,7 @@ void tcp_tick(void) {
                 spinlock_release_irqrestore(&t->lock, f);
             } else {
                 t->ka_probes++;
+                TSTAT(keepalive);
                 uint32_t seq = t->snd_una - 1;
                 spinlock_release_irqrestore(&t->lock, f);
                 tcp_output(t, seq, TH_ACK);
@@ -1463,4 +1576,107 @@ void tcp_tick(void) {
         tcb_free(dead);
         dead = n;
     }
+}
+
+static int linux_state(const tcp_tcb_t *t) {
+    if (t->is_listener) return 0x0A;
+    switch (t->state) {
+    case TCP_ESTABLISHED: return 0x01;
+    case TCP_SYN_SENT:    return 0x02;
+    case TCP_SYN_RCVD:    return 0x03;
+    case TCP_FIN_WAIT1:   return 0x04;
+    case TCP_FIN_WAIT2:   return 0x05;
+    case TCP_TIME_WAIT:   return 0x06;
+    case TCP_CLOSE_WAIT:  return 0x08;
+    case TCP_LAST_ACK:    return 0x09;
+    default:              return 0x07;
+    }
+}
+
+static uint32_t raw32(uint32_t host) {
+    return __builtin_bswap32(host);
+}
+
+static int addr6_words(char *out, size_t max, const uint8_t a[16]) {
+    uint32_t w[4];
+    memcpy(w, a, 16);
+    return snprintf(out, max, "%08X%08X%08X%08X", w[0], w[1], w[2], w[3]);
+}
+
+int tcp_proc_list(char *buf, size_t max, int family) {
+    int v6 = family == AF_INET6;
+    int n = snprintf(buf, max, v6
+        ? "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+        : "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+    uint64_t nowt = now_ms();
+    int idx = 0;
+    uint64_t g = spinlock_acquire_irqsave(&g_tcbs_lock);
+    for (tcp_tcb_t *t = g_tcbs; t && (size_t)n + 256 < max; t = t->next) {
+        if ((t->family == AF_INET6) != v6) continue;
+        if (t->app_closed && t->state == TCP_CLOSED) continue;
+        uint64_t f = spinlock_acquire_irqsave(&t->lock);
+        int tr = 0;
+        uint64_t when = 0;
+        if (t->rexmit_ms) {
+            tr = (t->snd_wnd == 0 && !t->pend_syn) ? 4 : 1;
+            when = t->rexmit_ms > nowt ? (t->rexmit_ms - nowt) / 10 : 0;
+        } else if (t->state == TCP_TIME_WAIT) {
+            tr = 3;
+            uint64_t end = t->close_ms + TCP_TIMEWAIT_MS;
+            when = end > nowt ? (end - nowt) / 10 : 0;
+        } else if (t->ka_on) {
+            tr = 2;
+        }
+        uint32_t txq = t->is_listener ? 0 : t->snd_buflen;
+        uint32_t rxq = t->is_listener ? (uint32_t)t->qlen : t->rcv_count;
+        uint32_t cw = t->smss ? t->cwnd / t->smss : 0;
+        int ssth = (t->ssthresh >= 0x7fffffffu || !t->smss) ? -1 : (int)(t->ssthresh / t->smss);
+        if (v6) {
+            char la[40], ra[40];
+            addr6_words(la, sizeof la, t->laddr6);
+            addr6_words(ra, sizeof ra, t->raddr6);
+            n += snprintf(buf + n, max - (size_t)n,
+                          "%4d: %s:%04X %s:%04X %02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %016lX %u %u %u %u %d\n",
+                          idx, la, t->local_port, ra, t->remote_port, linux_state(t), txq, rxq,
+                          tr, (unsigned long)when, (unsigned)t->retries, 0u, t->ka_probes, 0ul,
+                          t->refs + 1, 0ul, t->rto_ms / 10, 4u, 0u, cw, ssth);
+        } else {
+            n += snprintf(buf + n, max - (size_t)n,
+                          "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08lX %08X %5u %8d %lu %d %016lX %u %u %u %u %d\n",
+                          idx, raw32(t->local_ip), t->local_port, raw32(t->remote_ip), t->remote_port,
+                          linux_state(t), txq, rxq, tr, (unsigned long)when, (unsigned)t->retries, 0u,
+                          t->ka_probes, 0ul, t->refs + 1, 0ul, t->rto_ms / 10, 4u, 0u, cw, ssth);
+        }
+        spinlock_release_irqrestore(&t->lock, f);
+        idx++;
+    }
+    spinlock_release_irqrestore(&g_tcbs_lock, g);
+    return n;
+}
+
+int tcp_proc_snmp(char *buf, size_t max) {
+    unsigned curr = 0;
+    uint64_t g = spinlock_acquire_irqsave(&g_tcbs_lock);
+    for (tcp_tcb_t *t = g_tcbs; t; t = t->next)
+        if (!t->is_listener && (t->state == TCP_ESTABLISHED || t->state == TCP_CLOSE_WAIT)) curr++;
+    spinlock_release_irqrestore(&g_tcbs_lock, g);
+    return snprintf(buf, max,
+        "Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors\n"
+        "Tcp: 1 %u %u -1 %lu %lu %lu %lu %u %lu %lu %lu %lu %lu %lu\n",
+        TCP_RTO_MIN, TCP_RTO_MAX,
+        (unsigned long)g_tstat.active_opens, (unsigned long)g_tstat.passive_opens,
+        (unsigned long)g_tstat.attempt_fails, (unsigned long)g_tstat.estab_resets, curr,
+        (unsigned long)g_tstat.in_segs, (unsigned long)g_tstat.out_segs,
+        (unsigned long)g_tstat.retrans_segs, (unsigned long)g_tstat.in_errs,
+        (unsigned long)g_tstat.out_rsts, (unsigned long)g_tstat.in_errs);
+}
+
+int tcp_proc_netstat(char *buf, size_t max) {
+    return snprintf(buf, max,
+        "TcpExt: TCPTimeouts TCPFastRetrans TCPOFOQueue TCPOFODrop TCPRcvQDrop TCPWinProbe TCPKeepAlive\n"
+        "TcpExt: %lu %lu %lu %lu %lu %lu %lu\n",
+        (unsigned long)g_tstat.timeouts, (unsigned long)g_tstat.fast_retrans,
+        (unsigned long)g_tstat.ofo_queue, (unsigned long)g_tstat.ofo_drop,
+        (unsigned long)g_tstat.rcvq_drop, (unsigned long)g_tstat.win_probe,
+        (unsigned long)g_tstat.keepalive);
 }
