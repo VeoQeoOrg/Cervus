@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "../include/smp/smp.h"
+#include "../sched/spinlock.h"
 
 #define PERCPU_SECTION __attribute__((section(".percpu.head")))
 
@@ -43,11 +44,13 @@ typedef struct {
     uint64_t user_saved_r10;
     uint64_t user_saved_r8;
     uint64_t user_saved_r9;
+    int32_t  spin_depth;
 } __attribute__((aligned(64))) percpu_t;
 
 _Static_assert(__builtin_offsetof(percpu_t, syscall_kernel_rsp) == 0, "percpu: kernel_rsp");
 _Static_assert(__builtin_offsetof(percpu_t, syscall_user_rsp) == 8, "percpu: user_rsp");
 _Static_assert(__builtin_offsetof(percpu_t, current_task) == 24, "percpu: current_task");
+_Static_assert(__builtin_offsetof(percpu_t, spin_depth) == PERCPU_SPIN_DEPTH, "percpu: spin_depth");
 _Static_assert(__builtin_offsetof(percpu_t, need_resched) == 40, "percpu: need_resched");
 _Static_assert(__builtin_offsetof(percpu_t, user_saved_rbp) == 48, "percpu: saved_rbp");
 _Static_assert(__builtin_offsetof(percpu_t, user_saved_rbx) == 56, "percpu: saved_rbx");
@@ -66,6 +69,7 @@ percpu_t* get_percpu(void);
 percpu_t* get_percpu_mut(void);
 void init_percpu_regions(void);
 void set_percpu_base(percpu_t* base);
+void percpu_boot_base(void);
 uint32_t smp_cpu_index(void);
 #define current_cpu_id() (get_percpu()->cpu_id)
 

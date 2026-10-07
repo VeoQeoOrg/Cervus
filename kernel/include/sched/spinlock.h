@@ -10,9 +10,26 @@ typedef struct {
 
 #define SPINLOCK_INIT { .ticket = 0, .serving = 0 }
 
+#define PERCPU_SPIN_DEPTH 184
+
 void tlb_poll(void);
 
+static inline void spin_depth_inc(void) {
+    asm volatile("incl %%gs:%c0" :: "i"(PERCPU_SPIN_DEPTH) : "memory", "cc");
+}
+
+static inline void spin_depth_dec(void) {
+    asm volatile("decl %%gs:%c0" :: "i"(PERCPU_SPIN_DEPTH) : "memory", "cc");
+}
+
+static inline int spin_depth(void) {
+    int d;
+    asm volatile("movl %%gs:%c1, %0" : "=r"(d) : "i"(PERCPU_SPIN_DEPTH));
+    return d;
+}
+
 static inline void spinlock_acquire(spinlock_t* lock) {
+    spin_depth_inc();
     uint32_t my_ticket = __atomic_fetch_add(&lock->ticket, 1, __ATOMIC_RELAXED);
     while (__atomic_load_n(&lock->serving, __ATOMIC_ACQUIRE) != my_ticket) {
         tlb_poll();
@@ -22,6 +39,7 @@ static inline void spinlock_acquire(spinlock_t* lock) {
 
 static inline void spinlock_release(spinlock_t* lock) {
     __atomic_fetch_add(&lock->serving, 1, __ATOMIC_RELEASE);
+    spin_depth_dec();
 }
 
 static inline int spinlock_try_acquire(spinlock_t* lock) {
@@ -29,8 +47,12 @@ static inline int spinlock_try_acquire(spinlock_t* lock) {
     uint32_t ticket  = __atomic_load_n(&lock->ticket,  __ATOMIC_RELAXED);
     if (serving != ticket) return 0;
     uint32_t expected = serving;
-    return __atomic_compare_exchange_n(&lock->ticket, &expected, serving + 1,
-                                       0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+    spin_depth_inc();
+    if (__atomic_compare_exchange_n(&lock->ticket, &expected, serving + 1,
+                                    0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+        return 1;
+    spin_depth_dec();
+    return 0;
 }
 
 static inline uint64_t spinlock_acquire_irqsave(spinlock_t* lock) {

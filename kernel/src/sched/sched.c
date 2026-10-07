@@ -1127,6 +1127,10 @@ void sched_print_stats(void) {
     spinlock_release_irqrestore(&ready_queue_lock, _irqf);
 }
 
+bool task_is_idle(const task_t* t) {
+    return t >= &idle_tasks[0] && t < &idle_tasks[MAX_CPUS];
+}
+
 void task_unblock(task_t* t) {
     if (!t) return;
     if (t->state != TASK_BLOCKED) return;

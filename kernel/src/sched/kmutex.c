@@ -34,9 +34,7 @@ bool kmutex_trylock(kmutex_t *m) {
 void kmutex_lock(kmutex_t *m) {
     if (kmutex_trylock(m)) return;
     task_t *t = me();
-    uint64_t rf;
-    asm volatile("pushfq; pop %0" : "=r"(rf));
-    bool can_sleep = t && (rf & 0x200);
+    bool can_sleep = get_percpu() && t && !t->irq_nest && !task_is_idle(t) && spin_depth() == 0;
     if (!can_sleep) {
         while (!kmutex_trylock(m)) {
             tlb_poll();

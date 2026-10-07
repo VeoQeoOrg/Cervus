@@ -238,6 +238,7 @@ typedef struct task {
         uint64_t cur;
         uint64_t max;
     } rlim[RLIMIT_COUNT];
+    volatile int32_t irq_nest;
 } task_t;
 
 #define TASK_FLAG_TRACE          (1 << 0)
@@ -332,6 +333,7 @@ void    task_reparent(task_t* child, task_t* new_parent);
 extern spinlock_t children_lock;
 void    task_wakeup_waiters(uint32_t pid);
 void    task_unblock(task_t* t);
+bool    task_is_idle(const task_t* t);
 void    sched_wakeup_sleepers(uint64_t now_ns);
 task_t* task_find_foreground(void);
 void task_set_foreground(uint32_t pid);

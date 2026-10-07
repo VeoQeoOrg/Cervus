@@ -19,10 +19,17 @@ _reload_segments:
 
     retfq
 .reload_cs:
+    mov ecx, 0xC0000101
+    rdmsr
+    mov r8d, eax
+    mov r9d, edx
     mov ax, si
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
+    mov eax, r8d
+    mov edx, r9d
+    wrmsr
     ret

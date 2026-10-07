@@ -12,6 +12,7 @@ PERCPU_SECTION percpu_t percpu = {0};
 PERCPU_SECTION int dummy_percpu = 0xDEADBEEF;
 
 percpu_t* percpu_regions[MAX_CPUS] = {0};
+static percpu_t g_boot_percpu;
 
 bool g_has_fsgsbase = false;
 
@@ -80,7 +81,7 @@ percpu_t* get_percpu(void) {
     } else {
         gs_base = rdmsr_local(MSR_GS_BASE);
     }
-    if (gs_base == 0) return NULL;
+    if (gs_base == 0 || gs_base == (uint64_t)&g_boot_percpu) return NULL;
     return (percpu_t*)gs_base;
 }
 
@@ -88,8 +89,14 @@ percpu_t* get_percpu_mut(void) {
     return get_percpu();
 }
 
+void percpu_boot_base(void) {
+    wrmsr_local(MSR_GS_BASE, (uint64_t)&g_boot_percpu);
+    wrmsr_local(MSR_KERNEL_GS_BASE, (uint64_t)&g_boot_percpu);
+}
+
 void set_percpu_base(percpu_t* base) {
     uint64_t val = (uint64_t)base;
+    base->spin_depth = 0;
     if (g_has_fsgsbase) {
         asm volatile("wrgsbase %0" :: "r"(val) : "memory");
     } else {

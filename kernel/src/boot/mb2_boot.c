@@ -1,5 +1,6 @@
 #include "../../include/boot/boot_info.h"
 #include "../../include/io/serial.h"
+#include "../../include/smp/percpu.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -60,6 +61,7 @@ static void mmap_add_carved(boot_info_t *bi, uint64_t b, uint64_t e) {
 }
 
 void mb2_main(uint32_t magic, uint32_t info_phys) {
+    percpu_boot_base();
     serial_initialize(0x3F8, 115200);
     if (magic != MB2_LOADER_MAGIC) {
         serial_writestring("[mb2] bad multiboot2 magic, halting\n");

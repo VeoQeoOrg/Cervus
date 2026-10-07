@@ -5,6 +5,8 @@
 #include "../../include/interrupts/idt.h"
 #include "../../include/gdt/gdt.h"
 #include "../../include/io/ports.h"
+#include "../../include/sched/sched.h"
+#include "../../include/smp/percpu.h"
 
 extern const int_desc_t __start_int_handlers[];
 extern const int_desc_t __stop_int_handlers[];
@@ -28,5 +30,9 @@ void base_trap(void *ctx) {
         return isr_common_handler(regs);
     }
 
-    return irq_common_handler(regs);
+    percpu_t *pc = get_percpu();
+    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    if (t) t->irq_nest++;
+    irq_common_handler(regs);
+    if (t) t->irq_nest--;
 }

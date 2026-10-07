@@ -41,6 +41,7 @@ void sched_notify_ready(void) {
 __attribute__((used))
 void ap_entry_init(void) {
     asm volatile ("cli");
+    percpu_boot_base();
 
     __atomic_add_fetch(&ap_tramp_taken, 1, __ATOMIC_RELEASE);
 
