@@ -34,6 +34,7 @@ static void fmt_mode(mode_t m, uint32_t type, char *buf)
     else if (S_ISBLK(m))               buf[0] = 'b';
     else if (S_ISLNK(m))               buf[0] = 'l';
     else if (S_ISFIFO(m))              buf[0] = 'p';
+    else if (S_ISSOCK(m))              buf[0] = 's';
     else                               buf[0] = '-';
     const char *bits = "rwxrwxrwx";
     for (int i = 0; i < 9; i++)
@@ -59,6 +60,8 @@ static int cmp_name(const void *a, const void *b)
 static char type_indicator(const Entry *e)
 {
     if (e->d_type == DT_DIR) return '/';
+    if (e->d_type == DT_SOCK) return '=';
+    if (e->d_type == DT_FIFO) return '|';
     if (e->has_stat && (e->st.st_mode & S_IXUSR)) return '*';
     return 0;
 }
@@ -66,7 +69,8 @@ static char type_indicator(const Entry *e)
 static void color_for(const Entry *e)
 {
     if (e->d_type == DT_DIR) paint(C_BLUE);
-    else if (e->d_type == DT_CHR || e->d_type == DT_BLK) paint(C_YELLOW);
+    else if (e->d_type == DT_CHR || e->d_type == DT_BLK || e->d_type == DT_FIFO) paint(C_YELLOW);
+    else if (e->d_type == DT_SOCK) paint(C_MAGENTA);
     else if (e->has_stat && (e->st.st_mode & S_IXUSR)) paint(C_GREEN);
 }
 
@@ -217,7 +221,8 @@ int main(int argc, char **argv)
             Entry e;
             strncpy(e.name, argv[i], 255); e.name[255] = '\0';
             e.d_type = S_ISDIR(st.st_mode) ? DT_DIR : S_ISLNK(st.st_mode) ? DT_LNK
-                     : S_ISCHR(st.st_mode) ? DT_CHR : S_ISBLK(st.st_mode) ? DT_BLK : DT_REG;
+                     : S_ISCHR(st.st_mode) ? DT_CHR : S_ISBLK(st.st_mode) ? DT_BLK
+                     : S_ISFIFO(st.st_mode) ? DT_FIFO : S_ISSOCK(st.st_mode) ? DT_SOCK : DT_REG;
             e.st = st;
             e.has_stat = 1;
             emit_entry(&e, &o);

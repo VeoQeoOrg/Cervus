@@ -78,6 +78,7 @@ static int type_match(uint8_t d_type, char tc)
         case 'c': return d_type == DT_CHR;
         case 'b': return d_type == DT_BLK;
         case 'p': return d_type == DT_FIFO;
+        case 's': return d_type == DT_SOCK;
         default:  return 0;
     }
 }
@@ -232,6 +233,7 @@ static void do_find(find_ctx_t *ctx, const char *path, int depth)
                    : S_ISBLK(st.st_mode)  ? DT_BLK
                    : S_ISCHR(st.st_mode)  ? DT_CHR
                    : S_ISFIFO(st.st_mode) ? DT_FIFO
+                   : S_ISSOCK(st.st_mode) ? DT_SOCK
                    : DT_REG;
 
     int in_range = (depth >= ctx->mindepth);

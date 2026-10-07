@@ -15,6 +15,7 @@ static const char *type_str(uint32_t t)
         case 3: return "block device";
         case 4: return "symlink";
         case 5: return "pipe";
+        case 6: return "socket";
         default: return "unknown";
     }
 }
@@ -23,7 +24,7 @@ static void fmt_perms(mode_t m, uint32_t type, char *buf)
 {
     buf[0] = (type == 1 || S_ISDIR(m)) ? 'd'
            : S_ISLNK(m) ? 'l' : S_ISCHR(m) ? 'c'
-           : S_ISBLK(m) ? 'b' : S_ISFIFO(m) ? 'p' : '-';
+           : S_ISBLK(m) ? 'b' : S_ISFIFO(m) ? 'p' : S_ISSOCK(m) ? 's' : '-';
     const char *bits = "rwxrwxrwx";
     for (int i = 0; i < 9; i++)
         buf[1 + i] = (m & (0400 >> i)) ? bits[i] : '-';
@@ -39,6 +40,7 @@ static const char *type_short(uint32_t t)
         case 3: return "block";
         case 4: return "symlink";
         case 5: return "pipe";
+        case 6: return "socket";
         default: return "unknown";
     }
 }
