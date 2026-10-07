@@ -41,6 +41,10 @@ static void serve_pending(void) {
     __atomic_fetch_sub(&g_req_acks, 1, __ATOMIC_ACQ_REL);
 }
 
+void tlb_poll(void) {
+    if (__atomic_load_n(&g_req_acks, __ATOMIC_ACQUIRE) > 0) serve_pending();
+}
+
 void tlb_flush_mm(uint64_t cr3, const uintptr_t *addrs, size_t count) {
     flush_here(cr3, addrs, count);
     uint32_t online = smp_get_online_count();

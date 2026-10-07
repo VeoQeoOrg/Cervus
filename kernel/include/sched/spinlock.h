@@ -10,10 +10,14 @@ typedef struct {
 
 #define SPINLOCK_INIT { .ticket = 0, .serving = 0 }
 
+void tlb_poll(void);
+
 static inline void spinlock_acquire(spinlock_t* lock) {
     uint32_t my_ticket = __atomic_fetch_add(&lock->ticket, 1, __ATOMIC_RELAXED);
-    while (__atomic_load_n(&lock->serving, __ATOMIC_ACQUIRE) != my_ticket)
+    while (__atomic_load_n(&lock->serving, __ATOMIC_ACQUIRE) != my_ticket) {
+        tlb_poll();
         asm volatile("pause");
+    }
 }
 
 static inline void spinlock_release(spinlock_t* lock) {

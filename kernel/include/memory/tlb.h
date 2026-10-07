@@ -8,5 +8,6 @@
 #define TLB_SYNC_MAX_ADDRS 32
 
 void tlb_flush_mm(uint64_t cr3, const uintptr_t *addrs, size_t count);
+void tlb_poll(void);
 
 #endif

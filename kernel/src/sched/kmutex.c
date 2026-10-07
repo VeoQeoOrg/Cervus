@@ -38,7 +38,10 @@ void kmutex_lock(kmutex_t *m) {
     asm volatile("pushfq; pop %0" : "=r"(rf));
     bool can_sleep = t && (rf & 0x200);
     if (!can_sleep) {
-        while (!kmutex_trylock(m)) asm volatile("pause");
+        while (!kmutex_trylock(m)) {
+            tlb_poll();
+            asm volatile("pause");
+        }
         return;
     }
     kmutex_waiter_t w = { t, 0, 0 };
