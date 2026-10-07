@@ -239,6 +239,9 @@
 #define SYS_GETCPU            663
 #define SYS_SCHED_SETSCHED    664
 #define SYS_SCHED_GETSCHED    665
+#define SYS_SENDTO_FLAGS      666
+#define SYS_RECVFROM_FLAGS    667
+#define SYS_ACCEPT4           668
 
 #define SYSCALL_TABLE_SIZE    768
 

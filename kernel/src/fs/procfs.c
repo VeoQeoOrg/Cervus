@@ -263,6 +263,7 @@ static const char *vnode_type_name(int type) {
         case VFS_NODE_FILE:    return "file";
         case VFS_NODE_DIR:     return "dir";
         case VFS_NODE_CHARDEV: return "chardev";
+        case VFS_NODE_SOCKET:  return "socket";
         case VFS_NODE_BLKDEV:  return "blkdev";
         case VFS_NODE_SYMLINK: return "symlink";
         case VFS_NODE_PIPE:    return "pipe";

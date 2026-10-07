@@ -70,7 +70,7 @@ static vnode_t *unix_make(int type, unix_sock_t **out) {
     }
     vnode_t *vn = calloc(1, sizeof(*vn));
     if (!vn) { free(s); return NULL; }
-    vn->type = VFS_NODE_CHARDEV;
+    vn->type = VFS_NODE_SOCKET;
     vn->mode = 0600;
     vn->ops = &unix_vnode_ops;
     vn->fs_data = s;
@@ -96,6 +96,11 @@ int unix_describe(const vnode_t *vn, char *buf, size_t max) {
 
 int unix_is_socket(const vnode_t *vn) {
     return vn && vn->ops == &unix_vnode_ops;
+}
+
+int unix_is_listening(const vnode_t *vn) {
+    unix_sock_t *s = vn->fs_data;
+    return s && s->state == U_LISTEN;
 }
 
 int unix_make_pair(vnode_t **a_out, vnode_t **b_out) {

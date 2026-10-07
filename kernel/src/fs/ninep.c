@@ -67,12 +67,12 @@ static uint64_t g64(const uint8_t *b) { uint64_t v = 0; for (int k = 0; k < 8; k
 
 static int send_full(p9_conn_t *c, const uint8_t *b, int n) {
     int off = 0;
-    while (off < n) { int64_t r = tcp_send(c->tcb, b + off, n - off); if (r <= 0) return -1; off += r; }
+    while (off < n) { int64_t r = tcp_send(c->tcb, b + off, n - off, 0, 0); if (r <= 0) return -1; off += r; }
     return 0;
 }
 static int recv_full(p9_conn_t *c, uint8_t *b, int n) {
     int off = 0;
-    while (off < n) { int64_t r = tcp_recv(c->tcb, b + off, n - off, 0); if (r <= 0) return -1; off += r; }
+    while (off < n) { int64_t r = tcp_recv(c->tcb, b + off, n - off, 0, 0); if (r <= 0) return -1; off += r; }
     return 0;
 }
 
@@ -310,7 +310,8 @@ vnode_t *ninep_mount(uint32_t ip, uint16_t port) {
     c->msize = P9_MSIZE; c->next_fid = 1;
     c->wbuf = kmalloc(P9_MSIZE); c->rbuf = kmalloc(P9_MSIZE);
     if (!c->wbuf || !c->rbuf) { kfree(c->wbuf); kfree(c->rbuf); kfree(c); return NULL; }
-    if (tcp_connect(ip, port, &c->tcb) != 0 || !c->tcb) { kfree(c->wbuf); kfree(c->rbuf); kfree(c); return NULL; }
+    extern uint16_t sock_alloc_ephemeral_port(void);
+    if (tcp_connect(ip, port, sock_alloc_ephemeral_port(), NULL, 0, &c->tcb) != 0 || !c->tcb) { kfree(c->wbuf); kfree(c->rbuf); kfree(c); return NULL; }
     if (p9_version(c) != 0 || p9_attach(c, 0) != 0) { tcp_close(c->tcb); kfree(c->wbuf); kfree(c->rbuf); kfree(c); return NULL; }
     int is_dir = 1; uint64_t length = 0;
     p9_stat(c, 0, &is_dir, &length, NULL, NULL);

@@ -490,7 +490,7 @@ int64_t vfs_pread(vfs_file_t *file, void *buf, size_t len, uint64_t offset) {
     if (len == 0) return 0;
     if ((file->flags & O_ACCMODE) == O_WRONLY) return -EBADF;
     vnode_type_t t = file->vnode->type;
-    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
+    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE || t == VFS_NODE_SOCKET) return -ESPIPE;
     if (!file->vnode->ops || !file->vnode->ops->read) return -EIO;
     return file->vnode->ops->read(file->vnode, buf, len, offset);
 }
@@ -500,7 +500,7 @@ int64_t vfs_pwrite(vfs_file_t *file, const void *buf, size_t len, uint64_t offse
     if (len == 0) return 0;
     if ((file->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     vnode_type_t t = file->vnode->type;
-    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
+    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE || t == VFS_NODE_SOCKET) return -ESPIPE;
     if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
     int fe = fsize_check(file->vnode, offset, &len);
     if (fe < 0) return fe;
@@ -512,7 +512,7 @@ int64_t vfs_pwrite(vfs_file_t *file, const void *buf, size_t len, uint64_t offse
 int64_t vfs_seek(vfs_file_t *file, int64_t offset, int whence) {
     if (!file || !file->vnode) return -EBADF;
     vnode_type_t t = file->vnode->type;
-    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE) return -ESPIPE;
+    if (t == VFS_NODE_CHARDEV || t == VFS_NODE_PIPE || t == VFS_NODE_SOCKET) return -ESPIPE;
 
     int64_t new_off;
     switch (whence) {
@@ -534,6 +534,7 @@ static uint32_t mode_type_bits(vnode_type_t t) {
         case VFS_NODE_BLKDEV:  return 0060000;
         case VFS_NODE_SYMLINK: return 0120000;
         case VFS_NODE_PIPE:    return 0010000;
+        case VFS_NODE_SOCKET:  return 0140000;
         default:               return 0;
     }
 }

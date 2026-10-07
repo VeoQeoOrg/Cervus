@@ -32,6 +32,7 @@
 #define EROFS         30
 #define EMLINK        31
 #define EPIPE         32
+#define EDOM          33
 #define ERANGE        34
 #define EDEADLK       35
 #define ENAMETOOLONG  36
@@ -72,5 +73,20 @@
 #define ECAPABILITY   200
 #define ETASKDEAD     201
 #define EBADCR3       202
+
+#define EDESTADDRREQ     89
+#define EPROTOTYPE       91
+#define EPROTONOSUPPORT  93
+#define ESOCKTNOSUPPORT  94
+#define EPFNOSUPPORT     96
+#define EAFNOSUPPORT     97
+#define EADDRNOTAVAIL    99
+#define ENETRESET        102
+#define ECONNABORTED     103
+#define ECONNRESET       104
+#define ESHUTDOWN        108
+#define ETOOMANYREFS     109
+#define EHOSTDOWN        112
+#define EHOSTUNREACH     113
 
 #endif

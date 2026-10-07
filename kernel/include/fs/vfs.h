@@ -38,6 +38,7 @@ typedef enum {
     VFS_NODE_BLKDEV  = 3,
     VFS_NODE_SYMLINK = 4,
     VFS_NODE_PIPE    = 5,
+    VFS_NODE_SOCKET  = 6,
 } vnode_type_t;
 
 typedef struct {

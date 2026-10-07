@@ -5,6 +5,7 @@
 #include "../../include/sched/spinlock.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+#include <stdlib.h>
 
 #define IPPROTO_TCP     6
 #define IPPROTO_UDP    17
@@ -58,11 +59,18 @@ static uint16_t icmp6_cksum(const uint8_t *src, const uint8_t *dst, const uint8_
 }
 
 int ipv6_output(netdev_t *dev, const uint8_t *src_in, const uint8_t *dst, uint8_t nexthdr, const uint8_t *payload, uint32_t plen) {
-    if (plen > 1500 - 40) return -1;
+    int local = is_lo6(dst) || memcmp(dst, dev->ip6_ll, 16) == 0;
+    uint32_t mtu = dev->mtu ? dev->mtu : 1500;
+    if (plen > 65535 || (!local && 40 + plen > mtu)) return -1;
     uint8_t src[16];
     if (src_in) memcpy(src, src_in, 16); else memcpy(src, dev->ip6_ll, 16);
 
-    uint8_t pkt[1500];
+    uint8_t sbuf[1500];
+    uint8_t *pkt = sbuf;
+    if (40 + plen > sizeof sbuf) {
+        pkt = malloc(40 + plen);
+        if (!pkt) return -1;
+    }
     memset(pkt, 0, 40);
     pkt[0] = 0x60;
     pkt[4] = (uint8_t)(plen >> 8); pkt[5] = (uint8_t)plen;
@@ -72,14 +80,21 @@ int ipv6_output(netdev_t *dev, const uint8_t *src_in, const uint8_t *dst, uint8_
     memcpy(pkt + 24, dst, 16);
     memcpy(pkt + 40, payload, plen);
 
-    if (is_lo6(dst) || memcmp(dst, dev->ip6_ll, 16) == 0)
-        return loopback_output(ETH_P_IPV6, pkt, 40 + plen);
-
+    int rc;
     uint8_t mac[6];
-    if (is_mcast6(dst)) { mac[0] = 0x33; mac[1] = 0x33; mac[2] = dst[12]; mac[3] = dst[13]; mac[4] = dst[14]; mac[5] = dst[15]; }
-    else if (nd_lookup(dst, mac) != 0) { ipv6_resolve(dev, dst); return -1; }
-
-    return eth_send(dev, mac, ETH_P_IPV6, pkt, 40 + plen);
+    if (local) {
+        rc = loopback_output(ETH_P_IPV6, pkt, 40 + plen);
+    } else if (is_mcast6(dst)) {
+        mac[0] = 0x33; mac[1] = 0x33; mac[2] = dst[12]; mac[3] = dst[13]; mac[4] = dst[14]; mac[5] = dst[15];
+        rc = eth_send(dev, mac, ETH_P_IPV6, pkt, 40 + plen);
+    } else if (nd_lookup(dst, mac) != 0) {
+        ipv6_resolve(dev, dst);
+        rc = -1;
+    } else {
+        rc = eth_send(dev, mac, ETH_P_IPV6, pkt, 40 + plen);
+    }
+    if (pkt != sbuf) free(pkt);
+    return rc;
 }
 
 void ipv6_resolve(netdev_t *dev, const uint8_t *target) {

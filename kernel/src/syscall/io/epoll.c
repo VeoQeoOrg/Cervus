@@ -214,9 +214,10 @@ static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, in
                 n++;
                 continue;
             }
-            int want = (int)(snapshot[i].events & (POLLIN | POLLOUT | POLLPRI));
+            int want = (int)(snapshot[i].events & (POLLIN | POLLOUT | POLLPRI | POLLRDHUP |
+                                                   POLLRDNORM | POLLWRNORM));
             if (!want) want = POLLIN;
-            int got  = vfs_poll_file(file, want);
+            int got  = poll_expand(vfs_poll_file(file, want));
             fd_put(file);
             got &= (want | POLLERR | POLLHUP | POLLNVAL);
             if (got > 0) {

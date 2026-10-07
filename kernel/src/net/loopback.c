@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 #define LO_MTU     65535
-#define LO_BUDGET  (512 * 1024)
+#define LO_BUDGET  (16 * 1024 * 1024)
 
 typedef struct lo_pkt {
     struct lo_pkt *next;

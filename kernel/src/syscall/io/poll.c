@@ -44,7 +44,7 @@ static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ms) {
                     ? file->vnode->ops->poll_file(file, pf[i].events)
                     : vnode_poll(file->vnode, pf[i].events);
             fd_put(file);
-            rev &= (pf[i].events | POLLERR | POLLHUP | POLLNVAL);
+            rev = poll_expand(rev) & (pf[i].events | POLLERR | POLLHUP | POLLNVAL);
             if (rev) { pf[i].revents = (short)rev; ready++; }
         }
         if (ready > 0) return ready;
