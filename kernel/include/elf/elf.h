@@ -139,7 +139,7 @@ struct mm;
 struct vnode;
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);
 elf_load_result_t elf_load_vnode(struct vnode* vn, size_t size, size_t stack_sz);
-uintptr_t elf_build_init_stack(struct mm* mm, uintptr_t stack_top);
+uintptr_t exec_build_init_stack(const elf_load_result_t* elf, const char* path);
 
 void elf_unload(elf_load_result_t* result);
 

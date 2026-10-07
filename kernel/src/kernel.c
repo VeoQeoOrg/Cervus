@@ -112,7 +112,7 @@ static void load_elf_module(void) {
 
     serial_printf("[ELF] Load OK! entry=0x%llx stack_top=0x%llx\n", r.entry, r.stack_top);
 
-    uintptr_t init_rsp = elf_build_init_stack(r.mm, r.stack_top);
+    uintptr_t init_rsp = exec_build_init_stack(&r, "/bin/init");
     if (init_rsp == 0) {
         serial_writestring("[ELF] init stack build failed\n");
         return;

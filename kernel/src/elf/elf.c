@@ -257,22 +257,6 @@ static uintptr_t cover_orphan_sections(mm_t *mm, const elf64_ehdr_t *ehdr,
     return new_end;
 }
 
-uintptr_t elf_build_init_stack(mm_t *mm, uintptr_t stack_top) {
-    static const char argv0[] = "init";
-    uintptr_t str_addr = (stack_top - sizeof(argv0)) & ~(uintptr_t)0xF;
-    if (mm_copy_to(mm, str_addr, argv0, sizeof(argv0)) != 0) return 0;
-
-    uint64_t frame[4];
-    frame[0] = 1;
-    frame[1] = (uint64_t)str_addr;
-    frame[2] = 0;
-    frame[3] = 0;
-
-    uintptr_t rsp = (str_addr - sizeof(frame)) & ~(uintptr_t)0xF;
-    if (mm_copy_to(mm, rsp, frame, sizeof(frame)) != 0) return 0;
-    return rsp;
-}
-
 static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *result) {
     vfs_file_t *f = NULL;
     if (vfs_open(path, 0, 0, &f) < 0 || !f) return ELF_ERR_NULL;

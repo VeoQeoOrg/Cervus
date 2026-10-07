@@ -97,7 +97,7 @@ static int copy_user_strings(strvec_t *v, uint64_t uvec, size_t *total) {
 
 static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv,
                              const strvec_t *envp, const elf_load_result_t *elf,
-                             const char *execfn, task_t *t) {
+                             const char *execfn, uint32_t uid, uint32_t gid) {
     static const char platform[] = "x86_64";
     uintptr_t sp = stack_top & ~(uintptr_t)0xF;
 
@@ -132,10 +132,10 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
         AT_BASE,     elf->has_interp ? elf->interp_base : 0,
         AT_FLAGS,    0,
         AT_ENTRY,    elf->entry,
-        AT_UID,      t->uid,
-        AT_EUID,     t->uid,
-        AT_GID,      t->gid,
-        AT_EGID,     t->gid,
+        AT_UID,      uid,
+        AT_EUID,     uid,
+        AT_GID,      gid,
+        AT_EGID,     gid,
         AT_SECURE,   0,
         AT_CLKTCK,   100,
         AT_HWCAP,    0x178bfbff,
@@ -163,6 +163,19 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
     int r = mm_copy_to(mm, sp, frame, nptr * 8);
     free(frame);
     return r < 0 ? 0 : sp;
+}
+
+uintptr_t exec_build_init_stack(const elf_load_result_t *elf, const char *path) {
+    strvec_t argv = { 0 }, envp = { 0 };
+    size_t total = 0;
+    const char *name = strrchr(path, '/');
+    name = name ? name + 1 : path;
+    uintptr_t sp = 0;
+    if (sv_push(&argv, name, strlen(name), &total) == 0)
+        sp = build_stack(elf->mm, elf->stack_top, &argv, &envp, elf, path, 0, 0);
+    sv_free(&argv);
+    sv_free(&envp);
+    return sp;
 }
 
 static int exec_allowed(const vfs_stat_t *st, uint32_t uid, uint32_t gid)
@@ -287,7 +300,7 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
         return -ETXTBSY;
     }
 
-    uintptr_t new_rsp = build_stack(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn, t);
+    uintptr_t new_rsp = build_stack(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn, t->uid, t->gid);
     sv_free(&argv);
     if (!new_rsp) {
         mm_put(elf.mm);
