@@ -4,14 +4,18 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <sys/socket.h>
 
 #define UNIX_PATH_MAX 108
 
 struct sockaddr_un {
-    uint16_t sun_family;
-    char     sun_path[UNIX_PATH_MAX];
+    sa_family_t sun_family;
+    char        sun_path[UNIX_PATH_MAX];
 };
+
+#define SUN_LEN(ptr) (offsetof(struct sockaddr_un, sun_path) + strlen((ptr)->sun_path))
 
 #ifdef __cplusplus
 }

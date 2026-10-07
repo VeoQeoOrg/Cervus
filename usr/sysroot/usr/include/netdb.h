@@ -7,6 +7,8 @@ extern "C" {
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+#define NETDB_INTERNAL -1
+#define NETDB_SUCCESS  0
 #define HOST_NOT_FOUND 1
 #define TRY_AGAIN      2
 #define NO_RECOVERY    3
@@ -95,6 +97,8 @@ int  getnameinfo(const struct sockaddr *sa, socklen_t salen,
 
 int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen,
                     struct hostent **result, int *h_errnop);
+int gethostbyaddr_r(const void *addr, socklen_t len, int type, struct hostent *ret,
+                    char *buf, size_t buflen, struct hostent **result, int *h_errnop);
 
 #ifdef __cplusplus
 }

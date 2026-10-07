@@ -65,16 +65,12 @@ struct hostent *gethostbyname(const char *name)
     return &g_he;
 }
 
-int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen,
-                    struct hostent **result, int *h_errnop)
+static int fill_hostent_r(struct hostent *ret, char *buf, size_t buflen, in_addr_t a,
+                          const char *name, struct hostent **result, int *h_errnop)
 {
-    *result = NULL;
-    if (!name) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
     size_t nl = strlen(name) + 1;
-    size_t need = 3 * sizeof(char *) + 8 + nl;
-    if (buflen < need) return ERANGE;
-    in_addr_t a = resolve_host(name);
-    if (a == (in_addr_t)-1) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    size_t need = 7 + 3 * sizeof(char *) + 4 + nl;
+    if (buflen < need) { if (h_errnop) *h_errnop = NETDB_INTERNAL; return ERANGE; }
     char **list = (char **)(void *)(((uintptr_t)buf + 7) & ~(uintptr_t)7);
     char *addr = (char *)(list + 3);
     char *nm = addr + 4;
@@ -91,6 +87,28 @@ int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buf
     *result = ret;
     if (h_errnop) *h_errnop = 0;
     return 0;
+}
+
+int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen,
+                    struct hostent **result, int *h_errnop)
+{
+    *result = NULL;
+    if (!name) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    in_addr_t a = resolve_host(name);
+    if (a == (in_addr_t)-1) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    return fill_hostent_r(ret, buf, buflen, a, name, result, h_errnop);
+}
+
+int gethostbyaddr_r(const void *addr, socklen_t len, int type, struct hostent *ret,
+                    char *buf, size_t buflen, struct hostent **result, int *h_errnop)
+{
+    *result = NULL;
+    if (!addr || len != 4 || type != AF_INET) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
+    in_addr_t a;
+    memcpy(&a, addr, 4);
+    char nm[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, &a, nm, sizeof nm)) { if (h_errnop) *h_errnop = NETDB_INTERNAL; return EINVAL; }
+    return fill_hostent_r(ret, buf, buflen, a, nm, result, h_errnop);
 }
 
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type)
