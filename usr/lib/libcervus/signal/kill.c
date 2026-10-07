@@ -16,3 +16,8 @@ int killpg(pid_t pgrp, int sig)
     if (pgrp <= 1) { __cervus_set_errno(EINVAL); return -1; }
     return kill(-pgrp, sig);
 }
+
+int tgkill(pid_t tgid, pid_t tid, int sig)
+{
+    return (int)__cervus_sys_ret((long)syscall3(SYS_TGKILL, (long)tgid, (long)tid, sig));
+}

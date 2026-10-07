@@ -60,6 +60,7 @@ pid_t   setsid(void);
 
 pid_t   getpid(void);
 pid_t   getppid(void);
+pid_t   gettid(void);
 uid_t   getuid(void);
 gid_t   getgid(void);
 #define _SC_ARG_MAX                              0

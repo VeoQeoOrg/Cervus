@@ -147,7 +147,9 @@ int pthread_kill(pthread_t th, int sig)
     if (sig < 0 || sig >= 64) return EINVAL;
     if (!sig) return 0;
     int saved = errno;
-    int r = kill(th->tid, sig);
+    int tid = th == &g_main ? th->tid : __atomic_load_n(&th->tid_word, __ATOMIC_ACQUIRE);
+    if (tid <= 0) return ESRCH;
+    int r = tgkill(getpid(), tid, sig);
     int e = errno;
     __cervus_set_errno(saved);
     return r < 0 ? e : 0;
@@ -170,9 +172,10 @@ int pthread_cancel(pthread_t th)
         }
         return 0;
     }
+    int tid = th == &g_main ? th->tid : __atomic_load_n(&th->tid_word, __ATOMIC_ACQUIRE);
     if (th->cancel_state == PTHREAD_CANCEL_ENABLE &&
-        __atomic_load_n(&th->done, __ATOMIC_ACQUIRE) != TH_DONE && th->tid > 0)
-        kill(th->tid, SIGCANCEL);
+        __atomic_load_n(&th->done, __ATOMIC_ACQUIRE) != TH_DONE && tid > 0)
+        tgkill(getpid(), tid, SIGCANCEL);
     return 0;
 }
 
@@ -255,7 +258,7 @@ __attribute__((noreturn)) static void thread_finish(struct __pthread *th, void *
 void __cervus_thread_entry(struct __pthread *th)
 {
     __cervus_tls_set(th->tls);
-    th->tid = (int)getpid();
+    th->tid = (int)gettid();
     thread_finish(th, th->fn(th->arg));
 }
 
@@ -358,7 +361,7 @@ pthread_t pthread_self(void)
     void **tcb = __cervus_tcb();
     struct __pthread *self = tcb[__CERVUS_TCB_SELF];
     if (!self) {
-        g_main.tid = (int)getpid();
+        g_main.tid = (int)gettid();
         self = &g_main;
         tcb[__CERVUS_TCB_SELF] = self;
     }
