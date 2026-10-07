@@ -498,6 +498,11 @@ static int ramfs_dir_mknod(vnode_t *dir, const char *name, uint32_t mode, uint64
         if (!child) return -ENOMEM;
         child->ops = &ramfs_special_ops;
         break;
+    case 0140000:
+        child = ramfs_alloc_vnode(VFS_NODE_SOCKET, mode & 07777);
+        if (!child) return -ENOMEM;
+        child->ops = &ramfs_special_ops;
+        break;
     case 0:
     case 0100000:
         child = ramfs_alloc_vnode(VFS_NODE_FILE, mode & 07777);

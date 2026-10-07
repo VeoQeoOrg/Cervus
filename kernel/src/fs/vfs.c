@@ -351,6 +351,11 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
         return ret;
     }
 
+    if (node->type == VFS_NODE_SOCKET) {
+        vnode_unref(node);
+        return -ENXIO;
+    }
+
     if (node->type == VFS_NODE_PIPE && !(node->rdev & VFS_PIPE_ENDPOINT)) {
         vnode_t *end = NULL;
         ret = fifo_open(node, flags, &end);

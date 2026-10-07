@@ -21,7 +21,7 @@ int64_t sys_mknod(uint64_t path_ptr, uint64_t mode, uint64_t dev)
     task_t *t = syscall_cur_task();
     if (!t) return -ESRCH;
     uint32_t type = (uint32_t)mode & 0170000u;
-    if (type != 0 && type != 0100000u && type != 0010000u) return -EPERM;
+    if (type != 0 && type != 0100000u && type != 0010000u && type != 0140000u) return -EPERM;
     char path[VFS_MAX_PATH];
     int rp = syscall_resolve_path_from_user(path, (const char *)path_ptr, sizeof(path));
     if (rp < 0) return rp;

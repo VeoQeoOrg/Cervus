@@ -307,6 +307,14 @@ void kmain(void) {
     vfs_set_mount_info("/proc", "procfs", "procfs");
     serial_writestring("procfs [OK]\n");
 
+    vnode_t *runroot = ramfs_create_root();
+    if (runroot) {
+        runroot->mode = 0755;
+        vfs_mount("/run", runroot);
+        vfs_set_mount_info("/run", "ramfs", "ramfs");
+        vnode_unref(runroot);
+    }
+
     vnode_t *shmroot = ramfs_create_root();
     if (shmroot) {
         shmroot->mode = 01777;

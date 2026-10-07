@@ -691,6 +691,7 @@ static vnode_type_t vtype_of_ft(uint8_t ft) {
         case EXT2_FT_CHRDEV:  return VFS_NODE_CHARDEV;
         case EXT2_FT_BLKDEV:  return VFS_NODE_BLKDEV;
         case EXT2_FT_FIFO:    return VFS_NODE_PIPE;
+        case EXT2_FT_SOCK:    return VFS_NODE_SOCKET;
         default:              return VFS_NODE_FILE;
     }
 }
@@ -757,6 +758,10 @@ static vnode_t *ext2_make_vnode(ext2_t *fs, uint32_t ino, ext2_inode_t *di) {
             break;
         case 0x1000:
             v->type = VFS_NODE_PIPE;
+            v->ops  = &ext2_file_ops;
+            break;
+        case 0xC000:
+            v->type = VFS_NODE_SOCKET;
             v->ops  = &ext2_file_ops;
             break;
         default:
@@ -1617,6 +1622,7 @@ static int ext2_dir_mknod_impl(vnode_t *dir, const char *name, uint32_t mode) {
     uint8_t ft;
     switch (mode & 0170000) {
     case 0010000: type = 0x1000;        ft = EXT2_FT_FIFO;     break;
+    case 0140000: type = 0xC000;        ft = EXT2_FT_SOCK;     break;
     case 0:
     case 0100000: type = EXT2_S_IFREG;  ft = EXT2_FT_REG_FILE; break;
     default:      return -EPERM;
