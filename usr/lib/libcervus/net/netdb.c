@@ -8,169 +8,19 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdint.h>
-#include <libcervus.h>
+#include <strings.h>
 
-static struct hostent  g_he;
-static char            g_he_name[256];
-static in_addr_t       g_he_addr;
-static char           *g_he_addrlist[2];
-static char           *g_he_aliases[1];
-
-static struct servent  g_se;
-static char            g_se_name[32];
-static char            g_se_proto[8];
-static char           *g_se_aliases[1];
-
-struct known_service { const char *name; int port; const char *proto; };
-
-static const struct known_service g_services[] = {
-    { "ftp-data",  20, "tcp" }, { "ftp",     21, "tcp" },
-    { "ssh",       22, "tcp" }, { "telnet",  23, "tcp" },
-    { "smtp",      25, "tcp" }, { "domain",  53, "tcp" },
-    { "domain",    53, "udp" }, { "http",    80, "tcp" },
-    { "pop3",     110, "tcp" }, { "ntp",    123, "udp" },
-    { "imap",     143, "tcp" }, { "https",  443, "tcp" },
-    { "submission", 587, "tcp" }, { "imaps", 993, "tcp" },
-    { "pop3s",    995, "tcp" }, { "git",   9418, "tcp" },
-    { NULL, 0, NULL }
-};
-
-static in_addr_t resolve_host(const char *name)
-{
-    in_addr_t a = inet_addr(name);
-    if (a != (in_addr_t)-1) return a;
-    a = inet_resolve(name);
-    if (a == (in_addr_t)-1 || a == 0) return (in_addr_t)-1;
-    return a;
-}
-
-struct hostent *gethostbyname(const char *name)
-{
-    if (!name) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
-    in_addr_t a = resolve_host(name);
-    if (a == (in_addr_t)-1) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
-
-    snprintf(g_he_name, sizeof g_he_name, "%s", name);
-    g_he_addr = a;
-    g_he_addrlist[0] = (char *)&g_he_addr;
-    g_he_addrlist[1] = NULL;
-    g_he_aliases[0]  = NULL;
-
-    g_he.h_name      = g_he_name;
-    g_he.h_aliases   = g_he_aliases;
-    g_he.h_addrtype  = AF_INET;
-    g_he.h_length    = 4;
-    g_he.h_addr_list = g_he_addrlist;
-    return &g_he;
-}
-
-static int fill_hostent_r(struct hostent *ret, char *buf, size_t buflen, in_addr_t a,
-                          const char *name, struct hostent **result, int *h_errnop)
-{
-    size_t nl = strlen(name) + 1;
-    size_t need = 7 + 3 * sizeof(char *) + 4 + nl;
-    if (buflen < need) { if (h_errnop) *h_errnop = NETDB_INTERNAL; return ERANGE; }
-    char **list = (char **)(void *)(((uintptr_t)buf + 7) & ~(uintptr_t)7);
-    char *addr = (char *)(list + 3);
-    char *nm = addr + 4;
-    memcpy(addr, &a, 4);
-    memcpy(nm, name, nl);
-    list[0] = addr;
-    list[1] = NULL;
-    list[2] = NULL;
-    ret->h_name = nm;
-    ret->h_aliases = &list[2];
-    ret->h_addrtype = AF_INET;
-    ret->h_length = 4;
-    ret->h_addr_list = list;
-    *result = ret;
-    if (h_errnop) *h_errnop = 0;
-    return 0;
-}
-
-int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen,
-                    struct hostent **result, int *h_errnop)
-{
-    *result = NULL;
-    if (!name) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
-    in_addr_t a = resolve_host(name);
-    if (a == (in_addr_t)-1) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
-    return fill_hostent_r(ret, buf, buflen, a, name, result, h_errnop);
-}
-
-int gethostbyaddr_r(const void *addr, socklen_t len, int type, struct hostent *ret,
-                    char *buf, size_t buflen, struct hostent **result, int *h_errnop)
-{
-    *result = NULL;
-    if (!addr || len != 4 || type != AF_INET) { if (h_errnop) *h_errnop = HOST_NOT_FOUND; return ENOENT; }
-    in_addr_t a;
-    memcpy(&a, addr, 4);
-    char nm[INET_ADDRSTRLEN];
-    if (!inet_ntop(AF_INET, &a, nm, sizeof nm)) { if (h_errnop) *h_errnop = NETDB_INTERNAL; return EINVAL; }
-    return fill_hostent_r(ret, buf, buflen, a, nm, result, h_errnop);
-}
-
-struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type)
-{
-    if (!addr || len != 4 || type != AF_INET) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
-    struct in_addr in;
-    memcpy(&in, addr, 4);
-    snprintf(g_he_name, sizeof g_he_name, "%s", inet_ntoa(in));
-    memcpy(&g_he_addr, addr, 4);
-    g_he_addrlist[0] = (char *)&g_he_addr;
-    g_he_addrlist[1] = NULL;
-    g_he_aliases[0]  = NULL;
-    g_he.h_name      = g_he_name;
-    g_he.h_aliases   = g_he_aliases;
-    g_he.h_addrtype  = AF_INET;
-    g_he.h_length    = 4;
-    g_he.h_addr_list = g_he_addrlist;
-    return &g_he;
-}
-
-static struct servent *fill_servent(const char *name, int port, const char *proto)
-{
-    snprintf(g_se_name, sizeof g_se_name, "%s", name);
-    snprintf(g_se_proto, sizeof g_se_proto, "%s", proto);
-    g_se_aliases[0] = NULL;
-    g_se.s_name    = g_se_name;
-    g_se.s_aliases = g_se_aliases;
-    g_se.s_port    = (int)htons((uint16_t)port);
-    g_se.s_proto   = g_se_proto;
-    return &g_se;
-}
-
-struct servent *getservbyname(const char *name, const char *proto)
-{
-    if (!name) return NULL;
-    for (int i = 0; g_services[i].name; i++) {
-        if (strcmp(g_services[i].name, name) != 0) continue;
-        if (proto && strcmp(g_services[i].proto, proto) != 0) continue;
-        return fill_servent(g_services[i].name, g_services[i].port, g_services[i].proto);
-    }
-    return NULL;
-}
-
-struct servent *getservbyport(int port, const char *proto)
-{
-    int p = ntohs((uint16_t)port);
-    for (int i = 0; g_services[i].name; i++) {
-        if (g_services[i].port != p) continue;
-        if (proto && strcmp(g_services[i].proto, proto) != 0) continue;
-        return fill_servent(g_services[i].name, g_services[i].port, g_services[i].proto);
-    }
-    return NULL;
-}
+#define ENT_ALIASES 16
 
 const char *hstrerror(int err)
 {
     switch (err) {
-        case 0:              return "no error";
-        case HOST_NOT_FOUND: return "unknown host";
-        case TRY_AGAIN:      return "name server is busy, try again";
-        case NO_RECOVERY:    return "name server error";
-        case NO_DATA:        return "no address for that name";
-        default:             return "resolver error";
+        case 0:              return "Resolver Error 0 (no error)";
+        case HOST_NOT_FOUND: return "Unknown host";
+        case TRY_AGAIN:      return "Host name lookup failure";
+        case NO_RECOVERY:    return "Unknown server error";
+        case NO_DATA:        return "No address associated with name";
+        default:             return "Unknown resolver error";
     }
 }
 
@@ -183,126 +33,208 @@ void herror(const char *s)
 const char *gai_strerror(int errcode)
 {
     switch (errcode) {
-        case 0:            return "no error";
-        case EAI_BADFLAGS: return "bad flags";
-        case EAI_NONAME:   return "name or service not known";
-        case EAI_AGAIN:    return "temporary name resolution failure";
-        case EAI_FAIL:     return "name resolution failed";
-        case EAI_FAMILY:   return "address family not supported";
-        case EAI_SOCKTYPE: return "socket type not supported";
-        case EAI_SERVICE:  return "service not supported for this socket type";
-        case EAI_MEMORY:   return "out of memory";
-        case EAI_SYSTEM:   return "system error";
-        case EAI_OVERFLOW: return "buffer overflow";
-        default:           return "unknown error";
+        case 0:              return "Success";
+        case EAI_BADFLAGS:   return "Bad value for ai_flags";
+        case EAI_NONAME:     return "Name or service not known";
+        case EAI_AGAIN:      return "Temporary failure in name resolution";
+        case EAI_FAIL:       return "Non-recoverable failure in name resolution";
+        case EAI_NODATA:     return "No address associated with hostname";
+        case EAI_FAMILY:     return "ai_family not supported";
+        case EAI_SOCKTYPE:   return "ai_socktype not supported";
+        case EAI_SERVICE:    return "Servname not supported for ai_socktype";
+        case EAI_ADDRFAMILY: return "Address family for hostname not supported";
+        case EAI_MEMORY:     return "Memory allocation failure";
+        case EAI_SYSTEM:     return "System error";
+        case EAI_OVERFLOW:   return "Argument buffer overflow";
+        default:             return "Unknown error";
     }
 }
 
-static int parse_service(const char *service, int flags, int *port_out)
+static int split_fields(char *line, char **out, int max)
 {
-    if (!service || !*service) { *port_out = 0; return 0; }
-    if (isdigit((unsigned char)service[0])) {
-        char *end = NULL;
-        long v = strtol(service, &end, 10);
-        if (end && *end) return EAI_SERVICE;
-        if (v < 0 || v > 65535) return EAI_SERVICE;
-        *port_out = (int)v;
-        return 0;
+    char *hash = strchr(line, '#');
+    if (hash) *hash = 0;
+    int n = 0;
+    char *p = line;
+    while (*p && n < max) {
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (!*p) break;
+        out[n++] = p;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        if (*p) *p++ = 0;
     }
-    if (flags & AI_NUMERICSERV) return EAI_SERVICE;
-    for (int i = 0; g_services[i].name; i++) {
-        if (!strcmp(g_services[i].name, service)) { *port_out = g_services[i].port; return 0; }
-    }
-    return EAI_SERVICE;
+    return n;
 }
 
-int getaddrinfo(const char *node, const char *service,
-                const struct addrinfo *hints, struct addrinfo **res)
+static FILE *g_hosts_f;
+static int   g_hosts_keep;
+
+void sethostent(int stayopen)
 {
-    if (!res) return EAI_FAIL;
-    *res = NULL;
-
-    int family   = hints ? hints->ai_family   : AF_UNSPEC;
-    int socktype = hints ? hints->ai_socktype : 0;
-    int protocol = hints ? hints->ai_protocol : 0;
-    int flags    = hints ? hints->ai_flags    : 0;
-
-    if (family != AF_UNSPEC && family != AF_INET) return EAI_FAMILY;
-    if (socktype != 0 && socktype != SOCK_STREAM && socktype != SOCK_DGRAM)
-        return EAI_SOCKTYPE;
-
-    int port = 0;
-    int rc = parse_service(service, flags, &port);
-    if (rc != 0) return rc;
-
-    in_addr_t addr;
-    if (!node) {
-        addr = (flags & AI_PASSIVE) ? htonl(INADDR_ANY) : htonl(INADDR_LOOPBACK);
-    } else {
-        if (flags & AI_NUMERICHOST) {
-            addr = inet_addr(node);
-            if (addr == (in_addr_t)-1) return EAI_NONAME;
-        } else {
-            addr = resolve_host(node);
-            if (addr == (in_addr_t)-1) return EAI_NONAME;
-        }
-    }
-
-    struct addrinfo *ai = calloc(1, sizeof *ai);
-    if (!ai) return EAI_MEMORY;
-    struct sockaddr_in *sa = calloc(1, sizeof *sa);
-    if (!sa) { free(ai); return EAI_MEMORY; }
-
-    sa->sin_family      = AF_INET;
-    sa->sin_port        = htons((uint16_t)port);
-    sa->sin_addr.s_addr = addr;
-
-    ai->ai_family   = AF_INET;
-    ai->ai_socktype = socktype ? socktype : SOCK_STREAM;
-    ai->ai_protocol = protocol;
-    ai->ai_addrlen  = (socklen_t)sizeof *sa;
-    ai->ai_addr     = (struct sockaddr *)sa;
-    ai->ai_next     = NULL;
-
-    if ((flags & AI_CANONNAME) && node) {
-        ai->ai_canonname = malloc(strlen(node) + 1);
-        if (ai->ai_canonname) strcpy(ai->ai_canonname, node);
-    }
-
-    *res = ai;
-    return 0;
+    if (g_hosts_f) rewind(g_hosts_f);
+    else g_hosts_f = fopen("/etc/hosts", "re");
+    g_hosts_keep = stayopen;
 }
 
-void freeaddrinfo(struct addrinfo *res)
+void endhostent(void)
 {
-    while (res) {
-        struct addrinfo *next = res->ai_next;
-        free(res->ai_addr);
-        free(res->ai_canonname);
-        free(res);
-        res = next;
-    }
+    if (g_hosts_f) fclose(g_hosts_f);
+    g_hosts_f = NULL;
+    g_hosts_keep = 0;
 }
 
-int getnameinfo(const struct sockaddr *sa, socklen_t salen,
-                char *host, socklen_t hostlen,
-                char *serv, socklen_t servlen, int flags)
+struct hostent *gethostent(void)
 {
-    (void)flags;
-    if (!sa || salen < (socklen_t)sizeof(struct sockaddr_in)) return EAI_FAMILY;
-    if (sa->sa_family != AF_INET) return EAI_FAMILY;
+    static struct hostent he;
+    static char line[512];
+    static char *aliases[ENT_ALIASES + 1];
+    static unsigned char addr[16];
+    static char *addrs[2];
+    if (!g_hosts_f && !(g_hosts_f = fopen("/etc/hosts", "re"))) return NULL;
+    while (fgets(line, sizeof line, g_hosts_f)) {
+        char *f[ENT_ALIASES + 2];
+        int n = split_fields(line, f, ENT_ALIASES + 2);
+        if (n < 2) continue;
+        int af;
+        if (inet_pton(AF_INET, f[0], addr) == 1) af = AF_INET;
+        else if (inet_pton(AF_INET6, f[0], addr) == 1) af = AF_INET6;
+        else continue;
+        int k = 0;
+        for (int i = 2; i < n && k < ENT_ALIASES; i++) aliases[k++] = f[i];
+        aliases[k] = NULL;
+        addrs[0] = (char *)addr;
+        addrs[1] = NULL;
+        he.h_name = f[1];
+        he.h_aliases = aliases;
+        he.h_addrtype = af;
+        he.h_length = af == AF_INET ? 4 : 16;
+        he.h_addr_list = addrs;
+        return &he;
+    }
+    return NULL;
+}
 
-    const struct sockaddr_in *in = (const struct sockaddr_in *)sa;
-    if (host && hostlen) {
-        const char *t = inet_ntoa(in->sin_addr);
-        if (strlen(t) + 1 > (size_t)hostlen) return EAI_OVERFLOW;
-        strcpy(host, t);
+static FILE *g_serv_f;
+static int   g_serv_keep;
+
+void setservent(int stayopen)
+{
+    if (g_serv_f) rewind(g_serv_f);
+    else g_serv_f = fopen("/etc/services", "re");
+    g_serv_keep = stayopen;
+}
+
+void endservent(void)
+{
+    if (g_serv_f) fclose(g_serv_f);
+    g_serv_f = NULL;
+    g_serv_keep = 0;
+}
+
+struct servent *getservent(void)
+{
+    static struct servent se;
+    static char line[512];
+    static char *aliases[ENT_ALIASES + 1];
+    if (!g_serv_f && !(g_serv_f = fopen("/etc/services", "re"))) return NULL;
+    while (fgets(line, sizeof line, g_serv_f)) {
+        char *f[ENT_ALIASES + 2];
+        int n = split_fields(line, f, ENT_ALIASES + 2);
+        if (n < 2) continue;
+        char *slash = strchr(f[1], '/');
+        if (!slash) continue;
+        *slash = 0;
+        char *end;
+        long port = strtol(f[1], &end, 10);
+        if (*end || port < 0 || port > 65535) continue;
+        int k = 0;
+        for (int i = 2; i < n && k < ENT_ALIASES; i++) aliases[k++] = f[i];
+        aliases[k] = NULL;
+        se.s_name = f[0];
+        se.s_aliases = aliases;
+        se.s_port = (int)htons((uint16_t)port);
+        se.s_proto = slash + 1;
+        return &se;
     }
-    if (serv && servlen) {
-        char tmp[16];
-        snprintf(tmp, sizeof tmp, "%u", (unsigned)ntohs(in->sin_port));
-        if (strlen(tmp) + 1 > (size_t)servlen) return EAI_OVERFLOW;
-        strcpy(serv, tmp);
+    return NULL;
+}
+
+static FILE *g_net_f;
+
+void setnetent(int stayopen)
+{
+    (void)stayopen;
+    if (g_net_f) rewind(g_net_f);
+    else g_net_f = fopen("/etc/networks", "re");
+}
+
+void endnetent(void)
+{
+    if (g_net_f) fclose(g_net_f);
+    g_net_f = NULL;
+}
+
+static uint32_t parse_net(const char *s)
+{
+    uint32_t v = 0;
+    int parts = 0;
+    while (*s && parts < 4) {
+        char *end;
+        unsigned long x = strtoul(s, &end, 0);
+        if (end == s || x > 255) return 0xFFFFFFFFu;
+        v = (v << 8) | (uint32_t)x;
+        parts++;
+        if (*end == '.') s = end + 1;
+        else if (*end == 0) break;
+        else return 0xFFFFFFFFu;
     }
-    return 0;
+    return v;
+}
+
+struct netent *getnetent(void)
+{
+    static struct netent ne;
+    static char line[512];
+    static char *aliases[ENT_ALIASES + 1];
+    if (!g_net_f && !(g_net_f = fopen("/etc/networks", "re"))) return NULL;
+    while (fgets(line, sizeof line, g_net_f)) {
+        char *f[ENT_ALIASES + 2];
+        int n = split_fields(line, f, ENT_ALIASES + 2);
+        if (n < 2) continue;
+        uint32_t net = parse_net(f[1]);
+        if (net == 0xFFFFFFFFu) continue;
+        int k = 0;
+        for (int i = 2; i < n && k < ENT_ALIASES; i++) aliases[k++] = f[i];
+        aliases[k] = NULL;
+        ne.n_name = f[0];
+        ne.n_aliases = aliases;
+        ne.n_addrtype = AF_INET;
+        ne.n_net = net;
+        return &ne;
+    }
+    return NULL;
+}
+
+struct netent *getnetbyname(const char *name)
+{
+    struct netent *e;
+    setnetent(0);
+    while ((e = getnetent())) {
+        if (!strcasecmp(e->n_name, name)) break;
+        int hit = 0;
+        for (char **a = e->n_aliases; *a; a++) if (!strcasecmp(*a, name)) { hit = 1; break; }
+        if (hit) break;
+    }
+    endnetent();
+    return e;
+}
+
+struct netent *getnetbyaddr(uint32_t net, int type)
+{
+    struct netent *e;
+    setnetent(0);
+    while ((e = getnetent()))
+        if (e->n_addrtype == type && e->n_net == net) break;
+    endnetent();
+    return e;
 }

@@ -78,6 +78,7 @@ int getpeername(int fd, struct sockaddr *addr, socklen_t *len);
 #define MSG_WAITALL   0x0100
 #define MSG_NOSIGNAL  0x4000
 #define MSG_MORE      0x8000
+#define MSG_FASTOPEN  0x20000000
 #define MSG_CMSG_CLOEXEC 0x40000000
 #define SOL_SOCKET 1
 

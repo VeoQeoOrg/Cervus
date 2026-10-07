@@ -10,6 +10,7 @@ extern "C" {
 #define TCP_KEEPINTVL    5
 #define TCP_KEEPCNT      6
 #define TCP_QUICKACK     12
+#define TCP_FASTOPEN_CONNECT 30
 
 #ifdef __cplusplus
 }

@@ -27,6 +27,7 @@ chmod 0600 "$RFS/etc/shadow"
 chmod 1777 "$RFS/tmp"
 chmod 0700 "$RFS/root"
 printf 'cervus'                          > "$RFS/etc/hostname"
+printf '127.0.0.1\tlocalhost\n127.0.1.1\tcervus\n::1\t\tlocalhost ip6-localhost ip6-loopback\nff02::1\t\tip6-allnodes\nff02::2\t\tip6-allrouters\n' > "$RFS/etc/hosts"
 printf '/bin/csh\n'                      > "$RFS/etc/shell"
 printf 'pool.ntp.org\n'                  > "$RFS/etc/ntp"
 

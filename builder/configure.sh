@@ -39,6 +39,10 @@ LIBM_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -I usr/lib/libcervus/math/internal
 -Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
 -Wno-unused-but-set-variable -Wno-implicit-fallthrough"
 
+LIBNET_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -fno-strict-aliasing \
+-Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
+-Wno-implicit-fallthrough -Wno-maybe-uninitialized -Wno-unterminated-string-initialization"
+
 APP_CFLAGS="-ffreestanding -nostdlib -static -fno-stack-protector -fno-pie -fno-pic \
 -msse -msse2 -mfpmath=sse -mno-avx -mno-avx2 -mno-red-zone -O0 -g \
 -nostdinc -isystem usr/sysroot/usr/include -Wl,-Ttext-segment=0x401000"
@@ -180,6 +184,16 @@ rule cc_lib_opt
   depfile = \$out.d
   deps = gcc
 
+rule cc_libnet
+  command = gcc $LIBNET_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(net)   \$in
+  depfile = \$out.d
+
+rule cc_libnet_pic
+  command = gcc $LIBNET_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  description = CC(net*)  \$in
+  depfile = \$out.d
+
 rule cc_libm
   command = gcc $LIBM_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
   description = CC(libm)  \$in
@@ -279,6 +293,7 @@ for src in $(find usr/lib/libcervus -name '*.c' -o -name '*.s' | sort); do
     case "$src" in
         *.s) rule=as_lib; picrule=as_lib ;;
         */math/*|*/complex/*|*/fenv/*) rule=cc_libm; picrule=cc_libm_pic ;;
+        */net/resolv/*) rule=cc_libnet; picrule=cc_libnet_pic ;;
         */image/*|*/gl/*|*/compress/inflate.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
             rule=cc_lib_opt; picrule=cc_lib_pic_opt ;;
         *) rule=cc_lib; picrule=cc_lib_pic ;;
