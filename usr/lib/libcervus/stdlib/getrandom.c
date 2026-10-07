@@ -13,7 +13,7 @@ ssize_t getrandom(void *buf, size_t len, unsigned int flags)
     while (got < len) {
         ssize_t r = read(fd, (char *)buf + got, len - got);
         if (r < 0) {
-            if (__cervus_errno == EINTR) continue;
+            if (errno == EINTR) continue;
             close(fd);
             return got ? (ssize_t)got : -1;
         }
@@ -27,7 +27,7 @@ ssize_t getrandom(void *buf, size_t len, unsigned int flags)
 int getentropy(void *buf, size_t len)
 {
     if (len > 256) {
-        __cervus_errno = EIO;
+        __cervus_set_errno(EIO);
         return -1;
     }
     return getrandom(buf, len, 0) == (ssize_t)len ? 0 : -1;

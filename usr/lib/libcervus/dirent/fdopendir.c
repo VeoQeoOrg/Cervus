@@ -9,7 +9,7 @@ DIR *fdopendir(int fd)
     struct stat st;
     if (fstat(fd, &st) < 0) return NULL;
     if (!S_ISDIR(st.st_mode)) {
-        __cervus_errno = ENOTDIR;
+        __cervus_set_errno(ENOTDIR);
         return NULL;
     }
     DIR *d = (DIR *)malloc(sizeof(DIR));

@@ -8,8 +8,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdint.h>
-
-int h_errno;
+#include <libcervus.h>
 
 static struct hostent  g_he;
 static char            g_he_name[256];
@@ -47,9 +46,9 @@ static in_addr_t resolve_host(const char *name)
 
 struct hostent *gethostbyname(const char *name)
 {
-    if (!name) { h_errno = HOST_NOT_FOUND; return NULL; }
+    if (!name) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
     in_addr_t a = resolve_host(name);
-    if (a == (in_addr_t)-1) { h_errno = HOST_NOT_FOUND; return NULL; }
+    if (a == (in_addr_t)-1) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
 
     snprintf(g_he_name, sizeof g_he_name, "%s", name);
     g_he_addr = a;
@@ -113,7 +112,7 @@ int gethostbyaddr_r(const void *addr, socklen_t len, int type, struct hostent *r
 
 struct hostent *gethostbyaddr(const void *addr, socklen_t len, int type)
 {
-    if (!addr || len != 4 || type != AF_INET) { h_errno = HOST_NOT_FOUND; return NULL; }
+    if (!addr || len != 4 || type != AF_INET) { __cervus_set_h_errno(HOST_NOT_FOUND); return NULL; }
     struct in_addr in;
     memcpy(&in, addr, 4);
     snprintf(g_he_name, sizeof g_he_name, "%s", inet_ntoa(in));

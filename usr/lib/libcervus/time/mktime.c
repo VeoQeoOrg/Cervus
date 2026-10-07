@@ -1,5 +1,6 @@
 #include <time.h>
 #include <errno.h>
+#include <libcervus.h>
 
 extern long long __cervus_days_from_civil(long long y, int m, int d);
 extern long timezone_offset(void);
@@ -17,7 +18,7 @@ static long long fields_to_seconds(const struct tm *tm)
 
 time_t timegm(struct tm *tm)
 {
-    if (!tm) { errno = EINVAL; return (time_t)-1; }
+    if (!tm) { __cervus_set_errno(EINVAL); return (time_t)-1; }
     time_t t = (time_t)fields_to_seconds(tm);
     struct tm norm;
     if (!gmtime_r(&t, &norm)) return (time_t)-1;
@@ -27,7 +28,7 @@ time_t timegm(struct tm *tm)
 
 time_t mktime(struct tm *tm)
 {
-    if (!tm) { errno = EINVAL; return (time_t)-1; }
+    if (!tm) { __cervus_set_errno(EINVAL); return (time_t)-1; }
     time_t t = (time_t)(fields_to_seconds(tm) - timezone_offset());
     struct tm norm;
     if (!localtime_r(&t, &norm)) return (time_t)-1;

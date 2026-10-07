@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <libcervus.h>
 
 #define REALPATH_MAX_LINKS 40
 
@@ -23,10 +24,10 @@ char *realpath(const char *path, char *resolved)
     size_t ol = 0;
     int links = 0;
 
-    if (!path) { errno = EINVAL; return NULL; }
-    if (!*path) { errno = ENOENT; return NULL; }
+    if (!path) { __cervus_set_errno(EINVAL); return NULL; }
+    if (!*path) { __cervus_set_errno(ENOENT); return NULL; }
     size_t pl = strlen(path);
-    if (pl >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
+    if (pl >= PATH_MAX) { __cervus_set_errno(ENAMETOOLONG); return NULL; }
     memcpy(rest, path, pl + 1);
 
     out[0] = '\0';
@@ -54,18 +55,18 @@ char *realpath(const char *path, char *resolved)
         }
 
         size_t parent = ol;
-        if (append_name(out, &ol, s, n) < 0) { errno = ENAMETOOLONG; return NULL; }
+        if (append_name(out, &ol, s, n) < 0) { __cervus_set_errno(ENAMETOOLONG); return NULL; }
 
         struct stat st;
         if (lstat(out, &st) < 0) return NULL;
 
         if (S_ISLNK(st.st_mode)) {
-            if (++links > REALPATH_MAX_LINKS) { errno = ELOOP; return NULL; }
+            if (++links > REALPATH_MAX_LINKS) { __cervus_set_errno(ELOOP); return NULL; }
             ssize_t tl = readlink(out, target, sizeof target - 1);
             if (tl < 0) return NULL;
             target[tl] = '\0';
             size_t rl = strlen(p);
-            if ((size_t)tl + rl + 1 >= PATH_MAX) { errno = ENAMETOOLONG; return NULL; }
+            if ((size_t)tl + rl + 1 >= PATH_MAX) { __cervus_set_errno(ENAMETOOLONG); return NULL; }
             memcpy(joined, target, (size_t)tl);
             memcpy(joined + tl, p, rl + 1);
             memcpy(rest, joined, (size_t)tl + rl + 1);
@@ -75,13 +76,13 @@ char *realpath(const char *path, char *resolved)
             continue;
         }
 
-        if (*p && !S_ISDIR(st.st_mode)) { errno = ENOTDIR; return NULL; }
+        if (*p && !S_ISDIR(st.st_mode)) { __cervus_set_errno(ENOTDIR); return NULL; }
     }
 
     if (ol == 0) { out[0] = '/'; out[1] = '\0'; ol = 1; }
     if (!resolved) {
         resolved = malloc(ol + 1);
-        if (!resolved) { errno = ENOMEM; return NULL; }
+        if (!resolved) { __cervus_set_errno(ENOMEM); return NULL; }
     }
     memcpy(resolved, out, ol + 1);
     return resolved;

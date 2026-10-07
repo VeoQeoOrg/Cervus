@@ -5,7 +5,7 @@
 int fileno(FILE *s)
 {
     if (!s || s->has_io) {
-        __cervus_errno = EBADF;
+        __cervus_set_errno(EBADF);
         return -1;
     }
     return s->fd;

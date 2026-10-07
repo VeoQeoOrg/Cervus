@@ -68,7 +68,7 @@ __mblock_t *__cervus_heap_grow(size_t need)
         uintptr_t aligned = (addr + MB_ALIGN - 1) & ~(uintptr_t)(MB_ALIGN - 1);
         size_t lost = aligned - addr;
         if (lost >= chunk - MB_MIN_TOTAL - MB_HDR_SZ) {
-            __cervus_errno = ENOMEM;
+            __cervus_set_errno(ENOMEM);
             return NULL;
         }
 
@@ -90,7 +90,7 @@ __mblock_t *__cervus_heap_grow(size_t need)
     void *p = sbrk((intptr_t)chunk);
     if (p == (void *)-1) return NULL;
     if ((uintptr_t)p != (uintptr_t)__cervus_heap_end + MB_HDR_SZ) {
-        __cervus_errno = ENOMEM;
+        __cervus_set_errno(ENOMEM);
         return NULL;
     }
 

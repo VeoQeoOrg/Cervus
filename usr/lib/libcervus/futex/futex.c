@@ -1,12 +1,13 @@
 #include <sys/futex.h>
 #include <sys/syscall.h>
 #include <errno.h>
+#include <libcervus.h>
 
 int futex_wait(volatile uint32_t *addr, uint32_t expected, uint64_t timeout_ns)
 {
     long r = (long)syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)addr,
                             (uint64_t)expected, timeout_ns);
-    if (r < 0) { errno = (int)-r; return -1; }
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
     return 0;
 }
 
@@ -14,7 +15,7 @@ int futex_wake(volatile uint32_t *addr, int count)
 {
     long r = (long)syscall3(SYS_FUTEX_WAKE, (uint64_t)(uintptr_t)addr,
                             (uint64_t)count, 0);
-    if (r < 0) { errno = (int)-r; return -1; }
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
     return (int)r;
 }
 

@@ -12,7 +12,7 @@ int pipe(int fds[2])
 int pipe2(int fds[2], int flags)
 {
     if (flags & ~(O_CLOEXEC | O_NONBLOCK)) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     if (pipe(fds) < 0) return -1;
@@ -26,7 +26,7 @@ int pipe2(int fds[2], int flags)
 int dup3(int oldfd, int newfd, int flags)
 {
     if (oldfd == newfd || (flags & ~O_CLOEXEC)) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     int r = dup2(oldfd, newfd);

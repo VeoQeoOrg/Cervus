@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <libcervus.h>
 
 extern long __cervus_sys_ret(long r);
 
@@ -12,6 +13,6 @@ int kill(pid_t pid, int sig)
 
 int killpg(pid_t pgrp, int sig)
 {
-    if (pgrp <= 1) { errno = EINVAL; return -1; }
+    if (pgrp <= 1) { __cervus_set_errno(EINVAL); return -1; }
     return kill(-pgrp, sig);
 }

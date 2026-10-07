@@ -7,7 +7,7 @@
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
     if (!req || req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     uint64_t ns = (uint64_t)req->tv_sec * 1000000000ULL + (uint64_t)req->tv_nsec;
@@ -24,7 +24,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
             rem->tv_sec = (time_t)(left / 1000000000ULL);
             rem->tv_nsec = (long)(left % 1000000000ULL);
         }
-        __cervus_errno = (int)-r;
+        __cervus_set_errno((int)-r);
         return -1;
     }
     if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }

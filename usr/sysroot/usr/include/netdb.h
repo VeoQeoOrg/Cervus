@@ -39,7 +39,8 @@ extern "C" {
 #define NI_MAXHOST     1025
 #define NI_MAXSERV     32
 
-extern int h_errno;
+int *__h_errno_location(void) __attribute__((__const__));
+#define h_errno (*__h_errno_location())
 
 struct hostent {
     char  *h_name;

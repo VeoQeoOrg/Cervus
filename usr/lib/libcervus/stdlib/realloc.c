@@ -8,7 +8,7 @@ void *realloc(void *p, size_t n)
 {
     if (!p) return malloc(n);
     if (n == 0) { free(p); return NULL; }
-    if (n > ((size_t)-1) / 2) { __cervus_errno = ENOMEM; return NULL; }
+    if (n > ((size_t)-1) / 2) { __cervus_set_errno(ENOMEM); return NULL; }
 
     __cervus_lock(&__cervus_heap_lock);
 

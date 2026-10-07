@@ -9,6 +9,10 @@
 #define CERVUS_PATH_MAX 512
 
 extern int    __cervus_errno;
+int  *__errno_location(void);
+int  *__h_errno_location(void);
+void  __cervus_set_errno(int e);
+void  __cervus_set_h_errno(int e);
 extern int    __cervus_argc;
 extern char **__cervus_argv;
 
@@ -25,8 +29,16 @@ int    __cervus_tls_set(void *tp);
 void   __cervus_tls_free(void *tp);
 void   __cervus_tls_init(void);
 
-#define __CERVUS_TCB_SELF 2
-#define __CERVUS_TCB_KEYS 3
+#define __CERVUS_TCB_SELF   2
+#define __CERVUS_TCB_KEYS   3
+#define __CERVUS_TCB_ERRNO  4
+#define __CERVUS_TCB_HERRNO 5
+#define __CERVUS_TCB_ERRVAL 6
+#define __CERVUS_TCB_HERRVAL 7
+#define __CERVUS_TCB_SLOTS  8
+
+
+extern int __cervus_tls_live;
 
 static inline void **__cervus_tcb(void) {
     void **tp;

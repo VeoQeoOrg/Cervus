@@ -8,7 +8,7 @@ extern char **environ;
 
 int execvp(const char *file, char *const argv[])
 {
-    if (!file || !*file) { __cervus_errno = ENOENT; return -1; }
+    if (!file || !*file) { __cervus_set_errno(ENOENT); return -1; }
 
     int has_slash = 0;
     for (const char *p = file; *p; p++) if (*p == '/') { has_slash = 1; break; }
@@ -34,6 +34,6 @@ int execvp(const char *file, char *const argv[])
         p = colon;
         if (*p == ':') p++;
     }
-    __cervus_errno = ENOENT;
+    __cervus_set_errno(ENOENT);
     return -1;
 }

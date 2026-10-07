@@ -36,7 +36,7 @@ int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpat
 
 int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned flags)
 {
-    if (flags) { errno = EINVAL; return -1; }
+    if (flags) { __cervus_set_errno(EINVAL); return -1; }
     return renameat(olddirfd, oldpath, newdirfd, newpath);
 }
 
@@ -59,7 +59,7 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags)
 {
     __cervus_kstat_t k;
     long r = (long)syscall4(SYS_FSTATAT, dirfd, path, &k, flags);
-    if (r < 0 && r > -4096) { errno = (int)-r; return -1; }
+    if (r < 0 && r > -4096) { __cervus_set_errno((int)-r); return -1; }
     __cervus_stat_from_kernel(st, &k);
     return 0;
 }
@@ -82,7 +82,7 @@ int faccessat(int dirfd, const char *path, int mode, int flags)
     uid_t uid = (flags & AT_EACCESS) ? geteuid() : getuid();
     if (uid == 0) {
         if ((mode & X_OK) && !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) && st.st_type != 1) {
-            errno = EACCES;
+            __cervus_set_errno(EACCES);
             return -1;
         }
         return 0;
@@ -92,7 +92,7 @@ int faccessat(int dirfd, const char *path, int mode, int flags)
     else if (getgid() == st.st_gid) bits = (st.st_mode >> 3) & 7;
     else bits = st.st_mode & 7;
     if (((mode & R_OK) && !(bits & 4)) || ((mode & W_OK) && !(bits & 2)) || ((mode & X_OK) && !(bits & 1))) {
-        errno = EACCES;
+        __cervus_set_errno(EACCES);
         return -1;
     }
     return 0;

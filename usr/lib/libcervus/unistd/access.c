@@ -7,18 +7,18 @@
 
 int access(const char *path, int mode)
 {
-    if (!path) { __cervus_errno = EFAULT; return -1; }
+    if (!path) { __cervus_set_errno(EFAULT); return -1; }
 
     __cervus_kstat_t k;
     long r = __cervus_kstat(__CERVUS_KSTAT_PATH, (uint64_t)path, &k);
-    if (r < 0 && r > -4096) { __cervus_errno = (int)-r; return -1; }
+    if (r < 0 && r > -4096) { __cervus_set_errno((int)-r); return -1; }
     if (mode == F_OK) return 0;
 
     unsigned m = k.st_mode;
     if (((mode & R_OK) && !(m & (S_IRUSR | S_IRGRP | S_IROTH))) ||
         ((mode & W_OK) && !(m & (S_IWUSR | S_IWGRP | S_IWOTH))) ||
         ((mode & X_OK) && !(m & (S_IXUSR | S_IXGRP | S_IXOTH)))) {
-        __cervus_errno = EACCES;
+        __cervus_set_errno(EACCES);
         return -1;
     }
     return 0;

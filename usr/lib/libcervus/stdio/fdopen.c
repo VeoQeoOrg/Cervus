@@ -9,7 +9,7 @@ FILE *fdopen(int fd, const char *mode)
 {
     (void)mode;
     FILE *f = (FILE *)malloc(sizeof(FILE));
-    if (!f) { __cervus_errno = ENOMEM; return NULL; }
+    if (!f) { __cervus_set_errno(ENOMEM); return NULL; }
     memset(f, 0, sizeof(*f));
     f->fd    = fd;
     f->flags = 0;

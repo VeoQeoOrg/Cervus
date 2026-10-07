@@ -27,7 +27,7 @@ void vwarnx(const char *fmt, va_list ap) {
 }
 
 void vwarn(const char *fmt, va_list ap) {
-    int e = __cervus_errno;
+    int e = errno;
     emit_prefix();
     if (fmt) {
         vfprintf(stderr, fmt, ap);

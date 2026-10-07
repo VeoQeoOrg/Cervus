@@ -6,7 +6,7 @@
 
 int tcsetattr(int fd, int optional_actions, const struct termios *t)
 {
-    if (!t) { __cervus_errno = EINVAL; return -1; }
+    if (!t) { __cervus_set_errno(EINVAL); return -1; }
     unsigned long req;
     switch (optional_actions) {
         case TCSADRAIN: req = TCSETSW; break;

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <libcervus.h>
 
 static ENTRY *g_tab;
 static size_t g_mask, g_used;
@@ -35,16 +36,16 @@ void hdestroy(void)
 
 ENTRY *hsearch(ENTRY item, ACTION action)
 {
-    if (!g_tab) { errno = ESRCH; return NULL; }
+    if (!g_tab) { __cervus_set_errno(ESRCH); return NULL; }
     for (size_t i = hash_of(item.key) & g_mask, k = 0; k <= g_mask; i = (i + 1) & g_mask, k++) {
         if (!g_tab[i].key) {
-            if (action == FIND || g_used + 1 > g_mask) { errno = action == FIND ? ESRCH : ENOMEM; return NULL; }
+            if (action == FIND || g_used + 1 > g_mask) { __cervus_set_errno(action == FIND ? ESRCH : ENOMEM); return NULL; }
             g_tab[i] = item;
             g_used++;
             return &g_tab[i];
         }
         if (!strcmp(g_tab[i].key, item.key)) return &g_tab[i];
     }
-    errno = ENOMEM;
+    __cervus_set_errno(ENOMEM);
     return NULL;
 }

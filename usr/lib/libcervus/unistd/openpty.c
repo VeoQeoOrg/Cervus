@@ -69,7 +69,7 @@ char *ptsname(int fd)
 {
     static char name[32];
     int e = ptsname_r(fd, name, sizeof name);
-    if (e) { errno = e; return NULL; }
+    if (e) { __cervus_set_errno(e); return NULL; }
     return name;
 }
 

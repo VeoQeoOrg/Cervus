@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <libcervus.h>
 
 int flock(int fd, int operation)
 {
@@ -16,12 +17,12 @@ int flock(int fd, int operation)
         case LOCK_SH: fl.l_type = F_RDLCK; break;
         case LOCK_EX: fl.l_type = F_WRLCK; break;
         case LOCK_UN: fl.l_type = F_UNLCK; break;
-        default: errno = EINVAL; return -1;
+        default: __cervus_set_errno(EINVAL); return -1;
     }
 
     int cmd = (operation & LOCK_NB) ? F_SETLK : F_SETLKW;
     if (fcntl(fd, cmd, &fl) < 0) {
-        if (errno == EAGAIN) errno = EWOULDBLOCK;
+        if (errno == EAGAIN) __cervus_set_errno(EWOULDBLOCK);
         return -1;
     }
     return 0;

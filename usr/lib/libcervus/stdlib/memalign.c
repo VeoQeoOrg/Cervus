@@ -10,11 +10,11 @@ void *memalign(size_t align, size_t n)
 {
     if (align <= MB_ALIGN) return malloc(n);
     if (align & (align - 1)) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     if (n > SIZE_MAX - align - 2 * MB_MIN_TOTAL) {
-        __cervus_errno = ENOMEM;
+        __cervus_set_errno(ENOMEM);
         return NULL;
     }
     void *p = malloc(n + align + MB_MIN_TOTAL);
@@ -44,11 +44,11 @@ void *memalign(size_t align, size_t n)
 int posix_memalign(void **out, size_t align, size_t n)
 {
     if (!out || align < sizeof(void *) || (align & (align - 1))) return EINVAL;
-    int saved = __cervus_errno;
+    int saved = errno;
     void *p = memalign(align, n ? n : 1);
     if (!p) {
-        int e = __cervus_errno;
-        __cervus_errno = saved;
+        int e = errno;
+        __cervus_set_errno(saved);
         return e ? e : ENOMEM;
     }
     *out = p;
@@ -58,7 +58,7 @@ int posix_memalign(void **out, size_t align, size_t n)
 void *aligned_alloc(size_t align, size_t n)
 {
     if (!align || (align & (align - 1))) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     return memalign(align, n);

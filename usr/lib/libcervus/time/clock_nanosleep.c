@@ -1,5 +1,6 @@
 #include <time.h>
 #include <errno.h>
+#include <libcervus.h>
 
 int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem)
 {
@@ -20,6 +21,6 @@ int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct
     int saved = errno;
     if (nanosleep(&rel, rem) == 0) return 0;
     int e = errno;
-    errno = saved;
+    __cervus_set_errno(saved);
     return e;
 }

@@ -26,7 +26,7 @@ static long conf_value(int name)
         case _PC_ALLOC_SIZE_MIN:    return 4096;
         case _PC_SYMLINK_MAX:       return 4096;
         case _PC_2_SYMLINKS:        return 1;
-        default:                    __cervus_errno = EINVAL; return -1;
+        default:                    __cervus_set_errno(EINVAL); return -1;
     }
 }
 

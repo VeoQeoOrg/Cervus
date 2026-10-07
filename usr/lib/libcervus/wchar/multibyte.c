@@ -1,5 +1,6 @@
 #include <wchar.h>
 #include <errno.h>
+#include <libcervus.h>
 
 static mbstate_t g_mbrtowc_state;
 static mbstate_t g_mbrlen_state;
@@ -21,7 +22,7 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps)
 {
     if (!ps) ps = &g_mbrtowc_state;
     if (!s) {
-        if (ps->__count) { ps->__count = 0; errno = EILSEQ; return (size_t)-1; }
+        if (ps->__count) { ps->__count = 0; __cervus_set_errno(EILSEQ); return (size_t)-1; }
         return 0;
     }
     if (n == 0) return (size_t)-2;
@@ -41,7 +42,7 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps)
         if (c >= 0xC2 && c <= 0xDF)      { need = 1; val = c & 0x1F; }
         else if (c >= 0xE0 && c <= 0xEF) { need = 2; val = c & 0x0F; }
         else if (c >= 0xF0 && c <= 0xF4) { need = 3; val = c & 0x07; }
-        else { errno = EILSEQ; return (size_t)-1; }
+        else { __cervus_set_errno(EILSEQ); return (size_t)-1; }
         total = need + 1;
         i = 1;
     }
@@ -50,7 +51,7 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps)
         unsigned c = p[i];
         if ((c & 0xC0) != 0x80) {
             ps->__count = 0;
-            errno = EILSEQ;
+            __cervus_set_errno(EILSEQ);
             return (size_t)-1;
         }
         val = (val << 6) | (c & 0x3F);
@@ -67,7 +68,7 @@ size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps)
     ps->__count = 0;
     ps->__value = 0;
     if (val < utf8_min(total) || val > 0x10FFFF || (val >= 0xD800 && val <= 0xDFFF)) {
-        errno = EILSEQ;
+        __cervus_set_errno(EILSEQ);
         return (size_t)-1;
     }
     if (pwc) *pwc = (wchar_t)val;
@@ -90,7 +91,7 @@ size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps)
         s[1] = (char)(0x80 | (c & 0x3F));
         return 2;
     }
-    if (c >= 0xD800 && c <= 0xDFFF) { errno = EILSEQ; return (size_t)-1; }
+    if (c >= 0xD800 && c <= 0xDFFF) { __cervus_set_errno(EILSEQ); return (size_t)-1; }
     if (c < 0x10000) {
         s[0] = (char)(0xE0 | (c >> 12));
         s[1] = (char)(0x80 | ((c >> 6) & 0x3F));
@@ -104,7 +105,7 @@ size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps)
         s[3] = (char)(0x80 | (c & 0x3F));
         return 4;
     }
-    errno = EILSEQ;
+    __cervus_set_errno(EILSEQ);
     return (size_t)-1;
 }
 

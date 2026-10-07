@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <libcervus.h>
 
 static int walk(char *path, size_t len, size_t cap, int level,
                 int (*fn)(const char *, const struct stat *, int, struct FTW *),
@@ -53,7 +54,7 @@ static int walk(char *path, size_t len, size_t cap, int level,
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
         size_t nl = strlen(de->d_name);
         size_t sep = len && path[len - 1] != '/' ? 1 : 0;
-        if (len + sep + nl + 1 > cap) { closedir(d); errno = ENAMETOOLONG; return -1; }
+        if (len + sep + nl + 1 > cap) { closedir(d); __cervus_set_errno(ENAMETOOLONG); return -1; }
         if (sep) path[len] = '/';
         memcpy(path + len + sep, de->d_name, nl + 1);
         r = walk(path, len + sep + nl, cap, level + 1, fn, flags, root_dev);
@@ -77,7 +78,7 @@ static int walk(char *path, size_t len, size_t cap, int level,
 int nftw(const char *dir, int (*fn)(const char *, const struct stat *, int, struct FTW *), int fd_limit, int flags)
 {
     (void)fd_limit;
-    if (!dir || !*dir) { errno = ENOENT; return -1; }
+    if (!dir || !*dir) { __cervus_set_errno(ENOENT); return -1; }
     size_t cap = PATH_MAX;
     char *path = malloc(cap);
     if (!path) return -1;
@@ -93,7 +94,7 @@ int nftw(const char *dir, int (*fn)(const char *, const struct stat *, int, stru
             if (off > 1) path[off++] = '/';
         }
     }
-    if (off + len + 1 > cap) { if (cwdfd >= 0) close(cwdfd); free(path); errno = ENAMETOOLONG; return -1; }
+    if (off + len + 1 > cap) { if (cwdfd >= 0) close(cwdfd); free(path); __cervus_set_errno(ENAMETOOLONG); return -1; }
     memcpy(path + off, dir, len + 1);
     struct stat rst;
     dev_t root_dev = stat(path, &rst) == 0 ? rst.st_dev : 0;
@@ -102,7 +103,7 @@ int nftw(const char *dir, int (*fn)(const char *, const struct stat *, int, stru
         int e = errno;
         fchdir(cwdfd);
         close(cwdfd);
-        errno = e;
+        __cervus_set_errno(e);
     }
     free(path);
     return r;

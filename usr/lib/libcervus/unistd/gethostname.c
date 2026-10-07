@@ -2,10 +2,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <libcervus.h>
 
 int gethostname(char *name, size_t len)
 {
-    if (!name || len == 0) { errno = EINVAL; return -1; }
+    if (!name || len == 0) { __cervus_set_errno(EINVAL); return -1; }
 
     char host[128] = {0};
     FILE *f = fopen("/etc/hostname", "r");
@@ -18,14 +19,14 @@ int gethostname(char *name, size_t len)
     }
     if (!host[0]) snprintf(host, sizeof host, "cervus");
 
-    if (strlen(host) + 1 > len) { errno = ENAMETOOLONG; return -1; }
+    if (strlen(host) + 1 > len) { __cervus_set_errno(ENAMETOOLONG); return -1; }
     strcpy(name, host);
     return 0;
 }
 
 int sethostname(const char *name, size_t len)
 {
-    if (!name) { errno = EINVAL; return -1; }
+    if (!name) { __cervus_set_errno(EINVAL); return -1; }
     FILE *f = fopen("/etc/hostname", "w");
     if (!f) return -1;
     fprintf(f, "%.*s\n", (int)len, name);

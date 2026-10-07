@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/random.h>
@@ -22,12 +23,12 @@ void __cervus_run_init(int argc, char **argv, char **envp, const __cervus_image_
     if (img) g_image = *img;
 
     uintptr_t guard;
-    int saved_errno = __cervus_errno;
+    int saved_errno = errno;
     if (getrandom(&guard, sizeof guard, 0) == (ssize_t)sizeof guard) {
         guard &= ~(uintptr_t)0xff;
         if (guard) __stack_chk_guard = guard;
     }
-    __cervus_errno = saved_errno;
+    __cervus_set_errno(saved_errno);
 
     if (argc > 0 && argv && argv[0]) {
         program_invocation_name = argv[0];

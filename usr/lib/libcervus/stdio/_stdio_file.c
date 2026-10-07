@@ -66,7 +66,7 @@ off_t __cervus_io_seek(struct __cervus_FILE *s, off_t off, int whence)
 {
     if (!s->has_io) return lseek(s->fd, off, whence);
     if (!s->io.seek) {
-        __cervus_errno = ESPIPE;
+        __cervus_set_errno(ESPIPE);
         return -1;
     }
     off_t pos = off;

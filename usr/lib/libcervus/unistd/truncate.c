@@ -5,7 +5,7 @@
 
 int truncate(const char *path, off_t length)
 {
-    if (!path) { __cervus_errno = EFAULT; return -1; }
+    if (!path) { __cervus_set_errno(EFAULT); return -1; }
     return (int)__cervus_sys_ret(syscall2(SYS_TRUNCATE, path, (uint64_t)length));
 }
 

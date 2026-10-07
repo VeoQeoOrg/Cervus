@@ -35,7 +35,7 @@ void *__cervus_tls_alloc(void)
     }
 
     size_t tsize = align_up((size_t)g_tls.memsz, (size_t)g_tls.align);
-    size_t total = tsize + sizeof(void *) * 4;
+    size_t total = tsize + sizeof(void *) * __CERVUS_TCB_SLOTS;
 
     size_t a = (size_t)g_tls.align;
     if (a < 16) a = 16;
@@ -52,12 +52,16 @@ void *__cervus_tls_alloc(void)
 
     *(void **)tp = tp;
     ((void **)tp)[1] = raw;
+    ((void **)tp)[__CERVUS_TCB_ERRNO] = &((void **)tp)[__CERVUS_TCB_ERRVAL];
+    ((void **)tp)[__CERVUS_TCB_HERRNO] = &((void **)tp)[__CERVUS_TCB_HERRVAL];
     return tp;
 }
 
 int __cervus_tls_set(void *tp)
 {
-    return (int)syscall1(SYS_SET_FSBASE, (uint64_t)(uintptr_t)tp);
+    int r = (int)syscall1(SYS_SET_FSBASE, (uint64_t)(uintptr_t)tp);
+    if (r == 0) __atomic_store_n(&__cervus_tls_live, 1, __ATOMIC_RELEASE);
+    return r;
 }
 
 void __cervus_tls_free(void *tp)

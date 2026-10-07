@@ -36,7 +36,7 @@ static ssize_t ms_write(void *c, const char *buf, size_t n)
 {
     memstream_t *m = c;
     if (grow(m, m->pos + n + 1) < 0) {
-        __cervus_errno = ENOMEM;
+        __cervus_set_errno(ENOMEM);
         return -1;
     }
     memcpy(m->data + m->pos, buf, n);
@@ -54,11 +54,11 @@ static int ms_seek(void *c, off64_t *off, int whence)
                  : whence == SEEK_END ? (off64_t)m->len : -1;
     off64_t np = base + *off;
     if (base < 0 || np < 0) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     if (grow(m, (size_t)np + 1) < 0) {
-        __cervus_errno = ENOMEM;
+        __cervus_set_errno(ENOMEM);
         return -1;
     }
     m->pos = (size_t)np;
@@ -78,7 +78,7 @@ static int ms_close(void *c)
 FILE *open_memstream(char **bufp, size_t *sizep)
 {
     if (!bufp || !sizep) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     memstream_t *m = calloc(1, sizeof *m);
@@ -87,7 +87,7 @@ FILE *open_memstream(char **bufp, size_t *sizep)
     m->sizep = sizep;
     if (grow(m, 1) < 0) {
         free(m);
-        __cervus_errno = ENOMEM;
+        __cervus_set_errno(ENOMEM);
         return NULL;
     }
     publish(m);

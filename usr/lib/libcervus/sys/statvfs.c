@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <libcervus.h>
 
 static void fill(struct statvfs *buf, const cervus_statvfs_t *cv)
 {
@@ -22,7 +23,7 @@ static void fill(struct statvfs *buf, const cervus_statvfs_t *cv)
 
 int statvfs(const char *path, struct statvfs *buf)
 {
-    if (!path || !buf) { errno = EFAULT; return -1; }
+    if (!path || !buf) { __cervus_set_errno(EFAULT); return -1; }
     cervus_statvfs_t cv;
     if (cervus_statvfs(path, &cv) != 0) return -1;
     fill(buf, &cv);
@@ -34,7 +35,7 @@ int fstatvfs(int fd, struct statvfs *buf)
     char link[64], target[1024];
     snprintf(link, sizeof link, "/proc/self/fd/%d", fd);
     long n = readlink(link, target, sizeof target - 1);
-    if (n <= 0) { errno = ENOSYS; return -1; }
+    if (n <= 0) { __cervus_set_errno(ENOSYS); return -1; }
     target[n] = '\0';
     return statvfs(target, buf);
 }

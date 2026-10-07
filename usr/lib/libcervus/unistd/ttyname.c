@@ -33,9 +33,9 @@ static int search(const char *dir, const struct stat *want, char *buf, size_t le
 
 int ttyname_r(int fd, char *buf, size_t len)
 {
-    if (!isatty(fd)) return __cervus_errno ? __cervus_errno : ENOTTY;
+    if (!isatty(fd)) return errno ? errno : ENOTTY;
     struct stat want;
-    if (fstat(fd, &want) < 0) return __cervus_errno;
+    if (fstat(fd, &want) < 0) return errno;
     int r = search("/dev/pts", &want, buf, len);
     if (r == 0) r = search("/dev", &want, buf, len);
     if (r < 0) return -r;
@@ -47,7 +47,7 @@ char *ttyname(int fd)
     static char name[128];
     int e = ttyname_r(fd, name, sizeof name);
     if (e) {
-        __cervus_errno = e;
+        __cervus_set_errno(e);
         return NULL;
     }
     return name;

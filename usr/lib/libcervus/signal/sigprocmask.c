@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <signal.h>
 #include <sys/syscall.h>
 #include <libcervus.h>
@@ -25,9 +26,9 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *old)
 {
-    int saved = __cervus_errno;
+    int saved = errno;
     if (sigprocmask(how, set, old) == 0) return 0;
-    int e = __cervus_errno;
-    __cervus_errno = saved;
+    int e = errno;
+    __cervus_set_errno(saved);
     return e;
 }

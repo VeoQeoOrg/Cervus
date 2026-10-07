@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <sys/resource.h>
+#include <libcervus.h>
 
 static long proc_field(const char *path, const char *key, long fallback)
 {
@@ -143,6 +144,6 @@ long sysconf(int name)
     case _SC_NL_TEXTMAX:            return INT_MAX;
     }
     if (name >= 0 && name <= _SC_SIGSTKSZ) return -1;
-    errno = EINVAL;
+    __cervus_set_errno(EINVAL);
     return -1;
 }

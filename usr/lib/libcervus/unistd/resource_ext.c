@@ -7,8 +7,8 @@
 int getpriority(int which, id_t who)
 {
     long r = syscall2(SYS_GETPRIORITY, (uint64_t)which, (uint64_t)who);
-    if (r < 0) { errno = (int)-r; return -1; }
-    errno = 0;
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
+    __cervus_set_errno(0);
     return 20 - (int)r;
 }
 

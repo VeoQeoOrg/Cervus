@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <libcervus.h>
 
 enum { SA_OPEN, SA_CLOSE, SA_DUP2, SA_CHDIR, SA_FCHDIR, SA_CLOSEFROM };
 
@@ -270,11 +271,11 @@ static int do_spawn(pid_t *pid, const char *file, const posix_spawn_file_actions
     if (n == (ssize_t)sizeof(err) && err) {
         int st;
         while (waitpid(c, &st, 0) < 0 && errno == EINTR) {}
-        errno = saved;
+        __cervus_set_errno(saved);
         return err;
     }
     if (pid) *pid = c;
-    errno = saved;
+    __cervus_set_errno(saved);
     return 0;
 }
 

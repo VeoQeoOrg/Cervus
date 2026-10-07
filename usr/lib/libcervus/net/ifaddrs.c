@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <libcervus.h>
 
 #define IF_SCAN_MAX 16
 
@@ -24,14 +25,14 @@ unsigned int if_nametoindex(const char *name)
         if (netif_get(i, &c) != 0) break;
         if (!strncmp(c.name, name, sizeof c.name)) return (unsigned)i + 1;
     }
-    errno = ENXIO;
+    __cervus_set_errno(ENXIO);
     return 0;
 }
 
 char *if_indextoname(unsigned int index, char *name)
 {
     net_ifcfg_t c;
-    if (index == 0 || netif_get((int)index - 1, &c) != 0) { errno = ENXIO; return NULL; }
+    if (index == 0 || netif_get((int)index - 1, &c) != 0) { __cervus_set_errno(ENXIO); return NULL; }
     strncpy(name, c.name, IF_NAMESIZE - 1);
     name[IF_NAMESIZE - 1] = 0;
     return name;
@@ -74,7 +75,7 @@ int getifaddrs(struct ifaddrs **ifap)
     net_ifcfg_t c;
     for (int i = 0; i < IF_SCAN_MAX && netif_get(i, &c) == 0; i++) {
         struct ifaddrs *a = calloc(1, sizeof *a + IF_NAMESIZE);
-        if (!a) { freeifaddrs(head); errno = ENOMEM; return -1; }
+        if (!a) { freeifaddrs(head); __cervus_set_errno(ENOMEM); return -1; }
         a->ifa_name = (char *)(a + 1);
         strncpy(a->ifa_name, c.name, IF_NAMESIZE - 1);
         a->ifa_flags = flags_of(&c);

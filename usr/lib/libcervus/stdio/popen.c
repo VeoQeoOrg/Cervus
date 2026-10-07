@@ -6,7 +6,7 @@
 
 FILE *popen(const char *cmd, const char *type)
 {
-    if (!cmd || !type) { __cervus_errno = EINVAL; return NULL; }
+    if (!cmd || !type) { __cervus_set_errno(EINVAL); return NULL; }
     int fds[2];
     if (pipe(fds) < 0) return NULL;
     pid_t pid = fork();

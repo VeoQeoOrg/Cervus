@@ -8,13 +8,13 @@
 
 ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream) {
     if (!lineptr || !n || !stream) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     if (*lineptr == NULL || *n == 0) {
         size_t cap = 128;
         char *buf = (char *)malloc(cap);
-        if (!buf) { __cervus_errno = ENOMEM; return -1; }
+        if (!buf) { __cervus_set_errno(ENOMEM); return -1; }
         *lineptr = buf;
         *n = cap;
     }
@@ -24,7 +24,7 @@ ssize_t getdelim(char **lineptr, size_t *n, int delim, FILE *stream) {
         if (pos + 1 >= *n) {
             size_t nc = *n * 2;
             char *nb = (char *)realloc(*lineptr, nc);
-            if (!nb) { __cervus_errno = ENOMEM; return -1; }
+            if (!nb) { __cervus_set_errno(ENOMEM); return -1; }
             *lineptr = nb;
             *n = nc;
         }

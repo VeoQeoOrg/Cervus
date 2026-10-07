@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
@@ -9,7 +10,7 @@ int isatty(int fd)
     struct winsize ws;
     long r = syscall3(SYS_IOCTL, fd, TIOCGWINSZ, &ws);
     if (r < 0) {
-        __cervus_errno = (int)-r;
+        __cervus_set_errno((int)-r);
         return 0;
     }
     return 1;

@@ -5,7 +5,7 @@
 
 int uname(struct utsname *buf)
 {
-    if (!buf) { __cervus_errno = EFAULT; return -1; }
+    if (!buf) { __cervus_set_errno(EFAULT); return -1; }
     strncpy(buf->sysname,  "Cervus", _UTSNAME_LENGTH - 1);
     strncpy(buf->nodename, "cervus", _UTSNAME_LENGTH - 1);
     strncpy(buf->release,  "0.0.2",  _UTSNAME_LENGTH - 1);

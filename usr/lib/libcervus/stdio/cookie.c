@@ -7,7 +7,7 @@
 FILE *fopencookie(void *cookie, const char *mode, cookie_io_functions_t funcs)
 {
     if (!mode) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     FILE *f = calloc(1, sizeof *f);
@@ -49,7 +49,7 @@ static ssize_t mem_write(void *c, const char *in, size_t n)
     memfile_t *m = c;
     if (m->append) m->pos = m->len;
     if (m->pos >= m->size) {
-        __cervus_errno = ENOSPC;
+        __cervus_set_errno(ENOSPC);
         return n ? -1 : 0;
     }
     size_t room = m->size - m->pos;
@@ -61,7 +61,7 @@ static ssize_t mem_write(void *c, const char *in, size_t n)
         if (m->len < m->size) m->buf[m->len] = '\0';
     }
     if (take < n) {
-        __cervus_errno = ENOSPC;
+        __cervus_set_errno(ENOSPC);
         return take ? (ssize_t)take : -1;
     }
     return (ssize_t)take;
@@ -73,12 +73,12 @@ static int mem_seek(void *c, off64_t *off, int whence)
     off64_t base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? (off64_t)m->pos
                  : whence == SEEK_END ? (off64_t)m->len : -1;
     if (base < 0) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     off64_t np = base + *off;
     if (np < 0 || np > (off64_t)m->size) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return -1;
     }
     m->pos = (size_t)np;
@@ -97,7 +97,7 @@ static int mem_close(void *c)
 FILE *fmemopen(void *buf, size_t size, const char *mode)
 {
     if (!mode || !size || (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a')) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     int plus = strchr(mode, '+') != NULL;

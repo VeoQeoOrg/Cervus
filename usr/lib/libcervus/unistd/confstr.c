@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <libcervus.h>
 
 size_t confstr(int name, char *buf, size_t len)
 {
@@ -11,7 +12,7 @@ size_t confstr(int name, char *buf, size_t len)
     case _CS_POSIX_V7_LP64_OFF64_LDFLAGS:
     case _CS_POSIX_V7_LP64_OFF64_LIBS:   v = ""; break;
     default:
-        errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return 0;
     }
     size_t n = strlen(v) + 1;

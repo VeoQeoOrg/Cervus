@@ -2,10 +2,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <libcervus.h>
 
 int getloadavg(double loadavg[], int nelem)
 {
-    if (nelem < 0) { errno = EINVAL; return -1; }
+    if (nelem < 0) { __cervus_set_errno(EINVAL); return -1; }
     if (nelem == 0) return 0;
     int fd = open("/proc/loadavg", O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;

@@ -7,7 +7,7 @@
 void *calloc(size_t nm, size_t sz)
 {
     size_t t = nm * sz;
-    if (nm && t / nm != sz) { __cervus_errno = ENOMEM; return NULL; }
+    if (nm && t / nm != sz) { __cervus_set_errno(ENOMEM); return NULL; }
     void *p = malloc(t);
     if (p) memset(p, 0, t);
     return p;

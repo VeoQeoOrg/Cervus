@@ -143,7 +143,7 @@ int pthread_kill(pthread_t th, int sig)
     int saved = errno;
     int r = kill(th->tid, sig);
     int e = errno;
-    errno = saved;
+    __cervus_set_errno(saved);
     return r < 0 ? e : 0;
 }
 

@@ -4,6 +4,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <libcervus.h>
 
 enum {
     E_UTF8, E_UTF16, E_UTF16LE, E_UTF16BE, E_UTF32, E_UTF32LE, E_UTF32BE,
@@ -153,13 +154,13 @@ static int parse(const char *name, int *ignore, int *translit)
 iconv_t iconv_open(const char *tocode, const char *fromcode)
 {
     cd_t *cd = calloc(1, sizeof *cd);
-    if (!cd) { errno = ENOMEM; return (iconv_t)-1; }
+    if (!cd) { __cervus_set_errno(ENOMEM); return (iconv_t)-1; }
     int dummy = 0;
     cd->to = parse(tocode, &cd->ignore, &cd->translit);
     cd->from = parse(fromcode, &dummy, &dummy);
     if (cd->to < 0 || cd->from < 0) {
         free(cd);
-        errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return (iconv_t)-1;
     }
     cd->in_big = 1;
@@ -344,7 +345,7 @@ static int encode(cd_t *cd, uint32_t v, unsigned char *o, size_t n, size_t *made
 size_t iconv(iconv_t h, char **inbuf, size_t *inleft, char **outbuf, size_t *outleft)
 {
     cd_t *cd = h;
-    if (!cd || h == (iconv_t)-1) { errno = EBADF; return (size_t)-1; }
+    if (!cd || h == (iconv_t)-1) { __cervus_set_errno(EBADF); return (size_t)-1; }
     if (!inbuf || !*inbuf) {
         cd->in_bom_seen = 0;
         cd->in_big = 1;
@@ -376,6 +377,6 @@ size_t iconv(iconv_t h, char **inbuf, size_t *inleft, char **outbuf, size_t *out
     *inbuf = (char *)in;
     *inleft = il;
     if (outbuf) { *outbuf = (char *)out; *outleft = ol; }
-    if (err) { errno = err; return (size_t)-1; }
+    if (err) { __cervus_set_errno(err); return (size_t)-1; }
     return irreversible;
 }

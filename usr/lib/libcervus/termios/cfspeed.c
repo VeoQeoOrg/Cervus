@@ -21,7 +21,7 @@ static int valid_speed(speed_t s)
 
 int cfsetispeed(struct termios *t, speed_t s)
 {
-    if (!t || !valid_speed(s)) { __cervus_errno = EINVAL; return -1; }
+    if (!t || !valid_speed(s)) { __cervus_set_errno(EINVAL); return -1; }
     t->c_cflag = (t->c_cflag & ~CBAUD) | ((s << CBAUD_SHIFT) & CBAUD);
     return 0;
 }

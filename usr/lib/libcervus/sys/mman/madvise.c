@@ -12,6 +12,6 @@ int posix_madvise(void *addr, size_t len, int advice)
 {
     int saved = errno;
     int r = madvise(addr, len, advice == 4 ? 0 : advice);
-    if (r < 0) { r = errno; errno = saved; return r; }
+    if (r < 0) { r = errno; __cervus_set_errno(saved); return r; }
     return 0;
 }

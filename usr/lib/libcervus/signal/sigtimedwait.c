@@ -9,7 +9,7 @@
 
 int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
 {
-    if (!set) { errno = EINVAL; return -1; }
+    if (!set) { __cervus_set_errno(EINVAL); return -1; }
     uint64_t mask = set->__bits[0] & ~((1ULL << SIGCANCEL) | (1ULL << SIGSETXID));
     int cp = __cervus_cp_enter();
     long r = syscall3(SYS_SIGTIMEDWAIT, (uint64_t)&mask, (uint64_t)info, (uint64_t)timeout);

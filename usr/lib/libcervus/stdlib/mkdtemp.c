@@ -10,10 +10,10 @@
 
 char *mkdtemp(char *tmpl)
 {
-    if (!tmpl) { __cervus_errno = EINVAL; return NULL; }
+    if (!tmpl) { __cervus_set_errno(EINVAL); return NULL; }
     size_t len = strlen(tmpl);
     if (len < 6 || strcmp(tmpl + len - 6, "XXXXXX") != 0) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return NULL;
     }
     static uint64_t seq = 0;
@@ -26,8 +26,8 @@ char *mkdtemp(char *tmpl)
             seed /= 36;
         }
         if (mkdir(tmpl, 0700) == 0) return tmpl;
-        if (__cervus_errno != EEXIST) return NULL;
+        if (errno != EEXIST) return NULL;
     }
-    __cervus_errno = EEXIST;
+    __cervus_set_errno(EEXIST);
     return NULL;
 }

@@ -6,10 +6,11 @@
 #include <sys/mman_shared.h>
 #include <unistd.h>
 #include <errno.h>
+#include <libcervus.h>
 
 static int ret_or_errno(long r)
 {
-    if (r < 0) { errno = (int)-r; return -1; }
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
     return (int)r;
 }
 
@@ -50,7 +51,7 @@ static void itimerspec_from_raw(struct itimerspec *v, const uint64_t raw[4])
 int timerfd_settime(int fd, int flags, const struct itimerspec *new_value,
                     struct itimerspec *old_value)
 {
-    if (!new_value) { errno = EFAULT; return -1; }
+    if (!new_value) { __cervus_set_errno(EFAULT); return -1; }
     uint64_t spec[4] = {
         (uint64_t)new_value->it_interval.tv_sec,
         (uint64_t)new_value->it_interval.tv_nsec,
@@ -61,17 +62,17 @@ int timerfd_settime(int fd, int flags, const struct itimerspec *new_value,
     long r = (long)syscall4(SYS_TIMERFD_SETTIME2, (uint64_t)fd, (uint64_t)flags,
                             (uint64_t)(uintptr_t)spec,
                             old_value ? (uint64_t)(uintptr_t)out : 0);
-    if (r < 0) { errno = (int)-r; return -1; }
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
     if (old_value) itimerspec_from_raw(old_value, out);
     return 0;
 }
 
 int timerfd_gettime(int fd, struct itimerspec *curr_value)
 {
-    if (!curr_value) { errno = EFAULT; return -1; }
+    if (!curr_value) { __cervus_set_errno(EFAULT); return -1; }
     uint64_t out[4] = { 0, 0, 0, 0 };
     long r = (long)syscall2(SYS_TIMERFD_GETTIME, (uint64_t)fd, (uint64_t)(uintptr_t)out);
-    if (r < 0) { errno = (int)-r; return -1; }
+    if (r < 0) { __cervus_set_errno((int)-r); return -1; }
     itimerspec_from_raw(curr_value, out);
     return 0;
 }

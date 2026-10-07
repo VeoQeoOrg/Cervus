@@ -8,7 +8,7 @@ __cervus_lock_t __cervus_heap_lock = CERVUS_LOCK_INIT;
 void *malloc(size_t n)
 {
     if (n == 0) n = 1;
-    if (n > ((size_t)-1) / 2) { __cervus_errno = ENOMEM; return NULL; }
+    if (n > ((size_t)-1) / 2) { __cervus_set_errno(ENOMEM); return NULL; }
     size_t need = __cervus_align_up(n + MB_HDR_SZ, MB_ALIGN);
     if (need < MB_MIN_TOTAL) need = MB_MIN_TOTAL;
 
@@ -21,7 +21,7 @@ void *malloc(size_t n)
         b = __cervus_heap_grow(need);
         if (!b || MB_SIZE(b) < need) {
             if (b) __cervus_bin_insert(b);
-            __cervus_errno = ENOMEM;
+            __cervus_set_errno(ENOMEM);
             __cervus_unlock(&__cervus_heap_lock);
             return NULL;
         }

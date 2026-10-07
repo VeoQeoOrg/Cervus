@@ -22,11 +22,11 @@ static int supported(const char *name)
 locale_t newlocale(int mask, const char *name, locale_t base)
 {
     if (!name || (mask & ~LC_ALL_MASK)) {
-        __cervus_errno = EINVAL;
+        __cervus_set_errno(EINVAL);
         return (locale_t)0;
     }
     if (!supported(name)) {
-        __cervus_errno = ENOENT;
+        __cervus_set_errno(ENOENT);
         return (locale_t)0;
     }
     if (base && base != LC_GLOBAL_LOCALE && base != &g_c_locale) {
