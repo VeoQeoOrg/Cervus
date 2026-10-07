@@ -24,19 +24,6 @@ vnode_t *net_sock_from_fd(task_t *t, int fd, vfs_file_t **out_file, int64_t *err
     return f->vnode;
 }
 
-static int parse_sun_path(uint64_t uaddr, uint64_t addrlen, char *path, int cap) {
-    if (!uaddr) return -EFAULT;
-    if (addrlen < 3) return -EINVAL;
-    size_t n = addrlen - 2;
-    if (n > 108) n = 108;
-    char tmp[108];
-    if (syscall_copy_from_user(tmp, (const char *)uaddr + 2, n) < 0) return -EFAULT;
-    int i = 0;
-    while (i < cap - 1 && (size_t)i < n && tmp[i]) { path[i] = tmp[i]; i++; }
-    path[i] = 0;
-    return i ? 0 : -EINVAL;
-}
-
 int64_t net_parse_addr(uint64_t uaddr, uint64_t addrlen, sock_addr_t *a) {
     memset(a, 0, sizeof(*a));
     if (!uaddr) return -EFAULT;
@@ -46,6 +33,18 @@ int64_t net_parse_addr(uint64_t uaddr, uint64_t addrlen, sock_addr_t *a) {
     size_t n = addrlen > sizeof sa ? sizeof sa : (size_t)addrlen;
     if (syscall_copy_from_user(sa, (const void *)uaddr, n) < 0) return -EFAULT;
     a->family = sa[0] | (sa[1] << 8);
+    if (a->family == AF_UNIX) {
+        size_t n = addrlen - 2;
+        if (n > UNIX_PATH_MAX) n = UNIX_PATH_MAX;
+        if (n && syscall_copy_from_user(a->upath, (const uint8_t *)uaddr + 2, n) < 0) return -EFAULT;
+        if (n && a->upath[0]) {
+            size_t l = 0;
+            while (l < n && a->upath[l]) l++;
+            n = l;
+        }
+        a->ulen = (uint32_t)n;
+        return 0;
+    }
     if (a->family == AF_INET) {
         if (addrlen < 16) return -EINVAL;
         a->port = rd16be(sa + 2);
@@ -61,17 +60,20 @@ int64_t net_parse_addr(uint64_t uaddr, uint64_t addrlen, sock_addr_t *a) {
 }
 
 int64_t net_put_addr(const sock_addr_t *a, uint64_t uaddr, uint32_t cap, uint32_t *outlen) {
-    uint8_t sa[28];
+    uint8_t sa[2 + UNIX_PATH_MAX + 1];
     memset(sa, 0, sizeof sa);
     uint32_t len;
-    if (a->family == AF_INET6) {
+    if (a->family == AF_UNIX) {
+        sa[0] = AF_UNIX;
+        uint32_t ul = a->ulen > UNIX_PATH_MAX ? UNIX_PATH_MAX : a->ulen;
+        memcpy(sa + 2, a->upath, ul);
+        len = 2 + ul;
+        if (ul && a->upath[0] && ul < UNIX_PATH_MAX) len++;
+    } else if (a->family == AF_INET6) {
         sa[0] = AF_INET6;
         wr16be(sa + 2, a->port);
         memcpy(sa + 8, a->ip6, 16);
         len = 28;
-    } else if (a->family == AF_UNIX) {
-        sa[0] = AF_UNIX;
-        len = 2;
     } else {
         sa[0] = AF_INET;
         wr16be(sa + 2, a->port);
@@ -97,16 +99,22 @@ static int64_t put_addr_user(const sock_addr_t *a, uint64_t uaddr, uint64_t ulen
     return 0;
 }
 
+static int is_stream(vnode_t *vn) {
+    if (unix_is_vnode(vn)) return unix_sock_type(vn) == SOCK_STREAM;
+    return sock_type(vn) == SOCK_STREAM;
+}
+
 void net_sigpipe(vnode_t *vn, int64_t r, int flags) {
     if (r != -EPIPE || (flags & MSG_NOSIGNAL)) return;
-    if (unix_is_vnode(vn) || sock_type(vn) == SOCK_STREAM) sched_signal_current(SIGPIPE);
+    if (unix_is_vnode(vn) ? unix_sock_type(vn) != SOCK_DGRAM : sock_type(vn) == SOCK_STREAM)
+        sched_signal_current(SIGPIPE);
 }
 
 int64_t net_send_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, const sock_addr_t *to) {
     if (len && !syscall_uptr_validate((void *)ubuf, len)) return -EFAULT;
     int is_unix = unix_is_vnode(vn);
-    int stream = is_unix || sock_type(vn) == SOCK_STREAM;
-    if (!stream && len > DGRAM_MAX) return -EMSGSIZE;
+    int stream = is_stream(vn);
+    if (!stream && !is_unix && len > DGRAM_MAX) return -EMSGSIZE;
 
     uint8_t stackbuf[SOCK_STACK_IO];
     size_t cap = 0;
@@ -119,7 +127,7 @@ int64_t net_send_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, const s
         size_t chunk = len - total;
         if (chunk > cap) chunk = cap;
         if (chunk && syscall_copy_from_user(kb, (const uint8_t *)ubuf + total, chunk) < 0) { r = -EFAULT; break; }
-        r = is_unix ? unix_write_nb(vn, kb, chunk, (flags & MSG_DONTWAIT) != 0)
+        r = is_unix ? unix_op_sendmsg(vn, kb, chunk, flags, to, NULL)
                     : sock_op_sendto(vn, kb, chunk, flags, to);
         if (r < 0) break;
         total += (size_t)r;
@@ -133,12 +141,12 @@ int64_t net_send_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, const s
 int64_t net_recv_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, sock_addr_t *from, int *oflags) {
     if (len && !syscall_uptr_validate_write((void *)ubuf, len)) return -EFAULT;
     int is_unix = unix_is_vnode(vn);
-    int stream = is_unix || sock_type(vn) == SOCK_STREAM;
+    int stream = is_stream(vn);
 
     uint8_t stackbuf[SOCK_STACK_IO];
     size_t cap = 0;
     size_t want = len;
-    if (!stream && want > DGRAM_MAX) want = DGRAM_MAX;
+    if (!stream && !is_unix && want > DGRAM_MAX) want = DGRAM_MAX;
     void *kb = syscall_bounce_get(want ? want : 1, &cap, stackbuf, sizeof stackbuf);
     if (!stream && cap < want) { syscall_bounce_put(kb, stackbuf); return -ENOBUFS; }
 
@@ -147,7 +155,7 @@ int64_t net_recv_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, sock_ad
     do {
         size_t chunk = len - total;
         if (chunk > cap) chunk = cap;
-        r = is_unix ? unix_read_nb(vn, kb, chunk, (flags & MSG_DONTWAIT) != 0)
+        r = is_unix ? unix_op_recvmsg(vn, kb, chunk, flags, from, NULL, oflags)
                     : sock_op_recvfrom(vn, kb, chunk, flags, from, oflags);
         if (r <= 0) break;
         size_t got = (size_t)r < chunk ? (size_t)r : chunk;
@@ -162,7 +170,11 @@ int64_t net_recv_user(vnode_t *vn, uint64_t ubuf, size_t len, int flags, sock_ad
 }
 
 static int sock_type_ok(int domain, int type, int proto) {
-    if (domain == AF_UNIX) return type == SOCK_STREAM ? 0 : -EPROTONOSUPPORT;
+    if (domain == AF_UNIX) {
+        if (type != SOCK_STREAM && type != SOCK_DGRAM && type != SOCK_SEQPACKET)
+            return (type > 0 && type <= 10) ? -ESOCKTNOSUPPORT : -EINVAL;
+        return proto == 0 ? 0 : -EPROTONOSUPPORT;
+    }
     if (domain != AF_INET && domain != AF_INET6) return -EAFNOSUPPORT;
     if (type == SOCK_STREAM) return (proto == 0 || proto == IPPROTO_TCP) ? 0 : -EPROTONOSUPPORT;
     if (type == SOCK_DGRAM)  return (proto == 0 || proto == IPPROTO_UDP) ? 0 : -EPROTONOSUPPORT;
@@ -184,10 +196,7 @@ int64_t sys_socket(uint64_t domain, uint64_t type, uint64_t proto) {
     vfs_file_t *f = vfs_file_alloc();
     if (!f) { vn->ops->unref(vn); return -ENOMEM; }
     f->vnode = vn; f->flags = O_RDWR; f->offset = 0; f->refcount = 1;
-    if (sflags & SOCK_NONBLOCK) {
-        f->flags |= O_NONBLOCK;
-        if (unix_is_vnode(vn)) unix_set_nonblock(vn, 1);
-    }
+    if (sflags & SOCK_NONBLOCK) f->flags |= O_NONBLOCK;
     int fd = fd_alloc(t->fd_table, f, 0);
     if (fd < 0) { vfs_file_free(f); return -EMFILE; }
     if (sflags & SOCK_CLOEXEC) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
@@ -200,15 +209,9 @@ int64_t sys_bind(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     int64_t r;
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
-    if (unix_is_vnode(vn)) {
-        char path[108];
-        r = parse_sun_path(uaddr, addrlen, path, sizeof path);
-        if (r == 0) r = unix_op_bind(vn, path);
-    } else {
-        sock_addr_t a;
-        r = net_parse_addr(uaddr, addrlen, &a);
-        if (r == 0) r = sock_op_bind(vn, &a);
-    }
+    sock_addr_t a;
+    r = net_parse_addr(uaddr, addrlen, &a);
+    if (r == 0) r = unix_is_vnode(vn) ? unix_op_bind(vn, &a) : sock_op_bind(vn, &a);
     fd_put(f);
     return r;
 }
@@ -220,15 +223,9 @@ int64_t sys_connect(uint64_t fd, uint64_t uaddr, uint64_t addrlen) {
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
     int nonblock = (f->flags & O_NONBLOCK) ? 1 : 0;
-    if (unix_is_vnode(vn)) {
-        char path[108];
-        r = parse_sun_path(uaddr, addrlen, path, sizeof path);
-        if (r == 0) r = unix_op_connect(vn, path);
-    } else {
-        sock_addr_t a;
-        r = net_parse_addr(uaddr, addrlen, &a);
-        if (r == 0) r = sock_op_connect(vn, &a, nonblock);
-    }
+    sock_addr_t a;
+    r = net_parse_addr(uaddr, addrlen, &a);
+    if (r == 0) r = unix_is_vnode(vn) ? unix_op_connect(vn, &a, nonblock) : sock_op_connect(vn, &a, nonblock);
     fd_put(f);
     return r;
 }
@@ -243,7 +240,7 @@ static int64_t do_sendto(uint64_t fd, uint64_t ubuf, uint64_t len, int flags, ui
 
     sock_addr_t to;
     const sock_addr_t *top = NULL;
-    if (uaddr && !unix_is_vnode(vn) && sock_type(vn) != SOCK_STREAM) {
+    if (uaddr && addrlen && (unix_is_vnode(vn) || sock_type(vn) != SOCK_STREAM)) {
         r = net_parse_addr(uaddr, addrlen, &to);
         if (r < 0) { fd_put(f); return r; }
         top = &to;
@@ -266,11 +263,11 @@ static int64_t do_recvfrom(uint64_t fd, uint64_t ubuf, uint64_t len, int flags, 
     memset(&from, 0, sizeof from);
     int oflags = 0;
     r = net_recv_user(vn, ubuf, (size_t)len, flags, &from, &oflags);
-    int stream = unix_is_vnode(vn) || sock_type(vn) == SOCK_STREAM;
+    int stream = !unix_is_vnode(vn) && sock_type(vn) == SOCK_STREAM;
     fd_put(f);
     if (r < 0) return r;
     if (uaddr && uaddrlen) {
-        if (stream) {
+        if (stream || (from.family == AF_UNIX && from.ulen == 0)) {
             int zero = 0;
             if (syscall_copy_to_user((void *)uaddrlen, &zero, sizeof zero) < 0) return -EFAULT;
         } else {
@@ -305,7 +302,7 @@ int64_t sys_listen(uint64_t fd, uint64_t backlog) {
     int64_t r;
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
-    r = unix_is_vnode(vn) ? unix_op_listen(vn) : sock_op_listen(vn, (int)backlog);
+    r = unix_is_vnode(vn) ? unix_op_listen(vn, (int)backlog) : sock_op_listen(vn, (int)backlog);
     fd_put(f);
     return r;
 }
@@ -317,7 +314,7 @@ int64_t sys_sock_shutdown(uint64_t fd, uint64_t how) {
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
     if (how > 2) r = -EINVAL;
-    else r = unix_is_vnode(vn) ? 0 : sock_op_shutdown(vn, (int)how);
+    else r = unix_is_vnode(vn) ? unix_op_shutdown(vn, (int)how) : sock_op_shutdown(vn, (int)how);
     fd_put(f);
     return r;
 }
@@ -331,45 +328,16 @@ int64_t sys_setsockopt(uint64_t fd, uint64_t level, uint64_t optname,
     int64_t r;
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
-    if (unix_is_vnode(vn)) { fd_put(f); return level == 1 ? 0 : -ENOPROTOOPT; }
-
     uint8_t kbuf[128];
     memset(kbuf, 0, sizeof kbuf);
     if (optlen && syscall_copy_from_user(kbuf, (const void *)uval, (size_t)optlen) < 0) {
         fd_put(f);
         return -EFAULT;
     }
-    r = sock_op_setopt(vn, (int)level, (int)optname, kbuf, (uint32_t)optlen);
+    r = unix_is_vnode(vn) ? unix_op_setopt(vn, (int)level, (int)optname, kbuf, (uint32_t)optlen)
+                          : sock_op_setopt(vn, (int)level, (int)optname, kbuf, (uint32_t)optlen);
     fd_put(f);
     return r;
-}
-
-static int64_t unix_getopt(vnode_t *vn, int level, int optname, uint8_t *kbuf, uint32_t *len) {
-    if (level != 1) return -ENOPROTOOPT;
-    if (optname == 17) {
-        struct { uint32_t pid, uid, gid; } cr = { 0, 0, 0 };
-        int64_t r = unix_peer_cred(vn, &cr.pid, &cr.uid, &cr.gid);
-        if (r < 0) return r;
-        if (*len < sizeof cr) return -EINVAL;
-        memcpy(kbuf, &cr, sizeof cr);
-        *len = (uint32_t)sizeof cr;
-        return 0;
-    }
-    if (*len < sizeof(int)) return -EINVAL;
-    int v;
-    switch (optname) {
-    case 3:  v = SOCK_STREAM; break;
-    case 4:  v = 0; break;
-    case 7:
-    case 8:  v = 212992; break;
-    case 30: v = unix_is_listening(vn); break;
-    case 38: v = 0; break;
-    case 39: v = AF_UNIX; break;
-    default: return -ENOPROTOOPT;
-    }
-    memcpy(kbuf, &v, sizeof v);
-    *len = sizeof(int);
-    return 0;
 }
 
 int64_t sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
@@ -390,7 +358,7 @@ int64_t sys_getsockopt(uint64_t fd, uint64_t level, uint64_t optname,
     uint8_t kbuf[128];
     memset(kbuf, 0, sizeof kbuf);
     uint32_t len = cap;
-    if (unix_is_vnode(vn)) r = unix_getopt(vn, (int)level, (int)optname, kbuf, &len);
+    if (unix_is_vnode(vn)) r = unix_op_getopt(vn, (int)level, (int)optname, kbuf, &len);
     else                   r = sock_op_getopt(vn, (int)level, (int)optname, kbuf, &len);
     fd_put(f);
     if (r < 0) return r;
@@ -413,28 +381,15 @@ static int64_t do_accept(uint64_t fd, uint64_t uaddr, uint64_t uaddrlen, int fla
     sock_addr_t peer;
     memset(&peer, 0, sizeof peer);
     vnode_t *cvn = NULL;
-    if (unix_is_vnode(lvn)) {
-        cvn = unix_op_accept(lvn, nonblock);
-        if (!cvn) {
-            if (!unix_is_listening(lvn)) r = -EINVAL;
-            else r = nonblock ? -EAGAIN : -EINTR;
-        } else {
-            r = 0;
-        }
-        peer.family = AF_UNIX;
-    } else {
-        r = sock_op_accept(lvn, nonblock, &cvn, &peer);
-    }
+    r = unix_is_vnode(lvn) ? unix_op_accept(lvn, nonblock, &cvn, &peer)
+                           : sock_op_accept(lvn, nonblock, &cvn, &peer);
     fd_put(lf);
     if (r < 0) return r;
 
     vfs_file_t *cf = vfs_file_alloc();
     if (!cf) { cvn->ops->unref(cvn); return -ENOMEM; }
     cf->vnode = cvn; cf->flags = O_RDWR; cf->offset = 0; cf->refcount = 1;
-    if (flags & SOCK_NONBLOCK) {
-        cf->flags |= O_NONBLOCK;
-        if (unix_is_vnode(cvn)) unix_set_nonblock(cvn, 1);
-    }
+    if (flags & SOCK_NONBLOCK) cf->flags |= O_NONBLOCK;
     int cfd = fd_alloc(t->fd_table, cf, 0);
     if (cfd < 0) { vfs_file_free(cf); return -EMFILE; }
     if (flags & SOCK_CLOEXEC) fd_set_flags(t->fd_table, cfd, FD_CLOEXEC);
@@ -509,21 +464,8 @@ static int64_t sock_name(uint64_t fd, uint64_t uaddr, uint64_t ulen, int peer) {
     int64_t r;
     vfs_file_t *f; vnode_t *vn = net_sock_from_fd(t, (int)fd, &f, &r);
     if (!vn) return r;
-    if (unix_is_vnode(vn)) {
-        uint8_t sa[112];
-        memset(sa, 0, sizeof sa);
-        sa[0] = AF_UNIX;
-        r = unix_get_name(vn, peer, (char *)sa + 2, 108);
-        fd_put(f);
-        if (r < 0) return r;
-        int len = sa[2] ? 2 + (int)strlen((char *)sa + 2) + 1 : 2;
-        int n = cap < len ? cap : len;
-        if (n && syscall_copy_to_user((void *)uaddr, sa, (size_t)n) < 0) return -EFAULT;
-        if (syscall_copy_to_user((void *)ulen, &len, sizeof len) < 0) return -EFAULT;
-        return 0;
-    }
     sock_addr_t a;
-    r = sock_get_name(vn, peer, &a);
+    r = unix_is_vnode(vn) ? unix_get_name(vn, peer, &a) : sock_get_name(vn, peer, &a);
     fd_put(f);
     if (r < 0) return r;
     uint32_t len = 0;

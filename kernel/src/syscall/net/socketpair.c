@@ -3,26 +3,28 @@
 #include "../../../include/fs/vfs.h"
 #include "../../../include/net/socket.h"
 
-extern int unix_make_pair(vnode_t **a_out, vnode_t **b_out);
-
 int64_t sys_socketpair(uint64_t domain, uint64_t type, uint64_t fds_ptr)
 {
-    if (domain != AF_UNIX) return -EPROTO;
+    if (domain == AF_INET || domain == AF_INET6) return -EOPNOTSUPP;
+    if (domain != AF_UNIX) return -EAFNOSUPPORT;
     int sflags = (int)(type & (SOCK_NONBLOCK | SOCK_CLOEXEC));
-    if ((type & ~(uint64_t)(SOCK_NONBLOCK | SOCK_CLOEXEC)) != SOCK_STREAM) return -EPROTO;
+    int stype = (int)(type & ~(uint64_t)(SOCK_NONBLOCK | SOCK_CLOEXEC));
 
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
-    if (!syscall_uptr_validate((void *)fds_ptr, sizeof(int) * 2)) return -EFAULT;
+    if (!syscall_uptr_validate_write((void *)fds_ptr, sizeof(int) * 2)) return -EFAULT;
 
     vnode_t *va = NULL, *vb = NULL;
-    if (unix_make_pair(&va, &vb) < 0) return -ENOMEM;
+    int r = unix_make_pair(stype, &va, &vb);
+    if (r < 0) return r;
 
     vfs_file_t *fa = vfs_file_alloc();
     vfs_file_t *fb = vfs_file_alloc();
     if (!fa || !fb) {
         if (fa) vfs_file_free(fa);
         if (fb) vfs_file_free(fb);
+        va->ops->unref(va);
+        vb->ops->unref(vb);
         return -ENOMEM;
     }
     fa->vnode = va;
@@ -32,8 +34,6 @@ int64_t sys_socketpair(uint64_t domain, uint64_t type, uint64_t fds_ptr)
     if (sflags & SOCK_NONBLOCK) {
         fa->flags |= O_NONBLOCK;
         fb->flags |= O_NONBLOCK;
-        unix_set_nonblock(va, 1);
-        unix_set_nonblock(vb, 1);
     }
 
     int fd_a = fd_alloc(t->fd_table, fa, 0);

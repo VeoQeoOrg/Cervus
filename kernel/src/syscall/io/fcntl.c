@@ -9,7 +9,6 @@
 #define F_GETFL 3
 #define F_SETFL 4
 
-extern void unix_set_nonblock(vnode_t *vn, int on);
 #define F_GETLK 5
 #define F_SETLK 6
 #define F_SETLKW 7
@@ -123,7 +122,6 @@ int64_t sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
         case F_GETFL: r = (int64_t)f->flags; break;
         case F_SETFL:
             f->flags = (f->flags & O_ACCMODE) | ((int)arg & ~O_ACCMODE);
-            unix_set_nonblock(f->vnode, (f->flags & O_NONBLOCK) ? 1 : 0);
             r = 0;
             break;
         case F_GETLK:

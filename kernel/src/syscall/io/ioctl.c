@@ -22,7 +22,6 @@
 #define O_ASYNC_FL    0x2000
 #define FD_CLOEXEC_FL 1
 
-extern void unix_set_nonblock(vnode_t *vn, int on);
 
 #define IOCTL_TERMIOS_SIZE 48
 
@@ -96,7 +95,6 @@ int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr)
         if (!arg_ptr) { r = -EFAULT; goto out; }
         if (*(int *)kbuf) f->flags |= O_NONBLOCK_FL;
         else f->flags &= ~O_NONBLOCK_FL;
-        unix_set_nonblock(f->vnode, (f->flags & O_NONBLOCK_FL) ? 1 : 0);
         r = 0;
         goto out;
     case FIOASYNC:

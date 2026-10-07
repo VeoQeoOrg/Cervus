@@ -12,6 +12,7 @@
 #define SOCK_STREAM  1
 #define SOCK_DGRAM   2
 #define SOCK_RAW     3
+#define SOCK_SEQPACKET 5
 #define SOCK_NONBLOCK 0x800
 #define SOCK_CLOEXEC  0x80000
 
@@ -27,12 +28,24 @@
 #define MSG_MORE         0x8000
 #define MSG_CMSG_CLOEXEC 0x40000000
 
+#define UNIX_PATH_MAX 108
+#define UNIX_MAX_FDS  253
+
 typedef struct {
     int      family;
     uint16_t port;
     uint32_t ip;
     uint8_t  ip6[16];
+    uint32_t ulen;
+    char     upath[UNIX_PATH_MAX];
 } sock_addr_t;
+
+typedef struct {
+    int         nfds;
+    vfs_file_t *fds[UNIX_MAX_FDS];
+    int         has_creds;
+    uint32_t    pid, uid, gid;
+} unix_anc_t;
 
 vnode_t *sock_new_vnode(int domain, int type, int proto);
 int      sock_is_vnode(const vnode_t *vn);
@@ -40,20 +53,26 @@ int      sock_family(const vnode_t *vn);
 int      sock_type(const vnode_t *vn);
 
 vnode_t *unix_new_vnode(int type);
+int      unix_make_pair(int type, vnode_t **a_out, vnode_t **b_out);
 int      unix_is_vnode(const vnode_t *vn);
+int      unix_sock_type(const vnode_t *vn);
 int      unix_peer_cred(const vnode_t *vn, uint32_t *pid, uint32_t *uid, uint32_t *gid);
-void     unix_set_nonblock(vnode_t *vn, int on);
 int      unix_describe(const vnode_t *vn, char *buf, size_t max);
-int64_t  unix_op_bind(vnode_t *vn, const char *path);
-int64_t  unix_op_connect(vnode_t *vn, const char *path);
-int64_t  unix_op_listen(vnode_t *vn);
-vnode_t *unix_op_accept(vnode_t *vn, int nonblock);
-int64_t     unix_send_fd(vnode_t *vn, vfs_file_t *file);
+int64_t  unix_op_bind(vnode_t *vn, const sock_addr_t *a);
+int64_t  unix_op_connect(vnode_t *vn, const sock_addr_t *a, int nonblock);
+int64_t  unix_op_listen(vnode_t *vn, int backlog);
+int64_t  unix_op_accept(vnode_t *vn, int nonblock, vnode_t **out, sock_addr_t *peer);
+int64_t  unix_op_shutdown(vnode_t *vn, int how);
+int64_t  unix_op_sendmsg(vnode_t *vn, const void *buf, size_t len, int flags,
+                         const sock_addr_t *to, unix_anc_t *anc);
+int64_t  unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
+                         sock_addr_t *from, unix_anc_t *anc, int *oflags);
+int64_t  unix_op_setopt(vnode_t *vn, int level, int optname, const void *val, uint32_t len);
+int64_t  unix_op_getopt(vnode_t *vn, int level, int optname, void *val, uint32_t *len);
+int64_t  unix_send_fd(vnode_t *vn, vfs_file_t *file);
 vfs_file_t *unix_recv_fd(vnode_t *vn, int nonblock);
-int      unix_get_name(const vnode_t *vn, int peer, char *path, size_t cap);
+int      unix_get_name(const vnode_t *vn, int peer, sock_addr_t *out);
 int      unix_is_listening(const vnode_t *vn);
-int64_t  unix_read_nb(vnode_t *vn, void *buf, size_t len, int nonblock);
-int64_t  unix_write_nb(vnode_t *vn, const void *buf, size_t len, int nonblock);
 
 int64_t  sock_op_bind(vnode_t *vn, const sock_addr_t *a);
 int64_t  sock_op_connect(vnode_t *vn, const sock_addr_t *a, int nonblock);
