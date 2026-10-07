@@ -5,6 +5,7 @@ extern signal_irq_return
 extern get_percpu
 
 PERCPU_NEED_RESCHED equ 40
+PERCPU_SPIN_DEPTH   equ 184
 
 common_stub:
     push rax
@@ -76,6 +77,8 @@ common_stub:
     mov rax, [rsp + 15*8]
     cmp rax, 32
     jb .kernel_check_cs
+    cmp dword [gs:PERCPU_SPIN_DEPTH], 0
+    jne .kernel_check_cs
     mov rbx, rsp
     and rsp, -16
     call get_percpu

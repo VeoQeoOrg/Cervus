@@ -70,6 +70,13 @@ percpu_t* get_percpu_mut(void);
 void init_percpu_regions(void);
 void set_percpu_base(percpu_t* base);
 void percpu_boot_base(void);
+
+static inline void *percpu_current_task(void) {
+    if (!get_percpu()) return 0;
+    void *t;
+    __asm__ volatile("mov %%gs:24, %0" : "=r"(t));
+    return t;
+}
 uint32_t smp_cpu_index(void);
 #define current_cpu_id() (get_percpu()->cpu_id)
 

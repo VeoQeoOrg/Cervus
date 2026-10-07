@@ -377,16 +377,6 @@ int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
     sv_free(&envp);
     vfs_close(vfile);
 
-    percpu_t *pc = get_percpu();
-    if (pc) {
-        pc->syscall_user_rsp = new_rsp;
-        pc->user_saved_rip   = elf.has_interp ? elf.interp_entry : elf.entry;
-        pc->user_saved_rbp = pc->user_saved_rbx = 0;
-        pc->user_saved_r12 = pc->user_saved_r13 = pc->user_saved_r14 = 0;
-        pc->user_saved_r15 = 0;
-        pc->user_saved_r11 = 0x200;
-    }
-
     if (old_mm) mm_put(old_mm);
     else if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP | TASK_FLAG_FORK)))
         vmm_free_pagemap(old_pagemap);

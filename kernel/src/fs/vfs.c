@@ -8,8 +8,7 @@
 #include <string.h>
 
 uint32_t vfs_current_uid(void) {
-    percpu_t *pc = get_percpu();
-    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    task_t *t = (task_t *)percpu_current_task();
     return t ? t->uid : 0;
 }
 

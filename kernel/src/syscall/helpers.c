@@ -8,8 +8,7 @@
 
 task_t *syscall_cur_task(void)
 {
-    percpu_t *pc = get_percpu();
-    return pc ? (task_t *)pc->current_task : NULL;
+    return (task_t *)percpu_current_task();
 }
 
 void syscall_save_user_regs(task_t *t)

@@ -597,7 +597,7 @@ static int procroot_lookup(vnode_t *dir, const char *name, vnode_t **out) {
         }
     }
     if (strcmp(name, "self") == 0) {
-        task_t *me = current_task[smp_cpu_index()];
+        task_t *me = (task_t *)percpu_current_task();
         if (me) return make_piddir(me->pid, out);
         return -ENOENT;
     }

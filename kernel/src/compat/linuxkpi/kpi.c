@@ -93,8 +93,7 @@ static bool can_sleep(void)
     uint64_t rf;
     __asm__ volatile("pushfq; pop %0" : "=r"(rf));
     if (!(rf & 0x200)) return false;
-    percpu_t *pc = get_percpu();
-    return pc && pc->current_task;
+    return percpu_current_task() != 0;
 }
 
 void kpi_udelay(unsigned long us)
@@ -169,8 +168,7 @@ void kpi_wait_on(wait_queue_head_t *w, u32 seen, uint64_t timeout_ns)
             __asm__ volatile("pause");
         return;
     }
-    percpu_t *pc = get_percpu();
-    task_t *t = (task_t *)pc->current_task;
+    task_t *t = (task_t *)percpu_current_task();
     struct kpi_waiter me = { t, NULL, 0 };
     uint64_t f = spinlock_acquire_irqsave(&w->lock);
     if (__atomic_load_n(&w->seq, __ATOMIC_ACQUIRE) != seen) {
@@ -398,7 +396,7 @@ static void wait_not_running(struct work_struct *w)
 {
     struct workqueue_struct *wq = w->wq;
     if (!wq) return;
-    if (wq->thread && can_sleep() && get_percpu()->current_task == (void *)wq->thread) return;
+    if (wq->thread && can_sleep() && percpu_current_task() == (void *)wq->thread) return;
     for (;;) {
         u32 seq = __atomic_load_n(&wq->idle.seq, __ATOMIC_ACQUIRE);
         if (!work_is_current(w)) return;
@@ -431,7 +429,7 @@ bool kpi_flush_work(struct work_struct *w)
 {
     struct workqueue_struct *wq = w->wq;
     if (!wq) return false;
-    if (wq->thread && can_sleep() && get_percpu()->current_task == (void *)wq->thread) return false;
+    if (wq->thread && can_sleep() && percpu_current_task() == (void *)wq->thread) return false;
     bool waited = false;
     for (;;) {
         u32 seq = __atomic_load_n(&wq->idle.seq, __ATOMIC_ACQUIRE);
@@ -456,7 +454,7 @@ bool kpi_flush_delayed_work(struct delayed_work *d)
 void kpi_flush_workqueue(struct workqueue_struct *wq)
 {
     if (!wq) return;
-    if (wq->thread && can_sleep() && get_percpu()->current_task == (void *)wq->thread) return;
+    if (wq->thread && can_sleep() && percpu_current_task() == (void *)wq->thread) return;
     for (;;) {
         u32 seq = __atomic_load_n(&wq->idle.seq, __ATOMIC_ACQUIRE);
         uint64_t f = spinlock_acquire_irqsave(&wq->lock);

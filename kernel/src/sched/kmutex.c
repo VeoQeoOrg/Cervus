@@ -10,8 +10,7 @@ typedef struct kmutex_waiter {
 } kmutex_waiter_t;
 
 static task_t *me(void) {
-    percpu_t *pc = get_percpu();
-    return pc ? (task_t *)pc->current_task : current_task[smp_cpu_index()];
+    return get_percpu() ? (task_t *)percpu_current_task() : current_task[smp_cpu_index()];
 }
 
 void kmutex_init(kmutex_t *m) {

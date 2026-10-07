@@ -405,15 +405,13 @@ void task_apply_policy(task_t *t)
 
 void sched_signal_current(int sig)
 {
-    percpu_t *pc = get_percpu();
-    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    task_t *t = (task_t *)percpu_current_task();
     if (t && t->is_userspace) signal_send(t, sig);
 }
 
 uint64_t sched_current_rlimit(int res)
 {
-    percpu_t *pc = get_percpu();
-    task_t *t = pc ? (task_t *)pc->current_task : NULL;
+    task_t *t = (task_t *)percpu_current_task();
     if (!t || !t->is_userspace || res < 0 || res >= RLIMIT_COUNT) return RLIM_INF_K;
     return t->rlim[res].cur;
 }
@@ -1005,8 +1003,7 @@ void task_kill(task_t* target) {
 }
 
 static int caller_ctty(void) {
-    percpu_t *pc = get_percpu();
-    task_t *me = pc ? (task_t *)pc->current_task : current_task[smp_cpu_index()];
+    task_t *me = get_percpu() ? (task_t *)percpu_current_task() : current_task[smp_cpu_index()];
     int vt = me ? me->ctty : 0;
     if (vt < 0 || vt >= VT_COUNT) vt = 0;
     return vt;
@@ -1135,6 +1132,13 @@ static task_t* sched_pick_next(uint32_t cpu) {
 
 void sched_reschedule(void) {
     asm volatile("cli");
+
+    if (get_percpu() && spin_depth() != 0) {
+        static volatile int warned;
+        if (!__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED))
+            serial_printf("[sched] BUG: scheduling while atomic (spin depth %d) from %p\n",
+                          spin_depth(), __builtin_return_address(0));
+    }
 
     process_deferred_free();
 

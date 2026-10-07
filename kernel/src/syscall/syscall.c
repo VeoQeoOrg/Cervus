@@ -610,6 +610,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     task_t *t = syscall_cur_task();
     if (t) {
         syscall_save_user_regs(t);
+        asm volatile("sti" ::: "memory");
         puzzle_on_syscall(t);
     }
     if (nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
