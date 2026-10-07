@@ -115,18 +115,3 @@ int memfd_create(const char *name, unsigned int flags)
                                        (uint64_t)(uintptr_t)name, flags, 0));
 }
 
-long sendmsg(int fd, const struct msghdr *msg, int flags)
-{
-    long r = (long)syscall3(SYS_SENDMSG, (uint64_t)fd,
-                            (uint64_t)(uintptr_t)msg, (uint64_t)flags);
-    if (r < 0) { errno = (int)-r; return -1; }
-    return r;
-}
-
-long recvmsg(int fd, struct msghdr *msg, int flags)
-{
-    long r = (long)syscall3(SYS_RECVMSG, (uint64_t)fd,
-                            (uint64_t)(uintptr_t)msg, (uint64_t)flags);
-    if (r < 0) { errno = (int)-r; return -1; }
-    return r;
-}

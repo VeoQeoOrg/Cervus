@@ -11,6 +11,7 @@
 
 #ifndef SSH_NO_MAIN
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #endif
 
@@ -660,6 +661,8 @@ int main(int argc, char **argv) {
         close(fd);
         return 1;
     }
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 
     char pass[128]; pass[0] = 0;
     int have_key = 0;

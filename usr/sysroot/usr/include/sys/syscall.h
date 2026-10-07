@@ -229,6 +229,9 @@ extern "C" {
 #define SYS_GETCPU          663
 #define SYS_SCHED_SETSCHED  664
 #define SYS_SCHED_GETSCHED  665
+#define SYS_SENDTO_FLAGS    666
+#define SYS_RECVFROM_FLAGS  667
+#define SYS_ACCEPT4         668
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

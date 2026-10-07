@@ -8,6 +8,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
@@ -744,6 +745,8 @@ int main(int argc, char **argv) {
         struct sockaddr_in cli; socklen_t cl=sizeof cli;
         int c=accept(ls,(struct sockaddr*)&cli,&cl);
         if (c<0) { usleep(10000); continue; }
+        int one=1;
+        setsockopt(c,IPPROTO_TCP,TCP_NODELAY,&one,sizeof one);
         char ipstr[32]; strncpy(ipstr, inet_ntoa(cli.sin_addr), sizeof ipstr - 1); ipstr[sizeof ipstr - 1] = 0;
         printf("sshd: connection from %s\n", ipstr); fflush(stdout);
         pid_t pid=fork();

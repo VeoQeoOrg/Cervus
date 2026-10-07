@@ -29,6 +29,8 @@ extern "C" {
 #define AI_NUMERICHOST 0x0004
 #define AI_NUMERICSERV 0x0400
 #define AI_ADDRCONFIG  0x0020
+#define AI_V4MAPPED    0x0008
+#define AI_ALL         0x0010
 
 #define NI_NUMERICHOST 0x01
 #define NI_NUMERICSERV 0x02
