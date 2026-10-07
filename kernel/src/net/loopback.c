@@ -63,7 +63,7 @@ int loopback_output(uint16_t ethertype, const uint8_t *pkt, size_t len)
     return 0;
 }
 
-int loopback_drain_one(void)
+static int lo_process_one(void)
 {
     uint64_t f = spinlock_acquire_irqsave(&g_lock);
     lo_pkt_t *e = g_head;
@@ -89,12 +89,23 @@ int loopback_drain_one(void)
     return 1;
 }
 
+int loopback_drain(int budget)
+{
+    if (__atomic_exchange_n(&g_draining, 1, __ATOMIC_ACQUIRE)) return 0;
+    int n = 0;
+    while (n < budget && lo_process_one()) n++;
+    __atomic_store_n(&g_draining, 0, __ATOMIC_RELEASE);
+    return n;
+}
+
+int loopback_drain_one(void)
+{
+    return loopback_drain(1);
+}
+
 void loopback_drain_all(void)
 {
-    if (__atomic_exchange_n(&g_draining, 1, __ATOMIC_ACQUIRE)) return;
-    int spins = 0;
-    while (loopback_drain_one() && ++spins < 256) { }
-    __atomic_store_n(&g_draining, 0, __ATOMIC_RELEASE);
+    loopback_drain(256);
 }
 
 void loopback_init(void)

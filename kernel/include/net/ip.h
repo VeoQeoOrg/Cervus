@@ -20,6 +20,7 @@ int      ip_send(netdev_t *dev, uint32_t dst, uint8_t proto, const void *payload
 uint16_t ip_checksum(const void *data, size_t len);
 uint32_t ip_source_for(netdev_t *dev, uint32_t dst);
 int      loopback_drain_one(void);
+int      loopback_drain(int budget);
 void     loopback_drain_all(void);
 int      loopback_output(uint16_t ethertype, const uint8_t *pkt, size_t len);
 void     loopback_init(void);

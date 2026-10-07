@@ -174,8 +174,7 @@ static void net_worker(void *arg) {
     int tick = 0;
     uint64_t next_tick = 0;
     for (;;) {
-        int did = 0, spins = 0;
-        while (loopback_drain_one() && ++spins < 8192) did = 1;
+        int did = loopback_drain(8192) > 0;
 
         uint64_t now = sched_now_ns();
         if (now >= next_tick) {
