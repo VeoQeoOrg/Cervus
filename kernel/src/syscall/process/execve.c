@@ -208,14 +208,25 @@ static int parse_shebang(const uint8_t *hdr, size_t n, char *interp, char *arg) 
     return interp[0] ? 0 : -ENOEXEC;
 }
 
+int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr);
+
 int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
+{
+    char kpath[EXECVE_MAX_PATH];
+    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
+    if (rp < 0) return rp;
+    return execve_path(kpath, argv_ptr, envp_ptr);
+}
+
+int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
 {
     task_t *t = syscall_cur_task();
     if (!t || !t->is_userspace) return -EPERM;
 
     char kpath[EXECVE_MAX_PATH];
-    int rp = syscall_resolve_path_from_user(kpath, (const char *)path_ptr, sizeof(kpath));
-    if (rp < 0) return rp;
+    strncpy(kpath, path, sizeof kpath - 1);
+    kpath[sizeof kpath - 1] = 0;
+    int rp;
     if (!kpath[0]) return -ENOENT;
 
     strvec_t argv, envp;

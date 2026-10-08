@@ -23,6 +23,8 @@ extern int64_t sys_lchown(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_utimes(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t rename_kernel_paths(const char *oldp, const char *newp);
 extern int64_t link_kernel_paths(const char *oldp, const char *newp, int follow);
+extern int64_t sys_execve(uint64_t, uint64_t, uint64_t);
+extern int64_t execve_path(const char *path, uint64_t argv, uint64_t envp);
 
 static int at_enter(task_t *t, int64_t dirfd, uint64_t upath) {
     if ((int)dirfd == AT_FDCWD_K) return 0;
@@ -162,4 +164,28 @@ int64_t sys_fchdir(uint64_t fd) {
     }
     fd_put(f);
     return r;
+}
+
+int64_t sys_execveat(uint64_t dirfd, uint64_t path, uint64_t argv, uint64_t envp, uint64_t flags) {
+    if (flags & ~(uint64_t)(AT_EMPTY_PATH_K | AT_SYMLINK_NOFOLLOW_K)) return -EINVAL;
+    if (flags & AT_EMPTY_PATH_K) {
+        char first = 1;
+        if (path && syscall_copy_from_user(&first, (const void *)path, 1) < 0) return -EFAULT;
+        if (!path || first == 0) {
+            task_t *t = syscall_cur_task();
+            if (!t || !t->fd_table) return -EBADF;
+            vfs_file_t *f = fd_get(t->fd_table, (int)dirfd);
+            if (!f) return -EBADF;
+            if (!f->path || !f->vnode || f->vnode->type == VFS_NODE_DIR) {
+                fd_put(f);
+                return -EACCES;
+            }
+            char kpath[VFS_MAX_PATH];
+            strncpy(kpath, f->path, sizeof kpath - 1);
+            kpath[sizeof kpath - 1] = 0;
+            fd_put(f);
+            return execve_path(kpath, argv, envp);
+        }
+    }
+    AT_CALL(sys_execve(path, argv, envp));
 }
