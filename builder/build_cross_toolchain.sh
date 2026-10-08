@@ -86,6 +86,8 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
     say "building gcc (all-gcc, $JOBS jobs)"
     make -j"$JOBS" all-gcc >build.log 2>&1
     make install-gcc >>build.log 2>&1
+    find "$BUILD/gcc/gcc" "$PREFIX/lib/gcc/$TARGET" -type d -name include-fixed -exec \
+        sh -c 'rm -f "$1"/stdio.h "$1"/stddef.h' _ {} \;
     say "building libgcc"
     make -j"$JOBS" all-target-libgcc >>build.log 2>&1
     make install-target-libgcc >>build.log 2>&1
@@ -94,8 +96,6 @@ if [ ! -x "$PREFIX/bin/$TARGET-gcc" ]; then
     make -j"$JOBS" all-target-libstdc++-v3 >>build.log 2>&1
     make install-target-libstdc++-v3 >>build.log 2>&1
 
-    find "$PREFIX/lib/gcc/$TARGET" -type d -name include-fixed -exec \
-        sh -c 'rm -f "$1"/stdio.h "$1"/stddef.h' _ {} \;
     say "gcc + libgcc installed"
 else
     say "gcc already built"
