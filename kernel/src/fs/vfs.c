@@ -13,12 +13,10 @@ uint32_t vfs_current_uid(void) {
 }
 
 static vfs_mount_t  g_mounts[VFS_MAX_MOUNTS];
-static vfs_file_t   g_open_files[VFS_MAX_OPEN_FILES];
 static bool         g_vfs_ready = false;
 
 void vfs_init(void) {
     memset(g_mounts,     0, sizeof(g_mounts));
-    memset(g_open_files, 0, sizeof(g_open_files));
     g_vfs_ready = true;
     serial_writestring("[VFS] initialized\n");
 }
@@ -265,14 +263,11 @@ int vfs_lookup_nofollow(const char *path, vnode_t **out) {
 }
 
 vfs_file_t *vfs_file_alloc(void) {
-    for (int i = 0; i < VFS_MAX_OPEN_FILES; i++) {
-        if (g_open_files[i].refcount == 0) {
-            memset(&g_open_files[i], 0, sizeof(vfs_file_t));
-            g_open_files[i].refcount = 1;
-            return &g_open_files[i];
-        }
-    }
-    return NULL;
+    vfs_file_t *file = kmalloc(sizeof(vfs_file_t));
+    if (!file) return NULL;
+    memset(file, 0, sizeof(vfs_file_t));
+    file->refcount = 1;
+    return file;
 }
 
 void vfs_file_free(vfs_file_t *file) {
@@ -283,8 +278,8 @@ void vfs_file_free(vfs_file_t *file) {
         if (file->vnode && (acc == O_WRONLY || acc == O_RDWR))
             __atomic_fetch_sub(&file->vnode->writers, 1, __ATOMIC_ACQ_REL);
         vnode_unref(file->vnode);
-        file->vnode = NULL;
-        if (file->path) { kfree(file->path); file->path = NULL; }
+        if (file->path) kfree(file->path);
+        kfree(file);
     }
 }
 

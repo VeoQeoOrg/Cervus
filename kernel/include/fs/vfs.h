@@ -9,7 +9,6 @@
 #define VFS_MAX_PATH        512
 #define VFS_MAX_NAME        256
 #define VFS_MAX_MOUNTS       16
-#define VFS_MAX_OPEN_FILES  512
 
 #define O_RDONLY    0x000
 #define O_WRONLY    0x001
