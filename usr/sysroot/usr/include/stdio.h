@@ -73,6 +73,8 @@ int vprintf(const char *fmt, va_list ap);
 int sscanf(const char *str, const char *fmt, ...);
 int vsscanf(const char *str, const char *fmt, va_list ap);
 int fscanf(FILE *stream, const char *fmt, ...);
+int vfscanf(FILE *__restrict stream, const char *__restrict fmt, va_list ap);
+int vscanf(const char *__restrict fmt, va_list ap);
 int scanf(const char *fmt, ...);
 
 FILE  *fopen(const char *path, const char *mode);

@@ -1,9 +1,13 @@
 #include <stdio.h>
 #include <stdarg.h>
+#include "../../musl/shgetc.h"
 
-int vfscanf(FILE *stream, const char *fmt, va_list ap)
+int vfscanf(FILE *restrict stream, const char *restrict fmt, va_list ap)
 {
-    char buf[1024];
-    if (!fgets(buf, (int)sizeof(buf), stream)) return EOF;
-    return vsscanf(buf, fmt, ap);
+	SHFILE f;
+	sh_fromfile(&f, stream);
+	flockfile(stream);
+	int r = __cervus_vscan(&f, fmt, ap);
+	funlockfile(stream);
+	return r;
 }
