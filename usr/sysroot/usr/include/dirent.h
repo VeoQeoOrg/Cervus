@@ -31,6 +31,9 @@ DIR           *opendir(const char *path);
 struct dirent *readdir(DIR *dirp);
 int            closedir(DIR *dirp);
 void           rewinddir(DIR *dirp);
+int            readdir_r(DIR *__restrict dirp, struct dirent *__restrict entry, struct dirent **__restrict result);
+long           telldir(DIR *dirp);
+void           seekdir(DIR *dirp, long loc);
 int            dirfd(DIR *dirp);
 DIR           *fdopendir(int fd);
 int            scandir(const char *path, struct dirent ***namelist,

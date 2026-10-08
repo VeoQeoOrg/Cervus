@@ -780,3 +780,107 @@ void __cervus_atfork_child(void)
 {
     for (int i = 0; i < g_atfork_n; i++) if (g_atfork[i].child) g_atfork[i].child();
 }
+
+static int64_t ns_left(int clock, const struct timespec *at)
+{
+    struct timespec now;
+    clock_gettime(clock, &now);
+    return (int64_t)(at->tv_sec - now.tv_sec) * 1000000000LL + (at->tv_nsec - now.tv_nsec);
+}
+
+static int mutex_acquire_until(pthread_mutex_t *m, int clock, const struct timespec *at)
+{
+    int zero = 0;
+    if (__atomic_compare_exchange_n(&m->state, &zero, 1, 0,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE))
+        return 0;
+    if (at->tv_nsec < 0 || at->tv_nsec >= 1000000000L) return EINVAL;
+    for (;;) {
+        int prev = __atomic_exchange_n(&m->state, 2, __ATOMIC_ACQUIRE);
+        if (prev == 0) return 0;
+        int64_t left = ns_left(clock, at);
+        if (left <= 0) return ETIMEDOUT;
+        syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)&m->state, 2, (uint64_t)left);
+    }
+}
+
+int pthread_mutex_clocklock(pthread_mutex_t *restrict m, int clock, const struct timespec *restrict at)
+{
+    if (!m || !at) return EINVAL;
+    void *self = m->type != PTHREAD_MUTEX_NORMAL ? (void *)pthread_self() : 0;
+    if (self && m->owner == self) {
+        if (m->type == PTHREAD_MUTEX_ERRORCHECK) return EDEADLK;
+        m->count++;
+        return 0;
+    }
+    int r = mutex_acquire_until(m, clock, at);
+    if (r) return r;
+    if (self) {
+        m->owner = self;
+        m->count = 1;
+    }
+    return 0;
+}
+
+int pthread_mutex_timedlock(pthread_mutex_t *restrict m, const struct timespec *restrict at)
+{
+    return pthread_mutex_clocklock(m, CLOCK_REALTIME, at);
+}
+
+int pthread_rwlock_timedrdlock(pthread_rwlock_t *restrict l, const struct timespec *restrict at)
+{
+    if (!l) return EINVAL;
+    int r = pthread_mutex_timedlock(&l->w, at);
+    if (r) return r;
+    __atomic_add_fetch(&l->readers, 1, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(&l->w);
+    return 0;
+}
+
+int pthread_rwlock_timedwrlock(pthread_rwlock_t *restrict l, const struct timespec *restrict at)
+{
+    if (!l) return EINVAL;
+    int r = pthread_mutex_timedlock(&l->w, at);
+    if (r) return r;
+    for (;;) {
+        int n = __atomic_load_n(&l->readers, __ATOMIC_ACQUIRE);
+        if (n <= 0) return 0;
+        int64_t left = ns_left(CLOCK_REALTIME, at);
+        if (left <= 0) {
+            pthread_mutex_unlock(&l->w);
+            return ETIMEDOUT;
+        }
+        syscall3(SYS_FUTEX_WAIT, (uint64_t)(uintptr_t)&l->readers, (uint64_t)(unsigned)n, (uint64_t)left);
+    }
+}
+
+int pthread_rwlockattr_init(pthread_rwlockattr_t *a) { if (!a) return EINVAL; a->pshared = PTHREAD_PROCESS_PRIVATE; return 0; }
+int pthread_rwlockattr_destroy(pthread_rwlockattr_t *a) { return a ? 0 : EINVAL; }
+
+int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared)
+{
+    if (!a || (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) return EINVAL;
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *restrict a, int *restrict pshared)
+{
+    if (!a || !pshared) return EINVAL;
+    *pshared = a->pshared;
+    return 0;
+}
+
+static int g_concurrency;
+
+int pthread_getconcurrency(void)
+{
+    return __atomic_load_n(&g_concurrency, __ATOMIC_RELAXED);
+}
+
+int pthread_setconcurrency(int level)
+{
+    if (level < 0) return EINVAL;
+    __atomic_store_n(&g_concurrency, level, __ATOMIC_RELAXED);
+    return 0;
+}

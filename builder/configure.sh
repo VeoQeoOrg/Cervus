@@ -296,7 +296,7 @@ for src in $(find usr/lib/libcervus -name '*.c' -o -name '*.s' | sort); do
     case "$src" in
         *.s) rule=as_lib; picrule=as_lib ;;
         */math/*|*/complex/*|*/fenv/*) rule=cc_libm; picrule=cc_libm_pic ;;
-        */net/resolv/*|*/time/tz/*) rule=cc_musl; picrule=cc_musl_pic ;;
+        */net/resolv/*|*/time/tz/*|*/libcervus/musl/*) rule=cc_musl; picrule=cc_musl_pic ;;
         */image/*|*/gl/*|*/compress/inflate.c|*/crypto/sha1.c|*/crypto/sha256.c|*/crypto/sha512.c)
             rule=cc_lib_opt; picrule=cc_lib_pic_opt ;;
         *) rule=cc_lib; picrule=cc_lib_pic ;;

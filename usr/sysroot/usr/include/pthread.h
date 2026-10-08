@@ -137,6 +137,44 @@ int  pthread_setname_np(pthread_t th, const char *name);
 int  pthread_getname_np(pthread_t th, char *name, size_t len);
 int  pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
 
+int  pthread_mutex_timedlock(pthread_mutex_t *__restrict m, const struct timespec *__restrict abstime);
+int  pthread_mutex_clocklock(pthread_mutex_t *__restrict m, int clock, const struct timespec *__restrict abstime);
+int  pthread_rwlock_timedrdlock(pthread_rwlock_t *__restrict l, const struct timespec *__restrict abstime);
+int  pthread_rwlock_timedwrlock(pthread_rwlock_t *__restrict l, const struct timespec *__restrict abstime);
+
+typedef struct { int pshared; } pthread_rwlockattr_t;
+int  pthread_rwlockattr_init(pthread_rwlockattr_t *a);
+int  pthread_rwlockattr_destroy(pthread_rwlockattr_t *a);
+int  pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared);
+int  pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *__restrict a, int *__restrict pshared);
+
+typedef volatile int pthread_spinlock_t;
+int  pthread_spin_init(pthread_spinlock_t *l, int pshared);
+int  pthread_spin_destroy(pthread_spinlock_t *l);
+int  pthread_spin_lock(pthread_spinlock_t *l);
+int  pthread_spin_trylock(pthread_spinlock_t *l);
+int  pthread_spin_unlock(pthread_spinlock_t *l);
+
+#define PTHREAD_BARRIER_SERIAL_THREAD (-1)
+typedef struct {
+    pthread_mutex_t m;
+    pthread_cond_t  c;
+    unsigned        count;
+    unsigned        waiting;
+    unsigned        cycle;
+} pthread_barrier_t;
+typedef struct { int pshared; } pthread_barrierattr_t;
+int  pthread_barrierattr_init(pthread_barrierattr_t *a);
+int  pthread_barrierattr_destroy(pthread_barrierattr_t *a);
+int  pthread_barrierattr_setpshared(pthread_barrierattr_t *a, int pshared);
+int  pthread_barrierattr_getpshared(const pthread_barrierattr_t *__restrict a, int *__restrict pshared);
+int  pthread_barrier_init(pthread_barrier_t *__restrict b, const pthread_barrierattr_t *__restrict a, unsigned count);
+int  pthread_barrier_destroy(pthread_barrier_t *b);
+int  pthread_barrier_wait(pthread_barrier_t *b);
+
+int  pthread_getconcurrency(void);
+int  pthread_setconcurrency(int level);
+
 #ifdef __cplusplus
 }
 #endif

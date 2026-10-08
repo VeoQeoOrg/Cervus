@@ -53,6 +53,9 @@ time_t mktime(struct tm *tm);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 char  *asctime(const struct tm *tm);
 char  *ctime(const time_t *t);
+char  *asctime_r(const struct tm *__restrict tm, char *__restrict buf);
+char  *ctime_r(const time_t *t, char *buf);
+char  *strptime(const char *__restrict s, const char *__restrict fmt, struct tm *__restrict tm);
 
 int nanosleep(const struct timespec *req, struct timespec *rem);
 

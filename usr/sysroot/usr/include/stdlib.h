@@ -61,28 +61,34 @@ unsigned long long strtoull(const char *s, char **end, int base);
 #include <stdint.h>
 uint64_t __cervus_strtod_bits(const char *s, char **endptr);
 
-static __inline__ double strtod(const char *s, char **endp)
-{
-    uint64_t b = __cervus_strtod_bits(s, endp);
-    double d;
-    __builtin_memcpy(&d, &b, sizeof(d));
-    return d;
-}
+double      strtod(const char *__restrict s, char **__restrict endp);
+float       strtof(const char *__restrict s, char **__restrict endp);
+long double strtold(const char *__restrict s, char **__restrict endp);
+double      atof(const char *s);
 
-static __inline__ float strtof(const char *s, char **endp)
-{
-    return (float)strtod(s, endp);
-}
+double         drand48(void);
+double         erand48(unsigned short xsubi[3]);
+long           lrand48(void);
+long           nrand48(unsigned short xsubi[3]);
+long           mrand48(void);
+long           jrand48(unsigned short xsubi[3]);
+void           srand48(long seed);
+unsigned short *seed48(unsigned short *seed16v);
+void           lcong48(unsigned short param[7]);
+int            rand_r(unsigned *seed);
 
-static __inline__ long double strtold(const char *s, char **endp)
-{
-    return (long double)strtod(s, endp);
-}
-
-static __inline__ double atof(const char *s)
-{
-    return strtod(s, (char **)0);
-}
+void *reallocarray(void *ptr, size_t nmemb, size_t size);
+char *secure_getenv(const char *name);
+int   clearenv(void);
+int   at_quick_exit(void (*fn)(void));
+void  quick_exit(int status) __attribute__((noreturn));
+void  _Exit(int status) __attribute__((noreturn));
+int   mkostemp(char *tmpl, int flags);
+int   mkstemps(char *tmpl, int suffixlen);
+int   mkostemps(char *tmpl, int suffixlen, int flags);
+int   getsubopt(char **optionp, char *const *tokens, char **valuep);
+long  a64l(const char *s);
+char *l64a(long value);
 
 #ifndef __CERVUS_LOCALE_T
 #define __CERVUS_LOCALE_T

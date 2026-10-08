@@ -6,6 +6,8 @@ extern "C" {
 
 typedef int key_t;
 
+key_t ftok(const char *path, int id);
+
 #define IPC_PRIVATE  0
 #define IPC_CREAT    01000
 #define IPC_EXCL     02000

@@ -6,15 +6,16 @@ extern "C" {
 
 typedef long jmp_buf[8];
 
-int  setjmp(jmp_buf env);
+int  setjmp(jmp_buf env) __attribute__((returns_twice));
 void longjmp(jmp_buf env, int val) __attribute__((noreturn));
 
-int  _setjmp(jmp_buf env);
+int  _setjmp(jmp_buf env) __attribute__((returns_twice));
 void _longjmp(jmp_buf env, int val) __attribute__((noreturn));
 
-#define sigjmp_buf jmp_buf
-#define sigsetjmp(env, savesigs) setjmp(env)
-#define siglongjmp(env, val)     longjmp(env, val)
+typedef long sigjmp_buf[12];
+
+int  sigsetjmp(sigjmp_buf env, int savesigs) __attribute__((returns_twice));
+void siglongjmp(sigjmp_buf env, int val) __attribute__((noreturn));
 
 #ifdef __cplusplus
 }

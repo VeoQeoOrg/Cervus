@@ -75,13 +75,14 @@ extern const struct in6_addr in6addr_loopback;
 #define IN6_IS_ADDR_MC_ORGLOCAL(a)  (IN6_IS_ADDR_MULTICAST(a) && (((const struct in6_addr *)(a))->s6_addr[1] & 0xf) == 0x8)
 #define IN6_IS_ADDR_MC_GLOBAL(a)    (IN6_IS_ADDR_MULTICAST(a) && (((const struct in6_addr *)(a))->s6_addr[1] & 0xf) == 0xe)
 
-static inline uint16_t htons(uint16_t x) { return (uint16_t)((x << 8) | (x >> 8)); }
-static inline uint16_t ntohs(uint16_t x) { return htons(x); }
-static inline uint32_t htonl(uint32_t x) {
-    return ((x & 0xffu) << 24) | ((x & 0xff00u) << 8) |
-           ((x >> 8) & 0xff00u) | ((x >> 24) & 0xffu);
-}
-static inline uint32_t ntohl(uint32_t x) { return htonl(x); }
+uint32_t htonl(uint32_t x);
+uint16_t htons(uint16_t x);
+uint32_t ntohl(uint32_t x);
+uint16_t ntohs(uint16_t x);
+#define htonl(x) __builtin_bswap32(x)
+#define htons(x) __builtin_bswap16(x)
+#define ntohl(x) __builtin_bswap32(x)
+#define ntohs(x) __builtin_bswap16(x)
 
 #define IP_TOS                    1
 #define IP_TTL                    2

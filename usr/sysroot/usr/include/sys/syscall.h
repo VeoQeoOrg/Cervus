@@ -234,6 +234,7 @@ extern "C" {
 #define SYS_ACCEPT4         668
 #define SYS_GETTID          669
 #define SYS_TGKILL          670
+#define SYS_EXECVEAT        671
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

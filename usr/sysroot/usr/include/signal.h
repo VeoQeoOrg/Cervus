@@ -57,6 +57,7 @@ typedef void (*sighandler_t)(int);
 #define SIG_DFL  ((sighandler_t)0)
 #define SIG_IGN  ((sighandler_t)1)
 #define SIG_ERR  ((sighandler_t)-1)
+#define SIG_HOLD ((sighandler_t)2)
 
 #define SA_NOCLDSTOP  0x00000001
 #define SA_NOCLDWAIT  0x00000002
@@ -210,6 +211,14 @@ int sigaddset(sigset_t *set, int sig);
 int sigdelset(sigset_t *set, int sig);
 int sigismember(const sigset_t *set, int sig);
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int sighold(int sig);
+int sigrelse(int sig);
+int sigignore(int sig);
+int sigpause(int sig);
+void (*sigset(int sig, void (*disp)(int)))(int);
+int sigisemptyset(const sigset_t *set);
+int sigandset(sigset_t *dest, const sigset_t *a, const sigset_t *b);
+int sigorset(sigset_t *dest, const sigset_t *a, const sigset_t *b);
 int sigpending(sigset_t *set);
 int sigsuspend(const sigset_t *mask);
 int sigaltstack(const stack_t *ss, stack_t *old_ss);
