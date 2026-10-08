@@ -4,7 +4,10 @@
 extern "C" {
 #endif
 
+#ifndef __CERVUS_KEY_T
+#define __CERVUS_KEY_T
 typedef int key_t;
+#endif
 
 key_t ftok(const char *path, int id);
 

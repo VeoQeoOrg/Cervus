@@ -28,6 +28,34 @@ typedef uint64_t blksize_t;
 typedef int64_t  time_t;
 typedef int      clockid_t;
 typedef void    *timer_t;
+typedef uint64_t nlink_t;
+typedef long     suseconds_t;
+typedef unsigned useconds_t;
+typedef long     register_t;
+typedef int64_t  loff_t;
+typedef char    *caddr_t;
+
+#ifndef __CERVUS_KEY_T
+#define __CERVUS_KEY_T
+typedef int key_t;
+#endif
+
+#ifndef __CERVUS_CLOCK_T
+#define __CERVUS_CLOCK_T
+typedef long clock_t;
+#endif
+
+typedef unsigned char  u_char;
+typedef unsigned short u_short;
+typedef unsigned int   u_int;
+typedef unsigned long  u_long;
+typedef unsigned short ushort;
+typedef unsigned int   uint;
+typedef unsigned long  ulong;
+typedef uint8_t  u_int8_t;
+typedef uint16_t u_int16_t;
+typedef uint32_t u_int32_t;
+typedef uint64_t u_int64_t;
 
 #ifdef __cplusplus
 }

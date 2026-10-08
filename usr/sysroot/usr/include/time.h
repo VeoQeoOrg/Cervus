@@ -7,7 +7,10 @@ extern "C" {
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifndef __CERVUS_CLOCK_T
+#define __CERVUS_CLOCK_T
 typedef long clock_t;
+#endif
 
 #define CLOCKS_PER_SEC 1000000L
 
