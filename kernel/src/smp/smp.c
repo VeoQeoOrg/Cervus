@@ -304,9 +304,8 @@ void smp_init(void) {
         tss[i]->ist[0] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[1] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         tss[i]->ist[2] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
-        tss[i]->ist[3] = smp_allocate_stack(i, KERNEL_STACK_SIZE);
         if (!tss[i]->rsp0 || !tss[i]->ist[0] || !tss[i]->ist[1] ||
-            !tss[i]->ist[2] || !tss[i]->ist[3]) {
+            !tss[i]->ist[2]) {
             if (is_bsp_cpu)
                 kernel_panic("SMP: out of memory allocating BSP TSS/IST stacks");
             serial_printf("[SMP WARNING] no memory for CPU %u kernel stacks, "

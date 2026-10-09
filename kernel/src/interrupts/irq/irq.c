@@ -140,16 +140,13 @@ void setup_defined_irq_handlers(void) {
     }
 }
 
-extern percpu_t* percpu_regions[MAX_CPUS];
 
 DEFINE_IRQ(IPI_RESCHEDULE_VECTOR, ipi_reschedule_handler)
 {
     (void)frame;
 
-    uint32_t id = lapic_get_id();
-    if (id < MAX_CPUS && percpu_regions[id] != NULL) {
-        percpu_regions[id]->need_resched = true;
-    }
+    percpu_t* pc = get_percpu();
+    if (pc) pc->need_resched = true;
 
     lapic_eoi();
 }
