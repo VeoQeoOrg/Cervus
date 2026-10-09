@@ -202,7 +202,17 @@ static int walk_from(vnode_t *dir, const char *rel, vnode_t **out,
             target[n] = '\0';
 
             vnode_t *resolved = NULL;
-            if (target[0] == '/')
+            const char *root = target[0] == '/' ? task_fs_root() : NULL;
+            if (root) {
+                char full[VFS_MAX_PATH];
+                size_t rl = strlen(root);
+                syscall_path_normalize(target);
+                if (rl + strlen(target) + 1 > sizeof(full)) { vnode_unref(cur); return -ENAMETOOLONG; }
+                memcpy(full, root, rl);
+                strcpy(full + rl, target[1] ? target : "");
+                if (!full[0]) strcpy(full, "/");
+                ret = lookup_path(full, &resolved, is_last ? follow_final : true, depth + 1);
+            } else if (target[0] == '/')
                 ret = lookup_path(target, &resolved, is_last ? follow_final : true, depth + 1);
             else
                 ret = walk_from(cur, target, &resolved, is_last ? follow_final : true, depth + 1);

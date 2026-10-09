@@ -21,6 +21,8 @@ void  syscall_bounce_put(void *buf, void *stackbuf);
 int  syscall_copy_to_user(void *dst, const void *src, size_t n);
 int  syscall_strncpy_from_user(char *dst, const char *src, size_t max);
 int  syscall_resolve_path_from_user(char *dst, const char *src, size_t max);
+int  syscall_resolve_path(char *dst, const char *path, size_t max);
+size_t syscall_root_prefix(const char *path, const char *root);
 void syscall_path_normalize(char *path);
 
 int  syscall_perm_file(const char *kpath, int want);

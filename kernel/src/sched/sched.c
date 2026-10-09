@@ -295,6 +295,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->time_slice_init = parent->time_slice_init;
     task_inherit_limits(t, parent);
     memcpy(t->cwd, parent->cwd, sizeof(t->cwd));
+    memcpy(t->root, parent->root, sizeof(t->root));
     strncpy(t->name, parent->name, sizeof(t->name) - 1);
 
     t->pagemap = parent->pagemap;
@@ -576,6 +577,7 @@ task_t* task_fork(task_t* parent) {
     child->umask           = parent->umask;
     child->ctty            = parent->ctty;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
+    memcpy(child->root, parent->root, sizeof(child->root));
     memcpy(child->exe, parent->exe, sizeof(child->exe));
     child->capabilities    = parent->capabilities;
     child->time_slice      = parent->time_slice_init;
@@ -1376,6 +1378,11 @@ void task_sleep_ns(uint64_t ns) {
 }
 
 void task_sleep_ms(uint64_t ms) { task_sleep_ns(ms * 1000000ULL); }
+
+const char *task_fs_root(void) {
+    task_t *t = (task_t *)percpu_current_task();
+    return (t && t->root[0]) ? t->root : NULL;
+}
 
 void sched_print_stats(void) {
     uint64_t _irqf;

@@ -1,6 +1,8 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/fs/vfs.h"
+#include "../../../include/sched/capabilities.h"
 #include <string.h>
+#include <stdio.h>
 
 int64_t sys_chdir(uint64_t path_ptr, uint64_t a2, uint64_t a3,
                   uint64_t a4, uint64_t a5, uint64_t a6)
@@ -33,7 +35,43 @@ int64_t sys_getcwd(uint64_t buf_ptr, uint64_t size, uint64_t a3,
     if (!buf_ptr || size == 0) return -EINVAL;
 
     const char *cwd = t->cwd[0] ? t->cwd : "/";
+    char unreach[VFS_MAX_PATH + 16];
+    if (t->root[0]) {
+        size_t skip = syscall_root_prefix(cwd, t->root);
+        if (skip) {
+            cwd += skip;
+            if (!*cwd) cwd = "/";
+        } else {
+            snprintf(unreach, sizeof unreach, "(unreachable)%s", cwd);
+            cwd = unreach;
+        }
+    }
     size_t L = strlen(cwd) + 1;
     if (L > size) return -ERANGE;
     return syscall_copy_to_user((void *)buf_ptr, cwd, L);
+}
+
+int64_t sys_chroot(uint64_t path_ptr)
+{
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (!cap_has(t->capabilities, CAP_SYSADMIN)) return -EPERM;
+
+    char abs[VFS_MAX_PATH];
+    int r = syscall_resolve_path_from_user(abs, (const char *)path_ptr, sizeof(abs));
+    if (r < 0) return r;
+
+    vfs_stat_t st;
+    int sr = vfs_stat(abs, &st);
+    if (sr < 0) return sr;
+    if (st.st_type != VFS_NODE_DIR) return -ENOTDIR;
+
+    if (abs[0] == '/' && abs[1] == '\0') {
+        t->root[0] = '\0';
+        return 0;
+    }
+    size_t L = strlen(abs);
+    if (L >= sizeof(t->root)) return -ENAMETOOLONG;
+    memcpy(t->root, abs, L + 1);
+    return 0;
 }

@@ -203,23 +203,7 @@ static int abs_path(const sock_addr_t *a, char *out, size_t cap) {
     memcpy(rel, a->upath, n);
     rel[n] = 0;
     if (!rel[0]) return -ENOENT;
-    size_t rl = strlen(rel);
-    if (rel[0] == '/') {
-        if (rl + 1 > cap) return -ENAMETOOLONG;
-        memcpy(out, rel, rl + 1);
-    } else {
-        task_t *t = syscall_cur_task();
-        const char *cwd = (t && t->cwd[0]) ? t->cwd : "/";
-        if (t && t->at_base) cwd = t->at_base;
-        size_t cl = strlen(cwd);
-        if (cl + 1 + rl + 1 > cap) return -ENAMETOOLONG;
-        memcpy(out, cwd, cl);
-        size_t pos = cl;
-        if (pos == 0 || out[pos - 1] != '/') out[pos++] = '/';
-        memcpy(out + pos, rel, rl + 1);
-    }
-    syscall_path_normalize(out);
-    return 0;
+    return syscall_resolve_path(out, rel, cap);
 }
 
 static void node_key(vnode_t *n, uintptr_t *kfs, uint64_t *kid) {

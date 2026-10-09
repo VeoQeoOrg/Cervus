@@ -5,6 +5,7 @@
 #include "../../include/memory/paging.h"
 #include "../../include/io/serial.h"
 #include "../../include/fs/vfs.h"
+#include "../../include/sched/sched.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -259,6 +260,15 @@ static uintptr_t cover_orphan_sections(mm_t *mm, const elf64_ehdr_t *ehdr,
 
 static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *result) {
     vfs_file_t *f = NULL;
+    char full[VFS_MAX_PATH];
+    const char *root = path[0] == '/' ? task_fs_root() : NULL;
+    if (root) {
+        size_t rl = strlen(root), pl = strlen(path);
+        if (rl + pl + 1 > sizeof(full)) return ELF_ERR_NULL;
+        memcpy(full, root, rl);
+        memcpy(full + rl, path, pl + 1);
+        path = full;
+    }
     if (vfs_open(path, 0, 0, &f) < 0 || !f) return ELF_ERR_NULL;
 
     vfs_stat_t st;

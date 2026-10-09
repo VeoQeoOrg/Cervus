@@ -178,35 +178,59 @@ static int path_require_dirs(const char *path)
     return 0;
 }
 
-int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
+size_t syscall_root_prefix(const char *path, const char *root)
+{
+    size_t rl = strlen(root);
+    if (!rl || strncmp(path, root, rl) != 0) return 0;
+    if (path[rl] != '\0' && path[rl] != '/') return 0;
+    return rl;
+}
+
+int syscall_resolve_path(char *dst, const char *path, size_t max)
 {
     if (!dst || max == 0) return -EINVAL;
-    char tmp[512];
-    int n = syscall_strncpy_from_user(tmp, src, sizeof(tmp));
-    if (n < 0) return n;
-    if (tmp[0] == '\0') return -ENOENT;
-    if (tmp[0] == '/') {
-        size_t L = (size_t)n;
-        if (L >= max) return -ENAMETOOLONG;
-        memcpy(dst, tmp, L + 1);
+    if (!path[0]) return -ENOENT;
+    task_t *t = syscall_cur_task();
+    const char *root = (t && t->root[0]) ? t->root : "";
+    size_t rl = strlen(root);
+    char view[VFS_MAX_PATH];
+    size_t pl = strlen(path);
+    if (path[0] == '/') {
+        if (pl >= sizeof view) return -ENAMETOOLONG;
+        memcpy(view, path, pl + 1);
     } else {
-        task_t *t = syscall_cur_task();
-        const char *cwd = (t && t->cwd[0]) ? t->cwd : "/";
-        if (t && t->at_base) cwd = t->at_base;
-        size_t cl = 0; while (cwd[cl]) cl++;
-        size_t tl = (size_t)n;
-        size_t need = cl + 1 + tl + 1;
-        if (need >= max) return -ENAMETOOLONG;
-        size_t pos = 0;
-        for (size_t k = 0; k < cl; k++) dst[pos++] = cwd[k];
-        if (pos == 0 || dst[pos - 1] != '/') dst[pos++] = '/';
-        for (size_t k = 0; k < tl; k++) dst[pos++] = tmp[k];
-        dst[pos] = '\0';
+        const char *base = (t && t->cwd[0]) ? t->cwd : "/";
+        if (t && t->at_base) base = t->at_base;
+        if (rl) {
+            size_t skip = syscall_root_prefix(base, root);
+            if (skip) base += skip;
+            else { root = ""; rl = 0; }
+        }
+        if (!*base) base = "/";
+        size_t bl = strlen(base);
+        if (bl + 1 + pl + 1 > sizeof view) return -ENAMETOOLONG;
+        memcpy(view, base, bl);
+        size_t pos = bl;
+        if (view[pos - 1] != '/') view[pos++] = '/';
+        memcpy(view + pos, path, pl + 1);
     }
+    size_t vl = strlen(view);
+    if (rl + vl + 1 > max) return -ENAMETOOLONG;
+    memcpy(dst, root, rl);
+    memcpy(dst + rl, view, vl + 1);
     int r = path_require_dirs(dst);
     if (r < 0) return r;
-    syscall_path_normalize(dst);
+    syscall_path_normalize(dst + rl);
+    if (rl && dst[rl] == '/' && dst[rl + 1] == '\0') dst[rl] = '\0';
     return 0;
+}
+
+int syscall_resolve_path_from_user(char *dst, const char *src, size_t max)
+{
+    char tmp[VFS_MAX_PATH];
+    int n = syscall_strncpy_from_user(tmp, src, sizeof(tmp));
+    if (n < 0) return n;
+    return syscall_resolve_path(dst, tmp, max);
 }
 
 static int perm_check(uint32_t mode, uint32_t fuid, uint32_t fgid,

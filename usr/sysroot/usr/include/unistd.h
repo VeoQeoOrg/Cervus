@@ -35,6 +35,7 @@ int     rmdir(const char *path);
 int     access(const char *path, int mode);
 int     chdir(const char *path);
 int     fchdir(int fd);
+int     chroot(const char *path);
 int     unlinkat(int dirfd, const char *path, int flags);
 int     linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags);
 int     symlinkat(const char *target, int dirfd, const char *linkpath);

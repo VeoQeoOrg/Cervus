@@ -283,13 +283,8 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
             sv_free(&argv);
             argv = na;
             total = nt;
-            if (interp[0] == '/') {
-                strncpy(kpath, interp, sizeof kpath - 1);
-                kpath[sizeof kpath - 1] = 0;
-            } else {
-                rp = syscall_resolve_path_from_user(kpath, interp, sizeof kpath);
-                if (rp < 0) { sv_free(&argv); sv_free(&envp); return rp; }
-            }
+            rp = syscall_resolve_path(kpath, interp, sizeof kpath);
+            if (rp < 0) { sv_free(&argv); sv_free(&envp); return rp; }
             continue;
         }
         if (hdr[0] != 0x7F || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F') {

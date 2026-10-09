@@ -253,6 +253,7 @@ typedef struct task {
     uint64_t   group_dead_runtime;
     struct sem_undo *sem_undo;
     volatile int32_t sleep_noint;
+    char root[256];
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }
@@ -308,6 +309,7 @@ int  task_map_track(task_t *t, struct vnode *vn);
 void task_map_drop_all(task_t *t);
 void task_sleep_ns(uint64_t ns);
 void task_sleep_ms(uint64_t ms);
+const char *task_fs_root(void);
 uint64_t task_set_alarm(task_t *t, uint64_t seconds);
 void     task_set_itimer(task_t *t, uint64_t value_ns, uint64_t interval_ns,
                          uint64_t *old_value_ns, uint64_t *old_interval_ns);

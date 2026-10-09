@@ -247,6 +247,7 @@ extern "C" {
 #define SYS_MSGRCV          681
 #define SYS_MSGCTL          682
 #define SYS_SEMTIMEDOP      683
+#define SYS_CHROOT          684
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
