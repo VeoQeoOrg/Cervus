@@ -50,6 +50,11 @@ void lapic_enable(void) {
 }
 
 uint32_t lapic_get_id(void) {
+    if (!lapic_base) {
+        uint32_t a, b, c, d;
+        asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+        return b >> 24;
+    }
     return (lapic_read(LAPIC_ID) >> 24) & 0xFF;
 }
 
