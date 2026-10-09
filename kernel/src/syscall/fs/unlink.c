@@ -6,8 +6,8 @@ static int dir_is_empty(vnode_t *dir)
 {
     if (!dir->ops || !dir->ops->readdir) return 1;
     vfs_dirent_t d;
-    for (uint64_t i = 0; ; i++) {
-        if (dir->ops->readdir(dir, i, &d) < 0) break;
+    for (uint64_t pos = 0; ; ) {
+        if (dir->ops->readdir(dir, &pos, &d) < 0) break;
         if (!strcmp(d.d_name, ".") || !strcmp(d.d_name, "..")) continue;
         if (d.d_name[0]) return 0;
     }

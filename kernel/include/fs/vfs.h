@@ -91,7 +91,7 @@ typedef struct vnode_ops {
     int64_t (*write)   (vnode_t *node, const void *buf, size_t len, uint64_t offset);
     int     (*truncate)(vnode_t *node, uint64_t new_size);
     int     (*lookup)  (vnode_t *dir, const char *name, vnode_t **out);
-    int     (*readdir) (vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+    int     (*readdir) (vnode_t *dir, uint64_t *pos, vfs_dirent_t *out);
     int     (*mkdir)   (vnode_t *dir, const char *name, uint32_t mode);
     int     (*create)  (vnode_t *dir, const char *name, uint32_t mode, vnode_t **out);
     int     (*unlink)  (vnode_t *dir, const char *name);

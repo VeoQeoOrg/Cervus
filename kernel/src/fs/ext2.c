@@ -1389,7 +1389,7 @@ static int ext2_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return -ENOENT;
 }
 
-static int ext2_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int ext2_dir_readdir(vnode_t *dir, uint64_t *posp, vfs_dirent_t *out) {
     ext2_vdata_t *vd = dir->fs_data;
     ext2_t *fs = vd->fs;
     ext2_inode_t di;
@@ -1397,37 +1397,38 @@ static int ext2_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     if (r < 0) return r;
     uint8_t *bb = kmalloc(fs->block_size);
     if (!bb) return -ENOMEM;
-    uint32_t ds = di.i_size, pos = 0, fb = 0;
-    uint64_t cur = 0;
+    uint32_t bs = fs->block_size;
+    uint64_t ds = di.i_size, pos = *posp;
     while (pos < ds) {
+        uint32_t fb = (uint32_t)(pos / bs);
+        uint32_t want = (uint32_t)(pos % bs);
+        uint64_t base = (uint64_t)fb * bs;
         int32_t db = get_block_num(fs, &di, fb);
-        if (db <= 0) { fb++; pos += fs->block_size; continue; }
-        ext2_block_read(fs, (uint32_t)db, bb);
-        uint32_t off = 0;
-        while (off < fs->block_size && (pos + off) < ds) {
-            ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
-            if (de->rec_len == 0) break;
-            if (de->inode != 0 && de->name_len > 0) {
-                bool skip = (de->name_len == 1 && de->name[0] == '.') ||
-                            (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.');
-                if (!skip) {
-                    if (cur == index) {
-                        out->d_ino = de->inode;
-                        out->d_type = vtype_of_ft(de->file_type);
-                        size_t n = de->name_len;
-                        if (n >= VFS_MAX_NAME) n = VFS_MAX_NAME - 1;
-                        memcpy(out->d_name, de->name, n);
-                        out->d_name[n] = '\0';
-                        kfree(bb);
-                        return 0;
-                    }
-                    cur++;
+        if (db > 0) {
+            ext2_block_read(fs, (uint32_t)db, bb);
+            uint32_t off = 0;
+            while (off + 8 <= bs && base + off < ds) {
+                ext2_dir_entry_t *de = (ext2_dir_entry_t *)(bb + off);
+                if (de->rec_len < 8 || off + de->rec_len > bs) break;
+                bool dot = (de->name_len == 1 && de->name[0] == '.') ||
+                           (de->name_len == 2 && de->name[0] == '.' && de->name[1] == '.');
+                if (off >= want && de->inode != 0 && de->name_len > 0 && !dot) {
+                    out->d_ino = de->inode;
+                    out->d_type = vtype_of_ft(de->file_type);
+                    size_t n = de->name_len;
+                    if (n >= VFS_MAX_NAME) n = VFS_MAX_NAME - 1;
+                    memcpy(out->d_name, de->name, n);
+                    out->d_name[n] = '\0';
+                    *posp = base + off + de->rec_len;
+                    kfree(bb);
+                    return 0;
                 }
+                off += de->rec_len;
             }
-            off += de->rec_len;
         }
-        fb++; pos += fs->block_size;
+        pos = base + bs;
     }
+    *posp = pos;
     kfree(bb);
     return -ENOENT;
 }
@@ -2016,9 +2017,9 @@ static int locked_lookup(vnode_t *d, const char *name, vnode_t **out) {
     int r = ext2_dir_lookup(d, name, out);
     fs_unlock(fs); return r;
 }
-static int locked_readdir(vnode_t *d, uint64_t index, vfs_dirent_t *out) {
+static int locked_readdir(vnode_t *d, uint64_t *pos, vfs_dirent_t *out) {
     ext2_t *fs = VFS_OF(d); fs_lock(fs);
-    int r = ext2_dir_readdir(d, index, out);
+    int r = ext2_dir_readdir(d, pos, out);
     fs_unlock(fs); return r;
 }
 static int locked_mkdir(vnode_t *d, const char *name, uint32_t mode) {

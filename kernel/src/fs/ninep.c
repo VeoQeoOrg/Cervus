@@ -218,7 +218,15 @@ static int p9_lookup_op(vnode_t *dir, const char *name, vnode_t **out) {
     return 0;
 }
 
-static int p9_readdir_op(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int p9_readdir_op_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int p9_readdir_op(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = p9_readdir_op_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int p9_readdir_op_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     p9_node_t *dn = dir->fs_data;
     p9_conn_t *c = dn->conn;
     uint32_t tf = __atomic_fetch_add(&c->next_fid, 1, __ATOMIC_RELAXED);

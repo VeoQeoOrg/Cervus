@@ -291,7 +291,15 @@ static int iso9660_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return 0;
 }
 
-static int iso9660_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int iso9660_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int iso9660_dir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = iso9660_dir_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int iso9660_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     if (!dir || !out) return -EINVAL;
     iso9660_node_t *nd = (iso9660_node_t *)dir->fs_data;
     if (!nd || !nd->is_dir) return -ENOTDIR;

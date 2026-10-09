@@ -479,7 +479,15 @@ static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return -ENOENT;
 }
 
-static int piddir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int piddir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int piddir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = piddir_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int piddir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     (void)dir;
     if (index == PROC_PID_NFILES) {
         out->d_ino  = index + 1;
@@ -554,7 +562,15 @@ static int procnet_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return -ENOENT;
 }
 
-static int procnet_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int procnet_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int procnet_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = procnet_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int procnet_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     (void)dir;
     if (index >= PROC_NET_NFILES) return -ENOENT;
     out->d_ino  = g_proc_net_files[index].vnode.ino;
@@ -607,7 +623,15 @@ static int procroot_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return -ENOENT;
 }
 
-static int procroot_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int procroot_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int procroot_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = procroot_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int procroot_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     (void)dir;
     if (index < PROC_NFILES) {
         out->d_ino  = g_proc_files[index].vnode.ino;

@@ -397,7 +397,15 @@ static int readdir_cb(fat32_t *fs, uint32_t cluster, uint32_t entry_off,
     return 0;
 }
 
-static int fat32_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int fat32_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int fat32_dir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = fat32_dir_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int fat32_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     fat32_vdata_t *vd = (fat32_vdata_t *)dir->fs_data;
     if (!vd || !vd->fs) return -EIO;
     readdir_ctx_t ctx = { .wanted = index, .cur = 0, .out = out, .got = 0 };

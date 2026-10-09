@@ -573,7 +573,15 @@ static int devfs_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return -ENOENT;
 }
 
-static int devfs_dir_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int devfs_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int devfs_dir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = devfs_dir_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int devfs_dir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     devfs_dir_data_t *d = dir_data_of(dir);
     if ((int64_t)index >= d->count) return -ENOENT;
     devfs_entry_t *e = &d->entries[index];

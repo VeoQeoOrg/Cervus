@@ -696,9 +696,7 @@ int vfs_readdir(vfs_file_t *file, vfs_dirent_t *out) {
     if (!file || !file->vnode || !out) return -EBADF;
     if (file->vnode->type != VFS_NODE_DIR) return -ENOTDIR;
     if (!file->vnode->ops || !file->vnode->ops->readdir) return -EIO;
-    int ret = file->vnode->ops->readdir(file->vnode, file->offset, out);
-    if (ret == 0) file->offset++;
-    return ret;
+    return file->vnode->ops->readdir(file->vnode, &file->offset, out);
 }
 
 int vfs_mkdir(const char *path, uint32_t mode) {

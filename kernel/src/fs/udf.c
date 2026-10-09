@@ -468,7 +468,15 @@ static int udf_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     return 0;
 }
 
-static int udf_readdir(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
+static int udf_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out);
+
+static int udf_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    int r = udf_readdir_at(dir, *pos, out);
+    if (r == 0) (*pos)++;
+    return r;
+}
+
+static int udf_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
     if (!dir || !out) return -EINVAL;
     udf_node_t *nd = dir->fs_data;
     if (!nd || !nd->is_dir) return -ENOTDIR;
