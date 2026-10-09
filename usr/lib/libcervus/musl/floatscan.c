@@ -33,7 +33,7 @@
 
 #define MASK (KMAX-1)
 
-static long long scanexp(SHFILE *f, int pok)
+static long long scanexp(FILE *f, int pok)
 {
 	int c;
 	int x;
@@ -59,7 +59,7 @@ static long long scanexp(SHFILE *f, int pok)
 	return neg ? -y : y;
 }
 
-static long double decfloat(SHFILE *f, int c, int bits, int emin, int sign, int pok)
+static long double decfloat(FILE *f, int c, int bits, int emin, int sign, int pok)
 {
 	uint32_t x[KMAX];
 	static const uint32_t th[] = { LD_B1B_MAX };
@@ -297,7 +297,7 @@ static long double decfloat(SHFILE *f, int c, int bits, int emin, int sign, int 
 	return scalbnl(y, e2);
 }
 
-static long double hexfloat(SHFILE *f, int bits, int emin, int sign, int pok)
+static long double hexfloat(FILE *f, int bits, int emin, int sign, int pok)
 {
 	uint32_t x = 0;
 	long double y = 0;
@@ -408,7 +408,7 @@ static long double hexfloat(SHFILE *f, int bits, int emin, int sign, int pok)
 	return scalbnl(y, e2);
 }
 
-long double __floatscan(SHFILE *f, int prec, int pok)
+long double __floatscan(FILE *f, int prec, int pok)
 {
 	int sign = 1;
 	size_t i;

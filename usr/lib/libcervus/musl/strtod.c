@@ -1,10 +1,11 @@
 #include <stdlib.h>
 #include "shgetc.h"
 #include "floatscan.h"
+#include "stdio_impl.h"
 
 static long double strtox(const char *s, char **p, int prec)
 {
-	SHFILE f;
+	FILE f;
 	sh_fromstring(&f, s);
 	shlim(&f, 0);
 	long double y = __floatscan(&f, prec, 1);

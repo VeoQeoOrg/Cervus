@@ -1,8 +1,8 @@
 #ifndef INTSCAN_H
 #define INTSCAN_H
 
-#include "shgetc.h"
+#include <stdio.h>
 
-hidden unsigned long long __intscan(SHFILE *, unsigned, int, unsigned long long);
+hidden unsigned long long __intscan(FILE *, unsigned, int, unsigned long long);
 
 #endif

@@ -59,56 +59,6 @@ void __cervus_lock(__cervus_lock_t *l);
 void __cervus_unlock(__cervus_lock_t *l);
 extern __cervus_lock_t __cervus_heap_lock;
 
-#define __CF_OWNED   1
-
-#define __CBUF_UNSET 0
-#define __CBUF_FULL  1
-#define __CBUF_LINE  2
-#define __CBUF_NONE  3
-
-#define __CDIR_IDLE  0
-#define __CDIR_READ  1
-#define __CDIR_WRITE 2
-
-typedef struct {
-    ssize_t (*read)(void *cookie, char *buf, size_t n);
-    ssize_t (*write)(void *cookie, const char *buf, size_t n);
-    int     (*seek)(void *cookie, off_t *pos, int whence);
-    int     (*close)(void *cookie);
-} __cervus_io_funcs_t;
-
-struct __cervus_FILE {
-    int    fd;
-    int    eof;
-    int    err;
-    int    flags;
-    char  *buf;
-    size_t buf_size;
-    size_t buf_pos;
-    int    unget;
-    int    bufmode;
-    int    dir;
-    size_t buf_len;
-    __cervus_lock_t lock;
-    int    has_io;
-    void  *cookie;
-    __cervus_io_funcs_t io;
-};
-
-ssize_t __cervus_io_read(struct __cervus_FILE *s, void *buf, size_t n);
-ssize_t __cervus_io_write(struct __cervus_FILE *s, const void *buf, size_t n);
-off_t   __cervus_io_seek(struct __cervus_FILE *s, off_t off, int whence);
-int     __cervus_io_close(struct __cervus_FILE *s);
-size_t  __cervus_io_write_all(struct __cervus_FILE *s, const char *p, size_t total);
-
-int  __cervus_fflush(struct __cervus_FILE *s);
-void __cervus_stream_register(struct __cervus_FILE *s);
-void __cervus_stream_forget(struct __cervus_FILE *s);
-void __cervus_flush_all(void);
-#define __CERVUS_STDIO_BUFSZ 16384
-int  __cervus_fill(struct __cervus_FILE *s);
-void __cervus_setup_buf(struct __cervus_FILE *s);
-
 struct __cervus_DIR {
     int fd;
     struct dirent buf;

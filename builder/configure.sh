@@ -39,7 +39,7 @@ LIBM_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -I usr/lib/libcervus/math/internal
 -Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
 -Wno-unused-but-set-variable -Wno-implicit-fallthrough"
 
-MUSL_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -fno-strict-aliasing \
+MUSL_CFLAGS="$LIBCERVUS_CFLAGS_OPT -std=gnu99 -fno-strict-aliasing -iquote usr/lib/libcervus/musl \
 -Wno-unused-parameter -Wno-sign-compare -Wno-parentheses -Wno-missing-braces \
 -Wno-implicit-fallthrough -Wno-maybe-uninitialized -Wno-unterminated-string-initialization"
 

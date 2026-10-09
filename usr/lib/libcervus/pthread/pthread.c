@@ -35,11 +35,17 @@ struct __pthread {
     int           tid;
     void         *tls;
     char          name[16];
+    struct __cervus_FILE *stdio_locks;
 };
 
 #define DEFAULT_STACK (256 * 1024)
 
 static struct __pthread g_main;
+
+int __cervus_threaded;
+
+void __cervus_stdio_threaded(void);
+void __do_orphaned_stdio_locks(void);
 
 static void futex_wait(volatile int *addr, int val)
 {
@@ -235,6 +241,7 @@ __attribute__((noreturn)) static void thread_finish(struct __pthread *th, void *
 {
     run_cleanup(th);
     __cervus_pthread_key_cleanup();
+    __do_orphaned_stdio_locks();
     th->retval = retval;
     __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
     futex_wake(&th->done, 1);
@@ -293,6 +300,11 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     th->dstate = (attr && attr->detachstate == PTHREAD_CREATE_DETACHED) ? DS_DETACHED : DS_JOINABLE;
     th->tid_word = -1;
 
+    if (!__atomic_load_n(&__cervus_threaded, __ATOMIC_ACQUIRE)) {
+        __cervus_stdio_threaded();
+        __atomic_store_n(&__cervus_threaded, 1, __ATOMIC_RELEASE);
+    }
+
     uintptr_t top = ((uintptr_t)stk + ssz) & ~(uintptr_t)0xF;
     uint64_t *sp = (uint64_t *)top;
     *--sp = (uint64_t)(uintptr_t)th;
@@ -347,6 +359,7 @@ void pthread_exit(void *retval)
     if (th && th != &g_main) thread_finish(th, retval);
     if (th) run_cleanup(th);
     __cervus_pthread_key_cleanup();
+    __do_orphaned_stdio_locks();
     if (th) {
         th->retval = retval;
         __atomic_store_n(&th->done, TH_DONE, __ATOMIC_RELEASE);
@@ -367,6 +380,16 @@ pthread_t pthread_self(void)
     }
     return self;
 }
+int __cervus_tid(void)
+{
+    return pthread_self()->tid;
+}
+
+struct __cervus_FILE **__cervus_stdio_locks(void)
+{
+    return &pthread_self()->stdio_locks;
+}
+
 int pthread_equal(pthread_t a, pthread_t b) { return a == b; }
 
 int pthread_attr_init(pthread_attr_t *a)

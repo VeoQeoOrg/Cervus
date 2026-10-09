@@ -24,8 +24,12 @@ extern "C" {
 #define FOPEN_MAX 64
 #define TMP_MAX 10000
 #define L_tmpnam 32
+#define P_tmpdir "/tmp"
 
+#ifndef __CERVUS_FILE_DEFINED
+#define __CERVUS_FILE_DEFINED
 typedef struct __cervus_FILE FILE;
+#endif
 
 extern FILE *stdin;
 extern FILE *stdout;
@@ -47,9 +51,15 @@ int  ftrylockfile(FILE *stream);
 int getc(FILE *stream);
 int fgetc(FILE *stream);
 char *fgets(char *s, int n, FILE *stream);
+char *gets(char *s);
+int getw(FILE *stream);
+int putw(int w, FILE *stream);
+char *fgetln(FILE *stream, size_t *len);
 int ungetc(int c, FILE *stream);
 int setvbuf(FILE *stream, char *buf, int mode, size_t size);
 void setbuf(FILE *stream, char *buf);
+void setbuffer(FILE *stream, char *buf, size_t size);
+void setlinebuf(FILE *stream);
 FILE *freopen(const char *path, const char *mode, FILE *stream);
 typedef long fpos_t;
 
@@ -120,6 +130,19 @@ int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpat
 int renameat2(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, unsigned flags);
 int  remove(const char *path);
 char *tmpnam(char *buf);
+char *tempnam(const char *dir, const char *pfx);
+
+int    fgetc_unlocked(FILE *stream);
+int    fputc_unlocked(int c, FILE *stream);
+int    fflush_unlocked(FILE *stream);
+size_t fread_unlocked(void *buf, size_t size, size_t nmemb, FILE *stream);
+size_t fwrite_unlocked(const void *buf, size_t size, size_t nmemb, FILE *stream);
+void   clearerr_unlocked(FILE *stream);
+int    feof_unlocked(FILE *stream);
+int    ferror_unlocked(FILE *stream);
+int    fileno_unlocked(FILE *stream);
+char  *fgets_unlocked(char *s, int n, FILE *stream);
+int    fputs_unlocked(const char *s, FILE *stream);
 
 #define L_ctermid 9
 char *ctermid(char *s);

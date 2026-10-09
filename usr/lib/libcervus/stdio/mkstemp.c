@@ -87,3 +87,9 @@ char *mktemp(char *template)
     template[0] = 0;
     return template;
 }
+
+char *__randname(char *template)
+{
+    fill_random(template);
+    return template;
+}

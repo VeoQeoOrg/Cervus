@@ -7,6 +7,11 @@ extern "C" {
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifndef __CERVUS_FILE_DEFINED
+#define __CERVUS_FILE_DEFINED
+typedef struct __cervus_FILE FILE;
+#endif
+
 typedef int wint_t;
 
 typedef struct {
@@ -82,6 +87,41 @@ long double        wcstold(const wchar_t *s, wchar_t **end);
 
 struct tm;
 size_t wcsftime(wchar_t *s, size_t max, const wchar_t *fmt, const struct tm *tm);
+
+wint_t   fgetwc(FILE *f);
+wint_t   getwc(FILE *f);
+wint_t   getwchar(void);
+wint_t   fputwc(wchar_t c, FILE *f);
+wint_t   putwc(wchar_t c, FILE *f);
+wint_t   putwchar(wchar_t c);
+wchar_t *fgetws(wchar_t *s, int n, FILE *f);
+int      fputws(const wchar_t *s, FILE *f);
+wint_t   ungetwc(wint_t c, FILE *f);
+int      fwide(FILE *f, int mode);
+
+int      wprintf(const wchar_t *fmt, ...);
+int      fwprintf(FILE *f, const wchar_t *fmt, ...);
+int      swprintf(wchar_t *s, size_t n, const wchar_t *fmt, ...);
+int      vwprintf(const wchar_t *fmt, va_list ap);
+int      vfwprintf(FILE *f, const wchar_t *fmt, va_list ap);
+int      vswprintf(wchar_t *s, size_t n, const wchar_t *fmt, va_list ap);
+int      wscanf(const wchar_t *fmt, ...);
+int      fwscanf(FILE *f, const wchar_t *fmt, ...);
+int      swscanf(const wchar_t *s, const wchar_t *fmt, ...);
+int      vwscanf(const wchar_t *fmt, va_list ap);
+int      vfwscanf(FILE *f, const wchar_t *fmt, va_list ap);
+int      vswscanf(const wchar_t *s, const wchar_t *fmt, va_list ap);
+
+FILE    *open_wmemstream(wchar_t **bufp, size_t *sizep);
+
+wint_t   fgetwc_unlocked(FILE *f);
+wint_t   getwc_unlocked(FILE *f);
+wint_t   getwchar_unlocked(void);
+wint_t   fputwc_unlocked(wchar_t c, FILE *f);
+wint_t   putwc_unlocked(wchar_t c, FILE *f);
+wint_t   putwchar_unlocked(wchar_t c);
+wchar_t *fgetws_unlocked(wchar_t *s, int n, FILE *f);
+int      fputws_unlocked(const wchar_t *s, FILE *f);
 
 #ifdef __cplusplus
 }

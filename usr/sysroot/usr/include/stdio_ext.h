@@ -18,7 +18,7 @@ int         __fwritable(FILE *f);
 int         __freading(FILE *f);
 int         __fwriting(FILE *f);
 int         __fsetlocking(FILE *f, int type);
-void        __fpurge(FILE *f);
+int         __fpurge(FILE *f);
 void        _flushlbf(void);
 void        __fseterr(FILE *f);
 size_t      __freadahead(FILE *f);
