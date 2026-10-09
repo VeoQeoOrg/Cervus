@@ -69,7 +69,7 @@ static int gen_mounts(char *buf, size_t max) {
     size_t off = 0;
     for (int i = 0; i < n && off < max; i++) {
         const char *dev = mi[i].device[0] ? mi[i].device : "none";
-        int w = snprintf(buf + off, max - off, "%s %s %s 0 0\n",
+        int w = snprintf(buf + off, max - off, "%s %s %s rw 0 0\n",
                          dev, mi[i].path, mi[i].fstype);
         if (w < 0) break;
         off += (size_t)w;
@@ -363,7 +363,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "status",  gen_pid_status  },
     { "cmdline", gen_pid_cmdline },
     { "stat",    gen_pid_stat    },
-    { "fd",      gen_pid_fd      },
+    { "fds",     gen_pid_fd      },
     { "syscall", gen_pid_syscall },
     { "puzzle",  gen_pid_puzzle  },
     { "maps",    gen_pid_maps    },
@@ -445,8 +445,145 @@ static const vnode_ops_t pidexe_ops = {
     .unref    = pidexe_unref,
 };
 
+typedef struct {
+    uint32_t pid;
+    int      fd;
+} proc_fd_link_t;
+
+static int fd_link_target(uint32_t pid, int fd, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t || !t->fd_table || fd < 0 || fd >= TASK_MAX_FDS) return -ENOENT;
+    vfs_file_t *f = fd_get(t->fd_table, fd);
+    if (!f) return -ENOENT;
+    vnode_t *v = f->vnode;
+    int n;
+    if (f->path && f->path[0] == '/')
+        n = snprintf(buf, max, "%s", f->path);
+    else if (v && v->type == VFS_NODE_PIPE)
+        n = snprintf(buf, max, "pipe:[%llu]", (unsigned long long)v->ino);
+    else if (v && v->type == VFS_NODE_SOCKET)
+        n = snprintf(buf, max, "socket:[%llu]", (unsigned long long)v->ino);
+    else
+        n = snprintf(buf, max, "anon_inode:[%s]", v ? vnode_type_name((int)v->type) : "?");
+    fd_put(f);
+    if (n < 0) return -EIO;
+    return (size_t)n < max ? n : (int)max - 1;
+}
+
+static int64_t fdlink_readlink(vnode_t *node, char *buf, size_t bufsiz) {
+    proc_fd_link_t *l = node->fs_data;
+    char tmp[VFS_MAX_PATH];
+    int n = fd_link_target(l->pid, l->fd, tmp, sizeof tmp);
+    if (n < 0) return n;
+    if ((size_t)n > bufsiz) n = (int)bufsiz;
+    memcpy(buf, tmp, (size_t)n);
+    return n;
+}
+
+static int fdlink_stat(vnode_t *node, vfs_stat_t *out) {
+    proc_fd_link_t *l = node->fs_data;
+    char tmp[VFS_MAX_PATH];
+    int n = fd_link_target(l->pid, l->fd, tmp, sizeof tmp);
+    memset(out, 0, sizeof(*out));
+    out->st_ino  = node->ino;
+    out->st_type = VFS_NODE_SYMLINK;
+    out->st_mode = 0700;
+    out->st_size = n > 0 ? (uint64_t)n : 0;
+    out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
+    return 0;
+}
+
+static const vnode_ops_t fdlink_ops = {
+    .readlink = fdlink_readlink,
+    .stat     = fdlink_stat,
+    .ref      = proc_ref,
+    .unref    = piddyn_unref,
+};
+
+static int parse_fd(const char *s, int *out) {
+    if (!s[0] || (s[0] == '0' && s[1])) return -1;
+    int v = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9' || v > TASK_MAX_FDS) return -1;
+        v = v * 10 + (*p - '0');
+    }
+    *out = v;
+    return 0;
+}
+
+static int fddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
+    uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
+    int fd;
+    char tmp[8];
+    if (parse_fd(name, &fd) < 0 || fd_link_target(pid, fd, tmp, sizeof tmp) < 0) return -ENOENT;
+    vnode_t *v = kzalloc(sizeof(vnode_t));
+    if (!v) return -ENOMEM;
+    proc_fd_link_t *l = kzalloc(sizeof(proc_fd_link_t));
+    if (!l) { kfree(v); return -ENOMEM; }
+    l->pid = pid;
+    l->fd  = fd;
+    v->type = VFS_NODE_SYMLINK;
+    v->mode = 0700;
+    v->ino  = g_proc_ino++;
+    v->ops  = &fdlink_ops;
+    v->fs_data = l;
+    v->refcount = 1;
+    *out = v;
+    return 0;
+}
+
+static int fddir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
+    task_t *t = task_find_by_pid(pid);
+    if (!t || !t->fd_table) return -ENOENT;
+    for (uint64_t fd = *pos; fd < TASK_MAX_FDS; fd++) {
+        int type, oflags;
+        if (vfs_fd_info(t->fd_table, (int)fd, &type, &oflags) < 0) continue;
+        out->d_ino  = fd + 1;
+        out->d_type = (uint8_t)VFS_NODE_SYMLINK;
+        snprintf(out->d_name, VFS_MAX_NAME, "%d", (int)fd);
+        *pos = fd + 1;
+        return 0;
+    }
+    *pos = TASK_MAX_FDS;
+    return -ENOENT;
+}
+
+static int fddir_stat(vnode_t *node, vfs_stat_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->st_ino  = node->ino;
+    out->st_type = VFS_NODE_DIR;
+    out->st_mode = 0500;
+    out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
+    return 0;
+}
+
+static void fddir_unref(vnode_t *node) {
+    kfree(node);
+}
+
+static const vnode_ops_t fddir_ops = {
+    .lookup  = fddir_lookup,
+    .readdir = fddir_readdir,
+    .stat    = fddir_stat,
+    .ref     = proc_ref,
+    .unref   = fddir_unref,
+};
+
 static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
+    if (strcmp(name, "fd") == 0) {
+        vnode_t *v = kzalloc(sizeof(vnode_t));
+        if (!v) return -ENOMEM;
+        v->type = VFS_NODE_DIR;
+        v->mode = 0500;
+        v->ino  = g_proc_ino++;
+        v->ops  = &fddir_ops;
+        v->fs_data = (void *)(uintptr_t)pid;
+        v->refcount = 1;
+        *out = v;
+        return 0;
+    }
     if (strcmp(name, "exe") == 0) {
         vnode_t *v = kzalloc(sizeof(vnode_t));
         if (!v) return -ENOMEM;
@@ -493,6 +630,12 @@ static int piddir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
         out->d_ino  = index + 1;
         out->d_type = (uint8_t)VFS_NODE_SYMLINK;
         strcpy(out->d_name, "exe");
+        return 0;
+    }
+    if (index == PROC_PID_NFILES + 1) {
+        out->d_ino  = index + 1;
+        out->d_type = (uint8_t)VFS_NODE_DIR;
+        strcpy(out->d_name, "fd");
         return 0;
     }
     if (index >= PROC_PID_NFILES) return -ENOENT;
