@@ -23,14 +23,17 @@ typedef struct {
 
 #define FD_SETSIZE 1024
 
+typedef unsigned long fd_mask;
+#define NFDBITS (8 * (int)sizeof(fd_mask))
+
 typedef struct {
-    unsigned char fds_bits[FD_SETSIZE / 8];
+    unsigned long fds_bits[FD_SETSIZE / 8 / sizeof(long)];
 } fd_set;
 
-#define FD_ZERO(s)     do { for (int _i = 0; _i < FD_SETSIZE / 8; _i++) (s)->fds_bits[_i] = 0; } while (0)
-#define FD_SET(fd, s)   ((s)->fds_bits[(fd) / 8] |=  (unsigned char)(1 << ((fd) & 7)))
-#define FD_CLR(fd, s)   ((s)->fds_bits[(fd) / 8] &= (unsigned char)~(1 << ((fd) & 7)))
-#define FD_ISSET(fd, s) (((s)->fds_bits[(fd) / 8] >> ((fd) & 7)) & 1)
+#define FD_ZERO(s)      do { for (size_t _i = 0; _i < FD_SETSIZE / 8 / sizeof(long); _i++) (s)->fds_bits[_i] = 0; } while (0)
+#define FD_SET(fd, s)   ((s)->fds_bits[(fd) / (8 * sizeof(long))] |= (1UL << ((fd) % (8 * sizeof(long)))))
+#define FD_CLR(fd, s)   ((s)->fds_bits[(fd) / (8 * sizeof(long))] &= ~(1UL << ((fd) % (8 * sizeof(long)))))
+#define FD_ISSET(fd, s) (!!((s)->fds_bits[(fd) / (8 * sizeof(long))] & (1UL << ((fd) % (8 * sizeof(long))))))
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds,
