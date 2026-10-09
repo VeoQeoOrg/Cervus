@@ -739,7 +739,7 @@ int64_t mm_remap(mm_t *mm, uintptr_t old, size_t old_len, size_t new_len, int fl
     int64_t r;
     kmutex_lock(&mm->lock);
     vm_area_t *v = mm_find_vma(mm, old);
-    if (!v || old + old_len > v->end || (v->flags & VM_PFNMAP)) { r = -EFAULT; goto out; }
+    if (!v || old + old_len > v->end) { r = -EFAULT; goto out; }
 
     if (!fixed && !keep) {
         if (new_len <= old_len) {
