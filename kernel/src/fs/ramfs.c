@@ -10,6 +10,8 @@
 typedef struct {
     char     *name;
     vnode_t  *node;
+    uint32_t  hash;
+    int       next;
 } ramfs_child_t;
 
 typedef struct {
@@ -21,6 +23,10 @@ typedef struct {
     int            child_count;
     int            child_cap;
     int            live;
+    int           *buckets;
+    int            nbuckets;
+    int            free_head;
+    int            subdirs;
 
     char          *link_target;
 
@@ -80,7 +86,8 @@ static vnode_t *ramfs_alloc_vnode(vnode_type_t type, uint32_t mode) {
     ramfs_node_t *rn = kzalloc(sizeof(ramfs_node_t));
     if (!rn) { kfree(v); return NULL; }
 
-    rn->ino    = g_next_ino++;
+    rn->ino       = g_next_ino++;
+    rn->free_head = -1;
     v->type    = type;
     v->mode    = mode;
     v->ino     = rn->ino;
@@ -105,6 +112,7 @@ static void ramfs_unref(vnode_t *node) {
         }
         kfree(rn->children);
     }
+    if (rn->buckets) kfree(rn->buckets);
 
     kfree(rn);
     kfree(node);
@@ -212,10 +220,7 @@ static void name_removed(vnode_t *node) {
 static uint32_t ramfs_nlink(vnode_t *node) {
     ramfs_node_t *rn = node->fs_data;
     if (node->type != VFS_NODE_DIR) return rn->names ? rn->names : 1;
-    uint32_t n = 2;
-    for (int i = 0; i < rn->child_count; i++)
-        if (rn->children[i].node && rn->children[i].node->type == VFS_NODE_DIR) n++;
-    return n;
+    return 2 + (uint32_t)rn->subdirs;
 }
 
 static int ramfs_stat(vnode_t *node, vfs_stat_t *out) {
@@ -243,9 +248,41 @@ static const vnode_ops_t ramfs_file_ops = {
     .unref    = ramfs_unref,
 };
 
+static uint32_t ramfs_name_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    while (*s) { h ^= (uint8_t)*s++; h *= 16777619u; }
+    return h;
+}
+
+static void ramfs_bucket_insert(ramfs_node_t *rn, int i) {
+    int b = (int)(rn->children[i].hash & (uint32_t)(rn->nbuckets - 1));
+    rn->children[i].next = rn->buckets[b];
+    rn->buckets[b] = i;
+}
+
+static int ramfs_rehash(ramfs_node_t *rn, int nb) {
+    int *bk = kmalloc((size_t)nb * sizeof(int));
+    if (!bk) return -ENOMEM;
+    for (int k = 0; k < nb; k++) bk[k] = -1;
+    if (rn->buckets) kfree(rn->buckets);
+    rn->buckets  = bk;
+    rn->nbuckets = nb;
+    for (int i = 0; i < rn->child_count; i++)
+        if (rn->children[i].name) ramfs_bucket_insert(rn, i);
+    return 0;
+}
+
+static int ramfs_find(ramfs_node_t *rn, const char *name) {
+    if (!rn->nbuckets) return -1;
+    uint32_t h = ramfs_name_hash(name);
+    for (int i = rn->buckets[h & (uint32_t)(rn->nbuckets - 1)]; i >= 0; i = rn->children[i].next)
+        if (rn->children[i].hash == h && strcmp(rn->children[i].name, name) == 0) return i;
+    return -1;
+}
+
 static int ramfs_dir_grow(ramfs_node_t *rn) {
+    if (rn->child_cap > (1 << 28)) return -ENOSPC;
     int newcap = rn->child_cap == 0 ? 8 : rn->child_cap * 2;
-    if (newcap > RAMFS_MAX_CHILDREN) return -ENOSPC;
     ramfs_child_t *nb = kmalloc((size_t)newcap * sizeof(ramfs_child_t));
     if (!nb) return -ENOMEM;
     if (rn->children && rn->child_count > 0)
@@ -258,14 +295,11 @@ static int ramfs_dir_grow(ramfs_node_t *rn) {
 
 static int ramfs_dir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     ramfs_node_t *rn = dir->fs_data;
-    for (int i = 0; i < rn->child_count; i++) {
-        if (rn->children[i].name && strcmp(rn->children[i].name, name) == 0) {
-            vnode_ref(rn->children[i].node);
-            *out = rn->children[i].node;
-            return 0;
-        }
-    }
-    return -ENOENT;
+    int i = ramfs_find(rn, name);
+    if (i < 0) return -ENOENT;
+    vnode_ref(rn->children[i].node);
+    *out = rn->children[i].node;
+    return 0;
 }
 
 static int ramfs_dir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
@@ -288,26 +322,32 @@ static int ramfs_dir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
 static int ramfs_dir_add_child(vnode_t *dir, const char *name, vnode_t *child) {
     ramfs_node_t *rn = dir->fs_data;
 
-    int slot = -1;
-    for (int i = 0; i < rn->child_count; i++)
-        if (!rn->children[i].name) { slot = i; break; }
-    if (slot < 0) {
+    char *dup = kmalloc(strlen(name) + 1);
+    if (!dup) return -ENOMEM;
+    strcpy(dup, name);
+
+    if (rn->live + 1 > rn->nbuckets) {
+        int r = ramfs_rehash(rn, rn->nbuckets ? rn->nbuckets * 2 : 16);
+        if (r < 0 && !rn->nbuckets) { kfree(dup); return r; }
+    }
+
+    int slot;
+    if (rn->free_head >= 0) {
+        slot = rn->free_head;
+        rn->free_head = rn->children[slot].next;
+    } else {
         if (rn->child_count >= rn->child_cap) {
             int r = ramfs_dir_grow(rn);
-            if (r < 0) return r;
+            if (r < 0) { kfree(dup); return r; }
         }
         slot = rn->child_count++;
     }
 
-    char *dup = kmalloc(strlen(name) + 1);
-    if (!dup) {
-        if (slot == rn->child_count - 1) rn->child_count--;
-        return -ENOMEM;
-    }
-    strcpy(dup, name);
-
     rn->children[slot].name = dup;
     rn->children[slot].node = child;
+    rn->children[slot].hash = ramfs_name_hash(dup);
+    ramfs_bucket_insert(rn, slot);
+    if (child->type == VFS_NODE_DIR) rn->subdirs++;
     rn->live++;
     dir->size = (uint64_t)rn->live;
 
@@ -366,27 +406,29 @@ static int ramfs_dir_create(vnode_t *dir, const char *name, uint32_t mode, vnode
 }
 
 static void ramfs_drop_slot(vnode_t *dir, ramfs_node_t *rn, int i) {
+    int *pp = &rn->buckets[rn->children[i].hash & (uint32_t)(rn->nbuckets - 1)];
+    while (*pp != i) pp = &rn->children[*pp].next;
+    *pp = rn->children[i].next;
+    if (rn->children[i].node && rn->children[i].node->type == VFS_NODE_DIR) rn->subdirs--;
     kfree(rn->children[i].name);
     rn->children[i].name = NULL;
     rn->children[i].node = NULL;
+    rn->children[i].next = rn->free_head;
+    rn->free_head = i;
     rn->live--;
-    while (rn->child_count > 0 && !rn->children[rn->child_count - 1].name) rn->child_count--;
     dir->size = (uint64_t)rn->live;
 }
 
 static int ramfs_dir_unlink(vnode_t *dir, const char *name) {
     ramfs_node_t *rn = dir->fs_data;
-    for (int i = 0; i < rn->child_count; i++) {
-        if (rn->children[i].name && strcmp(rn->children[i].name, name) == 0) {
-            vnode_t *node = rn->children[i].node;
-            ramfs_drop_slot(dir, rn, i);
-            name_removed(node);
-            touch_dir(dir);
-            vnode_unref(node);
-            return 0;
-        }
-    }
-    return -ENOENT;
+    int i = ramfs_find(rn, name);
+    if (i < 0) return -ENOENT;
+    vnode_t *node = rn->children[i].node;
+    ramfs_drop_slot(dir, rn, i);
+    name_removed(node);
+    touch_dir(dir);
+    vnode_unref(node);
+    return 0;
 }
 
 static int64_t ramfs_readlink(vnode_t *node, char *buf, size_t bufsiz) {
@@ -434,12 +476,6 @@ static int ramfs_dir_symlink(vnode_t *dir, const char *name, const char *target)
     }
     vnode_unref(child);
     return 0;
-}
-
-static int ramfs_find(ramfs_node_t *rn, const char *name) {
-    for (int i = 0; i < rn->child_count; i++)
-        if (rn->children[i].name && strcmp(rn->children[i].name, name) == 0) return i;
-    return -1;
 }
 
 static bool ramfs_subtree_has(vnode_t *root, vnode_t *needle, int depth) {
