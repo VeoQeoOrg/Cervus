@@ -63,6 +63,10 @@ typedef struct mm {
     uint32_t       def_flags;
 } mm_t;
 
+#define MM_REMAP_MAYMOVE   0x1
+#define MM_REMAP_FIXED     0x2
+#define MM_REMAP_DONTUNMAP 0x4
+
 #define MM_FAULT_WRITE 0x1
 #define MM_FAULT_EXEC  0x2
 #define MM_FAULT_USER  0x4
@@ -90,6 +94,8 @@ int64_t    mm_map_pfn(mm_t *mm, uintptr_t addr, size_t len, uint32_t flags, bool
 int        mm_unmap(mm_t *mm, uintptr_t addr, size_t len);
 int        mm_protect(mm_t *mm, uintptr_t addr, size_t len, uint32_t prot);
 int        mm_sync(mm_t *mm, uintptr_t addr, size_t len);
+int64_t    mm_remap(mm_t *mm, uintptr_t old, size_t old_len, size_t new_len, int flags, uintptr_t new_addr);
+int        mm_mincore(mm_t *mm, uintptr_t addr, size_t len, uint8_t *out);
 int        mm_discard(mm_t *mm, uintptr_t addr, size_t len);
 uintptr_t  mm_set_brk(mm_t *mm, uintptr_t new_brk);
 void       mm_init_heap(mm_t *mm, uintptr_t start);

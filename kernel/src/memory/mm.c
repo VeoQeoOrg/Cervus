@@ -698,6 +698,127 @@ int mm_mlockall(mm_t *mm, int flags, bool lock) {
     return 0;
 }
 
+typedef struct { mm_t *mm; intptr_t delta; flushbuf_t *fb; } move_ctx_t;
+
+static void move_cb(vmm_pte_t *pte, uintptr_t va, void *c) {
+    move_ctx_t *m = c;
+    vmm_pte_t *dst = vmm_pte_lookup(m->mm->pagemap, va + m->delta);
+    if (!dst) return;
+    *dst = *pte;
+    *pte = 0;
+    fb_add(m->fb, va);
+}
+
+static bool prepare_tables(mm_t *mm, uintptr_t start, uintptr_t end) {
+    for (uintptr_t va = start; va < end; va = (va | ((1ULL << 21) - 1)) + 1)
+        if (!vmm_pte_ensure(mm->pagemap, va)) return false;
+    return true;
+}
+
+int64_t mm_remap(mm_t *mm, uintptr_t old, size_t old_len, size_t new_len, int flags, uintptr_t new_addr) {
+    if (!mm || (old & (PG - 1)) || !new_len || !old_len) return -EINVAL;
+    if (flags & ~(MM_REMAP_MAYMOVE | MM_REMAP_FIXED | MM_REMAP_DONTUNMAP)) return -EINVAL;
+    bool fixed = flags & MM_REMAP_FIXED, keep = flags & MM_REMAP_DONTUNMAP;
+    if ((fixed || keep) && !(flags & MM_REMAP_MAYMOVE)) return -EINVAL;
+    old_len = pup(old_len);
+    new_len = pup(new_len);
+    if (keep && old_len != new_len) return -EINVAL;
+    if (old + old_len < old || old + old_len > MM_USER_TOP) return -EINVAL;
+    if (fixed) {
+        if ((new_addr & (PG - 1)) || new_addr < 0x1000 || new_addr + new_len < new_addr ||
+            new_addr + new_len > MM_USER_TOP) return -EINVAL;
+        if (new_addr < old + old_len && old < new_addr + new_len) return -EINVAL;
+    }
+
+    int64_t r;
+    kmutex_lock(&mm->lock);
+    vm_area_t *v = mm_find_vma(mm, old);
+    if (!v || old + old_len > v->end || (v->flags & VM_PFNMAP)) { r = -EFAULT; goto out; }
+
+    if (!fixed && !keep) {
+        if (new_len <= old_len) {
+            r = new_len < old_len ? unmap_locked(mm, old + new_len, old + old_len) : 0;
+            if (r == 0) r = (int64_t)old;
+            goto out;
+        }
+        uintptr_t end = old + old_len;
+        if (end == v->end && !(v->flags & VM_GROWSDOWN) && old + new_len <= MM_USER_TOP &&
+            range_free(mm, end, old + new_len)) {
+            v->end = old + new_len;
+            if (v->flags & VM_LOCKED) populate_locked_vma(mm, v);
+            r = (int64_t)old;
+            goto out;
+        }
+        if (!(flags & MM_REMAP_MAYMOVE)) { r = -ENOMEM; goto out; }
+    }
+
+    uintptr_t dest;
+    if (fixed) {
+        r = unmap_locked(mm, new_addr, new_addr + new_len);
+        if (r < 0) goto out;
+        dest = new_addr;
+        v = mm_find_vma(mm, old);
+    } else {
+        dest = find_gap(mm, new_len);
+        if (!dest) { r = -ENOMEM; goto out; }
+    }
+    if (v->start < old) {
+        v = vma_split(mm, v, old);
+        if (!v) { r = -ENOMEM; goto out; }
+    }
+    if (v->end > old + old_len && !vma_split(mm, v, old + old_len)) { r = -ENOMEM; goto out; }
+    if (!prepare_tables(mm, dest, dest + old_len)) { r = -ENOMEM; goto out; }
+
+    vm_area_t *n = vma_new();
+    if (!n) { r = -ENOMEM; goto out; }
+    *n = *v;
+    n->next = n->prev = NULL;
+    n->start = dest;
+    n->end = dest + new_len;
+    if (n->vnode) vnode_ref(n->vnode);
+    if (n->open) n->open(n);
+
+    flushbuf_t fb = { .mm = mm };
+    move_ctx_t mc = { mm, (intptr_t)dest - (intptr_t)old, &fb };
+    walk_ptes(mm->pagemap, old, old + old_len, move_cb, &mc);
+    fb_done(&fb);
+    if (!keep) {
+        vma_unlink(mm, v);
+        vma_release(v);
+    }
+    vma_link(mm, n);
+    if (n->flags & VM_LOCKED) populate_locked_vma(mm, n);
+    r = (int64_t)dest;
+out:
+    kmutex_unlock(&mm->lock);
+    return r;
+}
+
+int mm_mincore(mm_t *mm, uintptr_t addr, size_t len, uint8_t *out) {
+    if (!mm || (addr & (PG - 1))) return -EINVAL;
+    uintptr_t end = addr + pup(len);
+    if (end < addr || end > MM_USER_TOP) return -ENOMEM;
+    kmutex_lock(&mm->lock);
+    vm_area_t *v = NULL;
+    size_t i = 0;
+    for (uintptr_t va = addr; va < end; va += PG, i++) {
+        if (!v || va >= v->end) v = mm_find_vma(mm, va);
+        if (!v) { kmutex_unlock(&mm->lock); return -ENOMEM; }
+        vmm_pte_t *pte = vmm_pte_lookup(mm->pagemap, va);
+        uint8_t res = pte && (*pte & VMM_PRESENT);
+        if (!res && (v->flags & VM_FILE) && v->vnode) {
+            uintptr_t phys;
+            if (pagecache_peek(v->vnode, (v->offset + (va - v->start)) / PG, &phys) == 0) {
+                page_unref(phys);
+                res = 1;
+            }
+        }
+        out[i] = res;
+    }
+    kmutex_unlock(&mm->lock);
+    return 0;
+}
+
 int mm_sync(mm_t *mm, uintptr_t addr, size_t len) {
     if (!mm || (addr & (PG - 1))) return -EINVAL;
     uintptr_t end = addr + pup(len);

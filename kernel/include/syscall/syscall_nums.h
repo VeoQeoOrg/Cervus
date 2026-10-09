@@ -250,6 +250,8 @@
 #define SYS_TIMER_GETTIME     674
 #define SYS_TIMER_GETOVERRUN  675
 #define SYS_TIMER_DELETE      676
+#define SYS_MREMAP            677
+#define SYS_MINCORE           678
 
 #define SYSCALL_TABLE_SIZE    768
 
