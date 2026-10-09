@@ -328,6 +328,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
 
     task_sample_rss(t);
+    t->cr3 = 0;
     mm_t *old_mm = t->mm;
     vmm_pagemap_t *old_pagemap = t->pagemap;
     uint32_t old_flags = t->flags;

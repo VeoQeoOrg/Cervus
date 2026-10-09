@@ -988,6 +988,7 @@ __attribute__((noreturn)) void task_exit(void)
     seat_task_exit(me->pid);
 
     vmm_switch_pagemap(vmm_get_kernel_pagemap());
+    me->cr3 = 0;
 
     vfs_lock_release_owner((int)me->pid);
     vt_fb_task_exit(me);
@@ -1264,7 +1265,10 @@ void sched_reschedule(void) {
     }
 
     uint64_t switch_cr3 = 0;
-    if (next->cr3 && (!old || old->cr3 != next->cr3)) {
+    uint64_t live_cr3;
+    asm volatile("mov %%cr3, %0" : "=r"(live_cr3));
+    live_cr3 &= ~0xFFFULL;
+    if (next->cr3 && live_cr3 != next->cr3) {
         if (next->pagemap)
             vmm_sync_kernel_mappings(next->pagemap);
         asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
@@ -1273,7 +1277,7 @@ void sched_reschedule(void) {
         vmm_pagemap_t* kpm = vmm_get_kernel_pagemap();
         if (kpm && kpm->pml4) {
             uint64_t kphys = (uint64_t)pmm_virt_to_phys(kpm->pml4);
-            if (!old || old->cr3 != kphys)
+            if (live_cr3 != kphys)
                 switch_cr3 = kphys;
         }
     }
