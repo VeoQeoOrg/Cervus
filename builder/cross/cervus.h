@@ -1,6 +1,9 @@
 #undef TARGET_CERVUS
 #define TARGET_CERVUS 1
 
+#undef CPP_SPEC
+#define CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
+
 #undef LIB_SPEC
 #define LIB_SPEC "%{shared:-lc;static|no-pie:--start-group -lcervus -lgcc --end-group;:--start-group -lc -lgcc --end-group}"
 
