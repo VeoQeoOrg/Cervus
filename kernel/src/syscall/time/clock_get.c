@@ -3,6 +3,7 @@
 #include "../../../include/apic/apic.h"
 #include "../../../include/drivers/timer.h"
 #include "../../../include/io/ports.h"
+#include "../../../include/time/ktimer.h"
 #include <stdbool.h>
 
 static int _rtc_bcd2bin(int v) { return (v & 0x0F) + ((v >> 4) * 10); }
@@ -111,12 +112,22 @@ int64_t sys_clock_get(uint64_t id, uint64_t ts_ptr)
 
     cervus_timespec_t ts;
 
-    if (id == 2 || id == 3) {
+    if (id == 2 || id == 3 || (int32_t)id < 0) {
         task_t *t = syscall_cur_task();
         if (!t) return -EINVAL;
-        uint64_t ns = t->total_runtime;
-        uint64_t now = sched_now_ns();
-        if (t->run_start_ns && now > t->run_start_ns) ns += now - t->run_start_ns;
+        bool thread = id == 3;
+        if ((int32_t)id < 0) {
+            int32_t cid = (int32_t)id;
+            if ((cid & 3) != 2) return -EINVAL;
+            thread = (cid & 4) != 0;
+            uint32_t pid = (uint32_t)(~(cid >> 3));
+            if (pid) {
+                t = task_find_by_pid(pid);
+                if (!t || t->state == TASK_DEAD) return -EINVAL;
+                if (thread && task_leader(t) != task_leader(syscall_cur_task())) return -EINVAL;
+            }
+        }
+        uint64_t ns = thread ? task_cputime(t) : task_group_cputime(task_leader(t));
         ts.tv_sec  = (int64_t)(ns / 1000000000ULL);
         ts.tv_nsec = (int64_t)(ns % 1000000000ULL);
     } else if (id != 0 && id != 1 && id != 4 && id != 5 && id != 6 && id != 7) {
@@ -154,5 +165,6 @@ int64_t sys_clock_set(uint64_t sec, uint64_t nsec)
     g_rtc_base_sec    = (int64_t)sec;
     g_rtc_base_ns     = now > nsec ? now - nsec : 0;
     g_rtc_initialized = true;
+    ktimer_clock_was_set();
     return 0;
 }

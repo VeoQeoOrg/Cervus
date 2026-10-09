@@ -1,3 +1,4 @@
+#include "../../include/time/ktimer.h"
 #include "../include/drivers/timer.h"
 #include "../include/time/clocksource.h"
 #include "../include/apic/apic.h"
@@ -68,7 +69,9 @@ DEFINE_IRQ(0x20, timer_handler)
     }
 
     if (cpu == 0) {
-        sched_wakeup_sleepers(sched_now_ns());
+        uint64_t now = sched_now_ns();
+        sched_wakeup_sleepers(now);
+        ktimer_run(now);
     }
 
     {

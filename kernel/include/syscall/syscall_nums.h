@@ -245,6 +245,11 @@
 #define SYS_GETTID            669
 #define SYS_TGKILL            670
 #define SYS_EXECVEAT          671
+#define SYS_TIMER_CREATE      672
+#define SYS_TIMER_SETTIME     673
+#define SYS_TIMER_GETTIME     674
+#define SYS_TIMER_GETOVERRUN  675
+#define SYS_TIMER_DELETE      676
 
 #define SYSCALL_TABLE_SIZE    768
 

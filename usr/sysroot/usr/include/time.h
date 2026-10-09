@@ -80,6 +80,14 @@ int clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct
 
 time_t timegm(struct tm *tm);
 int clock_settime(clockid_t clk, const struct timespec *ts);
+int clock_getcpuclockid(pid_t pid, clockid_t *clk);
+
+struct sigevent;
+int timer_create(clockid_t clk, struct sigevent *sev, timer_t *id);
+int timer_delete(timer_t id);
+int timer_settime(timer_t id, int flags, const struct itimerspec *nv, struct itimerspec *ov);
+int timer_gettime(timer_t id, struct itimerspec *cur);
+int timer_getoverrun(timer_t id);
 
 #ifdef __cplusplus
 }

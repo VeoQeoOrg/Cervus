@@ -249,6 +249,8 @@ typedef struct task {
     int32_t    group_exit_code;
     int32_t    group_term_sig;
     volatile int32_t group_killed;
+    struct ptimer_table *ptimers;
+    uint64_t   group_dead_runtime;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }
@@ -351,6 +353,9 @@ bool    task_is_idle(const task_t* t);
 void    task_group_exit(task_t* me, int exit_code, int term_sig);
 int     task_group_kill_others(task_t* me);
 task_t* task_group_pick(task_t* leader, int sig);
+task_t* task_group_find(task_t* leader, uint32_t tid);
+uint64_t task_group_cputime(task_t* leader);
+uint64_t task_cputime(task_t* t);
 int     task_exec_dethread(task_t* t);
 void    sched_wakeup_sleepers(uint64_t now_ns);
 task_t* task_find_foreground(void);

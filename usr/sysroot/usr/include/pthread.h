@@ -9,12 +9,7 @@ extern "C" {
 #include <sched.h>
 #include <time.h>
 
-typedef struct __pthread *pthread_t;
-
-typedef struct {
-    size_t stacksize;
-    int    detachstate;
-} pthread_attr_t;
+#include <sys/types.h>
 
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
@@ -77,6 +72,7 @@ void __pthread_cleanup_pop(struct __pthread_cleanup *c, int execute);
 #define pthread_cleanup_push(fn, arg) do { struct __pthread_cleanup __pcb; __pthread_cleanup_push(&__pcb, (fn), (arg));
 #define pthread_cleanup_pop(execute) __pthread_cleanup_pop(&__pcb, (execute)); } while (0)
 pthread_t pthread_self(void);
+int pthread_getcpuclockid(pthread_t th, clockid_t *clk);
 int  pthread_equal(pthread_t a, pthread_t b);
 
 int  pthread_attr_init(pthread_attr_t *a);

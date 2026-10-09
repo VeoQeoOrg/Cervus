@@ -16,6 +16,7 @@
 #include "../include/console/console.h"
 #include "../include/puzzle/puzzle.h"
 #include "../include/signal/signal.h"
+#include "../include/time/ptimer.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -767,6 +768,9 @@ static int group_detach(task_t* me)
         while (*pp && *pp != me) pp = &(*pp)->group_next;
         if (*pp) *pp = me->group_next;
         me->group_next = NULL;
+        uint64_t now = sched_now_ns();
+        leader->group_dead_runtime += me->total_runtime +
+            (me->run_start_ns && now > me->run_start_ns ? now - me->run_start_ns : 0);
     }
     int live = --leader->group_live;
     spinlock_release_irqrestore(&g_group_lock, f);
@@ -922,6 +926,37 @@ task_t* task_group_pick(task_t* leader, int sig)
     return pick;
 }
 
+task_t* task_group_find(task_t* leader, uint32_t tid)
+{
+    task_t* found = NULL;
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    if (leader->pid == tid && leader->state != TASK_ZOMBIE && leader->state != TASK_DEAD) {
+        found = leader;
+    } else {
+        for (task_t* t = leader->group_next; t; t = t->group_next)
+            if (t->pid == tid && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) { found = t; break; }
+    }
+    spinlock_release_irqrestore(&g_group_lock, f);
+    return found;
+}
+
+uint64_t task_cputime(task_t* t)
+{
+    uint64_t ns = t->total_runtime;
+    uint64_t now = sched_now_ns();
+    if (t->state == TASK_RUNNING && t->run_start_ns && now > t->run_start_ns) ns += now - t->run_start_ns;
+    return ns;
+}
+
+uint64_t task_group_cputime(task_t* leader)
+{
+    uint64_t f = spinlock_acquire_irqsave(&g_group_lock);
+    uint64_t ns = leader->group_dead_runtime + task_cputime(leader);
+    for (task_t* t = leader->group_next; t; t = t->group_next) ns += task_cputime(t);
+    spinlock_release_irqrestore(&g_group_lock, f);
+    return ns;
+}
+
 __attribute__((noreturn)) void task_exit(void)
 {
     asm volatile("cli");
@@ -988,7 +1023,9 @@ __attribute__((noreturn)) void task_exit(void)
     me->state = TASK_ZOMBIE;
     me->cr3 = 0;
 
+    signal_flush_timers(me);
     int live = group_detach(me);
+    if ((leader != me && live == 0) || (leader == me && live <= 0)) ptimer_group_exit(leader);
     if (leader != me) {
         if (live == 0) group_report(leader);
     } else if (live <= 0) {

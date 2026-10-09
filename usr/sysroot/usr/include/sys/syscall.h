@@ -235,6 +235,11 @@ extern "C" {
 #define SYS_GETTID          669
 #define SYS_TGKILL          670
 #define SYS_EXECVEAT        671
+#define SYS_TIMER_CREATE    672
+#define SYS_TIMER_SETTIME   673
+#define SYS_TIMER_GETTIME   674
+#define SYS_TIMER_GETOVERRUN 675
+#define SYS_TIMER_DELETE    676
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

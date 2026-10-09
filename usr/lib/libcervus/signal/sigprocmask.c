@@ -4,7 +4,7 @@
 #include <libcervus.h>
 
 #define SIGCANCEL 32
-#define SIGSETXID 33
+#define SIGTIMER 33
 
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
 {
@@ -12,7 +12,7 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset)
     const uint64_t *p = NULL;
     if (set) {
         mask = set->__bits[0];
-        if (how != SIG_UNBLOCK) mask &= ~((1ULL << SIGCANCEL) | (1ULL << SIGSETXID));
+        if (how != SIG_UNBLOCK) mask &= ~((1ULL << SIGCANCEL) | (1ULL << SIGTIMER));
         p = &mask;
     }
     uint64_t old = 0;

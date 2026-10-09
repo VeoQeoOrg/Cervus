@@ -390,6 +390,14 @@ struct __cervus_FILE **__cervus_stdio_locks(void)
     return &pthread_self()->stdio_locks;
 }
 
+int pthread_getcpuclockid(pthread_t th, clockid_t *clk)
+{
+    int tid = th == &g_main ? th->tid : __atomic_load_n(&th->tid_word, __ATOMIC_ACQUIRE);
+    if (tid <= 0) return ESRCH;
+    *clk = (clockid_t)((-tid - 1) * 8U + 6);
+    return 0;
+}
+
 int pthread_equal(pthread_t a, pthread_t b) { return a == b; }
 
 int pthread_attr_init(pthread_attr_t *a)

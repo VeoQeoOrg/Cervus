@@ -223,6 +223,11 @@ extern int64_t sys_accept4(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_gettid(void);
 extern int64_t sys_tgkill(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_execveat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timer_create(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timer_settime(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_timer_gettime(uint64_t, uint64_t);
+extern int64_t sys_timer_getoverrun(uint64_t);
+extern int64_t sys_timer_delete(uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -341,6 +346,7 @@ W2(sys_sched_setaffinity) W1(sys_sched_getaffinity) W0(sys_getcpu)
 W3(sys_sched_setscheduler) W2(sys_sched_getscheduler)
 W6(sys_sendto_flags) W6(sys_recvfrom_flags) W4(sys_accept4)
 W0(sys_gettid) W3(sys_tgkill) W5(sys_execveat)
+W3(sys_timer_create) W4(sys_timer_settime) W2(sys_timer_gettime) W1(sys_timer_getoverrun) W1(sys_timer_delete)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -509,6 +515,11 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_GETTID]          = _sys_gettid,
     [SYS_TGKILL]          = _sys_tgkill,
     [SYS_EXECVEAT]        = _sys_execveat,
+    [SYS_TIMER_CREATE]    = _sys_timer_create,
+    [SYS_TIMER_SETTIME]   = _sys_timer_settime,
+    [SYS_TIMER_GETTIME]   = _sys_timer_gettime,
+    [SYS_TIMER_GETOVERRUN] = _sys_timer_getoverrun,
+    [SYS_TIMER_DELETE]    = _sys_timer_delete,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

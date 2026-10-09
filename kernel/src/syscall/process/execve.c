@@ -8,6 +8,7 @@
 #include "../../../include/io/serial.h"
 #include "../../../include/puzzle/puzzle.h"
 #include "../../../include/drivers/random.h"
+#include "../../../include/time/ptimer.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -325,6 +326,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
         vfs_close(vfile); sv_free(&envp);
         return -EINTR;
     }
+    ptimer_group_exit(t);
 
     if (t->fd_table) fd_table_cloexec(t->fd_table);
 

@@ -75,6 +75,8 @@ typedef struct {
 } ksiginfo_t;
 
 int     signal_post(struct task *t, int sig, const ksiginfo_t *si);
+int     signal_post_timer(struct task *t, int sig, const ksiginfo_t *si);
+void    signal_flush_timers(struct task *t);
 void    signal_send_child(struct task *parent, struct task *child);
 int64_t sys_sigqueue(uint64_t pid, uint64_t sig, uint64_t value);
 int64_t sys_sigtimedwait(uint64_t set, uint64_t info, uint64_t ts);

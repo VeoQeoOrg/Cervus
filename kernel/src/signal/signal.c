@@ -1,5 +1,6 @@
 #include "../../include/sched/capabilities.h"
 #include "../../include/signal/signal.h"
+#include "../../include/time/ptimer.h"
 #include "../../include/sched/sched.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/memory/vmm.h"
@@ -57,7 +58,7 @@ static int signal_ignored(task_t *t, int sig) {
 
 static spinlock_t g_sig_lock = SPINLOCK_INIT;
 
-int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
+static int post(task_t *t, int sig, const ksiginfo_t *si) {
     if (!t || sig <= 0 || sig >= NSIG) return -EINVAL;
     if (sig != SIGKILL && signalfd_deliver(t->pid, sig, si)) return 0;
     uint64_t bit = 1ULL << sig;
@@ -65,6 +66,7 @@ int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
         signal_ignored(t, sig))
         return 0;
 
+    int merged = 0;
     uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
     if (sig >= SIGRTMIN_K) {
         uint64_t qlim = t->rlim[RLIMIT_SIGPENDING_K].cur;
@@ -88,6 +90,8 @@ int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
         t->sig_si[sig].trapno = si->trapno;
         t->sig_si[sig].err    = si->err;
         t->sig_si[sig].value  = si->value;
+    } else {
+        merged = 1;
     }
     t->sig_pending |= bit;
     if (sig == SIGKILL) {
@@ -99,7 +103,17 @@ int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
     if (t->state == TASK_BLOCKED &&
         (sig == SIGKILL || !(t->sig_blocked & bit) || (t->sig_waitset & bit)))
         task_unblock(t);
-    return 0;
+    return merged ? 2 : 1;
+}
+
+int signal_post(task_t *t, int sig, const ksiginfo_t *si) {
+    int r = post(t, sig, si);
+    return r < 0 ? r : 0;
+}
+
+int signal_post_timer(task_t *t, int sig, const ksiginfo_t *si) {
+    int r = post(t, sig, si);
+    return r == 2 ? -EBUSY : r;
 }
 
 void signal_send(task_t *t, int sig) {
@@ -153,18 +167,39 @@ static void take_signal(task_t *t, int sig, ksiginfo_t *out) {
         t->sig_pending &= ~bit;
     }
     spinlock_release_irqrestore(&g_sig_lock, f);
+    if (out->code == SI_TIMER_CODE) ptimer_signal_taken(t, out);
+}
+
+void signal_flush_timers(task_t *t) {
+    int timers[SIGQUEUE_MAX + NSIG];
+    int nt = 0;
+    uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
+    for (uint32_t i = 0; i < t->rtq_n; i++)
+        if (t->rtq[i].code == SI_TIMER_CODE) timers[nt++] = (int)t->rtq[i].pid;
+    for (int sig = 1; sig < SIGRTMIN_K; sig++)
+        if ((t->sig_pending & (1ULL << sig)) && t->sig_si[sig].code == SI_TIMER_CODE)
+            timers[nt++] = (int)t->sig_si[sig].pid;
+    spinlock_release_irqrestore(&g_sig_lock, f);
+    for (int i = 0; i < nt; i++) ptimer_signal_dropped(t, timers[i]);
 }
 
 static void discard_signal(task_t *t, int sig) {
+    int timers[SIGQUEUE_MAX + 1];
+    int nt = 0;
     uint64_t f = spinlock_acquire_irqsave(&g_sig_lock);
     if (sig >= SIGRTMIN_K) {
         uint32_t w = 0;
-        for (uint32_t i = 0; i < t->rtq_n; i++)
+        for (uint32_t i = 0; i < t->rtq_n; i++) {
             if (t->rtq[i].sig != sig) t->rtq[w++] = t->rtq[i];
+            else if (t->rtq[i].code == SI_TIMER_CODE) timers[nt++] = (int)t->rtq[i].pid;
+        }
         t->rtq_n = w;
+    } else if ((t->sig_pending & (1ULL << sig)) && t->sig_si[sig].code == SI_TIMER_CODE) {
+        timers[nt++] = (int)t->sig_si[sig].pid;
     }
     t->sig_pending &= ~(1ULL << sig);
     spinlock_release_irqrestore(&g_sig_lock, f);
+    for (int i = 0; i < nt; i++) ptimer_signal_dropped(t, timers[i]);
 }
 
 static void fill_siginfo(uint8_t *info, int sig, const ksiginfo_t *si) {
