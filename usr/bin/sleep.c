@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+#include <time.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
@@ -38,6 +40,8 @@ int main(int argc, char **argv)
         fputs("Usage: sleep <seconds>\n", stderr);
         return 1;
     }
-    cervus_nanosleep(parse_ns(arg));
+    uint64_t ns = parse_ns(arg);
+    struct timespec ts = { (time_t)(ns / 1000000000ULL), (long)(ns % 1000000000ULL) };
+    while (nanosleep(&ts, &ts) < 0 && errno == EINTR) {}
     return 0;
 }

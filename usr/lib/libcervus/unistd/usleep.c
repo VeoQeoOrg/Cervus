@@ -1,8 +1,8 @@
 #include <unistd.h>
-#include <stdint.h>
-#include <sys/cervus.h>
+#include <time.h>
 
 int usleep(unsigned int usec)
 {
-    return cervus_nanosleep((uint64_t)usec * 1000ULL);
+    struct timespec ts = { (time_t)(usec / 1000000), (long)(usec % 1000000) * 1000 };
+    return nanosleep(&ts, &ts);
 }
