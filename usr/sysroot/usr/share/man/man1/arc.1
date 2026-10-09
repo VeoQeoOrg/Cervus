@@ -1,10 +1,10 @@
 NAME
-       ar - pack and unpack archives
+       arc - pack and unpack archives
 
 SYNOPSIS
-       ar c <archive> <file>...
-       ar x <archive> [directory]
-       ar t <archive>
+       arc c <archive> <file>...
+       arc x <archive> [directory]
+       arc t <archive>
 
 DESCRIPTION
        Reads and writes the archive formats other systems use, so a
@@ -41,9 +41,9 @@ COMPRESSION
        mangled.
 
 EXAMPLE
-         ar c project.zip src doc readme.txt
-         ar t project.zip
-         ar x project.zip /tmp/unpacked
+         arc c project.zip src doc readme.txt
+         arc t project.zip
+         arc x project.zip /tmp/unpacked
 
 SEE ALSO
        tar(1), inflate(3)

@@ -13,7 +13,7 @@
 #define MAX_ENTRIES  4096
 
 static const char USAGE[] =
-    "Usage: ar <command> <archive> [files...]\n"
+    "Usage: arc <command> <archive> [files...]\n"
     "\n"
     "  c <archive> <file>...   create an archive holding these files\n"
     "  x <archive> [dir]       extract, into dir if given\n"
@@ -109,7 +109,7 @@ static void collect(const char *path)
 {
     struct stat st;
     if (stat(path, &st) != 0) {
-        fprintf(stderr, "ar: %s is not there\n", path);
+        fprintf(stderr, "arc: %s is not there\n", path);
         return;
     }
 
@@ -137,7 +137,7 @@ static void collect(const char *path)
 static int create_zip(const char *archive)
 {
     FILE *f = fopen(archive, "wb");
-    if (!f) { fprintf(stderr, "ar: cannot write %s\n", archive); return 1; }
+    if (!f) { fprintf(stderr, "arc: cannot write %s\n", archive); return 1; }
 
     for (int i = 0; i < g_count; i++) {
         entry_t *e = &g_entries[i];
@@ -280,7 +280,7 @@ static int create_tar(const char *archive, int gzip)
     if (build_tar(&tar, &tlen) != 0) return 1;
 
     FILE *f = fopen(archive, "wb");
-    if (!f) { free(tar); fprintf(stderr, "ar: cannot write %s\n", archive); return 1; }
+    if (!f) { free(tar); fprintf(stderr, "arc: cannot write %s\n", archive); return 1; }
 
     if (!gzip) {
         fwrite(tar, 1, tlen, f);
@@ -289,7 +289,7 @@ static int create_tar(const char *archive, int gzip)
         size_t plen = 0;
         if (raw_deflate(tar, tlen, &packed, &plen) != 0) {
             fclose(f); free(tar);
-            fprintf(stderr, "ar: cannot compress\n");
+            fprintf(stderr, "arc: cannot compress\n");
             return 1;
         }
         uint8_t head[10] = { 0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3 };
@@ -309,7 +309,7 @@ static int create_tar(const char *archive, int gzip)
 static int create_gz(const char *archive)
 {
     if (g_count != 1) {
-        fprintf(stderr, "ar: a .gz holds one file; use .tar.gz for several\n");
+        fprintf(stderr, "arc: a .gz holds one file; use .tar.gz for several\n");
         return 1;
     }
     size_t len = 0;
@@ -359,7 +359,7 @@ static int write_out(const char *dir, const char *name, const uint8_t *data,
 
     make_parents(path);
     FILE *f = fopen(path, "wb");
-    if (!f) { fprintf(stderr, "ar: cannot write %s\n", path); return 0; }
+    if (!f) { fprintf(stderr, "arc: cannot write %s\n", path); return 0; }
     if (len) fwrite(data, 1, len, f);
     fclose(f);
     if (mode & 0111) chmod(path, 0755);
@@ -401,10 +401,10 @@ static int read_zip(const uint8_t *z, size_t zlen, const char *dir, int list_onl
                 done += write_out(dir, name, raw, rawlen, 0644, list_only);
                 free(raw);
             } else {
-                fprintf(stderr, "ar: %s would not decompress\n", name);
+                fprintf(stderr, "arc: %s would not decompress\n", name);
             }
         } else {
-            fprintf(stderr, "ar: %s uses a compression method we do not have\n", name);
+            fprintf(stderr, "arc: %s uses a compression method we do not have\n", name);
         }
         (void)original;
         at = data_at + packed;
@@ -456,7 +456,7 @@ static int unpack_archive(const char *archive, const char *dir, int list_only)
 {
     size_t len = 0;
     uint8_t *data = slurp(archive, &len);
-    if (!data) { fprintf(stderr, "ar: cannot read %s\n", archive); return 1; }
+    if (!data) { fprintf(stderr, "arc: cannot read %s\n", archive); return 1; }
 
     uint8_t *plain = data;
     size_t plainlen = len;
@@ -465,7 +465,7 @@ static int unpack_archive(const char *archive, const char *dir, int list_only)
     if (len > 2 && data[0] == 0x1f && data[1] == 0x8b) {
         size_t ulen = 0;
         if (gunzip(data, len, &unzipped, &ulen) != 0) {
-            fprintf(stderr, "ar: %s will not decompress\n", archive);
+            fprintf(stderr, "arc: %s will not decompress\n", archive);
             free(data);
             return 1;
         }
@@ -485,7 +485,7 @@ static int unpack_archive(const char *archive, const char *dir, int list_only)
         if (n > 3 && !strcasecmp(name + n - 3, ".gz")) name[n - 3] = 0;
         done = write_out(dir, name, plain, plainlen, 0644, list_only);
     } else {
-        fprintf(stderr, "ar: %s is not an archive we know\n", archive);
+        fprintf(stderr, "arc: %s is not an archive we know\n", archive);
         free(data);
         free(unzipped);
         return 1;
@@ -509,9 +509,9 @@ int main(int argc, char **argv)
     const char *archive = argv[2];
 
     if (!strcmp(cmd, "c")) {
-        if (argc < 4) { fprintf(stderr, "ar: nothing to pack\n"); return 1; }
+        if (argc < 4) { fprintf(stderr, "arc: nothing to pack\n"); return 1; }
         for (int i = 3; i < argc; i++) collect(argv[i]);
-        if (!g_count) { fprintf(stderr, "ar: no files found\n"); return 1; }
+        if (!g_count) { fprintf(stderr, "arc: no files found\n"); return 1; }
 
         switch (format_of(archive)) {
             case FMT_ZIP: return create_zip(archive);
@@ -525,7 +525,7 @@ int main(int argc, char **argv)
     if (!strcmp(cmd, "x")) return unpack_archive(archive, argc > 3 ? argv[3] : "", 0);
     if (!strcmp(cmd, "t")) return unpack_archive(archive, "", 1);
 
-    fprintf(stderr, "ar: no such command '%s'\n", cmd);
+    fprintf(stderr, "arc: no such command '%s'\n", cmd);
     fputs(USAGE, stderr);
     return 1;
 }
