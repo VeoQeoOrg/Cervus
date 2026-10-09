@@ -60,6 +60,7 @@ common_stub:
 .user_signals:
     mov rdi, rbx
     call signal_irq_return
+    cli
     mov rsp, rbx
     pop rax
     mov ds, ax
@@ -95,6 +96,7 @@ common_stub:
     mov rsp, rbx
 
 .kernel_check_cs:
+    cli
     mov rax, [rsp + 18*8]
     and rax, 3
     jz .kernel_exit
