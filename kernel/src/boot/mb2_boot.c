@@ -11,6 +11,7 @@
 extern void    kmain(void);
 extern uint8_t mb_pml4[];
 extern char    kernel_lma_end[];
+extern uint64_t mb_load_delta;
 
 __attribute__((aligned(64))) char mb_boot_stack[65536];
 
@@ -77,7 +78,11 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
     const uint8_t *end = info + total;
     const uint8_t *mmap_tag = 0;
 
-    rsv_add(0x100000, (uint64_t)(uintptr_t)kernel_lma_end - 0x100000);
+    rsv_add(0x100000, 0x100000);
+    rsv_add(0x200000 + mb_load_delta, (uint64_t)(uintptr_t)kernel_lma_end - 0x200000);
+    if (mb_load_delta)
+        serial_printf("[mb2] kernel loaded at phys 0x%llx (relocated by 0x%llx)\n",
+                      (unsigned long long)(0x200000 + mb_load_delta), (unsigned long long)mb_load_delta);
     rsv_add((uint64_t)info_phys, total);
 
     for (const uint8_t *p = info + 8; p + 8 <= end; ) {

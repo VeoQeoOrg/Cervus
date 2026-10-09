@@ -19,6 +19,15 @@ fb_tag:
     dd 1024
     dd 32
 align 8
+reloc_tag:
+    dw 10
+    dw 0
+    dd 24
+    dd KPHYS
+    dd 0x3FE00000
+    dd 0x200000
+    dd 1
+align 8
 entry_tag:
     dw 3
     dw 0
@@ -53,6 +62,9 @@ mb_stack:     resb 32768
 mb_stack_top:
 mb_magic:     resd 1
 mb_info:      resd 1
+global mb_load_delta
+alignb 8
+mb_load_delta: resq 1
 
 section .boot.text
 BITS 32
@@ -69,20 +81,41 @@ extern mb_boot_stack
 _mb_start:
     cli
     cld
-    mov esp, PHYS(mb_stack_top)
-    mov [PHYS(mb_magic)], eax
-    mov [PHYS(mb_info)], ebx
+    xor ebp, ebp
+    cmp eax, 0x36d76289
+    jne .delta_done
+    lea esi, [ebx + 8]
+.tag_walk:
+    mov ecx, [esi]
+    test ecx, ecx
+    jz .delta_done
+    cmp ecx, 21
+    je .tag_load_base
+    mov ecx, [esi + 4]
+    add ecx, 7
+    and ecx, ~7
+    add esi, ecx
+    jmp .tag_walk
+.tag_load_base:
+    mov ebp, [esi + 8]
+    sub ebp, KPHYS
+.delta_done:
+    lea esp, [ebp + PHYS(mb_stack_top)]
+    mov [ebp + PHYS(mb_magic)], eax
+    mov [ebp + PHYS(mb_info)], ebx
+    mov [ebp + PHYS(mb_load_delta)], ebp
+    mov dword [ebp + PHYS(mb_load_delta) + 4], 0
     SERIAL '1'
 
     xor eax, eax
-    mov edi, PHYS(mb_pml4)
+    lea edi, [ebp + PHYS(mb_pml4)]
     mov ecx, (4096*4)/4
     rep stosd
-    mov edi, PHYS(mb_pdpt_id)
+    lea edi, [ebp + PHYS(mb_pdpt_id)]
     mov ecx, (4096*3)/4
     rep stosd
 
-    mov edi, PHYS(mb_pd_id)
+    lea edi, [ebp + PHYS(mb_pd_id)]
     mov eax, 0x83
     xor ebx, ebx
     mov ecx, 512*16
@@ -95,8 +128,8 @@ _mb_start:
     dec ecx
     jnz .fill_id
 
-    mov edi, PHYS(mb_pd_k)
-    mov eax, KPHYS | 0x83
+    lea edi, [ebp + PHYS(mb_pd_k)]
+    lea eax, [ebp + KPHYS + 0x83]
     mov ecx, 512
 .fill_k:
     mov [edi], eax
@@ -106,17 +139,21 @@ _mb_start:
     dec ecx
     jnz .fill_k
 
-    mov dword [PHYS(mb_pdpt_id) + 0],  PHYS(mb_pd_id) + 0*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_id) + 8],  PHYS(mb_pd_id) + 1*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_id) + 16], PHYS(mb_pd_id) + 2*0x1000 + 0x03
-    mov dword [PHYS(mb_pdpt_id) + 24], PHYS(mb_pd_id) + 3*0x1000 + 0x03
+    lea eax, [ebp + PHYS(mb_pd_id) + 0*0x1000 + 0x03]
+    mov [ebp + PHYS(mb_pdpt_id) + 0], eax
+    lea eax, [ebp + PHYS(mb_pd_id) + 1*0x1000 + 0x03]
+    mov [ebp + PHYS(mb_pdpt_id) + 8], eax
+    lea eax, [ebp + PHYS(mb_pd_id) + 2*0x1000 + 0x03]
+    mov [ebp + PHYS(mb_pdpt_id) + 16], eax
+    lea eax, [ebp + PHYS(mb_pd_id) + 3*0x1000 + 0x03]
+    mov [ebp + PHYS(mb_pdpt_id) + 24], eax
 
     mov eax, 0x80000001
     cpuid
     test edx, 1 << 26
     jz .hh_2mb
 
-    mov edi, PHYS(mb_pdpt_hh)
+    lea edi, [ebp + PHYS(mb_pdpt_hh)]
     mov eax, 0x83
     xor ebx, ebx
     mov ecx, 512
@@ -131,8 +168,8 @@ _mb_start:
     jmp .hh_done
 
 .hh_2mb:
-    mov edi, PHYS(mb_pdpt_hh)
-    mov eax, PHYS(mb_pd_id) + 0x03
+    lea edi, [ebp + PHYS(mb_pdpt_hh)]
+    lea eax, [ebp + PHYS(mb_pd_id) + 0x03]
     mov ecx, 16
 .hh_2mb_loop:
     mov [edi], eax
@@ -143,13 +180,17 @@ _mb_start:
     jnz .hh_2mb_loop
 .hh_done:
 
-    mov dword [PHYS(mb_pdpt_k) + 510*8], PHYS(mb_pd_k) + 0x03
+    lea eax, [ebp + PHYS(mb_pd_k) + 0x03]
+    mov [ebp + PHYS(mb_pdpt_k) + 510*8], eax
 
-    mov dword [PHYS(mb_pml4) + 0*8],   PHYS(mb_pdpt_id) + 0x03
-    mov dword [PHYS(mb_pml4) + 256*8], PHYS(mb_pdpt_hh) + 0x03
-    mov dword [PHYS(mb_pml4) + 511*8], PHYS(mb_pdpt_k)  + 0x03
+    lea eax, [ebp + PHYS(mb_pdpt_id) + 0x03]
+    mov [ebp + PHYS(mb_pml4) + 0*8], eax
+    lea eax, [ebp + PHYS(mb_pdpt_hh) + 0x03]
+    mov [ebp + PHYS(mb_pml4) + 256*8], eax
+    lea eax, [ebp + PHYS(mb_pdpt_k) + 0x03]
+    mov [ebp + PHYS(mb_pml4) + 511*8], eax
 
-    mov eax, PHYS(mb_pml4)
+    lea eax, [ebp + PHYS(mb_pml4)]
     mov cr3, eax
 
     mov eax, cr4
@@ -167,11 +208,17 @@ _mb_start:
 
     SERIAL '2'
 
-    lgdt [PHYS(gdt64_ptr)]
-    jmp 0x08:PHYS(long_entry)
+    lea eax, [ebp + PHYS(gdt64)]
+    mov [ebp + PHYS(gdt64_ptr) + 2], eax
+    lgdt [ebp + PHYS(gdt64_ptr)]
+    lea eax, [ebp + PHYS(long_entry)]
+    push dword 0x08
+    push eax
+    retf
 
 BITS 64
 long_entry:
+    mov ebp, ebp
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -184,9 +231,9 @@ long_entry:
     out dx, al
 
     xor edi, edi
-    mov edi, [PHYS(mb_magic)]
+    mov edi, [rel mb_magic]
     xor esi, esi
-    mov esi, [PHYS(mb_info)]
+    mov esi, [rel mb_info]
 
     mov rax, mb_boot_stack
     add rax, 65536
