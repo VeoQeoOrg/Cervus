@@ -980,8 +980,6 @@ __attribute__((noreturn)) void task_exit(void)
     extern void audio_task_exit(void *who);
     audio_task_exit(me);
 
-    extern void shm_task_exit(task_t *who);
-    shm_task_exit(me);
 
     extern void seat_task_exit(uint32_t pid);
     seat_task_exit(me->pid);
@@ -1025,7 +1023,11 @@ __attribute__((noreturn)) void task_exit(void)
 
     signal_flush_timers(me);
     int live = group_detach(me);
-    if ((leader != me && live == 0) || (leader == me && live <= 0)) ptimer_group_exit(leader);
+    if ((leader != me && live == 0) || (leader == me && live <= 0)) {
+        extern void sem_exit_group(task_t *leader);
+        ptimer_group_exit(leader);
+        sem_exit_group(leader);
+    }
     if (leader != me) {
         if (live == 0) group_report(leader);
     } else if (live <= 0) {

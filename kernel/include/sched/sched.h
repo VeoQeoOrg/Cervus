@@ -251,6 +251,7 @@ typedef struct task {
     volatile int32_t group_killed;
     struct ptimer_table *ptimers;
     uint64_t   group_dead_runtime;
+    struct sem_undo *sem_undo;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

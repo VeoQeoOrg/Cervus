@@ -252,6 +252,11 @@
 #define SYS_TIMER_DELETE      676
 #define SYS_MREMAP            677
 #define SYS_MINCORE           678
+#define SYS_MSGGET            679
+#define SYS_MSGSND            680
+#define SYS_MSGRCV            681
+#define SYS_MSGCTL            682
+#define SYS_SEMTIMEDOP        683
 
 #define SYSCALL_TABLE_SIZE    768
 

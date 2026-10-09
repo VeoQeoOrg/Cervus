@@ -133,6 +133,13 @@ static bool range_free(mm_t *mm, uintptr_t start, uintptr_t end) {
     return true;
 }
 
+bool mm_range_free(mm_t *mm, uintptr_t start, uintptr_t end) {
+    kmutex_lock(&mm->lock);
+    bool r = range_free(mm, start, end);
+    kmutex_unlock(&mm->lock);
+    return r;
+}
+
 static uintptr_t find_gap(mm_t *mm, size_t len) {
     uintptr_t floor = mm->brk ? pup(mm->brk) + 0x10000000ULL : 0x10000000ULL;
     vm_area_t *tail = mm->vmas;

@@ -230,6 +230,11 @@ extern int64_t sys_timer_getoverrun(uint64_t);
 extern int64_t sys_timer_delete(uint64_t);
 extern int64_t sys_mremap(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_mincore(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_msgget(uint64_t, uint64_t);
+extern int64_t sys_msgsnd(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_msgrcv(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_msgctl(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_semtimedop(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -350,6 +355,7 @@ W6(sys_sendto_flags) W6(sys_recvfrom_flags) W4(sys_accept4)
 W0(sys_gettid) W3(sys_tgkill) W5(sys_execveat)
 W3(sys_timer_create) W4(sys_timer_settime) W2(sys_timer_gettime) W1(sys_timer_getoverrun) W1(sys_timer_delete)
 W5(sys_mremap) W3(sys_mincore)
+W2(sys_msgget) W4(sys_msgsnd) W5(sys_msgrcv) W3(sys_msgctl) W4(sys_semtimedop)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -525,6 +531,11 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_TIMER_DELETE]    = _sys_timer_delete,
     [SYS_MREMAP]          = _sys_mremap,
     [SYS_MINCORE]         = _sys_mincore,
+    [SYS_MSGGET]          = _sys_msgget,
+    [SYS_MSGSND]          = _sys_msgsnd,
+    [SYS_MSGRCV]          = _sys_msgrcv,
+    [SYS_MSGCTL]          = _sys_msgctl,
+    [SYS_SEMTIMEDOP]      = _sys_semtimedop,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

@@ -15,6 +15,6 @@ int shmdt(const void *shmaddr) {
     return (int)__cervus_sys_ret(syscall1(SYS_SHMDT, shmaddr));
 }
 
-int shmctl(int shmid, int cmd, void *buf) {
+int shmctl(int shmid, int cmd, struct shmid_ds *buf) {
     return (int)__cervus_sys_ret(syscall3(SYS_SHMCTL, shmid, cmd, buf));
 }

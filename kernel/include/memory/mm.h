@@ -103,6 +103,7 @@ int        mm_setup_stack(mm_t *mm);
 int        mm_copy_to(mm_t *mm, uintptr_t dst, const void *src, size_t len);
 
 vm_area_t *mm_find_vma(mm_t *mm, uintptr_t addr);
+bool       mm_range_free(mm_t *mm, uintptr_t start, uintptr_t end);
 uint64_t   mm_vm_bytes(mm_t *mm);
 int        mm_format_maps(mm_t *mm, char *buf, size_t max);
 int        mm_set_exe(mm_t *mm, struct vnode *vn);
