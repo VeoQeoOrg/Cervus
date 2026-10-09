@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <getopt.h>
 #include <stdarg.h>
 #include <time.h>
 #include <stdlib.h>
@@ -29,6 +30,7 @@ static const char USAGE[] =
     "  -p   keep the archived permissions exactly, ignoring umask\n"
     "  -m   do not restore modification times\n"
     "  -k   do not replace existing files\n"
+    "  --format=ustar  the only format written and read\n"
     "\n"
     "The first argument may omit its dash, as in 'tar xzf a.tar.gz'.\n";
 
@@ -744,9 +746,34 @@ int main(int argc, char **argv)
 
     int list = 0, extract = 0, create = 0;
     const char *file = NULL, *cdir = NULL, *filter = NULL;
+    static const struct option longopts[] = {
+        { "create",              no_argument,       0, 'c' },
+        { "list",                no_argument,       0, 't' },
+        { "extract",             no_argument,       0, 'x' },
+        { "get",                 no_argument,       0, 'x' },
+        { "verbose",             no_argument,       0, 'v' },
+        { "gzip",                no_argument,       0, 'z' },
+        { "bzip2",               no_argument,       0, 'j' },
+        { "xz",                  no_argument,       0, 'J' },
+        { "no-same-owner",       no_argument,       0, 'o' },
+        { "same-permissions",    no_argument,       0, 'p' },
+        { "preserve-permissions",no_argument,       0, 'p' },
+        { "touch",               no_argument,       0, 'm' },
+        { "keep-old-files",      no_argument,       0, 'k' },
+        { "file",                required_argument, 0, 'f' },
+        { "directory",           required_argument, 0, 'C' },
+        { "format",              required_argument, 0, 'F' },
+        { 0, 0, 0, 0 }
+    };
     int opt;
-    while ((opt = getopt(argc, argv, "ctxvzjJopmkf:C:")) != -1) {
+    while ((opt = getopt_long(argc, argv, "ctxvzjJopmkf:C:", longopts, NULL)) != -1) {
         switch (opt) {
+            case 'F':
+                if (strcmp(optarg, "ustar")) {
+                    fprintf(stderr, "tar: only the ustar format is supported, not '%s'\n", optarg);
+                    return 2;
+                }
+                break;
             case 'c': create = 1; break;
             case 't': list = 1; break;
             case 'x': extract = 1; break;
