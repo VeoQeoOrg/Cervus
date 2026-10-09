@@ -142,14 +142,40 @@ static uint64_t alloc_and_init_stack(task_t* t) {
     return (uint64_t)sp;
 }
 
+extern volatile uint32_t sched_ready_flag;
+extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index);
+
+static void preempt_for(const task_t* t) {
+    percpu_t* pc = get_percpu();
+    if (!sched_ready_flag || !pc) return;
+    uint32_t n = smp_get_cpu_count();
+    int best = -1, best_prio = t->priority;
+    for (uint32_t c = 0; c < n && c < MAX_CPUS; c++) {
+        if (t->cpu_affinity && !(t->cpu_affinity & (1ULL << c))) continue;
+        task_t* cur = current_task[c];
+        if (!cur) continue;
+        int prio = (cur >= &idle_tasks[0] && cur < &idle_tasks[MAX_CPUS]) ? -1 : cur->priority;
+        if (prio < best_prio) {
+            best_prio = prio;
+            best = (int)c;
+        }
+    }
+    if (best < 0) return;
+    if (pc->cpu_index == (uint32_t)best) pc->need_resched = true;
+    else ipi_reschedule_cpu(smp_get_lapic_id_for_cpu((uint32_t)best));
+}
+
 static void enqueue_global(task_t* t) {
     uint64_t f = spinlock_acquire_irqsave(&ready_queue_lock);
     bool expected = false;
+    bool queued = false;
     if (atomic_cas_bool(&t->on_rq, &expected, true)) {
         t->next = ready_queues[t->priority];
         ready_queues[t->priority] = t;
+        queued = true;
     }
     spinlock_release_irqrestore(&ready_queue_lock, f);
+    if (queued) preempt_for(t);
 }
 
 void __attribute__((used)) ctx_rsp_corruption_detected(task_t* old, uint64_t saved_rsp) {

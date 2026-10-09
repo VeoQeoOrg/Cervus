@@ -99,7 +99,7 @@ static void vfs_syncd(void *arg) {
 }
 
 void vfs_start_syncd(void) {
-    task_create("syncd", vfs_syncd, NULL, 1);
+    task_create("syncd", vfs_syncd, NULL, DEFAULT_PRIORITY);
 }
 
 int vfs_umount(const char *path) {

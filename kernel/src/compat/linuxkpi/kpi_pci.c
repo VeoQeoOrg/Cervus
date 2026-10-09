@@ -14,7 +14,7 @@ static inline void  sys_pci_register(const pci_driver_t *d) { pci_register_drive
 
 #include "kpi_pci.h"
 
-#define KPI_IRQ_PRIO   20
+#define KPI_IRQ_PRIO   IRQ_THREAD_PRIORITY
 #define KPI_NAPI_PRIO  19
 #define KPI_MAX_BIND   8
 #define KPI_MAX_IDS    32

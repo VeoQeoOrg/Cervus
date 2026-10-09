@@ -625,5 +625,5 @@ void atl1c_init(void) {
 }
 
 void atl1c_start_worker(void) {
-    if (g_nics) task_create("atl1c_worker", atl1c_worker, NULL, 1);
+    if (g_nics) task_create("atl1c_worker", atl1c_worker, NULL, IRQ_THREAD_PRIORITY);
 }

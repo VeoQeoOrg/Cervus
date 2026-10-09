@@ -258,7 +258,7 @@ int net_ifcfg_set(int index, uint32_t ip, uint32_t netmask, uint32_t gateway, ui
 }
 
 void net_start_worker(void) {
-    task_create("net", net_worker, NULL, 1);
+    task_create("net", net_worker, NULL, IRQ_THREAD_PRIORITY);
 }
 
 void net_init(void) {

@@ -601,7 +601,7 @@ void uhci_start_worker(void) {
     if (g_ctrl_count == 0) return;
     spawned = true;
     extern void uhci_worker(void *arg);
-    task_create("uhci_worker", uhci_worker, NULL, 1);
+    task_create("uhci_worker", uhci_worker, NULL, IRQ_THREAD_PRIORITY);
 }
 
 int uhci_controller_count(void) { return g_ctrl_count; }

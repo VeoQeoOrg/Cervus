@@ -358,7 +358,7 @@ void disk_start_media_worker(void) {
                   na, has_atapi ? "yes" : "no", has_atapi ? "started" : "skipped");
     if (has_atapi) {
         started = 1;
-        task_create("disk_media", disk_media_worker, NULL, 1);
+        task_create("disk_media", disk_media_worker, NULL, DEFAULT_PRIORITY);
     }
 }
 

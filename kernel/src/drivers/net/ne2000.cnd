@@ -62,7 +62,7 @@ const RXCR_PHYSMATCH    = 0x08u8;
 const RXCR_BROADCAST    = 0x04u8;
 const TX_POLL_RETRIES   = 100000usize;
 const POLL_INTERVAL_MS  = 1u64;
-const WORKER_PRIO       = 1i32;
+const WORKER_PRIO       = 24i32;
 
 const PCI_COMMAND     = 0x04u16;
 const PCI_CMD_ENABLE  = 0x0005u16;

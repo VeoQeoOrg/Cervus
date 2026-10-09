@@ -269,5 +269,5 @@ void virtio_net_init(void) {
 }
 
 void virtio_net_start_worker(void) {
-    if (g_nics) task_create("virtio_net", virtio_worker, NULL, 1);
+    if (g_nics) task_create("virtio_net", virtio_worker, NULL, IRQ_THREAD_PRIORITY);
 }

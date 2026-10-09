@@ -1185,7 +1185,7 @@ void xhci_start_worker(void) {
     if (g_count == 0) return;
     spawned = true;
     extern void xhci_worker(void *arg);
-    task_create("xhci_worker", xhci_worker, NULL, 1);
+    task_create("xhci_worker", xhci_worker, NULL, IRQ_THREAD_PRIORITY);
 }
 
 static void disconnect_slot(uint8_t slot_id) {

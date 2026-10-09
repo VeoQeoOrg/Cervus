@@ -788,7 +788,7 @@ void ehci_start_worker(void) {
     if (g_ctrl_count == 0) return;
     spawned = true;
     extern void ehci_worker(void *arg);
-    task_create("ehci_worker", ehci_worker, NULL, 1);
+    task_create("ehci_worker", ehci_worker, NULL, IRQ_THREAD_PRIORITY);
 }
 
 int ehci_controller_count(void) { return g_ctrl_count; }

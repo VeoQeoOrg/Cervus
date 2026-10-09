@@ -54,6 +54,7 @@ typedef enum {
 
 #define MAX_PRIORITY           31
 #define DEFAULT_PRIORITY       16
+#define IRQ_THREAD_PRIORITY    24
 #define TASK_DEFAULT_TIMESLICE 10
 
 #define RLIMIT_CPU_K        0

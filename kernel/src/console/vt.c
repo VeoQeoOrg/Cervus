@@ -374,7 +374,7 @@ static void vt_switch_worker(void *arg) {
 }
 
 void vt_start_worker(void) {
-    if (task_create("vt_switch", vt_switch_worker, NULL, 1)) g_switch_worker = 1;
+    if (task_create("vt_switch", vt_switch_worker, NULL, IRQ_THREAD_PRIORITY)) g_switch_worker = 1;
 }
 
 void vt_request_switch(int n) {

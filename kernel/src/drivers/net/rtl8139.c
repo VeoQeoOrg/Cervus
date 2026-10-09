@@ -179,5 +179,5 @@ void rtl8139_init(void) {
 }
 
 void rtl8139_start_worker(void) {
-    if (g_rtls) task_create("rtl8139_worker", rtl_worker, NULL, 1);
+    if (g_rtls) task_create("rtl8139_worker", rtl_worker, NULL, IRQ_THREAD_PRIORITY);
 }

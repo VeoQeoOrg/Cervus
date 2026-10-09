@@ -335,7 +335,7 @@ void e1000_init(void) {
 void e1000_start_worker(void) {
     for (e1000_t *e = g_nics; e; e = e->next)
         if (e->polled) {
-            task_create("e1000_worker", e1000_worker, NULL, 1);
+            task_create("e1000_worker", e1000_worker, NULL, IRQ_THREAD_PRIORITY);
             return;
         }
 }

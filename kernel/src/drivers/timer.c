@@ -185,7 +185,7 @@ static void tsc_recal_task(void *arg) {
 
 void timer_start_recal_task(void) {
     if (!hpet_is_available() || g_tsc_khz == 0 || !tsc_is_invariant()) return;
-    task_create("tsc_recal", tsc_recal_task, NULL, 1);
+    task_create("tsc_recal", tsc_recal_task, NULL, DEFAULT_PRIORITY);
 }
 
 uint64_t sched_now_ns(void) {

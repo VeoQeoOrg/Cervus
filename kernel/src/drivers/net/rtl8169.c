@@ -649,5 +649,5 @@ void rtl8169_init(void) {
 }
 
 void rtl8169_start_worker(void) {
-    if (g_nics) task_create("rtl8169_worker", rtl_worker, NULL, 1);
+    if (g_nics) task_create("rtl8169_worker", rtl_worker, NULL, IRQ_THREAD_PRIORITY);
 }
