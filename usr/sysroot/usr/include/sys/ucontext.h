@@ -65,6 +65,7 @@ typedef struct ucontext {
     stack_t          uc_stack;
     mcontext_t       uc_mcontext;
     sigset_t         uc_sigmask;
+    fpregset_t       __fpregs_mem __attribute__((aligned(16)));
 } ucontext_t;
 
 #ifdef __cplusplus
