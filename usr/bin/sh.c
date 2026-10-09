@@ -1874,10 +1874,32 @@ static void glob_field(const char *field, svec *out)
         while (*p == '/') p++;
     }
 
+    size_t fl = strlen(field);
+    int trail = fl > 1 && field[fl - 1] == '/' && !(fl > 2 && field[fl - 2] == '\\');
+
     svec hits;
     sv_init(&hits);
     glob_walk(absolute ? "/" : "", parts.v, 0, parts.n, &hits);
     sv_free(&parts);
+
+    if (trail) {
+        int k = 0;
+        for (int i = 0; i < hits.n; i++) {
+            struct stat st;
+            if (stat(hits.v[i], &st) != 0 || !S_ISDIR(st.st_mode)) { free(hits.v[i]); continue; }
+            size_t hl = strlen(hits.v[i]);
+            if (hl && hits.v[i][hl - 1] != '/') {
+                char *d = xmalloc(hl + 2);
+                memcpy(d, hits.v[i], hl);
+                d[hl] = '/';
+                d[hl + 1] = 0;
+                free(hits.v[i]);
+                hits.v[i] = d;
+            }
+            hits.v[k++] = hits.v[i];
+        }
+        hits.n = k;
+    }
 
     if (hits.n == 0) {
         sv_free(&hits);
