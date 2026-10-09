@@ -7,6 +7,7 @@
 #include "../../../include/sched/sched.h"
 #include "../../../include/drivers/timer.h"
 #include "../../../include/syscall/errno.h"
+#include "../../../include/signal/signal.h"
 #include <string.h>
 
 #define EV_RING    512
@@ -239,7 +240,7 @@ static int64_t ev_read_file(vfs_file_t *file, void *buf, size_t len)
             spinlock_release_irqrestore(&d->lock, f);
             return -EAGAIN;
         }
-        if (me && me->pending_kill) {
+        if (me && (me->pending_kill || signal_pending_deliverable(me))) {
             spinlock_release_irqrestore(&d->lock, f);
             return -EINTR;
         }

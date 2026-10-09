@@ -5,6 +5,7 @@
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/poll.h"
 #include "../../../include/drivers/timer.h"
+#include "../../../include/signal/signal.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -238,7 +239,7 @@ static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, in
         if (deadline && sched_now_ns() >= deadline) return 0;
 
         task_t *me = syscall_cur_task();
-        if (me && me->pending_kill) return -EINTR;
+        if (me && (me->pending_kill || signal_pending_deliverable(me))) return -EINTR;
         task_sleep_ns(1000000ULL);
     }
 }

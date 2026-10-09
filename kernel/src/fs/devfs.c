@@ -219,14 +219,12 @@ static int wait_for_char(int vt, vt_tty_t *t, char *out)
         if (me && me->pending_kill) return -1;
         if (me && signal_pending_deliverable(me)) return -2;
         if (me) {
-            t->reader = me;
-            if (!ring_empty(t) && vt == vt_active()) {
-                t->reader = NULL;
-                continue;
-            }
             me->wakeup_time_ns = 0;
             me->runnable = false;
             me->state = TASK_BLOCKED;
+            t->reader = me;
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            if (!ring_empty(t) && vt == vt_active()) task_unblock(me);
             sched_reschedule();
             t->reader = NULL;
             if (signal_pending_deliverable(me)) return -2;

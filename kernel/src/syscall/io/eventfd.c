@@ -2,9 +2,11 @@
 #include "../../../include/syscall/errno.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
+#include "../../../include/sched/waitq.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/poll.h"
 #include "../../../include/drivers/timer.h"
+#include "../../../include/signal/signal.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -23,7 +25,7 @@ typedef struct {
     int        semaphore;
     int        nonblock;
     spinlock_t lock;
-    task_t    *waiter;
+    waitq_t    readers;
 } eventfd_t;
 
 typedef struct {
@@ -33,16 +35,8 @@ typedef struct {
     int        clockid;
     int        nonblock;
     spinlock_t lock;
-    task_t    *waiter;
+    waitq_t    readers;
 } timerfd_t;
-
-static void wake_one(task_t **slot)
-{
-    task_t *w = *slot;
-    if (!w) return;
-    *slot = NULL;
-    task_unblock(w);
-}
 
 static int64_t efd_read(vnode_t *n, void *buf, size_t len, uint64_t off)
 {
@@ -64,17 +58,16 @@ static int64_t efd_read(vnode_t *n, void *buf, size_t len, uint64_t off)
             spinlock_release_irqrestore(&e->lock, f);
             return -EAGAIN;
         }
-        e->waiter = me;
-        spinlock_release_irqrestore(&e->lock, f);
-
-        if (me) {
-            me->runnable = false;
-            me->state = TASK_BLOCKED;
-            sched_reschedule();
-            if (me->pending_kill) return -EINTR;
-        } else {
+        if (!me) {
+            spinlock_release_irqrestore(&e->lock, f);
             task_yield();
+            continue;
         }
+        if (me->pending_kill || signal_pending_deliverable(me)) {
+            spinlock_release_irqrestore(&e->lock, f);
+            return -EINTR;
+        }
+        waitq_block(&e->readers, &e->lock, f, 0);
     }
 }
 
@@ -94,7 +87,7 @@ static int64_t efd_write(vnode_t *n, const void *buf, size_t len, uint64_t off)
         return -EAGAIN;
     }
     e->count += add;
-    wake_one(&e->waiter);
+    waitq_wake_all(&e->readers);
     spinlock_release_irqrestore(&e->lock, f);
     return (int64_t)sizeof(uint64_t);
 }
@@ -191,20 +184,20 @@ static int64_t tfd_read(vnode_t *n, void *buf, size_t len, uint64_t off)
             memcpy(buf, &fired, sizeof fired);
             return (int64_t)sizeof(uint64_t);
         }
-        if (tm->nonblock || !tm->expires_ns) {
+        if (tm->nonblock) {
             spinlock_release_irqrestore(&tm->lock, f);
             return -EAGAIN;
         }
-        uint64_t until = tm->expires_ns;
-        spinlock_release_irqrestore(&tm->lock, f);
-
-        if (me) {
-            uint64_t now2 = sched_now_ns();
-            task_sleep_ns(until > now2 ? until - now2 : 0);
-            if (me->pending_kill) return -EINTR;
-        } else {
+        if (!me) {
+            spinlock_release_irqrestore(&tm->lock, f);
             task_yield();
+            continue;
         }
+        if (me->pending_kill || signal_pending_deliverable(me)) {
+            spinlock_release_irqrestore(&tm->lock, f);
+            return -EINTR;
+        }
+        waitq_block(&tm->readers, &tm->lock, f, tm->expires_ns);
     }
 }
 
@@ -311,7 +304,7 @@ static int64_t timerfd_settime_on(timerfd_t *tm, uint64_t flags, uint64_t value_
     }
     tm->interval_ns = interval;
     tm->expires_ns  = timerfd_deadline(tm, flags, initial);
-    wake_one(&tm->waiter);
+    waitq_wake_all(&tm->readers);
     spinlock_release_irqrestore(&tm->lock, f);
     return 0;
 }

@@ -4,6 +4,7 @@
 #include "../../include/sched/spinlock.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/syscall/errno.h"
+#include "../../include/signal/signal.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -90,7 +91,7 @@ static int64_t pty_do_read(pty_t *p, pty_ring *in, int *other_open, int nonblock
         }
         if (!*other_open) { spinlock_release_irqrestore(&p->lock, f); return 0; }
         if (nonblock) { spinlock_release_irqrestore(&p->lock, f); return -EAGAIN; }
-        if (me && me->pending_kill) { spinlock_release_irqrestore(&p->lock, f); return -EINTR; }
+        if (me && (me->pending_kill || signal_pending_deliverable(me))) { spinlock_release_irqrestore(&p->lock, f); return -EINTR; }
         if (me) { in->reader = me; me->runnable = false; me->state = TASK_BLOCKED; }
         spinlock_release_irqrestore(&p->lock, f);
         if (me) sched_reschedule(); else task_yield();
@@ -115,7 +116,7 @@ static int64_t pty_do_write(pty_t *p, pty_ring *out, int *other_open, int nonblo
             continue;
         }
         if (nonblock) { spinlock_release_irqrestore(&p->lock, f); return done ? (int64_t)done : -EAGAIN; }
-        if (me && me->pending_kill) { spinlock_release_irqrestore(&p->lock, f); return done ? (int64_t)done : -EINTR; }
+        if (me && (me->pending_kill || signal_pending_deliverable(me))) { spinlock_release_irqrestore(&p->lock, f); return done ? (int64_t)done : -EINTR; }
         if (me) { out->writer = me; me->runnable = false; me->state = TASK_BLOCKED; }
         spinlock_release_irqrestore(&p->lock, f);
         if (me) sched_reschedule(); else task_yield();
