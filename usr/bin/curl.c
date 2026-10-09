@@ -60,6 +60,9 @@ static void usage(void) {
            "  --max-redirs N      -i     include headers -I     head only\n"
            "  -D F   dump headers -o F   output file      -O     remote name\n"
            "  -k     insecure     -s     silent   -S show errors   -v verbose   -f fail\n"
+           "  --retry N           retry transient failures N times\n"
+           "  --retry-delay S     wait S seconds between retries (default: backoff)\n"
+           "  --retry-all-errors  retry on any failure\n"
            "  short flags may be combined, e.g. -fsSL\n");
 }
 
@@ -68,6 +71,7 @@ int main(int argc, char **argv) {
     o.header_fd = -1; o.data_len = -1; o.max_redirs = 50;
     const char *ofile = 0, *url = 0, *dumphdr = 0;
     int remote_name = 0, silent = 0, show_error = 0;
+    int retries = 0, retry_delay = -1, retry_all = 0;
     char *data = 0; long datalen = 0;
 
     for (int ai = 1; ai < argc; ai++) {
@@ -93,6 +97,10 @@ int main(int argc, char **argv) {
             else if (!strcmp(a, "--max-redirs") && ai+1<argc) o.max_redirs = atoi(argv[++ai]);
             else if ((!strcmp(a, "--data") || !strcmp(a, "--data-binary") || !strcmp(a, "--data-raw")) && ai+1<argc) add_data(&data, &datalen, argv[++ai]);
             else if (!strcmp(a, "--header") && ai+1<argc) { if (o.nheaders < HTTP_MAX_HEADERS) o.headers[o.nheaders++] = argv[++ai]; }
+            else if (!strcmp(a, "--retry") && ai+1<argc) retries = atoi(argv[++ai]);
+            else if (!strcmp(a, "--retry-delay") && ai+1<argc) retry_delay = atoi(argv[++ai]);
+            else if (!strcmp(a, "--retry-all-errors")) retry_all = 1;
+            else if (!strcmp(a, "--retry-connrefused")) {}
             else if (!strcmp(a, "--help")) { usage(); return 0; }
             else { fprintf(stderr, "curl: unknown option %s\n", a); return 2; }
             continue;
@@ -132,25 +140,39 @@ int main(int argc, char **argv) {
     o.silent = silent && !show_error;
     if (data) { o.data = data; o.data_len = datalen; }
 
-    int out = 1;
     char name[256];
-    if (ofile) { out = open(ofile, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (out < 0) { fprintf(stderr, "curl: cannot create %s\n", ofile); return 1; } }
-    else if (remote_name) { basename_of(url, name, sizeof name); out = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (out < 0) { fprintf(stderr, "curl: cannot create %s\n", name); return 1; } }
-
+    const char *outpath = ofile;
+    if (!outpath && remote_name) { basename_of(url, name, sizeof name); outpath = name; }
     if (dumphdr) { o.header_fd = open(dumphdr, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (o.header_fd < 0) fprintf(stderr, "curl: cannot create %s\n", dumphdr); }
 
-    if (!strncmp(url, "ftp://", 6)) {
-        int rc = ftp_fetch(url, out, o.verbose);
+    int rc = 1;
+    for (int attempt = 0;; attempt++) {
+        int out = 1;
+        if (outpath) {
+            out = open(outpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (out < 0) { fprintf(stderr, "curl: cannot create %s\n", outpath); rc = 1; break; }
+        }
+        int transient;
+        if (!strncmp(url, "ftp://", 6)) {
+            int r = ftp_fetch(url, out, o.verbose);
+            rc = r == 0 ? 0 : 1;
+            transient = r != 0;
+        } else {
+            int status = http_request(url, out, &o);
+            rc = status < 0 ? 1 : status >= 400 ? 22 : 0;
+            transient = status < 0 || status == 408 || status == 429 || status == 500 ||
+                        status == 502 || status == 503 || status == 504;
+        }
         if (out != 1) close(out);
-        if (o.header_fd >= 0) close(o.header_fd);
-        if (data) free(data);
-        return rc == 0 ? 0 : 1;
+        if (rc == 0 || attempt >= retries || !(transient || retry_all)) break;
+        int wait = retry_delay >= 0 ? retry_delay : (1 << (attempt < 9 ? attempt : 9));
+        if (wait > 600) wait = 600;
+        if (!silent || show_error)
+            fprintf(stderr, "curl: transient problem, retrying in %d second%s, %d retr%s left\n",
+                    wait, wait == 1 ? "" : "s", retries - attempt, retries - attempt == 1 ? "y" : "ies");
+        sleep((unsigned)wait);
     }
-
-    int status = http_request(url, out, &o);
-    if (out != 1) close(out);
     if (o.header_fd >= 0) close(o.header_fd);
     if (data) free(data);
-    if (status < 0) return 1;
-    return status >= 400 ? 22 : 0;
+    return rc;
 }
