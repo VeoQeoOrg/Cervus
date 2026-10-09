@@ -100,8 +100,6 @@ void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector)
 
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
-
-    serial_printf("Sent IPI vector 0x%02x to LAPIC %u\n", vector, target_lapic_id);
 }
 
 void lapic_send_init(uint32_t target_lapic_id)
@@ -131,8 +129,6 @@ void lapic_send_ipi_to_all_but_self(uint8_t vector)
 
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
-
-    serial_printf("Broadcast IPI (all but self) vector 0x%02x sent\n", vector);
 }
 
 void lapic_send_nmi_to_all_but_self(void)
@@ -165,8 +161,6 @@ void ipi_reschedule_single(uint32_t target_lapic_id) {
 
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
-
-    serial_printf("Reschedule IPI sent to LAPIC %u\n", target_lapic_id);
 }
 
 void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
@@ -199,9 +193,6 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
 
     while (lapic_read(0x300) & (1 << 12))
         asm volatile ("pause");
-
-    if (count == TLB_FLUSH_ALL) serial_printf("TLB shootdown broadcast sent: full flush\n");
-    else serial_printf("TLB shootdown broadcast sent for %zu addresses\n", count);
 }
 
 void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
