@@ -20,9 +20,9 @@ int cervus_display_info(cervus_fb_info_t *out) {
 }
 
 enum {
-    O_FREE, O_DISPLAY, O_REGISTRY, O_SYNC, O_FRAME, O_COMPOSITOR, O_SHM, O_POOL,
-    O_BUFFER, O_SURFACE, O_WM, O_XSURF, O_TOPLEVEL, O_SEAT, O_KEYBOARD, O_POINTER,
-    O_RELMGR, O_REL, O_CONSTRAINTS, O_LOCKED, O_ZOMBIE
+    OBJ_FREE, OBJ_DISPLAY, OBJ_REGISTRY, OBJ_SYNC, OBJ_FRAME, OBJ_COMPOSITOR, OBJ_SHM, OBJ_POOL,
+    OBJ_BUFFER, OBJ_SURFACE, OBJ_WM, OBJ_XSURF, OBJ_TOPLEVEL, OBJ_SEAT, OBJ_KEYBOARD, OBJ_POINTER,
+    OBJ_RELMGR, OBJ_REL, OBJ_CONSTRAINTS, OBJ_LOCKED, OBJ_ZOMBIE
 };
 
 #define DECO_H    26
@@ -166,7 +166,7 @@ static struct {
 
 static uint32_t wl_new(int type) {
     for (uint32_t id = 2; id < WL_OBJS; id++)
-        if (W.type[id] == O_FREE) { W.type[id] = (uint8_t)type; return id; }
+        if (W.type[id] == OBJ_FREE) { W.type[id] = (uint8_t)type; return id; }
     W.dead = 1;
     return 0;
 }
@@ -348,17 +348,17 @@ static void deco_pointer(int32_t x, int32_t y) {
 static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
     uint32_t u[8] = { 0 };
     for (size_t i = 0; i < 8 && (i + 1) * 4 <= len; i++) memcpy(&u[i], a + i * 4, 4);
-    uint8_t t = id < WL_OBJS ? W.type[id] : O_FREE;
+    uint8_t t = id < WL_OBJS ? W.type[id] : OBJ_FREE;
 
     switch (t) {
-    case O_DISPLAY:
+    case OBJ_DISPLAY:
         if (op == 0) {
             W.dead = 1;
         } else if (op == 1 && u[0] < WL_OBJS) {
-            W.type[u[0]] = O_FREE;
+            W.type[u[0]] = OBJ_FREE;
         }
         break;
-    case O_REGISTRY:
+    case OBJ_REGISTRY:
         if (op == 0 && len >= 12) {
             uint32_t name = u[0], slen = u[1];
             if (8 + slen > len) break;
@@ -366,53 +366,53 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
             uint32_t ver;
             memcpy(&ver, a + 8 + ((slen + 3) & ~3u), 4);
             if (!strcmp(iface, "wl_compositor") && !W.compositor)
-                W.compositor = wl_bind(name, iface, ver < 4 ? ver : 4, O_COMPOSITOR);
+                W.compositor = wl_bind(name, iface, ver < 4 ? ver : 4, OBJ_COMPOSITOR);
             else if (!strcmp(iface, "wl_shm") && !W.shm)
-                W.shm = wl_bind(name, iface, 1, O_SHM);
+                W.shm = wl_bind(name, iface, 1, OBJ_SHM);
             else if (!strcmp(iface, "xdg_wm_base") && !W.wm)
-                W.wm = wl_bind(name, iface, 1, O_WM);
+                W.wm = wl_bind(name, iface, 1, OBJ_WM);
             else if (!strcmp(iface, "wl_seat") && !W.seat) {
                 W.seat_ver = ver < 5 ? ver : 5;
-                W.seat = wl_bind(name, iface, W.seat_ver, O_SEAT);
+                W.seat = wl_bind(name, iface, W.seat_ver, OBJ_SEAT);
             } else if (!strcmp(iface, "zwp_relative_pointer_manager_v1") && !W.relmgr)
-                W.relmgr = wl_bind(name, iface, 1, O_RELMGR);
+                W.relmgr = wl_bind(name, iface, 1, OBJ_RELMGR);
             else if (!strcmp(iface, "zwp_pointer_constraints_v1") && !W.constraints)
-                W.constraints = wl_bind(name, iface, 1, O_CONSTRAINTS);
+                W.constraints = wl_bind(name, iface, 1, OBJ_CONSTRAINTS);
         }
         break;
-    case O_SYNC:
+    case OBJ_SYNC:
         if (op == 0) W.sync_done = 1;
         break;
-    case O_FRAME:
+    case OBJ_FRAME:
         if (op == 0) {
             W.frame_pending = 0;
             if (W.dirty) commit_now();
         }
         break;
-    case O_WM:
+    case OBJ_WM:
         if (op == 0) req1(W.wm, 3, u[0]);
         break;
-    case O_XSURF:
+    case OBJ_XSURF:
         if (op == 0) {
             req1(W.xsurf, 4, u[0]);
             if (!W.configured) { W.configured = 1; deco_draw(); W.dirty = 1; }
             if (W.dirty && !W.frame_pending) commit_now();
         }
         break;
-    case O_TOPLEVEL:
+    case OBJ_TOPLEVEL:
         if (op == 1) ev_push(CERVUS_FBEV_CLOSE, 0, 0, 0, 0);
         break;
-    case O_SEAT:
+    case OBJ_SEAT:
         if (op == 0) {
             if ((u[0] & 2) && !W.keyboard) {
-                W.keyboard = wl_new(O_KEYBOARD);
+                W.keyboard = wl_new(OBJ_KEYBOARD);
                 if (W.keyboard) req1(W.seat, 1, W.keyboard);
             }
             if ((u[0] & 1) && !W.pointer) {
-                W.pointer = wl_new(O_POINTER);
+                W.pointer = wl_new(OBJ_POINTER);
                 if (W.pointer) req1(W.seat, 0, W.pointer);
                 if (W.pointer && W.relmgr && !W.rel) {
-                    W.rel = wl_new(O_REL);
+                    W.rel = wl_new(OBJ_REL);
                     msg_t m = { .n = 0 };
                     m_u32(&m, W.rel);
                     m_u32(&m, W.pointer);
@@ -421,7 +421,7 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
             }
         }
         break;
-    case O_KEYBOARD:
+    case OBJ_KEYBOARD:
         if (op == 1) {
             W.focused = 1;
             deco_draw();
@@ -442,7 +442,7 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
             ev_push(CERVUS_FBEV_KEY, key, state ? 1 : 0, 0, 0);
         }
         break;
-    case O_POINTER:
+    case OBJ_POINTER:
         if (op == 0) {
             W.enter_serial = u[0];
             W.pointer_in = 1;
@@ -474,7 +474,7 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
             if (u[1] == 0 && v) ev_push(CERVUS_FBEV_WHEEL, 0, v > 0 ? 1 : -1, 0, 0);
         }
         break;
-    case O_REL:
+    case OBJ_REL:
         if (op == 0 && len >= 16) {
             W.rel_fx += (int32_t)u[2];
             W.rel_fy += (int32_t)u[3];
@@ -536,7 +536,7 @@ static int wl_read(int block) {
 }
 
 static void wl_roundtrip(void) {
-    uint32_t cb = wl_new(O_SYNC);
+    uint32_t cb = wl_new(OBJ_SYNC);
     if (!cb) return;
     W.sync_done = 0;
     req1(1, 0, cb);
@@ -558,8 +558,8 @@ static int wl_connect(void) {
     if (fd < 0) return -1;
     if (connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) { close(fd); return -1; }
     W.fd = fd;
-    W.type[1] = O_DISPLAY;
-    W.type[2] = O_REGISTRY;
+    W.type[1] = OBJ_DISPLAY;
+    W.type[2] = OBJ_REGISTRY;
     req1(1, 1, 2);
     wl_roundtrip();
     wl_roundtrip();
@@ -619,7 +619,7 @@ static void commit_now(void) {
     m.n = 0;
     m_u32(&m, 0); m_u32(&m, 0); m_u32(&m, W.w); m_u32(&m, W.fh);
     wl_send(W.surface, 2, &m, -1);
-    uint32_t cb = wl_new(O_FRAME);
+    uint32_t cb = wl_new(OBJ_FRAME);
     if (cb) { req1(W.surface, 3, cb); W.frame_pending = 1; }
     req0(W.surface, 6);
     W.dirty = 0;
@@ -641,25 +641,25 @@ static int window_open(void) {
     W.close_hot = 0;
     W.in_bar = 0;
 
-    W.pool = wl_new(O_POOL);
+    W.pool = wl_new(OBJ_POOL);
     msg_t m = { .n = 0 };
     m_u32(&m, W.pool);
     m_u32(&m, (uint32_t)W.bytes);
     wl_send(W.shm, 0, &m, W.shm_fd);
 
-    W.buffer = wl_new(O_BUFFER);
+    W.buffer = wl_new(OBJ_BUFFER);
     m.n = 0;
     m_u32(&m, W.buffer); m_u32(&m, 0); m_u32(&m, W.w); m_u32(&m, W.fh);
     m_u32(&m, W.w * 4); m_u32(&m, 1);
     wl_send(W.pool, 0, &m, -1);
 
-    W.surface = wl_new(O_SURFACE);
+    W.surface = wl_new(OBJ_SURFACE);
     req1(W.compositor, 0, W.surface);
-    W.xsurf = wl_new(O_XSURF);
+    W.xsurf = wl_new(OBJ_XSURF);
     m.n = 0;
     m_u32(&m, W.xsurf); m_u32(&m, W.surface);
     wl_send(W.wm, 2, &m, -1);
-    W.toplevel = wl_new(O_TOPLEVEL);
+    W.toplevel = wl_new(OBJ_TOPLEVEL);
     req1(W.xsurf, 1, W.toplevel);
 
     if (!W.title[0]) snprintf(W.title, sizeof W.title, "%s",
@@ -688,8 +688,8 @@ static void window_close(void) {
     req0(W.buffer, 0);
     req0(W.pool, 1);
     wl_flush();
-    W.type[W.toplevel] = W.type[W.xsurf] = W.type[W.surface] = O_ZOMBIE;
-    W.type[W.buffer] = W.type[W.pool] = O_ZOMBIE;
+    W.type[W.toplevel] = W.type[W.xsurf] = W.type[W.surface] = OBJ_ZOMBIE;
+    W.type[W.buffer] = W.type[W.pool] = OBJ_ZOMBIE;
     W.toplevel = W.xsurf = W.surface = W.buffer = W.pool = 0;
     munmap(W.base, W.bytes);
     close(W.shm_fd);
@@ -788,7 +788,7 @@ int cervus_fb_grab_pointer(int on) {
     if (!cervus_fb_windowed() || !W.open) return -ENODEV;
     if (on && !W.grab) {
         if (!W.constraints || !W.pointer) return -ENOTSUP;
-        W.locked = wl_new(O_LOCKED);
+        W.locked = wl_new(OBJ_LOCKED);
         msg_t m = { .n = 0 };
         m_u32(&m, W.locked);
         m_u32(&m, W.surface);
@@ -800,7 +800,7 @@ int cervus_fb_grab_pointer(int on) {
         hide_cursor();
         wl_flush();
     } else if (!on && W.grab) {
-        if (W.locked) { req0(W.locked, 0); W.type[W.locked] = O_ZOMBIE; W.locked = 0; }
+        if (W.locked) { req0(W.locked, 0); W.type[W.locked] = OBJ_ZOMBIE; W.locked = 0; }
         W.grab = 0;
         wl_flush();
     }

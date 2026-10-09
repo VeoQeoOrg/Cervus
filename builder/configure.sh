@@ -128,19 +128,19 @@ ninja_required_version = 1.10
 builddir = $BUILDDIR
 
 rule cc_core
-  command = gcc $KERNEL_CORE $KERNEL_CPP -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $KERNEL_CORE $KERNEL_CPP -MD -MF \$out.d -c \$in -o \$out
   description = CC(core)  \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_linux
-  command = gcc $KERNEL_LINUX $KERNEL_CPP -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $KERNEL_LINUX $KERNEL_CPP -MD -MF \$out.d -c \$in -o \$out
   description = CC(linux) \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_sse
-  command = gcc $KERNEL_SSE $KERNEL_CPP -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $KERNEL_SSE $KERNEL_CPP -MD -MF \$out.d -c \$in -o \$out
   description = CC(sse)   \$in
   depfile = \$out.d
   deps = gcc
@@ -162,47 +162,47 @@ rule psf
   description = PSF       \$in
 
 rule cc_lib
-  command = gcc $LIBCERVUS_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBCERVUS_CFLAGS -MD -MF \$out.d -c \$in -o \$out
   description = CC(lib)   \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_lib_pic
-  command = gcc $LIBCERVUS_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBCERVUS_CFLAGS -fPIC -MD -MF \$out.d -c \$in -o \$out
   description = CC(pic)   \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_lib_pic_opt
-  command = gcc $LIBCERVUS_CFLAGS_OPT -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBCERVUS_CFLAGS_OPT -fPIC -MD -MF \$out.d -c \$in -o \$out
   description = CC(pic*)  \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_lib_opt
-  command = gcc $LIBCERVUS_CFLAGS_OPT -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBCERVUS_CFLAGS_OPT -MD -MF \$out.d -c \$in -o \$out
   description = CC(lib*)  \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_musl
-  command = gcc $MUSL_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $MUSL_CFLAGS -MD -MF \$out.d -c \$in -o \$out
   description = CC(musl)  \$in
   depfile = \$out.d
 
 rule cc_musl_pic
-  command = gcc $MUSL_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $MUSL_CFLAGS -fPIC -MD -MF \$out.d -c \$in -o \$out
   description = CC(musl*) \$in
   depfile = \$out.d
 
 rule cc_libm
-  command = gcc $LIBM_CFLAGS -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBM_CFLAGS -MD -MF \$out.d -c \$in -o \$out
   description = CC(libm)  \$in
   depfile = \$out.d
   deps = gcc
 
 rule cc_libm_pic
-  command = gcc $LIBM_CFLAGS -fPIC -MMD -MF \$out.d -c \$in -o \$out
+  command = gcc $LIBM_CFLAGS -fPIC -MD -MF \$out.d -c \$in -o \$out
   description = CC(libm*) \$in
   depfile = \$out.d
   deps = gcc
@@ -212,13 +212,13 @@ rule as_lib
   description = AS(lib)   \$in
 
 rule cc_app
-  command = gcc $APP_CFLAGS -MMD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
+  command = gcc $APP_CFLAGS -MD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
   description = CCLD(app) \$out
   depfile = \$out.d
   deps = gcc
 
 rule cc_app_opt
-  command = gcc $APP_CFLAGS_OPT -MMD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
+  command = gcc $APP_CFLAGS_OPT -MD -MF \$out.d -o \$out \$in $CRT0 $LIBCERVUS_A
   description = CCLD(app*) \$out
   depfile = \$out.d
   deps = gcc
