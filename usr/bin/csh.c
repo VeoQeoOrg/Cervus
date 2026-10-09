@@ -169,6 +169,7 @@ extern char **environ;
 static int capture_command(const char *cmd, char *out, size_t outsz) {
     int pfd[2];
     if (pipe(pfd) < 0) { out[0] = 0; return -1; }
+    fflush(NULL);
     pid_t pid = fork();
     if (pid < 0) { close(pfd[0]); close(pfd[1]); out[0] = 0; return -1; }
     if (pid == 0) {
@@ -436,6 +437,7 @@ static int exec_pipeline(char **tok, int n, int *pipe_idx, int npipe)
 
     pid_t pids[CSH_PIPELINE_MAX];
     for (int i = 0; i < nseg; i++) {
+        fflush(NULL);
         pid_t pid = fork();
         if (pid < 0) {
             fputs(C_RED "csh: fork failed\n" C_RESET, stdout);
@@ -580,6 +582,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     }
     real_envp[ei_out] = NULL;
 
+    fflush(NULL);
     pid_t child = fork();
     if (child < 0) { fputs(C_RED "csh: fork failed\n" C_RESET, stdout); return 1; }
     if (child == 0) {
@@ -2920,6 +2923,7 @@ static int run_stdin_stream(void) {
     int li = 0;
     char c;
     for (;;) {
+        fflush(stdout);
         ssize_t r = read(0, &c, 1);
         if (r <= 0) {
             if (li > 0) { line[li] = '\0'; run_command_line(line); }

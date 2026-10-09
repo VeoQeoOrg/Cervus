@@ -67,6 +67,7 @@ int main(int argc, char **argv) {
         }
     } else {
         char c;
+        fflush(stdout);
         read(0, &c, 1);
     }
 

@@ -197,6 +197,7 @@ int main(int argc, char **argv) {
                 break;
             }
             char c;
+            fflush(stdout);
             ssize_t n = read(0, &c, 1);
             if (n == 1) break;
             if (n < 0 && errno == EINTR) continue;

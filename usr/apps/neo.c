@@ -175,6 +175,7 @@ static int g_iblen = 0, g_ibpos = 0;
 
 static int ib_fill(void)
 {
+    fflush(stdout);
     ssize_t n = read(0, g_ib, sizeof g_ib);
     if (n <= 0) { g_iblen = 0; g_ibpos = 0; return 0; }
     g_iblen = (int)n;

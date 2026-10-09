@@ -11,6 +11,7 @@ static int confirm_prompt(void)
 {
     char buf[64];
     int i = 0;
+    fflush(stdout);
     while (i < 63) {
         char c;
         ssize_t r = read(0, &c, 1);

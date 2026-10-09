@@ -13,6 +13,7 @@ static const char *base_of(const char *p) {
 }
 
 static int read_line(const char *prompt, char *buf, int cap) {
+    fflush(stdout);
     if (prompt) { write(1, prompt, strlen(prompt)); }
     int len = 0;
     while (len < cap - 1) {

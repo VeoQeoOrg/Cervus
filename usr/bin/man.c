@@ -48,6 +48,7 @@ static void man_enter_raw(void)
 static int read_key_blocking(void)
 {
     unsigned char c;
+    fflush(stdout);
     if (read(0, &c, 1) != 1) return -1;
     if (c != 0x1B) return c;
     unsigned char s0, s1;

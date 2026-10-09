@@ -1036,6 +1036,7 @@ static char *capture(const char *script, int *status)
     int pfd[2];
     if (pipe(pfd) < 0) return xstrdup("");
 
+    fflush(NULL);
     pid_t pid = fork();
     if (pid < 0) { close(pfd[0]); close(pfd[1]); return xstrdup(""); }
     if (pid == 0) {
@@ -1954,6 +1955,7 @@ static int apply_redirs(redir_t *r, fdsave_t *save)
                 body = expanded;
             }
             size_t blen = strlen(body);
+            fflush(NULL);
             pid_t pid = fork();
             if (pid == 0) {
                 close(pfd[0]);
@@ -2602,6 +2604,7 @@ static int exec_external(char **argv, redir_t *redirs, svec *assigns, int fork_i
         _exit(126);
     }
 
+    fflush(NULL);
     pid_t pid = fork();
     if (pid < 0) { fprintf(stderr, "%s: cannot fork\n", g_shname); return 1; }
     if (pid == 0) {
@@ -2808,6 +2811,7 @@ static int exec_pipeline(node_t *n)
         int pfd[2] = { -1, -1 };
         if (i + 1 < nk && pipe(pfd) < 0) { fprintf(stderr, "%s: cannot pipe\n", g_shname); break; }
 
+        fflush(NULL);
         pid_t pid = fork();
         if (pid < 0) { fprintf(stderr, "%s: cannot fork\n", g_shname); break; }
         if (pid == 0) {
@@ -2835,6 +2839,7 @@ static int exec_pipeline(node_t *n)
 
 static int exec_in_subshell(node_t *body, redir_t *redirs)
 {
+    fflush(NULL);
     pid_t pid = fork();
     if (pid < 0) return 1;
     if (pid == 0) {
@@ -2887,6 +2892,7 @@ static int exec_node(node_t *n)
 
         case N_PIPE: {
             if (n->bg) {
+                fflush(NULL);
                 pid_t pid = fork();
                 if (pid == 0) { _exit(exec_pipeline(n)); }
                 g_last_bg = (int)pid;
@@ -2901,6 +2907,7 @@ static int exec_node(node_t *n)
         case N_SIMPLE: {
             if (n->line) g_lineno = n->line;
             if (n->bg) {
+                fflush(NULL);
                 pid_t pid = fork();
                 if (pid == 0) {
                     int rc = exec_simple(n, 1);
