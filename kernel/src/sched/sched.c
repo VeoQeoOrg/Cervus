@@ -524,8 +524,11 @@ task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, 
 
     t->create_time_ns = sched_now_ns();
     pid_register(t);
-    enqueue_global(t);
     return t;
+}
+
+void task_start(task_t* t) {
+    enqueue_global(t);
 }
 
 task_t* task_fork(task_t* parent) {

@@ -136,6 +136,7 @@ static void load_elf_module(void) {
 
     t->mm = r.mm;
     mm_init_heap(r.mm, r.load_end);
+    task_start(t);
 
     serial_printf("[ELF] Task 'init' created: cr3=0x%llx\n", t->cr3);
 

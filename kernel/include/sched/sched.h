@@ -330,6 +330,7 @@ int     sched_find_free_cpu_mask(uint64_t exclude);
 void    spec_selftest(void);
 
 task_t* task_create_user(const char* name, uintptr_t entry, uintptr_t user_rsp, uint64_t cr3, int priority, vmm_pagemap_t* pagemap, uint32_t uid, uint32_t gid);
+void    task_start(task_t* t);
 
 __attribute__((noreturn)) void task_exit(void);
 void    task_kill(task_t* task);
