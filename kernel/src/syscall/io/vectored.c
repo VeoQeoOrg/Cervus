@@ -94,6 +94,10 @@ static int64_t do_vec(uint64_t fd, uint64_t iov_ptr, uint64_t cnt, int64_t off, 
         if ((size_t)n < chunk) break;
     }
     syscall_bounce_put(bb, kbuf);
+    if (writing && done) {
+        int s = vfs_write_synced(file);
+        if (s < 0) { done = 0; err = s; }
+    }
     fd_put(file);
     kfree(v);
     if (done) return (int64_t)done;

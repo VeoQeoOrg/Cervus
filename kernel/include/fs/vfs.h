@@ -22,6 +22,8 @@
 #define O_NOFOLLOW  0x20000
 #define O_NONBLOCK  0x800
 #define O_CLOEXEC   0x80000
+#define O_DSYNC     0x1000
+#define O_SYNC      0x101000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -191,6 +193,7 @@ int     vfs_mount_fs(const char *path, vnode_t *fs_root,
                      void (*sync_fn)(void *));
 
 int     vfs_umount (const char *path);
+int     vfs_write_synced(vfs_file_t *file);
 int     vfs_lookup (const char *path, vnode_t **out);
 int     vfs_lookup_nofollow(const char *path, vnode_t **out);
 

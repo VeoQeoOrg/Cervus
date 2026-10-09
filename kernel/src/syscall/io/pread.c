@@ -63,6 +63,10 @@ int64_t sys_pwrite(uint64_t fd, uint64_t buf_ptr, uint64_t count, uint64_t offse
         if ((size_t)w < chunk) break;
     }
     syscall_bounce_put(bb, kbuf);
+    if (total) {
+        int s = vfs_write_synced(file);
+        if (s < 0) { total = 0; err = s; }
+    }
     fd_put(file);
     if (total == 0 && err < 0) return err;
     return (int64_t)total;

@@ -686,6 +686,12 @@ static int chown_common(const char *path, uint32_t uid, uint32_t gid, bool follo
 int vfs_chown(const char *path, uint32_t uid, uint32_t gid) { return chown_common(path, uid, gid, true); }
 int vfs_lchown(const char *path, uint32_t uid, uint32_t gid) { return chown_common(path, uid, gid, false); }
 
+int vfs_write_synced(vfs_file_t *file) {
+    if (!(file->flags & O_DSYNC) || !file->vnode) return 0;
+    if (file->vnode->type != VFS_NODE_FILE && file->vnode->type != VFS_NODE_BLKDEV) return 0;
+    return vfs_fsync(file);
+}
+
 int vfs_fsync(vfs_file_t *file) {
     if (!file || !file->vnode) return -EBADF;
     vfs_sync_all();

@@ -19,6 +19,10 @@ extern "C" {
 #define O_NONBLOCK   0x800
 #define O_DIRECTORY  0x10000
 #define O_CLOEXEC    0x80000
+#define O_DSYNC      0x1000
+#define O_SYNC       0x101000
+#define O_RSYNC      O_SYNC
+#define O_NDELAY     O_NONBLOCK
 
 #define F_DUPFD      0
 #define F_DUPFD_CLOEXEC 1030
