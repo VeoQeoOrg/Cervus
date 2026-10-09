@@ -15,7 +15,7 @@ int execvp(const char *file, char *const argv[])
     if (has_slash) return execve(file, argv, environ);
 
     const char *path = getenv("PATH");
-    if (!path || !*path) path = "/bin:/apps";
+    if (!path || !*path) path = "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin";
 
     char buf[512];
     const char *p = path;

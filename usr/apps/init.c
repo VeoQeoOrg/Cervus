@@ -328,16 +328,16 @@ static void boot_setup(void) {
 
     if (rooted_on_disk) {
         setenv("HOME", "/root", 1);
-        setenv("PATH", "/bin:/apps:/usr/bin", 1);
+        setenv("PATH", "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin", 1);
         setenv("MODE", "installed", 1);
         g_login = 1;
     } else if (disk_mounted) {
         setenv("HOME", "/mnt/root", 1);
-        setenv("PATH", "/mnt/bin:/mnt/apps:/mnt/usr/bin", 1);
+        setenv("PATH", "/mnt/bin:/mnt/apps:/mnt/usr/local/bin:/mnt/usr/bin:/mnt/usr/sbin:/mnt/sbin", 1);
         setenv("MODE", "installed", 1);
     } else {
         setenv("HOME", "/root", 1);
-        setenv("PATH", "/bin:/apps:/usr/bin", 1);
+        setenv("PATH", "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin", 1);
         setenv("MODE", "live", 1);
     }
 

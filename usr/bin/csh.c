@@ -79,7 +79,7 @@ static blk_t g_stack[CSH_NEST_MAX];
 static int   g_sp = 0;
 
 static char g_cwd[CSH_PATH_MAX] = "/";
-static char g_path_env[CSH_VAL_MAX] = "/bin:/apps:/usr/bin";
+static char g_path_env[CSH_VAL_MAX] = "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin";
 static int  g_last_rc = 0;
 
 static uint32_t g_rand_state = 0;

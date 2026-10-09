@@ -2159,7 +2159,7 @@ static int path_find(const char *cmd, char *out, size_t outsz)
         return 0;
     }
     const char *path = var_get("PATH");
-    if (!path || !*path) path = "/bin:/apps:/usr/bin";
+    if (!path || !*path) path = "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin";
     const char *p = path;
     while (*p) {
         const char *e = strchr(p, ':');
@@ -3227,7 +3227,7 @@ static void import_environ(void)
         if (i >= 0) g_vars[i].exported = 1;
         free(name);
     }
-    if (!var_get("PATH")) { var_set("PATH", "/bin:/apps:/usr/bin"); var_export("PATH"); }
+    if (!var_get("PATH")) { var_set("PATH", "/bin:/apps:/usr/local/bin:/usr/bin:/usr/sbin:/sbin"); var_export("PATH"); }
     if (!var_get("IFS")) var_set("IFS", " \t\n");
     char cwd[1024];
     if (getcwd(cwd, sizeof cwd)) { var_set("PWD", cwd); var_export("PWD"); }
