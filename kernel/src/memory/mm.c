@@ -283,7 +283,6 @@ void mm_put(mm_t *mm) {
         mm->exe = NULL;
     }
     vmm_free_pagemap(mm->pagemap);
-    kfree(mm->pagemap);
     kfree(mm);
 }
 
