@@ -48,6 +48,7 @@ typedef struct slab {
     uint16_t     total;
     uint16_t     used;
     uint16_t     _pad;
+    uint64_t     magic;
 } slab_t;
 
 typedef struct {

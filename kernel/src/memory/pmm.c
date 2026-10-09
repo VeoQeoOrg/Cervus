@@ -5,6 +5,7 @@
 #include "../../include/smp/percpu.h"
 #include <string.h>
 #include <stdio.h>
+#include "../../include/panic/panic.h"
 
 static pmm_buddy_state_t g_buddy;
 static uint8_t *g_fstate;
@@ -501,6 +502,8 @@ static void _slab_list_remove(slab_t **head, slab_t *s) {
     s->next = s->prev = NULL;
 }
 
+#define SLAB_MAGIC 0x534c4142c3a7f00dULL
+
 static slab_t *_slab_new(slab_cache_t *cache) {
     uint16_t cap = _slab_capacity(cache->obj_size);
     if (!cap) return NULL;
@@ -510,6 +513,7 @@ static slab_t *_slab_new(slab_cache_t *cache) {
     slab_t *s = (slab_t *)SLAB_PAGE_ALLOC(pages);
     if (!s) return NULL;
 
+    s->magic    = SLAB_MAGIC;
     s->obj_size = (uint16_t)cache->obj_size;
     s->total    = cap;
     s->used     = 0;
@@ -658,6 +662,15 @@ void kfree(void *ptr) {
     slab_lock_acq();
 
     slab_t *s = (slab_t *)((uintptr_t)ptr & ~((uintptr_t)PAGE_SIZE - 1));
+    uintptr_t first = _slab_obj_start(s);
+    if (s->magic != SLAB_MAGIC || (uintptr_t)ptr < first ||
+        ((uintptr_t)ptr - first) % s->obj_size || ((uintptr_t)ptr - first) / s->obj_size >= s->total) {
+        slab_lock_rel();
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        serial_printf("[SLAB] kfree of %p, which is not a live slab object (caller %p)\n",
+                      ptr, __builtin_return_address(0));
+        kernel_panic("kfree: invalid pointer");
+    }
 
     slab_cache_t *cache = NULL;
     for (int i = 0; i < SLAB_NUM_CACHES; i++) {
@@ -681,6 +694,7 @@ void kfree(void *ptr) {
     if (s->used == 0) {
         _slab_list_remove(&cache->partial, s);
         size_t pages = _slab_pages(s->obj_size);
+        s->magic = 0;
         slab_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
         SLAB_PAGE_FREE(s, pages > 0 ? pages : 1);
