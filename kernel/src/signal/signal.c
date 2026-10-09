@@ -99,6 +99,7 @@ static int post(task_t *t, int sig, const ksiginfo_t *si) {
         t->pending_kill = true;
     }
     spinlock_release_irqrestore(&g_sig_lock, f);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
 
     if (t->state == TASK_BLOCKED &&
         (sig == SIGKILL || !(t->sig_blocked & bit) || (t->sig_waitset & bit)))

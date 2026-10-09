@@ -51,6 +51,7 @@ void kmutex_lock(kmutex_t *m) {
     m->tail = &w;
     t->runnable = false;
     t->state = TASK_BLOCKED;
+    t->sleep_noint++;
     spinlock_release_irqrestore(&m->wait_lock, f);
     while (!__atomic_load_n(&w.granted, __ATOMIC_ACQUIRE)) {
         sched_reschedule();
@@ -63,6 +64,7 @@ void kmutex_lock(kmutex_t *m) {
             spinlock_release_irqrestore(&m->wait_lock, g);
         }
     }
+    t->sleep_noint--;
     m->owner = t;
 }
 

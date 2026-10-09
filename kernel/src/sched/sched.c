@@ -811,6 +811,7 @@ static void group_mark_kill(task_t* t)
     if (t->pending_kill) return;
     t->kill_sig     = SIGKILL;
     t->pending_kill = true;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (t->state == TASK_BLOCKED) {
         t->wakeup_time_ns = 0;
         task_unblock(t);
@@ -1052,6 +1053,7 @@ void task_kill(task_t* target) {
                   target->pid, (int)target->state, lapic_get_id());
     target->kill_sig = SIGINT;
     target->pending_kill = true;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
 
     if (target->state == TASK_BLOCKED) {
         target->wakeup_time_ns = 0;
@@ -1214,6 +1216,14 @@ void sched_reschedule(void) {
     uint32_t cpu  = smp_cpu_index();
 
     task_t*  old  = current_task[cpu];
+    if (old && old->state == TASK_BLOCKED && !old->sleep_noint) {
+        __atomic_thread_fence(__ATOMIC_SEQ_CST);
+        if (old->pending_kill || signal_pending_deliverable(old) || (old->sig_pending & old->sig_waitset)) {
+            old->wakeup_time_ns = 0;
+            old->runnable = true;
+            old->state = TASK_RUNNING;
+        }
+    }
     task_t*  next = sched_pick_next(cpu);
 
     if (!next) { asm volatile("sti"); return; }
@@ -1357,10 +1367,12 @@ void task_sleep_ns(uint64_t ns) {
     task_t *me = current_task[cpu];
     if (!me) { asm volatile("sti"); return; }
     me->wakeup_time_ns = sched_now_ns() + ns;
+    me->sleep_noint++;
     me->runnable = false;
     me->state    = TASK_BLOCKED;
     sched_note_wakeup(me->wakeup_time_ns);
     sched_reschedule();
+    me->sleep_noint--;
 }
 
 void task_sleep_ms(uint64_t ms) { task_sleep_ns(ms * 1000000ULL); }

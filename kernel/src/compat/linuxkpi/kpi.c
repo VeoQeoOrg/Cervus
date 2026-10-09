@@ -178,11 +178,13 @@ void kpi_wait_on(wait_queue_head_t *w, u32 seen, uint64_t timeout_ns)
     me.next = w->head;
     w->head = &me;
     t->wakeup_time_ns = timeout_ns == ~0ULL ? 0 : sched_now_ns() + timeout_ns;
+    t->sleep_noint++;
     t->runnable = false;
     t->state = TASK_BLOCKED;
     if (t->wakeup_time_ns) sched_note_wakeup(t->wakeup_time_ns);
     spinlock_release_irqrestore(&w->lock, f);
     sched_reschedule();
+    t->sleep_noint--;
     f = spinlock_acquire_irqsave(&w->lock);
     if (!me.woken) waiter_remove(w, &me);
     spinlock_release_irqrestore(&w->lock, f);
