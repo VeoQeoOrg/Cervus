@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <signal.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -35,6 +36,7 @@ typedef struct {
 static struct termios g_orig_tio;
 static int g_in_raw = 0, g_nonblock = 0;
 static int g_cols = 80, g_rows_term = 24;
+static volatile sig_atomic_t g_winch;
 static int g_running = 1, g_paused = 0, g_sort = 0;
 static int g_refresh_ms = 100, g_ncpus = 1;
 static int g_selected = 0, g_scroll = 0;
@@ -62,7 +64,7 @@ static int tty_set_nonblock(int on) {
 static void restore_term(void) {
     if (g_nonblock) { tty_set_nonblock(0); g_nonblock = 0; }
     if (g_in_raw)   { tcsetattr(0, TCSAFLUSH, &g_orig_tio); g_in_raw = 0; }
-    fputs("\x1b[?25h\x1b[2J\x1b[H", stdout);
+    fputs("\x1b[?7h\x1b[?25h\x1b[2J\x1b[H", stdout);
     fflush(stdout);
 }
 
@@ -77,8 +79,13 @@ static void enter_raw(void) {
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(0, TCSAFLUSH, &raw) == 0) g_in_raw = 1;
     if (tty_set_nonblock(1) == 0) g_nonblock = 1;
-    fputs("\x1b[?25l\x1b[2J\x1b[H", stdout);
+    fputs("\x1b[?7l\x1b[?25l\x1b[2J\x1b[H", stdout);
     fflush(stdout);
+}
+
+static void on_winch(int sig) {
+    (void)sig;
+    g_winch = 1;
 }
 
 static void update_size(void) {
@@ -411,6 +418,11 @@ int main(int argc, char **argv) {
     g_ncpus = detect_ncpus();
     update_size();
     enter_raw();
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_winch;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGWINCH, &sa, NULL);
 
     g_prev_uptime_ns = ns_now();
     sample(g_prev_uptime_ns);
@@ -445,6 +457,12 @@ int main(int argc, char **argv) {
                     do_sample = 1;
                 }
             }
+        }
+        if (g_winch) {
+            g_winch = 0;
+            update_size();
+            fputs("\x1b[2J", stdout);
+            redraw = 1;
         }
         if (do_sample) sample(ns_now());
         if (resort || do_sample) { sort_rows(); resync_selection(); }

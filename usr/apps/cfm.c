@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -374,6 +375,15 @@ static void draw(void) {
     }
 }
 
+static int cfm_key(void) {
+    int k = tui_read_key();
+    if (k == -1) {
+        tui_end();
+        exit(0);
+    }
+    return k;
+}
+
 static int read_line_prompt(const char *label, char *buf, int cap) {
     int len = 0;
     buf[0] = 0;
@@ -381,7 +391,7 @@ static int read_line_prompt(const char *label, char *buf, int cap) {
         tui_move(g_rows, 1);
         printf("\x1b[43m\x1b[30m%s\x1b[0m %s\x1b[K", label, buf);
         fflush(stdout);
-        int k = tui_read_key();
+        int k = cfm_key();
         if (k == TK_ENTER)  return len > 0 ? 1 : 0;
         if (k == TK_ESC)    return -1;
         if (k == TK_BACKSP || k == 8) { if (len > 0) buf[--len] = 0; continue; }
@@ -394,7 +404,7 @@ static int confirm(const char *msg) {
     printf("\x1b[41m\x1b[97m%s (y/n)\x1b[0m\x1b[K", msg);
     fflush(stdout);
     for (;;) {
-        int k = tui_read_key();
+        int k = cfm_key();
         if (k == 'y' || k == 'Y') return 1;
         if (k == 'n' || k == 'N' || k == TK_ESC) return 0;
     }
@@ -500,7 +510,7 @@ static void view_file(const char *path) {
         }
         fflush(stdout);
 
-        int k = tui_read_key();
+        int k = cfm_key();
         if (k == 'q' || k == TK_ESC || k == TK_BACKSP || k == TK_LEFT) break;
         else if (k == TK_UP)   { if (off > 0) off--; }
         else if (k == TK_DOWN) { if (off < li - 1) off++; }
@@ -654,7 +664,7 @@ static void view_image_fullscreen(const char *path) {
     }
     blit_fit(&im, 0, 0, (int)fbi.width, (int)fbi.height);
     if (windowed) while (!window_wait_close(-1)) { }
-    else tui_read_key();
+    else cfm_key();
     cervus_fb_release();
     image_free(&im);
 }
@@ -729,14 +739,14 @@ static int thumb_next_frame(void) {
 }
 
 static int read_key_animated(void) {
-    if (!g_thumb_gif_ok || g_thumb_rw <= 0) return tui_read_key();
+    if (!g_thumb_gif_ok || g_thumb_rw <= 0) return cfm_key();
     for (;;) {
         struct pollfd pfd = { 0, POLLIN, 0 };
         int delay = g_thumb_gif.delays_ms[g_thumb_frame];
         if (delay < 20) delay = 20;
         int r = poll(&pfd, 1, delay);
-        if (r > 0) return tui_read_key();
-        if (r < 0) return tui_read_key();
+        if (r > 0) return cfm_key();
+        if (r < 0) return errno == EINTR ? TK_RESIZE : cfm_key();
         thumb_next_frame();
     }
 }
@@ -866,7 +876,7 @@ static void open_with(void) {
         printf("\x1b[?25l");
         fflush(stdout);
 
-        int k = tui_read_key();
+        int k = cfm_key();
         if (k == TK_UP)        sel = sel > 0 ? sel - 1 : n - 1;
         else if (k == TK_DOWN) sel = sel < n - 1 ? sel + 1 : 0;
         else if (k == TK_ESC)  { printf("\x1b[?25h"); draw(); return; }
@@ -1046,7 +1056,7 @@ static void do_settings(void) {
         for (int i = 0; i < N; i++)
             printf("%s  %-16s %-12s\x1b[0m\r\n", i == sel ? "\x1b[7m" : "  ", names[i], vals[i]);
         fflush(stdout);
-        int k = tui_read_key();
+        int k = cfm_key();
         if (k == TK_ESC || k == 'q') break;
         else if (k == TK_UP)   sel = (sel + N - 1) % N;
         else if (k == TK_DOWN) sel = (sel + 1) % N;
@@ -1120,7 +1130,7 @@ int main(int argc, char **argv) {
         draw();
         int k = read_key_animated();
         switch (k) {
-        case TK_RESIZE: break;
+        case TK_RESIZE: tui_clear(); break;
         case TK_UP:    if (g_n) g_sel = (g_sel > 0) ? g_sel - 1 : g_n - 1; break;
         case TK_DOWN:  if (g_n) g_sel = (g_sel < g_n - 1) ? g_sel + 1 : 0; break;
         case TK_PGUP:  g_sel -= (g_rows - 3); if (g_sel < 0) g_sel = 0; break;

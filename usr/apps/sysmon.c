@@ -86,7 +86,7 @@ static void restore_term(void)
         tcsetattr(0, TCSAFLUSH, &g_orig_tio);
         g_in_raw = 0;
     }
-    fputs("\x1b[?25h\x1b[?1049l", stdout);
+    fputs("\x1b[?7h\x1b[?25h\x1b[?1049l", stdout);
     fflush(stdout);
 }
 
@@ -104,7 +104,7 @@ static void enter_raw(void)
 
     if (tty_set_nonblock(1) == 0) g_stdin_nonblock = 1;
 
-    fputs("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H", stdout);
+    fputs("\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[2J\x1b[H", stdout);
     fflush(stdout);
 }
 
@@ -497,6 +497,8 @@ static uint64_t ns_now(void)
 }
 
 static void on_sig(int s) { (void)s; g_running = 0; }
+static volatile sig_atomic_t g_winch;
+static void on_winch(int s) { (void)s; g_winch = 1; }
 
 static void sysmon_snapshot(void) {
     g_ncpus = detect_ncpus();
@@ -559,6 +561,11 @@ int main(int argc, char **argv)
 
     signal(SIGINT,  on_sig);
     signal(SIGTERM, on_sig);
+    struct sigaction wa;
+    memset(&wa, 0, sizeof wa);
+    wa.sa_handler = on_winch;
+    sigemptyset(&wa.sa_mask);
+    sigaction(SIGWINCH, &wa, NULL);
 
     g_ncpus = detect_ncpus();
     update_size();
@@ -618,6 +625,12 @@ int main(int argc, char **argv)
             }
         }
         if (resort) sort_rows();
+        if (g_winch) {
+            g_winch = 0;
+            update_size();
+            fputs("\x1b[2J", stdout);
+            redraw = 1;
+        }
         if (redraw) draw_screen(ns_now());
 
         uint64_t now = ns_now();

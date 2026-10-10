@@ -336,6 +336,18 @@ static void usage(void) {
           "  -w   open for writing (default is read-only)\n", stderr);
 }
 
+static void layout_windows(void)
+{
+    if (w_head) delwin(w_head);
+    if (w_body) delwin(w_body);
+    if (w_foot) delwin(w_foot);
+    g_rows_visible = LINES - 3;
+    if (g_rows_visible < 1) g_rows_visible = 1;
+    w_head = newwin(1, COLS, 0, 0);
+    w_body = newwin(g_rows_visible, COLS, 1, 0);
+    w_foot = newwin(2, COLS, LINES - 2, 0);
+}
+
 int main(int argc, char **argv) {
     int ai = 1;
     for (; ai < argc && argv[ai][0] == '-' && argv[ai][1]; ai++) {
@@ -374,11 +386,7 @@ int main(int argc, char **argv) {
     curs_set(0);
     keypad(stdscr, TRUE);
 
-    g_rows_visible = LINES - 3;
-    if (g_rows_visible < 1) g_rows_visible = 1;
-    w_head = newwin(1, COLS, 0, 0);
-    w_body = newwin(g_rows_visible, COLS, 1, 0);
-    w_foot = newwin(2, COLS, LINES - 2, 0);
+    layout_windows();
     keypad(w_foot, TRUE);
     if (!w_head || !w_body || !w_foot) { endwin(); return 1; }
 
@@ -397,7 +405,7 @@ int main(int argc, char **argv) {
             case KEY_HOME:  g_cur = 0; g_nib = 0; break;
             case KEY_END:   g_cur = g_size - 1; g_nib = 0; break;
             case '\t':      g_ascii_pane = !g_ascii_pane; g_nib = 0; break;
-            case KEY_RESIZE: break;
+            case KEY_RESIZE: layout_windows(); clear(); break;
             case 'g': case 'G': do_goto(); break;
             case '/':           do_search(0); break;
             case 'n':

@@ -9,6 +9,7 @@
 #include <termios.h>
 #include <dirent.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -172,11 +173,20 @@ static void enable_raw_mode(void)
 
 static unsigned char g_ib[256];
 static int g_iblen = 0, g_ibpos = 0;
+static int g_input_eof;
+static volatile sig_atomic_t g_winch;
+
+static void on_winch(int sig)
+{
+    (void)sig;
+    g_winch = 1;
+}
 
 static int ib_fill(void)
 {
     fflush(stdout);
     ssize_t n = read(0, g_ib, sizeof g_ib);
+    if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) g_input_eof = 1;
     if (n <= 0) { g_iblen = 0; g_ibpos = 0; return 0; }
     g_iblen = (int)n;
     g_ibpos = 0;
@@ -200,7 +210,10 @@ static int ib_more(void)
 static int read_key(void)
 {
     int c = ib_getc();
-    if (c < 0) return KEY_NONE;
+    if (c < 0) {
+        if (g_input_eof) exit(1);
+        return KEY_NONE;
+    }
     if (c != 0x1B) return c;
 
     if (!ib_more()) return KEY_ESC;
@@ -1359,6 +1372,10 @@ static void refresh_screen(void)
     scroll();
     abuf_t ab = {0};
     ab_append(&ab, "\x1b[?25l", 6);
+    if (g_winch) {
+        g_winch = 0;
+        ab_append(&ab, "\x1b[2J", 4);
+    }
     draw_rows(&ab);
     draw_status(&ab);
     draw_message(&ab);
@@ -2884,6 +2901,7 @@ static void comp_draw(abuf_t *ab) {
 static int process_key(void)
 {
     int c = read_key();
+    if (c == KEY_NONE) return 1;
 
     if (g_comp_open) {
         switch (c) {
@@ -3140,6 +3158,11 @@ int main(int argc, char **argv)
     write(1, "\x1b[H", 3);
 
     refresh_screen();
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_winch;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGWINCH, &sa, NULL);
     while (process_key()) {
         refresh_screen();
     }

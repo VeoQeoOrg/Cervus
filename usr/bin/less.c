@@ -6,6 +6,8 @@
 #include <ctype.h>
 #include <regex.h>
 #include <termios.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -33,6 +35,13 @@ static int   g_top = 0;
 static int   g_term_rows = 24;
 static int   g_term_cols = 80;
 static int   g_running = 1;
+static volatile sig_atomic_t g_winch;
+
+static void on_winch(int sig)
+{
+    (void)sig;
+    g_winch = 1;
+}
 static int   g_show_lineno = 0;
 static char  g_status_msg[256];
 static int   g_status_visible = 0;
@@ -156,7 +165,8 @@ static void enter_raw(void)
 static int read_key(void)
 {
     unsigned char c;
-    if (read(0, &c, 1) != 1) return -1;
+    ssize_t r = read(0, &c, 1);
+    if (r != 1) return (r < 0 && errno == EINTR) ? -2 : -1;
     if (c != 0x1B) return c;
     unsigned char s0, s1;
     if (read(0, &s0, 1) != 1) return 0x1B;
@@ -326,7 +336,9 @@ static int prompt_line(char prefix, char *out, int max)
     int n = 0;
     while (n < max - 1) {
         unsigned char c;
-        if (read(0, &c, 1) != 1) { out[0] = '\0'; break; }
+        ssize_t r;
+        while ((r = read(0, &c, 1)) < 0 && errno == EINTR) {}
+        if (r != 1) { out[0] = '\0'; break; }
         if (c == '\r' || c == '\n') break;
         if (c == 27) { out[0] = '\0'; fputs("\x1b[?25l", stdout); fflush(stdout); return -1; }
         if (c == 127 || c == 8) {
@@ -379,7 +391,8 @@ static void show_help(void)
     fputs("    Esc            cancel an in-progress prompt\r\n", stdout);
     fputs("\r\n  Press any key to return...", stdout);
     fflush(stdout);
-    unsigned char c; (void)read(0, &c, 1);
+    unsigned char c;
+    while (read(0, &c, 1) < 0 && errno == EINTR) {}
 }
 
 int main(int argc, char **argv)
@@ -471,10 +484,21 @@ int main(int argc, char **argv)
 
     enter_raw();
     atexit(restore_term);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_winch;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGWINCH, &sa, NULL);
     draw_screen();
 
     while (g_running) {
-        int k = read_key();
+        int k = g_winch ? -2 : read_key();
+        if (k == -2) {
+            g_winch = 0;
+            fputs("\x1b[2J", stdout);
+            draw_screen();
+            continue;
+        }
         if (k < 0) break;
         g_status_visible = 0;
         int visible_rows = g_term_rows - 1;
