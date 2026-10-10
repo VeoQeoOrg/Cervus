@@ -62,6 +62,8 @@ static uint64_t kvmclock_read(void) {
 
 static bool kvmclock_available(void) { return g_pvti != NULL; }
 
+bool kvmclock_in_use(void) { return g_pvti != NULL; }
+
 static clocksource_t cs_kvmclock = {
     .name = "kvm-clock", .rating = 400,
     .available = kvmclock_available, .read_ns = kvmclock_read,

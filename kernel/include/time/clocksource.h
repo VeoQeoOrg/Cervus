@@ -23,5 +23,6 @@ uint64_t      clocksource_now_ns(void);
 void          clocksource_watchdog_tick(void);
 int           clocksource_list(char *buf, int max);
 void          kvmclock_init(void);
+bool          kvmclock_in_use(void);
 
 #endif

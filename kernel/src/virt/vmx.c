@@ -443,7 +443,8 @@ static void vmcs_setup(kvm_vcpu_t *vcpu) {
     vmwrite(VMCS_LINK_POINTER, ~0ull);
     vmwrite(VMCS_EPT_POINTER, vcpu->vm->eptp);
     if (vcpu->vpid) vmwrite(VMCS_VPID, vcpu->vpid);
-    vmwrite(VMCS_TSC_OFFSET, (uint64_t)-(int64_t)rdtsc_now());
+    vcpu->tsc_offset = vcpu->vm->tsc_offset;
+    vmwrite(VMCS_TSC_OFFSET, (uint64_t)vcpu->tsc_offset);
     vmwrite(VMCS_CR0_MASK, ~CR0_GUEST_OWNED);
     vmwrite(VMCS_CR4_MASK, ~CR4_GUEST_OWNED);
 
@@ -930,7 +931,9 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
     uint64_t *slot;
     switch (msr) {
     case MSR_IA32_TSC:
-        vmwrite(VMCS_TSC_OFFSET, data - rdtsc_now());
+        vcpu->tsc_offset = kvm_tsc_offset_for_write(vcpu, data, host);
+        vmwrite(VMCS_TSC_OFFSET, (uint64_t)vcpu->tsc_offset);
+        vcpu->pvclock_dirty = true;
         return 0;
     case MSR_IA32_APIC_BASE:
         if (!host && ((data & APIC_BASE_EXTD) ||
@@ -943,7 +946,11 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
         vcpu->msr_feature_control = data;
         return 0;
     case MSR_IA32_TSC_ADJUST:
-        if (!host) vmwrite(VMCS_TSC_OFFSET, vmread(VMCS_TSC_OFFSET) + (data - vcpu->msr_tsc_adjust));
+        if (!host) {
+            vcpu->tsc_offset += (int64_t)(data - vcpu->msr_tsc_adjust);
+            vmwrite(VMCS_TSC_OFFSET, (uint64_t)vcpu->tsc_offset);
+            vcpu->pvclock_dirty = true;
+        }
         vcpu->msr_tsc_adjust = data;
         return 0;
     case MSR_IA32_UCODE_REV:
@@ -1018,10 +1025,16 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
     case MSR_KVM_SYSTEM_TIME_NEW:
     case MSR_KVM_SYSTEM_TIME:
         vcpu->msr_kvm_system_time = data;
+        vcpu->pvclock_gpa = (data & 1) ? (data & ~1ull) : 0;
+        vcpu->pvclock_dirty = true;
         return 0;
     case MSR_KVM_WALL_CLOCK_NEW:
     case MSR_KVM_WALL_CLOCK:
         vcpu->msr_kvm_wall_clock = data;
+        if (!host) {
+            vcpu->wall_clock_gpa = data;
+            vcpu->wall_clock_pending = true;
+        }
         return 0;
     default:
         break;
@@ -1518,6 +1531,7 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
             }
             kvm_lapic_timer_check(vcpu, sched_now_ns());
         }
+        kvm_clock_sync(vcpu);
         asm volatile("cli" ::: "memory");
         percpu_t *pc = get_percpu();
         if (pc->need_resched) {

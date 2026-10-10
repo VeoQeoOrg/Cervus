@@ -15,6 +15,11 @@ extern void devfs_register(const char *name, vnode_t *node);
 
 #define MCG_CTL_P (1ull << 8)
 
+#define KVM_FEATURE_CLOCKSOURCE            (1u << 0)
+#define KVM_FEATURE_NOP_IO_DELAY           (1u << 1)
+#define KVM_FEATURE_CLOCKSOURCE2           (1u << 3)
+#define KVM_FEATURE_CLOCKSOURCE_STABLE_BIT (1u << 24)
+
 static const vnode_ops_t kvm_dev_ops;
 static const vnode_ops_t kvm_vm_ops;
 static const vnode_ops_t kvm_vcpu_ops;
@@ -91,7 +96,6 @@ static int check_extension(uint64_t cap) {
     case KVM_CAP_SPLIT_IRQCHIP:
     case KVM_CAP_IOEVENTFD:
     case KVM_CAP_SET_IDENTITY_MAP_ADDR:
-    case KVM_CAP_ADJUST_CLOCK:
     case KVM_CAP_INTERNAL_ERROR_DATA:
     case KVM_CAP_VCPU_EVENTS:
     case KVM_CAP_INTR_SHADOW:
@@ -108,6 +112,8 @@ static int check_extension(uint64_t cap) {
         return 1;
     case KVM_CAP_MCE:
         return KVM_MCE_BANKS;
+    case KVM_CAP_ADJUST_CLOCK:
+        return KVM_CLOCK_TSC_STABLE;
     case KVM_CAP_NR_VCPUS:
     case KVM_CAP_MAX_VCPUS:
     case KVM_CAP_MAX_VCPU_ID:
@@ -237,6 +243,8 @@ static uint32_t build_supported_cpuid(struct kvm_cpuid_entry2 *out, uint32_t max
         struct kvm_cpuid_entry2 *e = &out[n++];
         memset(e, 0, sizeof *e);
         e->function = 0x40000001u;
+        e->eax = KVM_FEATURE_CLOCKSOURCE | KVM_FEATURE_NOP_IO_DELAY | KVM_FEATURE_CLOCKSOURCE2;
+        if (kvm_host_tsc_stable()) e->eax |= KVM_FEATURE_CLOCKSOURCE_STABLE_BIT;
     }
     return n;
 }
@@ -289,6 +297,7 @@ static int64_t create_vm(uint64_t type) {
     vm->refcount = 1;
     vm->ioevent_lock = (spinlock_t)SPINLOCK_INIT;
     vm->mcg_cap_supported = MCG_CTL_P | KVM_MCE_BANKS;
+    kvm_clock_init_vm(vm);
     if (ept_init(vm) < 0) { free(vm); return -ENOMEM; }
     mm_get(t->mm);
     vm->mm = t->mm;
@@ -588,13 +597,14 @@ static int64_t kvm_vm_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
     case KVM_GET_CLOCK: {
         struct kvm_clock_data c;
         memset(&c, 0, sizeof c);
-        c.clock = clocksource_now_ns() + (uint64_t)vm->clock_offset_ns;
+        c.clock = kvm_clock_read(vm);
+        c.flags = vm->clock_stable ? KVM_CLOCK_TSC_STABLE : 0;
         return copy_out(arg, &c, sizeof c);
     }
     case KVM_SET_CLOCK: {
         struct kvm_clock_data c;
         if (copy_in(&c, arg, sizeof c) < 0) return -EFAULT;
-        vm->clock_offset_ns = (int64_t)c.clock - (int64_t)clocksource_now_ns();
+        kvm_clock_set(vm, c.clock);
         return 0;
     }
     case KVM_SET_GSI_ROUTING:

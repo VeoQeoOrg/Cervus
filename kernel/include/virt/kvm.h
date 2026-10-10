@@ -127,6 +127,13 @@ struct kvm_vcpu {
     int              last_cpu;
     uint16_t         vpid;
     uint64_t         tlb_gen_seen;
+    int64_t          tsc_offset;
+    uint64_t         pvclock_gpa;
+    uint32_t         pvclock_version;
+    uint32_t         pvclock_gen;
+    bool             pvclock_dirty;
+    bool             wall_clock_pending;
+    uint64_t         wall_clock_gpa;
     volatile int     mode;
     volatile uint32_t requests;
     struct task     *owner;
@@ -220,7 +227,17 @@ struct kvm_vm {
 
     uint64_t         tss_addr;
     uint64_t         identity_map_addr;
-    int64_t          clock_offset_ns;
+    spinlock_t       clock_lock;
+    uint64_t         clock_master_tsc;
+    uint64_t         clock_master_ns;
+    uint32_t         clock_mul;
+    int8_t           clock_shift;
+    bool             clock_stable;
+    volatile uint32_t clock_gen;
+    int64_t          tsc_offset;
+    uint64_t         tsc_last_value;
+    uint64_t         tsc_last_ns;
+    bool             tsc_written;
     uint64_t         mcg_cap_supported;
 };
 
@@ -290,6 +307,13 @@ int      kvm_set_gsi(kvm_vm_t *vm, uint32_t gsi, int level);
 int64_t  kvm_set_routing(kvm_vm_t *vm, uint64_t arg);
 int64_t  kvm_irqfd(kvm_vm_t *vm, const struct kvm_irqfd *a);
 void     kvm_irq_destroy(kvm_vm_t *vm);
+
+bool     kvm_host_tsc_stable(void);
+void     kvm_clock_init_vm(kvm_vm_t *vm);
+uint64_t kvm_clock_read(kvm_vm_t *vm);
+void     kvm_clock_set(kvm_vm_t *vm, uint64_t ns);
+int64_t  kvm_tsc_offset_for_write(kvm_vcpu_t *vcpu, uint64_t data, bool host);
+void     kvm_clock_sync(kvm_vcpu_t *vcpu);
 
 void     kvm_dev_init(void);
 
