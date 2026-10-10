@@ -58,6 +58,7 @@ static void vm_get(kvm_vm_t *vm) {
 
 static void vm_put(kvm_vm_t *vm) {
     if (__atomic_sub_fetch(&vm->refcount, 1, __ATOMIC_ACQ_REL) > 0) return;
+    kvm_irq_destroy(vm);
     ept_destroy(vm);
     for (int i = 0; i < KVM_MAX_MEMSLOTS; i++)
         if (vm->slots[i].dirty) free(vm->slots[i].dirty);
@@ -83,8 +84,11 @@ static int check_extension(uint64_t cap) {
     case KVM_CAP_SYNC_MMU:
     case KVM_CAP_DESTROY_MEMORY_REGION_WORKS:
     case KVM_CAP_USER_NMI:
-    case KVM_CAP_IRQ_ROUTING:
     case KVM_CAP_JOIN_MEMORY_REGIONS_WORKS:
+    case KVM_CAP_IRQCHIP:
+    case KVM_CAP_IRQFD:
+    case KVM_CAP_IRQ_INJECT_STATUS:
+    case KVM_CAP_SPLIT_IRQCHIP:
     case KVM_CAP_IOEVENTFD:
     case KVM_CAP_SET_IDENTITY_MAP_ADDR:
     case KVM_CAP_ADJUST_CLOCK:
@@ -110,6 +114,8 @@ static int check_extension(uint64_t cap) {
         return KVM_MAX_VCPUS;
     case KVM_CAP_NR_MEMSLOTS:
         return KVM_MAX_MEMSLOTS;
+    case KVM_CAP_IRQ_ROUTING:
+        return KVM_MAX_IRQ_ROUTES;
     default:
         return 0;
     }
@@ -592,12 +598,48 @@ static int64_t kvm_vm_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
         return 0;
     }
     case KVM_SET_GSI_ROUTING:
-        return 0;
-    case KVM_ENABLE_CAP:
+        return kvm_set_routing(vm, arg);
+    case KVM_ENABLE_CAP: {
+        struct kvm_enable_cap c;
+        if (copy_in(&c, arg, sizeof c) < 0) return -EFAULT;
+        if (c.flags || c.cap != KVM_CAP_SPLIT_IRQCHIP) return -EINVAL;
+        if (c.args[0] > 2 * KVM_IOAPIC_PINS) return -EINVAL;
+        kmutex_lock(&vm->lock);
+        int64_t res = 0;
+        if (vm->irqchip_split) res = -EEXIST;
+        else if (vm->nvcpus) res = -EINVAL;
+        else vm->irqchip_split = true;
+        kmutex_unlock(&vm->lock);
+        return res;
+    }
+    case KVM_CREATE_IRQCHIP:
         return -EINVAL;
-    case KVM_SIGNAL_MSI:
-    case KVM_IRQFD:
-        return -ENXIO;
+    case KVM_IRQ_LINE:
+    case KVM_IRQ_LINE_STATUS: {
+        struct kvm_irq_level l;
+        if (!vm->irqchip_split) return -ENXIO;
+        if (copy_in(&l, arg, sizeof l) < 0) return -EFAULT;
+        int st = kvm_set_gsi(vm, l.irq, (int)l.level);
+        if (req == KVM_IRQ_LINE_STATUS) {
+            l.status = st;
+            return copy_out(arg, &l, sizeof l);
+        }
+        return 0;
+    }
+    case KVM_SIGNAL_MSI: {
+        struct kvm_msi m;
+        if (!vm->irqchip_split) return -ENXIO;
+        if (copy_in(&m, arg, sizeof m) < 0) return -EFAULT;
+        if (m.flags & ~KVM_MSI_VALID_DEVID) return -EINVAL;
+        int st = kvm_deliver_msi(vm, ((uint64_t)m.address_hi << 32) | m.address_lo, m.data);
+        return st < 0 ? 0 : st;
+    }
+    case KVM_IRQFD: {
+        struct kvm_irqfd f;
+        if (!vm->irqchip_split) return -ENXIO;
+        if (copy_in(&f, arg, sizeof f) < 0) return -EFAULT;
+        return kvm_irqfd(vm, &f);
+    }
     default:
         return -ENOTTY;
     }
@@ -785,15 +827,34 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         v->nmi_pending = true;
         return 0;
     case KVM_GET_MP_STATE: {
-        struct kvm_mp_state mp = { v->mp_state };
+        struct kvm_mp_state mp = { __atomic_load_n(&v->mp_state, __ATOMIC_SEQ_CST) };
         return copy_out(arg, &mp, sizeof mp);
     }
     case KVM_SET_MP_STATE: {
         struct kvm_mp_state mp;
         if (copy_in(&mp, arg, sizeof mp) < 0) return -EFAULT;
         if (mp.mp_state > KVM_MP_STATE_SIPI_RECEIVED) return -EINVAL;
-        v->mp_state = mp.mp_state;
+        if (!v->vm->irqchip_split && mp.mp_state != KVM_MP_STATE_RUNNABLE) return -EINVAL;
+        __atomic_store_n(&v->mp_state, mp.mp_state, __ATOMIC_SEQ_CST);
         return 0;
+    }
+    case KVM_GET_LAPIC: {
+        if (!v->vm->irqchip_split) return -ENXIO;
+        struct kvm_lapic_state *ls = calloc(1, sizeof *ls);
+        if (!ls) return -ENOMEM;
+        kvm_lapic_get_state(v, ls);
+        int r = copy_out(arg, ls, sizeof *ls);
+        free(ls);
+        return r;
+    }
+    case KVM_SET_LAPIC: {
+        if (!v->vm->irqchip_split) return -ENXIO;
+        struct kvm_lapic_state *ls = calloc(1, sizeof *ls);
+        if (!ls) return -ENOMEM;
+        int r = copy_in(ls, arg, sizeof *ls);
+        if (r == 0) kvm_lapic_set_state(v, ls);
+        free(ls);
+        return r;
     }
     case KVM_GET_VCPU_EVENTS: {
         struct kvm_vcpu_events e;
@@ -864,6 +925,7 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
     }
     case KVM_TPR_ACCESS_REPORTING:
     case KVM_SET_VAPIC_ADDR:
+        return v->vm->irqchip_split ? 0 : -EINVAL;
     case KVM_KVMCLOCK_CTRL:
     case KVM_ENABLE_CAP:
     case KVM_TRANSLATE:

@@ -10,6 +10,7 @@
 #include "../../include/interrupts/idt.h"
 #include "../../include/signal/signal.h"
 #include "../../include/syscall/errno.h"
+#include "../../include/drivers/timer.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -98,7 +99,9 @@ extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index);
 #define MSR_KVM_SYSTEM_TIME_NEW 0x4b564d01
 
 #define APIC_BASE_ENABLE (1ull << 11)
+#define APIC_BASE_EXTD   (1ull << 10)
 #define APIC_BASE_BSP    (1ull << 8)
+#define APIC_BASE_ADDR   0x000FFFFFFFFFF000ull
 
 #define CR0_GUEST_OWNED CR0_TS
 #define CR4_GUEST_OWNED (CR4_TSD | CR4_DE | CR4_PVI | CR4_PCE | CR4_OSFXSR | CR4_OSXMMEXCPT | CR4_PGE | CR4_FSGSBASE)
@@ -112,6 +115,8 @@ typedef struct {
     uint64_t ept_vpid;
     bool     ins_outs_info;
     bool     has_vpid;
+    bool     preempt;
+    uint32_t preempt_shift;
 } vmx_caps_t;
 
 static vmx_caps_t g_vmx;
@@ -162,8 +167,11 @@ static bool vmx_probe(void) {
     if (((basic >> 50) & 0xF) != 6) return false;
 
     if (!adjust_ctl(true_ctls ? MSR_IA32_VMX_TRUE_PINBASED : MSR_IA32_VMX_PINBASED_CTLS,
-                    PIN_EXTINT_EXITING | PIN_NMI_EXITING, PIN_VIRTUAL_NMIS, &g_vmx.pin))
+                    PIN_EXTINT_EXITING | PIN_NMI_EXITING, PIN_VIRTUAL_NMIS | PIN_PREEMPTION_TIMER, &g_vmx.pin))
         return false;
+    g_vmx.preempt = (g_vmx.pin & PIN_PREEMPTION_TIMER) != 0;
+    g_vmx.pin &= ~PIN_PREEMPTION_TIMER;
+    g_vmx.preempt_shift = (uint32_t)vmx_rdmsr(MSR_IA32_VMX_MISC) & 0x1F;
     if (!adjust_ctl(true_ctls ? MSR_IA32_VMX_TRUE_PROCBASED : MSR_IA32_VMX_PROCBASED_CTLS,
                     PROC_HLT_EXITING | PROC_CR8_LOAD_EXITING | PROC_CR8_STORE_EXITING |
                     PROC_UNCOND_IO_EXITING | PROC_MOV_DR_EXITING | PROC_SECONDARY |
@@ -205,9 +213,10 @@ static bool vmx_probe(void) {
     }
     g_vpid_map[0] = 1;
     g_vmx.ok = true;
-    serial_printf("[kvm] VMX: EPT, unrestricted guest%s%s\n",
+    serial_printf("[kvm] VMX: EPT, unrestricted guest%s%s%s\n",
                   g_vmx.has_vpid ? ", VPID" : "",
-                  (g_vmx.proc2 & PROC2_ENABLE_RDTSCP) ? ", RDTSCP" : "");
+                  (g_vmx.proc2 & PROC2_ENABLE_RDTSCP) ? ", RDTSCP" : "",
+                  g_vmx.preempt ? ", preemption timer" : "");
     return true;
 }
 
@@ -514,6 +523,7 @@ static void vcpu_reset_soft(kvm_vcpu_t *vcpu) {
     vcpu->exc_pending = false;
     vcpu->mp_state = KVM_MP_STATE_RUNNABLE;
     memset(&vcpu->pend, 0, sizeof vcpu->pend);
+    kvm_lapic_reset(vcpu, false);
     uint16_t fcw = 0x37F;
     uint32_t mxcsr = 0x1F80;
     memset(vcpu->guest_fpu, 0, 512);
@@ -701,10 +711,19 @@ static bool guest_interruptible(kvm_vcpu_t *vcpu) {
     return true;
 }
 
+static bool accepts_extint(kvm_vcpu_t *vcpu) {
+    return !vcpu->vm->irqchip_split || kvm_lapic_accept_pic(vcpu);
+}
+
 static bool ready_for_injection(kvm_vcpu_t *vcpu) {
     if (vmread(VMCS_ENTRY_INTR_INFO) & INTR_INFO_VALID) return false;
     if (vcpu->exc_pending || vcpu->pending_irq >= 0) return false;
+    if (!accepts_extint(vcpu)) return false;
     return guest_interruptible(vcpu);
+}
+
+static uint64_t vcpu_cr8(kvm_vcpu_t *vcpu) {
+    return vcpu->vm->irqchip_split ? kvm_lapic_get_cr8(vcpu) : vcpu->cr8;
 }
 
 static void set_proc_bit(uint32_t bit, bool on) {
@@ -714,8 +733,9 @@ static void set_proc_bit(uint32_t bit, bool on) {
 }
 
 static void inject_events(kvm_vcpu_t *vcpu) {
-    if (vmread(VMCS_ENTRY_INTR_INFO) & INTR_INFO_VALID) return;
-    if (vcpu->exc_pending) {
+    bool irqchip = vcpu->vm->irqchip_split;
+    bool busy = (vmread(VMCS_ENTRY_INTR_INFO) & INTR_INFO_VALID) != 0;
+    if (!busy && vcpu->exc_pending) {
         uint32_t info = INTR_INFO_VALID | vcpu->exc_vector;
         if (vcpu->exc_vector == 3 || vcpu->exc_vector == 4) {
             info |= INTR_TYPE_SW_EXCEPTION;
@@ -729,26 +749,36 @@ static void inject_events(kvm_vcpu_t *vcpu) {
         }
         vmwrite(VMCS_ENTRY_INTR_INFO, info);
         vcpu->exc_pending = false;
-        return;
+        busy = true;
     }
     if (vcpu->nmi_pending) {
         uint32_t intr = (uint32_t)vmread(VMCS_GUEST_INTERRUPTIBILITY);
-        if (!(intr & (INTERRUPTIBILITY_NMI | INTERRUPTIBILITY_MOV_SS | INTERRUPTIBILITY_STI))) {
+        if (!busy && !(intr & (INTERRUPTIBILITY_NMI | INTERRUPTIBILITY_MOV_SS | INTERRUPTIBILITY_STI))) {
             vmwrite(VMCS_ENTRY_INTR_INFO, INTR_INFO_VALID | INTR_TYPE_NMI | 2);
             vcpu->nmi_pending = false;
+            busy = true;
             set_proc_bit(PROC_NMI_WINDOW_EXITING, false);
         } else if (g_vmx.pin & PIN_VIRTUAL_NMIS) {
             set_proc_bit(PROC_NMI_WINDOW_EXITING, true);
         }
     }
-    if (vcpu->pending_irq >= 0) {
-        if (guest_interruptible(vcpu) && !(vmread(VMCS_ENTRY_INTR_INFO) & INTR_INFO_VALID)) {
-            vmwrite(VMCS_ENTRY_INTR_INFO, INTR_INFO_VALID | INTR_TYPE_EXT_INTR | (uint32_t)vcpu->pending_irq);
-            vcpu->pending_irq = -1;
+    bool open = !busy && guest_interruptible(vcpu);
+    if (open && vcpu->pending_irq >= 0 && accepts_extint(vcpu)) {
+        vmwrite(VMCS_ENTRY_INTR_INFO, INTR_INFO_VALID | INTR_TYPE_EXT_INTR | (uint32_t)vcpu->pending_irq);
+        vcpu->pending_irq = -1;
+        busy = true;
+    } else if (open && irqchip) {
+        int vec = kvm_lapic_pending(vcpu);
+        if (vec >= 0) {
+            kvm_lapic_ack(vcpu, vec);
+            vmwrite(VMCS_ENTRY_INTR_INFO, INTR_INFO_VALID | INTR_TYPE_EXT_INTR | (uint32_t)vec);
+            busy = true;
         }
     }
-    bool want_window = vcpu->pending_irq >= 0 || vcpu->run->request_interrupt_window;
-    set_proc_bit(PROC_INTR_WINDOW_EXITING, want_window && !ready_for_injection(vcpu));
+    bool want = (vcpu->pending_irq >= 0 && accepts_extint(vcpu)) ||
+                (vcpu->run->request_interrupt_window && accepts_extint(vcpu)) ||
+                (irqchip && kvm_lapic_pending(vcpu) >= 0);
+    set_proc_bit(PROC_INTR_WINDOW_EXITING, want && (busy || !guest_interruptible(vcpu)));
 }
 
 static void save_idt_vectoring(kvm_vcpu_t *vcpu) {
@@ -770,7 +800,7 @@ static void save_idt_vectoring(kvm_vcpu_t *vcpu) {
 static void fill_run_state(kvm_vcpu_t *vcpu) {
     struct kvm_run *run = vcpu->run;
     run->if_flag = (vmread(VMCS_GUEST_RFLAGS) & RFLAGS_IF) ? 1 : 0;
-    run->cr8 = vcpu->cr8;
+    run->cr8 = vcpu_cr8(vcpu);
     run->apic_base = vcpu->apic_base;
     run->ready_for_interrupt_injection = ready_for_injection(vcpu) ? 1 : 0;
     run->flags = 0;
@@ -903,6 +933,9 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
         vmwrite(VMCS_TSC_OFFSET, data - rdtsc_now());
         return 0;
     case MSR_IA32_APIC_BASE:
+        if (!host && ((data & APIC_BASE_EXTD) ||
+                      (data & ~(APIC_BASE_ADDR | APIC_BASE_ENABLE | APIC_BASE_EXTD | APIC_BASE_BSP))))
+            return -1;
         vcpu->apic_base = data;
         return 0;
     case MSR_IA32_FEATURE_CONTROL:
@@ -1061,6 +1094,12 @@ static int handle_cr(kvm_vcpu_t *vcpu) {
         case 8: {
             uint64_t old = vcpu->cr8;
             if (val & ~0xFull) { emu_inject_gp(vcpu); return 1; }
+            if (vcpu->vm->irqchip_split) {
+                kvm_lapic_set_cr8(vcpu, (uint8_t)val);
+                vcpu->cr8 = val;
+                skip_instruction(vcpu);
+                return 1;
+            }
             vcpu->cr8 = val;
             skip_instruction(vcpu);
             if (val < old) {
@@ -1075,7 +1114,7 @@ static int handle_cr(kvm_vcpu_t *vcpu) {
         }
     } else if (type == 1) {
         if (cr == 3) vmx_reg_write(vcpu, reg, vmread(VMCS_GUEST_CR3));
-        else if (cr == 8) vmx_reg_write(vcpu, reg, vcpu->cr8);
+        else if (cr == 8) vmx_reg_write(vcpu, reg, vcpu_cr8(vcpu));
         else { emu_inject_ud(vcpu); return 1; }
     } else if (type == 2) {
         apply_cr0(vcpu, guest_cr0(vcpu) & ~CR0_TS);
@@ -1261,6 +1300,8 @@ static void dump_guest(kvm_vcpu_t *vcpu, uint32_t reason) {
                   vmread(VMCS_INSTR_ERROR));
 }
 
+static int vcpu_halt(kvm_vcpu_t *vcpu);
+
 static int handle_exit(kvm_vcpu_t *vcpu, uint32_t reason) {
     struct kvm_run *run = vcpu->run;
     switch (reason & 0xFFFF) {
@@ -1287,6 +1328,7 @@ static int handle_exit(kvm_vcpu_t *vcpu, uint32_t reason) {
         return handle_cpuid(vcpu);
     case EXIT_REASON_HLT:
         skip_instruction(vcpu);
+        if (vcpu->vm->irqchip_split) return vcpu_halt(vcpu);
         if (vcpu->pending_irq >= 0 && guest_interruptible(vcpu)) return 1;
         run->exit_reason = KVM_EXIT_HLT;
         return 0;
@@ -1327,6 +1369,8 @@ static int handle_exit(kvm_vcpu_t *vcpu, uint32_t reason) {
         return handle_wrmsr(vcpu);
     case EXIT_REASON_EPT_VIOLATION:
         return handle_ept_violation(vcpu);
+    case EXIT_REASON_PREEMPT_TIMER:
+        return 1;
     case EXIT_REASON_EPT_MISCONFIG:
         dump_guest(vcpu, reason);
         return exit_internal(vcpu, KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON, reason, vmread(VMCS_GUEST_PHYS_ADDR));
@@ -1341,6 +1385,98 @@ static bool vcpu_should_stop(kvm_vcpu_t *vcpu) {
     if (vcpu->run->immediate_exit) return true;
     if (me && (me->pending_kill || signal_pending_deliverable(me))) return true;
     return false;
+}
+
+static bool halt_events(kvm_vcpu_t *vcpu, bool if_set) {
+    uint32_t mp = __atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST);
+    if (mp == KVM_MP_STATE_INIT_RECEIVED || mp == KVM_MP_STATE_SIPI_RECEIVED) return true;
+    if (__atomic_load_n(&vcpu->nmi_pending, __ATOMIC_SEQ_CST)) return true;
+    if (!if_set) return false;
+    if (vcpu->pending_irq >= 0 && kvm_lapic_accept_pic(vcpu)) return true;
+    return kvm_lapic_pending(vcpu) >= 0;
+}
+
+static int vcpu_halt(kvm_vcpu_t *vcpu) {
+    bool if_set = (vmread(VMCS_GUEST_RFLAGS) & RFLAGS_IF) != 0;
+    uint32_t expect = KVM_MP_STATE_RUNNABLE;
+    __atomic_compare_exchange_n(&vcpu->mp_state, &expect, KVM_MP_STATE_HALTED, false,
+                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    for (;;) {
+        kvm_lapic_timer_check(vcpu, sched_now_ns());
+        if (halt_events(vcpu, if_set)) break;
+        if (vcpu_should_stop(vcpu)) {
+            vcpu->run->exit_reason = KVM_EXIT_INTR;
+            return -EINTR;
+        }
+        uint64_t f = spinlock_acquire_irqsave(&vcpu->halt_lock);
+        if (halt_events(vcpu, if_set) || vcpu_should_stop(vcpu)) {
+            spinlock_release_irqrestore(&vcpu->halt_lock, f);
+            continue;
+        }
+        waitq_block(&vcpu->halt_wq, &vcpu->halt_lock, f, kvm_lapic_timer_deadline(vcpu));
+    }
+    expect = KVM_MP_STATE_HALTED;
+    __atomic_compare_exchange_n(&vcpu->mp_state, &expect, KVM_MP_STATE_RUNNABLE, false,
+                                __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return 1;
+}
+
+static void vcpu_init_reset(kvm_vcpu_t *vcpu) {
+    vmwrite(VMCS_ENTRY_INTR_INFO, 0);
+    vmcs_reset_guest(vcpu);
+    vcpu->pending_irq = -1;
+    vcpu->exc_pending = false;
+    vcpu->nmi_pending = false;
+    vcpu->cr8 = 0;
+    memset(&vcpu->pend, 0, sizeof vcpu->pend);
+    kvm_lapic_reset(vcpu, true);
+}
+
+static int vcpu_mp_wait(kvm_vcpu_t *vcpu) {
+    if (__atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST) == KVM_MP_STATE_INIT_RECEIVED)
+        vcpu_init_reset(vcpu);
+    for (;;) {
+        uint32_t mp = __atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST);
+        if (mp == KVM_MP_STATE_SIPI_RECEIVED) {
+            uint32_t vec = vcpu->sipi_vector & 0xFF;
+            struct kvm_segment cs = { .base = (uint64_t)vec << 12, .limit = 0xFFFF,
+                                      .selector = (uint16_t)(vec << 8), .type = 0xB, .present = 1, .s = 1 };
+            write_seg(SEG_CS, &cs);
+            vmwrite(VMCS_GUEST_RIP, 0);
+            uint32_t expect = KVM_MP_STATE_SIPI_RECEIVED;
+            __atomic_compare_exchange_n(&vcpu->mp_state, &expect, KVM_MP_STATE_RUNNABLE, false,
+                                        __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+            return 1;
+        }
+        if (mp == KVM_MP_STATE_RUNNABLE || mp == KVM_MP_STATE_HALTED) return 1;
+        if (vcpu_should_stop(vcpu)) {
+            vcpu->run->exit_reason = KVM_EXIT_INTR;
+            return -EINTR;
+        }
+        uint64_t f = spinlock_acquire_irqsave(&vcpu->halt_lock);
+        mp = __atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST);
+        if (mp == KVM_MP_STATE_SIPI_RECEIVED || mp == KVM_MP_STATE_RUNNABLE || vcpu_should_stop(vcpu)) {
+            spinlock_release_irqrestore(&vcpu->halt_lock, f);
+            continue;
+        }
+        waitq_block(&vcpu->halt_wq, &vcpu->halt_lock, f, 0);
+    }
+}
+
+static void arm_preemption_timer(kvm_vcpu_t *vcpu) {
+    if (!g_vmx.preempt) return;
+    uint32_t pin = g_vmx.pin;
+    uint64_t dl = vcpu->vm->irqchip_split ? kvm_lapic_timer_deadline(vcpu) : 0;
+    if (dl) {
+        uint64_t now = sched_now_ns();
+        uint64_t ns = dl > now ? dl - now : 0;
+        if (ns > 1000000000000ull) ns = 1000000000000ull;
+        uint64_t ticks = (ns * g_tsc_khz / 1000000ull) >> g_vmx.preempt_shift;
+        if (ticks > 0xFFFFFFFFull) ticks = 0xFFFFFFFFull;
+        vmwrite(VMCS_PREEMPTION_TIMER, ticks);
+        pin |= PIN_PREEMPTION_TIMER;
+    }
+    if ((uint32_t)vmread(VMCS_PIN_CONTROLS) != pin) vmwrite(VMCS_PIN_CONTROLS, pin);
 }
 
 static int complete_pending(kvm_vcpu_t *vcpu) {
@@ -1364,12 +1500,23 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
 
     run->exit_reason = KVM_EXIT_UNKNOWN;
     r = complete_pending(vcpu);
+    if (r > 0 && vcpu->vm->irqchip_split &&
+        __atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST) == KVM_MP_STATE_HALTED)
+        r = vcpu_halt(vcpu);
 
     while (r > 0) {
         if (vcpu_should_stop(vcpu)) {
             run->exit_reason = KVM_EXIT_INTR;
             r = -EINTR;
             break;
+        }
+        if (vcpu->vm->irqchip_split) {
+            uint32_t mp = __atomic_load_n(&vcpu->mp_state, __ATOMIC_SEQ_CST);
+            if (mp != KVM_MP_STATE_RUNNABLE && mp != KVM_MP_STATE_HALTED) {
+                r = vcpu_mp_wait(vcpu);
+                continue;
+            }
+            kvm_lapic_timer_check(vcpu, sched_now_ns());
         }
         asm volatile("cli" ::: "memory");
         percpu_t *pc = get_percpu();
@@ -1386,18 +1533,25 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
             r = 0;
             break;
         }
+        __atomic_and_fetch(&vcpu->requests, ~VCPU_REQ_EVENT, __ATOMIC_ACQ_REL);
         inject_events(vcpu);
         if (run->exit_reason == KVM_EXIT_SHUTDOWN) {
             asm volatile("sti" ::: "memory");
             r = 0;
             break;
         }
+        arm_preemption_timer(vcpu);
         vcpu->mode = VCPU_IN_GUEST;
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         uint32_t req = __atomic_exchange_n(&vcpu->requests, 0, __ATOMIC_ACQ_REL);
         if ((req & VCPU_REQ_TLB_FLUSH) || vcpu->tlb_gen_seen != vcpu->vm->tlb_gen) {
             vcpu->tlb_gen_seen = vcpu->vm->tlb_gen;
             vmx_flush_ept(vcpu);
+        }
+        if (req & VCPU_REQ_EVENT) {
+            vcpu->mode = VCPU_OUTSIDE_GUEST;
+            asm volatile("sti" ::: "memory");
+            continue;
         }
         int er = vmx_enter(&vcpu->regs, vcpu->launched ? 1 : 0);
         vcpu->mode = VCPU_OUTSIDE_GUEST;
@@ -1498,7 +1652,7 @@ void vmx_get_sregs(kvm_vcpu_t *vcpu, struct kvm_sregs *s) {
     s->cr2 = vcpu->regs.cr2;
     s->cr3 = vmread(VMCS_GUEST_CR3);
     s->cr4 = guest_cr4(vcpu);
-    s->cr8 = vcpu->cr8;
+    s->cr8 = vcpu_cr8(vcpu);
     s->efer = vcpu->efer;
     s->apic_base = vcpu->apic_base;
     uint32_t info = (uint32_t)vmread(VMCS_ENTRY_INTR_INFO);
@@ -1534,6 +1688,7 @@ int vmx_set_sregs(kvm_vcpu_t *vcpu, const struct kvm_sregs *s) {
     vmwrite(VMCS_GUEST_CR3, s->cr3);
     vcpu->cr8 = s->cr8;
     vcpu->apic_base = s->apic_base;
+    if (vcpu->vm->irqchip_split) kvm_lapic_set_cr8(vcpu, (uint8_t)(s->cr8 & 0xF));
     vcpu->efer = s->efer;
     apply_cr4(vcpu, s->cr4);
     vcpu->cr0 = s->cr0;

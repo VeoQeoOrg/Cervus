@@ -354,6 +354,8 @@ static int mmio_exit(kvm_vcpu_t *vcpu, uint64_t gpa, int size, bool write, uint6
 }
 
 static int mmio_write(kvm_vcpu_t *vcpu, uint64_t gpa, int size, uint64_t data) {
+    int k = kvm_mmio_kernel_write(vcpu, gpa, size, data);
+    if (k >= 0) return k;
     if (kvm_ioeventfd_signal(vcpu->vm, false, gpa, (uint32_t)size, data)) return 1;
     return mmio_exit(vcpu, gpa, size, true, data);
 }
@@ -659,6 +661,13 @@ truncated:
 do_read:
     p->active = true;
     p->kind = PEND_MMIO;
+    {
+        uint64_t kv;
+        if (kvm_mmio_kernel_read(vcpu, gpa, p->size, &kv)) {
+            memcpy(vcpu->run->mmio.data, &kv, sizeof kv);
+            return emu_mmio_complete(vcpu);
+        }
+    }
     return mmio_exit(vcpu, gpa, p->size, false, 0);
 }
 

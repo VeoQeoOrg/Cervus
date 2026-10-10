@@ -6,6 +6,7 @@
 #include "kvm_abi.h"
 #include "../sched/kmutex.h"
 #include "../sched/spinlock.h"
+#include "../sched/waitq.h"
 
 struct mm;
 struct vnode;
@@ -18,6 +19,8 @@ struct task;
 #define KVM_MCE_BANKS        10
 #define KVM_RUN_PAGES        2
 #define KVM_PIO_PAGE_OFFSET  1
+#define KVM_MAX_IRQ_ROUTES   4096
+#define KVM_IOAPIC_PINS      24
 
 enum {
     VCPU_REG_RAX, VCPU_REG_RCX, VCPU_REG_RDX, VCPU_REG_RBX,
@@ -57,9 +60,33 @@ typedef struct kvm_ioeventfd_entry {
 typedef struct kvm_vm kvm_vm_t;
 typedef struct kvm_vcpu kvm_vcpu_t;
 
+typedef struct {
+    spinlock_t lock;
+    uint8_t    regs[KVM_APIC_REG_SIZE];
+    uint64_t   timer_deadline;
+    uint64_t   timer_period;
+    uint32_t   timer_divide;
+} kvm_lapic_t;
+
+typedef struct {
+    uint32_t gsi;
+    uint32_t type;
+    uint32_t address_lo;
+    uint32_t address_hi;
+    uint32_t data;
+} kvm_route_t;
+
+typedef struct kvm_irqfd_entry {
+    struct kvm_irqfd_entry *next;
+    kvm_vm_t      *vm;
+    struct vnode  *efd;
+    uint32_t       gsi;
+} kvm_irqfd_entry_t;
+
 enum { VCPU_OUTSIDE_GUEST = 0, VCPU_IN_GUEST = 1 };
 
 #define VCPU_REQ_TLB_FLUSH (1u << 0)
+#define VCPU_REQ_EVENT     (1u << 1)
 
 enum { PEND_NONE = 0, PEND_PIO = 1, PEND_MMIO = 2 };
 
@@ -158,6 +185,10 @@ struct kvm_vcpu {
 
     kvm_pending_t    pend;
     uint64_t         pio_data_off;
+
+    kvm_lapic_t      lapic;
+    spinlock_t       halt_lock;
+    waitq_t          halt_wq;
 };
 
 struct kvm_vm {
@@ -179,6 +210,13 @@ struct kvm_vm {
     spinlock_t       ioevent_lock;
     kvm_ioeventfd_entry_t *ioevents;
     uint32_t         nioevents;
+
+    bool             irqchip_split;
+    spinlock_t       route_lock;
+    kvm_route_t     *routes;
+    uint32_t         nroutes;
+    spinlock_t       irqfd_lock;
+    kvm_irqfd_entry_t *irqfds;
 
     uint64_t         tss_addr;
     uint64_t         identity_map_addr;
@@ -233,6 +271,25 @@ uint64_t emu_seg_base(kvm_vcpu_t *vcpu, int seg);
 void     emu_inject_pf(kvm_vcpu_t *vcpu, uint64_t gva, uint32_t error);
 void     emu_inject_gp(kvm_vcpu_t *vcpu);
 void     emu_inject_ud(kvm_vcpu_t *vcpu);
+
+void     kvm_lapic_reset(kvm_vcpu_t *vcpu, bool init);
+void     kvm_lapic_get_state(kvm_vcpu_t *vcpu, struct kvm_lapic_state *s);
+void     kvm_lapic_set_state(kvm_vcpu_t *vcpu, const struct kvm_lapic_state *s);
+int      kvm_lapic_pending(kvm_vcpu_t *vcpu);
+void     kvm_lapic_ack(kvm_vcpu_t *vcpu, int vector);
+bool     kvm_lapic_accept_pic(kvm_vcpu_t *vcpu);
+uint8_t  kvm_lapic_get_cr8(kvm_vcpu_t *vcpu);
+void     kvm_lapic_set_cr8(kvm_vcpu_t *vcpu, uint8_t cr8);
+void     kvm_lapic_timer_check(kvm_vcpu_t *vcpu, uint64_t now);
+uint64_t kvm_lapic_timer_deadline(kvm_vcpu_t *vcpu);
+bool     kvm_mmio_kernel_read(kvm_vcpu_t *vcpu, uint64_t gpa, int size, uint64_t *val);
+int      kvm_mmio_kernel_write(kvm_vcpu_t *vcpu, uint64_t gpa, int size, uint64_t val);
+void     kvm_vcpu_kick(kvm_vcpu_t *vcpu);
+int      kvm_deliver_msi(kvm_vm_t *vm, uint64_t addr, uint32_t data);
+int      kvm_set_gsi(kvm_vm_t *vm, uint32_t gsi, int level);
+int64_t  kvm_set_routing(kvm_vm_t *vm, uint64_t arg);
+int64_t  kvm_irqfd(kvm_vm_t *vm, const struct kvm_irqfd *a);
+void     kvm_irq_destroy(kvm_vm_t *vm);
 
 void     kvm_dev_init(void);
 

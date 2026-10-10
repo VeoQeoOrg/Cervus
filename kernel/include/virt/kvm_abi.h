@@ -276,9 +276,51 @@ struct kvm_msi {
     uint8_t  pad[12];
 };
 
+#define KVM_IRQFD_FLAG_DEASSIGN  (1u << 0)
+#define KVM_IRQFD_FLAG_RESAMPLE  (1u << 1)
+
+#define KVM_MSI_VALID_DEVID      (1u << 0)
+
+#define KVM_IRQ_ROUTING_IRQCHIP  1
+#define KVM_IRQ_ROUTING_MSI      2
+
+struct kvm_irq_routing_entry {
+    uint32_t gsi;
+    uint32_t type;
+    uint32_t flags;
+    uint32_t pad;
+    union {
+        struct {
+            uint32_t irqchip;
+            uint32_t pin;
+        } irqchip;
+        struct {
+            uint32_t address_lo;
+            uint32_t address_hi;
+            uint32_t data;
+            uint32_t devid;
+        } msi;
+        uint32_t pad[8];
+    } u;
+};
+
 struct kvm_irq_routing {
     uint32_t nr;
     uint32_t flags;
+};
+
+struct kvm_irq_level {
+    union {
+        uint32_t irq;
+        int32_t  status;
+    };
+    uint32_t level;
+};
+
+#define KVM_APIC_REG_SIZE 0x400
+
+struct kvm_lapic_state {
+    char regs[KVM_APIC_REG_SIZE];
 };
 
 struct kvm_enable_cap {
@@ -397,6 +439,9 @@ struct kvm_run {
             uint32_t index;
             uint64_t data;
         } msr;
+        struct {
+            uint8_t vector;
+        } eoi;
         char padding[256];
     };
     uint64_t kvm_valid_regs;
@@ -421,6 +466,7 @@ struct kvm_run {
 #define KVM_EXIT_NMI             16
 #define KVM_EXIT_INTERNAL_ERROR  17
 #define KVM_EXIT_SYSTEM_EVENT    24
+#define KVM_EXIT_IOAPIC_EOI      26
 
 #define KVM_EXIT_IO_IN  0
 #define KVM_EXIT_IO_OUT 1
@@ -448,8 +494,10 @@ struct kvm_run {
 #define KVM_CAP_DESTROY_MEMORY_REGION_WORKS 21
 #define KVM_CAP_USER_NMI                    22
 #define KVM_CAP_IRQ_ROUTING                 25
+#define KVM_CAP_IRQ_INJECT_STATUS           26
 #define KVM_CAP_JOIN_MEMORY_REGIONS_WORKS   30
 #define KVM_CAP_MCE                         31
+#define KVM_CAP_IRQFD                       32
 #define KVM_CAP_IOEVENTFD                   36
 #define KVM_CAP_SET_IDENTITY_MAP_ADDR       37
 #define KVM_CAP_ADJUST_CLOCK                39
@@ -466,6 +514,7 @@ struct kvm_run {
 #define KVM_CAP_SIGNAL_MSI                  77
 #define KVM_CAP_READONLY_MEM                81
 #define KVM_CAP_IOEVENTFD_NO_LENGTH         100
+#define KVM_CAP_SPLIT_IRQCHIP               121
 #define KVM_CAP_IOEVENTFD_ANY_LENGTH        122
 #define KVM_CAP_MAX_VCPU_ID                 128
 #define KVM_CAP_IMMEDIATE_EXIT              136
@@ -480,6 +529,9 @@ struct kvm_run {
 #define KVM_GET_MSR_FEATURE_INDEX_LIST KVM_IOWR(0x0a, struct kvm_msr_list)
 
 #define KVM_CREATE_VCPU            KVM_IO(0x41)
+#define KVM_CREATE_IRQCHIP         KVM_IO(0x60)
+#define KVM_IRQ_LINE               KVM_IOW(0x61, struct kvm_irq_level)
+#define KVM_IRQ_LINE_STATUS        KVM_IOWR(0x67, struct kvm_irq_level)
 #define KVM_GET_DIRTY_LOG          KVM_IOW(0x42, struct kvm_dirty_log)
 #define KVM_SET_NR_MMU_PAGES       KVM_IO(0x44)
 #define KVM_GET_NR_MMU_PAGES       KVM_IO(0x45)
@@ -514,6 +566,8 @@ struct kvm_run {
 #define KVM_SET_FPU                KVM_IOW(0x8d, struct kvm_fpu)
 #define KVM_SET_CPUID2             KVM_IOW(0x90, struct kvm_cpuid2)
 #define KVM_GET_CPUID2             KVM_IOWR(0x91, struct kvm_cpuid2)
+#define KVM_GET_LAPIC              KVM_IOR(0x8e, struct kvm_lapic_state)
+#define KVM_SET_LAPIC              KVM_IOW(0x8f, struct kvm_lapic_state)
 #define KVM_TPR_ACCESS_REPORTING   KVM_IOWR(0x92, struct kvm_tpr_access_ctl)
 #define KVM_SET_VAPIC_ADDR         KVM_IOW(0x93, struct kvm_vapic_addr)
 #define KVM_GET_MP_STATE           KVM_IOR(0x98, struct kvm_mp_state)

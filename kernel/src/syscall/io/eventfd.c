@@ -26,6 +26,8 @@ typedef struct {
     int        nonblock;
     spinlock_t lock;
     waitq_t    readers;
+    void     (*hook)(void *);
+    void      *hook_ctx;
 } eventfd_t;
 
 typedef struct {
@@ -86,8 +88,12 @@ static int64_t efd_write(vnode_t *n, const void *buf, size_t len, uint64_t off)
         spinlock_release_irqrestore(&e->lock, f);
         return -EAGAIN;
     }
-    e->count += add;
-    waitq_wake_all(&e->readers);
+    if (e->hook && add) {
+        e->hook(e->hook_ctx);
+    } else {
+        e->count += add;
+        waitq_wake_all(&e->readers);
+    }
     spinlock_release_irqrestore(&e->lock, f);
     return (int64_t)sizeof(uint64_t);
 }
@@ -128,6 +134,25 @@ static const vnode_ops_t EFD_OPS = {
     .ioctl = efd_ioctl,
     .unref = efd_unref,
 };
+
+int eventfd_set_hook(vnode_t *n, void (*fn)(void *), void *ctx)
+{
+    if (!n || n->ops != &EFD_OPS) return -EINVAL;
+    eventfd_t *e = (eventfd_t *)n->fs_data;
+    uint64_t f = spinlock_acquire_irqsave(&e->lock);
+    if (fn && e->hook) {
+        spinlock_release_irqrestore(&e->lock, f);
+        return -EBUSY;
+    }
+    e->hook = fn;
+    e->hook_ctx = ctx;
+    if (fn && e->count) {
+        e->count = 0;
+        fn(ctx);
+    }
+    spinlock_release_irqrestore(&e->lock, f);
+    return 0;
+}
 
 int64_t sys_eventfd(uint64_t initval, uint64_t flags, uint64_t unused)
 {

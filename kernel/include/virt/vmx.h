@@ -108,6 +108,7 @@
 #define VMCS_GUEST_INTERRUPTIBILITY   0x4824
 #define VMCS_GUEST_ACTIVITY_STATE     0x4826
 #define VMCS_GUEST_SYSENTER_CS        0x482A
+#define VMCS_PREEMPTION_TIMER         0x482E
 #define VMCS_HOST_SYSENTER_CS         0x4C00
 
 #define VMCS_CR0_MASK                 0x6000
@@ -152,6 +153,7 @@
 #define PIN_EXTINT_EXITING            (1u << 0)
 #define PIN_NMI_EXITING               (1u << 3)
 #define PIN_VIRTUAL_NMIS              (1u << 5)
+#define PIN_PREEMPTION_TIMER          (1u << 6)
 
 #define PROC_INTR_WINDOW_EXITING      (1u << 2)
 #define PROC_TSC_OFFSETTING           (1u << 3)
