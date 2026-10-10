@@ -1,3 +1,4 @@
+#include "../../include/virt/kvm.h"
 #include "../include/memory/mm.h"
 #include "../include/sched/capabilities.h"
 #include "../include/sched/sched.h"
@@ -1245,6 +1246,8 @@ void sched_reschedule(void) {
         }
     }
 
+    if (old && old->kvm_vcpu) vmx_sched_out(old->kvm_vcpu);
+
     if (old && old->fpu_state && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
         fpu_save(old->fpu_state);
         old->fpu_used = true;
@@ -1326,6 +1329,11 @@ void sched_reschedule(void) {
     else     context_switch(&bootstrap_tasks[cpu], next, &current_task[cpu], switch_cr3);
 
     process_deferred_free();
+
+    {
+        task_t *resumed = current_task[smp_cpu_index()];
+        if (resumed && resumed->kvm_vcpu) vmx_sched_in(resumed->kvm_vcpu);
+    }
 
     asm volatile("sti");
 }

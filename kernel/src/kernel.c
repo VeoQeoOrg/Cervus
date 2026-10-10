@@ -483,6 +483,8 @@ void kmain(void) {
     load_elf_module();
     extern void evdev_init(void);
     evdev_init();
+    extern void kvm_dev_init(void);
+    kvm_dev_init();
 
     puzzle_guardian_start();
 

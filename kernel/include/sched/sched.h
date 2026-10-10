@@ -254,6 +254,7 @@ typedef struct task {
     struct sem_undo *sem_undo;
     volatile int32_t sleep_noint;
     char root[256];
+    void *kvm_vcpu;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }
