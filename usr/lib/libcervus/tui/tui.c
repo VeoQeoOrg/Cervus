@@ -6,12 +6,26 @@
 #include <termios.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 static struct termios g_saved;
 static int g_raw = 0;
+static struct sigaction g_old_winch;
+static int g_winch_set;
+static volatile sig_atomic_t g_winch_flag;
+
+static void tui_on_winch(int sig) {
+    (void)sig;
+    g_winch_flag = 1;
+}
 
 void tui_begin(void) {
     struct termios raw;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = tui_on_winch;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGWINCH, &sa, &g_old_winch) == 0) g_winch_set = 1;
     if (tcgetattr(0, &g_saved) == 0) {
         raw = g_saved;
         raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
@@ -33,6 +47,10 @@ void tui_end(void) {
     if (g_raw) {
         tcsetattr(0, TCSAFLUSH, &g_saved);
         g_raw = 0;
+    }
+    if (g_winch_set) {
+        sigaction(SIGWINCH, &g_old_winch, NULL);
+        g_winch_set = 0;
     }
 }
 
@@ -89,9 +107,19 @@ static int ib_more(void) {
 }
 
 int tui_read_key(void) {
+    if (g_winch_flag) {
+        g_winch_flag = 0;
+        return TK_RESIZE;
+    }
     g_intr = 0;
     int c = ib_getc();
-    if (c < 0) return g_intr ? TK_RESIZE : -1;
+    if (c < 0) {
+        if (g_intr) {
+            g_winch_flag = 0;
+            return TK_RESIZE;
+        }
+        return -1;
+    }
     if (c != 0x1B) {
         if (c == '\n' || c == '\r') return TK_ENTER;
         if (c == 8 || c == 127)     return TK_BACKSP;

@@ -102,6 +102,10 @@ extern WINDOW *stdscr;
 extern int LINES, COLS;
 
 WINDOW *initscr(void);
+int     resizeterm(int lines, int cols);
+int     resize_term(int lines, int cols);
+bool    is_term_resized(int lines, int cols);
+int     wresize(WINDOW *w, int lines, int cols);
 int     endwin(void);
 int     isendwin(void);
 const char *curses_version(void);

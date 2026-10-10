@@ -7,6 +7,7 @@
 #include <termios.h>
 #include <poll.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 
 #define TIOCGWINSZ 0x5413
 
@@ -32,6 +33,12 @@ static short g_pair_bg[COLOR_PAIRS];
 static int   g_pair_set[COLOR_PAIRS];
 
 static int g_ungot = -1;
+static volatile sig_atomic_t g_winch;
+
+static void curses_on_winch(int sig) {
+    (void)sig;
+    g_winch = 1;
+}
 
 chtype COLOR_PAIR(int n) {
     return ((chtype)(n & CURSES_PAIR_MASK)) << CURSES_PAIR_SHIFT;
@@ -95,8 +102,71 @@ int mvwin(WINDOW *w, int y, int x) {
     return OK;
 }
 
+int wresize(WINDOW *w, int h, int wd) {
+    if (!w || h <= 0 || wd <= 0) return ERR;
+    chtype *cells = malloc((size_t)h * wd * sizeof(chtype));
+    if (!cells) return ERR;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < wd; x++)
+            cells[y * wd + x] = (y < w->h && x < w->w) ? w->cells[y * w->w + x] : cell_of(' ', A_NORMAL);
+    free(w->cells);
+    w->cells = cells;
+    w->h = h;
+    w->w = wd;
+    if (w->cury >= h) w->cury = h - 1;
+    if (w->curx >= wd) w->curx = wd - 1;
+    return OK;
+}
+
+bool is_term_resized(int lines, int cols) {
+    return lines != g_rows || cols != g_cols;
+}
+
+int resize_term(int lines, int cols) {
+    if (lines <= 0 || cols <= 0) return ERR;
+    if (!g_started) { LINES = lines; COLS = cols; return OK; }
+    chtype *virt = malloc((size_t)lines * cols * sizeof(chtype));
+    chtype *phys = malloc((size_t)lines * cols * sizeof(chtype));
+    if (!virt || !phys) { free(virt); free(phys); return ERR; }
+    for (int i = 0; i < lines * cols; i++) {
+        virt[i] = cell_of(' ', A_NORMAL);
+        phys[i] = cell_of(0, CURSES_ATTR_MASK);
+    }
+    free(g_virt);
+    free(g_phys);
+    g_virt = virt;
+    g_phys = phys;
+    g_rows = lines;
+    g_cols = cols;
+    LINES = lines;
+    COLS = cols;
+    if (stdscr) wresize(stdscr, lines, cols);
+    fputs("\x1b[2J", stdout);
+    return OK;
+}
+
+int resizeterm(int lines, int cols) {
+    return resize_term(lines, cols);
+}
+
+static void apply_winch(void) {
+    g_winch = 0;
+    int old_l = LINES, old_c = COLS;
+    query_size();
+    int l = LINES, c = COLS;
+    LINES = old_l;
+    COLS = old_c;
+    resize_term(l, c);
+}
+
 WINDOW *initscr(void) {
     if (g_started) return stdscr;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = curses_on_winch;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGWINCH, &sa, NULL);
 
     if (tcgetattr(0, &g_saved_tio) == 0) g_have_tio = 1;
     query_size();
@@ -522,10 +592,14 @@ int ungetch(int c) { g_ungot = c; return OK; }
 int wgetch(WINDOW *w) {
     if (g_ungot >= 0) { int c = g_ungot; g_ungot = -1; return c; }
 
+    if (g_winch) { apply_winch(); return KEY_RESIZE; }
     int delay = w ? w->delay : -1;
     g_intr = 0;
     int c = nextc(delay);
-    if (c < 0) return g_intr ? KEY_RESIZE : ERR;
+    if (c < 0) {
+        if (g_winch) { apply_winch(); return KEY_RESIZE; }
+        return g_intr ? KEY_RESIZE : ERR;
+    }
 
     if (c == '\n' || c == '\r') return (w && w->keypad) ? KEY_ENTER : '\n';
     if (c == 8 || c == 127)     return (w && w->keypad) ? KEY_BACKSPACE : c;
