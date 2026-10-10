@@ -100,6 +100,8 @@ typedef void (*sighandler_t)(int);
 #define BUS_ADRALN  1
 #define BUS_ADRERR  2
 #define BUS_OBJERR  3
+#define BUS_MCEERR_AR 4
+#define BUS_MCEERR_AO 5
 
 #define CLD_EXITED    1
 #define CLD_KILLED    2
