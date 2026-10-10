@@ -199,5 +199,6 @@ void clocksource_init(void) {
     clocksource_register(&cs_jiffies);
     clocksource_register(&cs_hpet);
     clocksource_register(&cs_tsc);
+    kvmclock_init();
     clocksource_select();
 }
