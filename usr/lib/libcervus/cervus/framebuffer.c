@@ -22,7 +22,7 @@ int cervus_display_info(cervus_fb_info_t *out) {
 enum {
     OBJ_FREE, OBJ_DISPLAY, OBJ_REGISTRY, OBJ_SYNC, OBJ_FRAME, OBJ_COMPOSITOR, OBJ_SHM, OBJ_POOL,
     OBJ_BUFFER, OBJ_SURFACE, OBJ_WM, OBJ_XSURF, OBJ_TOPLEVEL, OBJ_SEAT, OBJ_KEYBOARD, OBJ_POINTER,
-    OBJ_RELMGR, OBJ_REL, OBJ_CONSTRAINTS, OBJ_LOCKED, OBJ_ZOMBIE
+    OBJ_RELMGR, OBJ_REL, OBJ_CONSTRAINTS, OBJ_LOCKED, OBJ_DECOMGR, OBJ_DECO, OBJ_ZOMBIE
 };
 
 #define DECO_H    26
@@ -140,14 +140,14 @@ static struct {
     size_t   outlen;
     int      dead;
 
-    uint32_t compositor, shm, wm, seat, relmgr, constraints;
+    uint32_t compositor, shm, wm, seat, relmgr, constraints, decomgr;
     uint32_t seat_ver;
     uint32_t keyboard, pointer, rel, locked;
     int      sync_done;
 
-    uint32_t w, h, req_w, req_h, fh;
+    uint32_t w, h, req_w, req_h, fh, deco_h;
     char     title[64];
-    uint32_t pool, buffer, surface, xsurf, toplevel;
+    uint32_t pool, buffer, surface, xsurf, toplevel, deco;
     int      shm_fd;
     uint32_t *base, *pixels;
     int32_t  px, py;
@@ -301,7 +301,8 @@ static void deco_text(int x, int y, const char *t, uint32_t c) {
 }
 
 static void deco_draw(void) {
-    if (!W.base) return;
+    if (!W.base || !W.deco_h) return;
+    W.dirty = 1;
     uint32_t bg = W.focused ? 0xFFE6E6EA : 0xFFC9C9CF;
     uint32_t fg = W.focused ? 0xFF1C1C22 : 0xFF6A6A72;
     deco_fill(0, 0, W.w, DECO_H - 1, bg);
@@ -336,12 +337,11 @@ static void deco_draw(void) {
 static void deco_pointer(int32_t x, int32_t y) {
     W.px = x;
     W.py = y;
-    W.in_bar = y < DECO_H;
+    W.in_bar = y < (int32_t)W.deco_h;
     int hot = W.in_bar && x >= (int32_t)W.w - DECO_H;
     if (hot != W.close_hot) {
         W.close_hot = hot;
         deco_draw();
-        W.dirty = 1;
     }
 }
 
@@ -378,6 +378,8 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
                 W.relmgr = wl_bind(name, iface, 1, OBJ_RELMGR);
             else if (!strcmp(iface, "zwp_pointer_constraints_v1") && !W.constraints)
                 W.constraints = wl_bind(name, iface, 1, OBJ_CONSTRAINTS);
+            else if (!strcmp(iface, "zxdg_decoration_manager_v1") && !W.decomgr)
+                W.decomgr = wl_bind(name, iface, 1, OBJ_DECOMGR);
         }
         break;
     case OBJ_SYNC:
@@ -395,9 +397,12 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
     case OBJ_XSURF:
         if (op == 0) {
             req1(W.xsurf, 4, u[0]);
-            if (!W.configured) { W.configured = 1; deco_draw(); W.dirty = 1; }
+            W.configured = 1;
             if (W.dirty && !W.frame_pending) commit_now();
         }
+        break;
+    case OBJ_DECO:
+        if (op == 0 && !W.base) W.deco_h = u[0] == 2 ? 0 : DECO_H;
         break;
     case OBJ_TOPLEVEL:
         if (op == 1) ev_push(CERVUS_FBEV_CLOSE, 0, 0, 0, 0);
@@ -425,13 +430,11 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
         if (op == 1) {
             W.focused = 1;
             deco_draw();
-            W.dirty = 1;
             ev_push(CERVUS_FBEV_FOCUS, 0, 1, 0, 0);
         } else if (op == 2) {
             W.focused = 0;
             release_held();
             deco_draw();
-            W.dirty = 1;
             ev_push(CERVUS_FBEV_FOCUS, 0, 0, 0, 0);
         } else if (op == 3 && len >= 16) {
             uint32_t key = u[2], state = u[3];
@@ -448,13 +451,13 @@ static void on_event(uint32_t id, uint32_t op, const uint8_t *a, size_t len) {
             W.pointer_in = 1;
             if (W.grab) hide_cursor();
             deco_pointer((int32_t)u[2] / 256, (int32_t)u[3] / 256);
-            if (!W.in_bar) ev_push(CERVUS_FBEV_MOTION, 0, 0, W.px, W.py - DECO_H);
+            if (!W.in_bar) ev_push(CERVUS_FBEV_MOTION, 0, 0, W.px, W.py - (int32_t)W.deco_h);
         } else if (op == 1) {
             W.pointer_in = 0;
-            deco_pointer(-1, DECO_H);
+            deco_pointer(-1, (int32_t)W.deco_h);
         } else if (op == 2) {
             deco_pointer((int32_t)u[1] / 256, (int32_t)u[2] / 256);
-            if (!W.in_bar) ev_push(CERVUS_FBEV_MOTION, 0, 0, W.px, W.py - DECO_H);
+            if (!W.in_bar) ev_push(CERVUS_FBEV_MOTION, 0, 0, W.px, W.py - (int32_t)W.deco_h);
         } else if (op == 3) {
             if (W.in_bar && !W.grab) {
                 if (u[3] && W.close_hot) {
@@ -589,8 +592,7 @@ void cervus_fb_set_title(const char *title) {
         m_str(&m, W.title);
         wl_send(W.toplevel, 2, &m, -1);
         deco_draw();
-        W.dirty = 1;
-        if (!W.frame_pending) commit_now();
+        if (W.dirty && !W.frame_pending) commit_now();
         wl_flush();
     }
 }
@@ -610,7 +612,7 @@ static void pick_size(void) {
 }
 
 static void commit_now(void) {
-    if (!W.open || !W.configured) return;
+    if (!W.open || !W.configured || !W.base) return;
     msg_t m = { .n = 0 };
     m_u32(&m, W.buffer);
     m_u32(&m, 0);
@@ -626,23 +628,57 @@ static void commit_now(void) {
     wl_flush();
 }
 
+static void window_close(void);
+
 static int window_open(void) {
     if (W.open) return 0;
     if (!cervus_fb_windowed()) return -ENODEV;
     pick_size();
-    W.fh = W.h + DECO_H;
-    W.bytes = (size_t)W.w * W.fh * 4;
-    W.shm_fd = memfd_create("cervus-fb", 0);
-    if (W.shm_fd < 0 || ftruncate(W.shm_fd, (off_t)W.bytes) != 0) return -ENOMEM;
-    W.base = mmap(NULL, W.bytes, PROT_READ | PROT_WRITE, MAP_SHARED, W.shm_fd, 0);
-    if (W.base == MAP_FAILED) { W.base = W.pixels = NULL; return -ENOMEM; }
-    memset(W.base, 0, W.bytes);
-    W.pixels = W.base + (size_t)W.w * DECO_H;
     W.close_hot = 0;
     W.in_bar = 0;
+    W.deco_h = DECO_H;
+
+    W.surface = wl_new(OBJ_SURFACE);
+    req1(W.compositor, 0, W.surface);
+    W.xsurf = wl_new(OBJ_XSURF);
+    msg_t m = { .n = 0 };
+    m_u32(&m, W.xsurf); m_u32(&m, W.surface);
+    wl_send(W.wm, 2, &m, -1);
+    W.toplevel = wl_new(OBJ_TOPLEVEL);
+    req1(W.xsurf, 1, W.toplevel);
+    if (W.decomgr) {
+        W.deco = wl_new(OBJ_DECO);
+        m.n = 0;
+        m_u32(&m, W.deco); m_u32(&m, W.toplevel);
+        wl_send(W.decomgr, 1, &m, -1);
+        req1(W.deco, 1, 2);
+    }
+
+    if (!W.title[0]) snprintf(W.title, sizeof W.title, "%s",
+                              program_invocation_short_name && *program_invocation_short_name
+                              ? program_invocation_short_name : "cervus");
+    m.n = 0; m_str(&m, W.title); wl_send(W.toplevel, 2, &m, -1);
+    m.n = 0; m_str(&m, W.title); wl_send(W.toplevel, 3, &m, -1);
+    req0(W.surface, 6);
+    wl_flush();
+
+    W.open = 1;
+    W.configured = 0;
+    W.frame_pending = 0;
+    while (!W.configured && !W.dead) if (wl_read(1) < 0) break;
+    if (W.dead) return -EIO;
+
+    W.fh = W.h + W.deco_h;
+    W.bytes = (size_t)W.w * W.fh * 4;
+    W.shm_fd = memfd_create("cervus-fb", 0);
+    void *base = MAP_FAILED;
+    if (W.shm_fd >= 0 && ftruncate(W.shm_fd, (off_t)W.bytes) == 0)
+        base = mmap(NULL, W.bytes, PROT_READ | PROT_WRITE, MAP_SHARED, W.shm_fd, 0);
+    if (base == MAP_FAILED) { window_close(); return -ENOMEM; }
+    memset(base, 0, W.bytes);
 
     W.pool = wl_new(OBJ_POOL);
-    msg_t m = { .n = 0 };
+    m.n = 0;
     m_u32(&m, W.pool);
     m_u32(&m, (uint32_t)W.bytes);
     wl_send(W.shm, 0, &m, W.shm_fd);
@@ -653,46 +689,31 @@ static int window_open(void) {
     m_u32(&m, W.w * 4); m_u32(&m, 1);
     wl_send(W.pool, 0, &m, -1);
 
-    W.surface = wl_new(OBJ_SURFACE);
-    req1(W.compositor, 0, W.surface);
-    W.xsurf = wl_new(OBJ_XSURF);
-    m.n = 0;
-    m_u32(&m, W.xsurf); m_u32(&m, W.surface);
-    wl_send(W.wm, 2, &m, -1);
-    W.toplevel = wl_new(OBJ_TOPLEVEL);
-    req1(W.xsurf, 1, W.toplevel);
-
-    if (!W.title[0]) snprintf(W.title, sizeof W.title, "%s",
-                              program_invocation_short_name && *program_invocation_short_name
-                              ? program_invocation_short_name : "cervus");
-    m.n = 0; m_str(&m, W.title); wl_send(W.toplevel, 2, &m, -1);
-    m.n = 0; m_str(&m, W.title); wl_send(W.toplevel, 3, &m, -1);
     m.n = 0; m_u32(&m, W.w); m_u32(&m, W.fh); wl_send(W.toplevel, 7, &m, -1);
     m.n = 0; m_u32(&m, W.w); m_u32(&m, W.fh); wl_send(W.toplevel, 8, &m, -1);
-    req0(W.surface, 6);
-    wl_flush();
 
-    W.open = 1;
-    W.configured = 0;
-    W.frame_pending = 0;
-    while (!W.configured && !W.dead) if (wl_read(1) < 0) break;
+    W.base = base;
+    W.pixels = W.base + (size_t)W.w * W.deco_h;
+    W.dirty = 1;
+    deco_draw();
+    commit_now();
     return W.dead ? -EIO : 0;
 }
 
 static void window_close(void) {
     if (!W.open) return;
     cervus_fb_grab_pointer(0);
+    if (W.deco) { req0(W.deco, 0); W.type[W.deco] = OBJ_ZOMBIE; W.deco = 0; }
     req0(W.toplevel, 0);
     req0(W.xsurf, 0);
     req0(W.surface, 0);
-    req0(W.buffer, 0);
-    req0(W.pool, 1);
-    wl_flush();
     W.type[W.toplevel] = W.type[W.xsurf] = W.type[W.surface] = OBJ_ZOMBIE;
-    W.type[W.buffer] = W.type[W.pool] = OBJ_ZOMBIE;
+    if (W.buffer) { req0(W.buffer, 0); W.type[W.buffer] = OBJ_ZOMBIE; }
+    if (W.pool) { req0(W.pool, 1); W.type[W.pool] = OBJ_ZOMBIE; }
+    wl_flush();
     W.toplevel = W.xsurf = W.surface = W.buffer = W.pool = 0;
-    munmap(W.base, W.bytes);
-    close(W.shm_fd);
+    if (W.base) munmap(W.base, W.bytes);
+    if (W.shm_fd >= 0) close(W.shm_fd);
     W.base = W.pixels = NULL;
     W.shm_fd = -1;
     W.open = 0;
