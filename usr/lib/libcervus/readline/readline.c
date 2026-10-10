@@ -30,6 +30,7 @@ static int g_eof_streak = 0;
 static int g_no_cursor = 0;
 static const char *g_prompt_str = NULL;
 static int g_cur_len = 0;
+static int g_cur_row = 0;
 
 static void term_update_size(void) {
     struct winsize ws;
@@ -65,12 +66,21 @@ static int vis_cols(int byte_pos) {
 }
 
 static void full_refresh(int pos) {
-    write(1, "\r", 1);
+    char b[24];
+    int n;
+    if (g_cur_row > 0) { n = snprintf(b, sizeof b, "\x1b[%dA", g_cur_row); write(1, b, n); }
+    write(1, "\r\x1b[J", 4);
     if (g_prompt_str && g_prompt_str[0]) write(1, g_prompt_str, strlen(g_prompt_str));
     if (g_rl_buf && g_cur_len > 0) write(1, g_rl_buf, g_cur_len);
-    write(1, "\x1b[K", 3);
-    int back = vis_cols(g_cur_len) - vis_cols(pos);
-    if (back > 0) { char b[16]; int n = snprintf(b, sizeof b, "\x1b[%dD", back); write(1, b, n); }
+    int end = g_prompt_len + vis_cols(g_cur_len);
+    if (end > 0 && end % g_cols == 0) write(1, "\r\n", 2);
+    int end_row = end / g_cols;
+    int want = g_prompt_len + vis_cols(pos);
+    int want_row = want / g_cols, want_col = want % g_cols;
+    if (end_row > want_row) { n = snprintf(b, sizeof b, "\x1b[%dA", end_row - want_row); write(1, b, n); }
+    write(1, "\r", 1);
+    if (want_col > 0) { n = snprintf(b, sizeof b, "\x1b[%dC", want_col); write(1, b, n); }
+    g_cur_row = want_row;
 }
 
 static int utf8_next(const char *buf, int len, int p) {
@@ -500,6 +510,7 @@ static int readline_edit(char *buf, int maxlen) {
     }
     g_start_row = term_get_cursor_row() - g_prompt_len / g_cols;
     if (g_start_row < 0) g_start_row = 0;
+    g_cur_row = g_prompt_len / g_cols;
 
     int len = 0, pos = 0, hidx = 0;
     int utf8_pending = 0;
@@ -637,6 +648,7 @@ static int readline_edit(char *buf, int maxlen) {
         }
         if (c == 12) {
             g_cur_len = len;
+            if (!g_no_cursor) g_cur_row = (g_prompt_len + vis_cols(pos)) / g_cols;
             full_refresh(pos);
             continue;
         }
