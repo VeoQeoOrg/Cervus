@@ -15,6 +15,8 @@
 #define TCSETS        0x5402
 #define TCSETSW       0x5403
 #define TCSETSF       0x5404
+#define TIOCGPGRP     0x540F
+#define TIOCSPGRP     0x5410
 #define TIOCGWINSZ    0x5413
 #define TIOCSWINSZ    0x5414
 #define TIOCGCURSOR   0x5480
@@ -29,6 +31,7 @@
 #define TIO_ISIG        0x00000001u
 #define TIO_VINTR       0
 #define PTY_SIGINT      2
+#define PTY_SIGWINCH    28
 
 typedef struct {
     char     buf[PTY_BUF];
@@ -45,6 +48,7 @@ typedef struct {
     int      m_open, s_open;
     int      m_nonblock, s_nonblock;
     uint32_t slave_pid;
+    uint32_t fg_pgid;
     spinlock_t lock;
 } pty_t;
 
@@ -130,10 +134,20 @@ static int64_t pty_master_read(vnode_t *n, void *buf, size_t len, uint64_t off) 
 static void pty_signal_foreground(pty_t *p, int sig) {
     extern task_t *task_find_by_pid(uint32_t pid);
     extern void signal_send_children(task_t *root, int sig);
+    if (p->fg_pgid) { signal_send_group(p->fg_pgid, sig); return; }
     if (!p->slave_pid) return;
     task_t *sh = task_find_by_pid(p->slave_pid);
     if (!sh || sh->state == TASK_ZOMBIE || sh->state == TASK_DEAD) return;
     signal_send_children(sh, sig);
+}
+
+static uint32_t pty_fg_pgid(pty_t *p) {
+    extern task_t *task_find_by_pid(uint32_t pid);
+    if (p->fg_pgid) return p->fg_pgid;
+    if (!p->slave_pid) return 0;
+    task_t *t = task_find_by_pid(p->slave_pid);
+    if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) return 0;
+    return t->pgid;
 }
 
 static int64_t pty_master_write(vnode_t *n, const void *buf, size_t len, uint64_t off) {
@@ -212,7 +226,30 @@ static int64_t pty_ioctl(vnode_t *n, uint64_t req, void *arg, int is_master) {
         case TCGETS: if (arg) memcpy(arg, p->termios, TERMIOS_SZ); return 0;
         case TCSETS: case TCSETSW: case TCSETSF: if (arg) memcpy(p->termios, arg, TERMIOS_SZ); return 0;
         case TIOCGWINSZ: if (arg) memcpy(arg, p->ws, 8); return 0;
-        case TIOCSWINSZ: if (arg) memcpy(p->ws, arg, 8); return 0;
+        case TIOCSWINSZ: {
+            if (!arg) return -EFAULT;
+            int changed = memcmp(p->ws, arg, 8) != 0;
+            memcpy(p->ws, arg, 8);
+            if (changed) {
+                uint32_t pg = pty_fg_pgid(p);
+                if (pg) signal_send_group(pg, PTY_SIGWINCH);
+            }
+            return 0;
+        }
+        case TIOCGPGRP: {
+            if (!arg) return -EFAULT;
+            uint32_t pg = pty_fg_pgid(p);
+            if (!pg) { task_t *me = syscall_cur_task(); pg = me ? me->pgid : 0; }
+            *(int32_t *)arg = (int32_t)pg;
+            return 0;
+        }
+        case TIOCSPGRP: {
+            if (!arg) return -EFAULT;
+            int32_t pg = *(int32_t *)arg;
+            if (pg <= 0) return -EINVAL;
+            p->fg_pgid = (uint32_t)pg;
+            return 0;
+        }
         case TIOCGCURSOR: return -1;
         case FIONREAD: {
             if (!arg) return -EFAULT;
