@@ -2,252 +2,556 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <regex.h>
+#include <fnmatch.h>
+#include <getopt.h>
 #include <sys/stat.h>
 #include <cervus_util.h>
 
 typedef struct {
-    int ignore_case;
-    int invert;
-    int show_lineno;
-    int recursive;
-    int count_only;
-    int files_with_match;
-    int quiet;
-    int no_filename;
-    int fixed;
-    int extended;
+    char   *text;
+    size_t  len;
     regex_t re;
-    int re_ready;
-} grep_opts_t;
+    int     re_ok;
+} pattern_t;
 
-static int match_line(const char *line, const char *pat, grep_opts_t *o)
-{
-    if (o->fixed) {
-        size_t pl = strlen(pat);
-        if (pl == 0) return 1;
-        for (const char *p = line; *p; p++) {
-            size_t k = 0;
-            while (k < pl && p[k]) {
-                char a = p[k], b = pat[k];
-                if (o->ignore_case) {
-                    if (a >= 'A' && a <= 'Z') a = a - 'A' + 'a';
-                    if (b >= 'A' && b <= 'Z') b = b - 'A' + 'a';
-                }
-                if (a != b) break;
-                k++;
-            }
-            if (k == pl) return 1;
+typedef struct {
+    char  *line;
+    size_t len;
+    long   lineno;
+} held_t;
+
+enum { MODE_BASIC, MODE_EXTENDED, MODE_FIXED };
+
+static pattern_t *g_pats;
+static int        g_npats;
+static int        g_mode = MODE_BASIC;
+static int        g_icase, g_invert, g_word, g_xline;
+static int        g_count, g_list, g_list_missing, g_quiet, g_silent;
+static int        g_lineno, g_only, g_with_name = -1, g_recursive, g_deref;
+static int        g_binary_text, g_binary_skip;
+static long       g_max_count = -1;
+static long       g_after, g_before;
+static char     **g_include, **g_exclude, **g_exclude_dir;
+static int        g_ninclude, g_nexclude, g_nexclude_dir;
+static int        g_error;
+static int        g_printed_any;
+static int        g_file_has_out;
+static long       g_last_out_line;
+static int        g_implicit_dot;
+
+static void *xrealloc(void *p, size_t n) {
+    void *q = realloc(p, n ? n : 1);
+    if (!q) { fputs("grep: out of memory\n", stderr); exit(2); }
+    return q;
+}
+
+static void add_list(char ***list, int *n, const char *s) {
+    *list = xrealloc(*list, sizeof(char *) * (size_t)(*n + 1));
+    (*list)[(*n)++] = strdup(s);
+}
+
+static void add_pattern(const char *s, size_t len) {
+    g_pats = xrealloc(g_pats, sizeof(pattern_t) * (size_t)(g_npats + 1));
+    pattern_t *p = &g_pats[g_npats++];
+    memset(p, 0, sizeof *p);
+    p->text = xrealloc(NULL, len + 1);
+    memcpy(p->text, s, len);
+    p->text[len] = '\0';
+    p->len = len;
+}
+
+static void add_patterns(const char *s) {
+    for (;;) {
+        const char *nl = strchr(s, '\n');
+        if (!nl) { add_pattern(s, strlen(s)); return; }
+        add_pattern(s, (size_t)(nl - s));
+        s = nl + 1;
+    }
+}
+
+static int add_pattern_file(const char *path) {
+    FILE *f = strcmp(path, "-") == 0 ? stdin : fopen(path, "r");
+    if (!f) { fprintf(stderr, "grep: %s: cannot open\n", path); return -1; }
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    while ((n = getline(&line, &cap, f)) >= 0) {
+        if (n > 0 && line[n - 1] == '\n') line[--n] = '\0';
+        add_pattern(line, (size_t)n);
+    }
+    free(line);
+    if (f != stdin) fclose(f);
+    return 0;
+}
+
+static int compile_patterns(void) {
+    if (g_mode == MODE_FIXED) return 0;
+    for (int i = 0; i < g_npats; i++) {
+        pattern_t *p = &g_pats[i];
+        int cflags = (g_mode == MODE_EXTENDED ? REG_EXTENDED : 0) | (g_icase ? REG_ICASE : 0);
+        const char *src = p->text;
+        char *wrapped = NULL;
+        if (g_xline) {
+            size_t n = p->len + 8;
+            wrapped = xrealloc(NULL, n);
+            if (g_mode == MODE_EXTENDED) snprintf(wrapped, n, "^(%s)$", p->text);
+            else snprintf(wrapped, n, "^\\(%s\\)$", p->text);
+            src = wrapped;
+        }
+        int rc = regcomp(&p->re, src, cflags);
+        free(wrapped);
+        if (rc != 0) {
+            char err[128];
+            regerror(rc, &p->re, err, sizeof err);
+            fprintf(stderr, "grep: %s: %s\n", p->text, err);
+            return -1;
+        }
+        p->re_ok = 1;
+    }
+    return 0;
+}
+
+static int is_word_char(unsigned char c) {
+    return isalnum(c) || c == '_';
+}
+
+static int word_ok(const char *line, size_t len, size_t so, size_t eo) {
+    if (so > 0 && is_word_char((unsigned char)line[so - 1])) return 0;
+    if (eo < len && is_word_char((unsigned char)line[eo])) return 0;
+    return 1;
+}
+
+static int fixed_at(const char *s, const char *p, size_t n) {
+    if (!g_icase) return memcmp(s, p, n) == 0;
+    for (size_t i = 0; i < n; i++)
+        if (tolower((unsigned char)s[i]) != tolower((unsigned char)p[i])) return 0;
+    return 1;
+}
+
+static int find_one(pattern_t *p, const char *line, size_t len, size_t from, size_t *so, size_t *eo) {
+    if (g_mode == MODE_FIXED) {
+        if (g_xline) {
+            if (from || p->len != len || !fixed_at(line, p->text, len)) return 0;
+            *so = 0; *eo = len;
+            return 1;
+        }
+        for (size_t i = from; i + p->len <= len; i++) {
+            if (!fixed_at(line + i, p->text, p->len)) continue;
+            if (g_word && !word_ok(line, len, i, i + p->len)) continue;
+            *so = i; *eo = i + p->len;
+            return 1;
         }
         return 0;
     }
-    if (!o->re_ready) return 0;
-    return regexec(&o->re, line, 0, NULL, 0) == 0;
-}
-
-static int looks_binary(const char *buf, ssize_t n)
-{
-    int nonprint = 0;
-    for (ssize_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)buf[i];
-        if (c == 0x00) return 1;
-        if (c < 0x08 || (c > 0x0d && c < 0x20 && c != 0x1b)) nonprint++;
+    size_t start = from;
+    while (start <= len) {
+        regmatch_t m;
+        int ef = start > 0 ? REG_NOTBOL : 0;
+        if (regexec(&p->re, line + start, 1, &m, ef) != 0) return 0;
+        size_t s = start + (size_t)m.rm_so, e = start + (size_t)m.rm_eo;
+        if (!g_word || word_ok(line, len, s, e)) {
+            *so = s; *eo = e;
+            return 1;
+        }
+        start = s + 1;
     }
-    return (n > 0 && nonprint * 100 / n > 30);
+    return 0;
 }
 
-static int grep_fd(int fd, const char *pat, const char *prefix,
-                   const grep_opts_t *o, int *any, int skip_binary)
-{
-    char buf[8192];
-    int line = 0;
-    int matched_in_file = 0;
-    char acc[4096];
-    int alen = 0;
-    int checked = 0, is_binary = 0;
+static int find_any(const char *line, size_t len, size_t from, size_t *so, size_t *eo) {
+    int found = 0;
+    size_t bs = 0, be = 0;
+    for (int i = 0; i < g_npats; i++) {
+        size_t s, e;
+        if (!find_one(&g_pats[i], line, len, from, &s, &e)) continue;
+        if (!found || s < bs || (s == bs && e > be)) { bs = s; be = e; found = 1; }
+    }
+    if (found) { *so = bs; *eo = be; }
+    return found;
+}
 
-    while (1) {
-        ssize_t n = read(fd, buf, sizeof(buf));
-        if (n <= 0) break;
-        if (skip_binary && !checked) { checked = 1; if (looks_binary(buf, n)) { is_binary = 1; break; } }
-        for (ssize_t i = 0; i < n; i++) {
-            char c = buf[i];
-            if (c == '\n' || alen + 1 >= (int)sizeof(acc)) {
-                acc[alen] = '\0';
-                line++;
-                int m = match_line(acc, pat, (grep_opts_t *)o);
-                if (o->invert) m = !m;
-                if (m) {
-                    matched_in_file++;
-                    if (any) *any = 1;
-                    if (!o->quiet && !o->count_only && !o->files_with_match) {
-                        if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
-                        if (o->show_lineno) fprintf(stdout, "%d:", line);
-                        fputs(acc, stdout);
-                        putchar('\n');
-                    }
-                    if (o->quiet) return 0;
-                    if (o->files_with_match) {
-                        if (prefix) { puts(prefix); }
-                        return 0;
-                    }
+static char  *g_mbuf;
+static size_t g_mcap;
+
+static const char *match_view(const char *line, size_t len) {
+    if (!memchr(line, '\0', len)) return line;
+    if (g_mcap < len + 1) {
+        g_mcap = len + 1;
+        g_mbuf = xrealloc(g_mbuf, g_mcap);
+    }
+    for (size_t i = 0; i < len; i++) g_mbuf[i] = line[i] ? line[i] : '\n';
+    g_mbuf[len] = '\0';
+    return g_mbuf;
+}
+
+static void print_prefix(const char *name, long lineno, char sep) {
+    if (name) { fputs(name, stdout); putchar(sep); }
+    if (g_lineno) { printf("%ld", lineno); putchar(sep); }
+}
+
+static void emit_line(const char *name, const char *line, size_t len, long lineno, char sep) {
+    if (g_after || g_before) {
+        if (g_printed_any && (!g_file_has_out || lineno > g_last_out_line + 1))
+            fputs("--\n", stdout);
+        g_printed_any = 1;
+        g_file_has_out = 1;
+        g_last_out_line = lineno;
+    }
+    print_prefix(name, lineno, sep);
+    fwrite(line, 1, len, stdout);
+    putchar('\n');
+}
+
+static void emit_only(const char *name, const char *line, size_t len, long lineno) {
+    const char *view = match_view(line, len);
+    size_t from = 0;
+    while (from <= len) {
+        size_t so, eo;
+        if (!find_any(view, len, from, &so, &eo)) break;
+        if (eo > so) {
+            print_prefix(name, lineno, ':');
+            fwrite(line + so, 1, eo - so, stdout);
+            putchar('\n');
+            from = eo;
+        } else {
+            from = so + 1;
+        }
+    }
+}
+
+static int line_selected(const char *line, size_t len) {
+    size_t so, eo;
+    int m = find_any(match_view(line, len), len, 0, &so, &eo);
+    return g_invert ? !m : m;
+}
+
+static int grep_stream(FILE *f, const char *display) {
+    const char *name = g_with_name ? display : NULL;
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    long lineno = 0, selected = 0, after_left = 0;
+    int binary = 0;
+    held_t *ring = NULL;
+    long ring_n = 0, ring_head = 0;
+    if (g_before > 0) ring = calloc((size_t)g_before, sizeof(held_t));
+    int stop = 0;
+
+    g_file_has_out = 0;
+    if (!g_binary_text) {
+        char head[4096];
+        ssize_t hn = pread(fileno(f), head, sizeof head, 0);
+        if (hn > 0 && memchr(head, '\0', (size_t)hn)) {
+            binary = 1;
+            if (g_binary_skip) { free(ring); return 0; }
+        }
+    }
+    while (!stop && (n = getline(&line, &cap, f)) >= 0) {
+        lineno++;
+        size_t len = (size_t)n;
+        if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+        if (!binary && !g_binary_text && memchr(line, '\0', len)) {
+            binary = 1;
+            if (g_binary_skip) break;
+        }
+        int sel = line_selected(line, len);
+        if (sel) {
+            selected++;
+            if (g_quiet) { stop = 1; break; }
+            if (!g_count && !g_list && !g_list_missing) {
+                if (binary) {
+                    fflush(stdout);
+                    fprintf(stderr, "grep: %s: binary file matches\n", display);
+                    stop = 1;
+                    break;
                 }
-                alen = 0;
-                if (c != '\n') acc[alen++] = c;
+                for (long k = 0; k < ring_n; k++) {
+                    held_t *h = &ring[(ring_head + k) % g_before];
+                    emit_line(name, h->line, h->len, h->lineno, '-');
+                }
+                ring_n = 0;
+                if (g_only) {
+                    if (!g_invert) emit_only(name, line, len, lineno);
+                } else {
+                    emit_line(name, line, len, lineno, ':');
+                }
+                after_left = g_after;
+            }
+            if (g_list) break;
+            if (g_max_count >= 0 && selected >= g_max_count) {
+                if (after_left == 0) break;
+                stop = 2;
+            }
+        } else if (after_left > 0 && !g_count && !g_list && !g_list_missing && !binary) {
+            emit_line(name, line, len, lineno, '-');
+            after_left--;
+        } else if (ring) {
+            held_t *h;
+            if (ring_n < g_before) {
+                h = &ring[(ring_head + ring_n) % g_before];
+                ring_n++;
             } else {
-                acc[alen++] = c;
+                h = &ring[ring_head];
+                ring_head = (ring_head + 1) % g_before;
             }
+            free(h->line);
+            h->line = xrealloc(NULL, len + 1);
+            memcpy(h->line, line, len + 1);
+            h->len = len;
+            h->lineno = lineno;
+        }
+        if (stop == 2) {
+            while (after_left > 0 && (n = getline(&line, &cap, f)) >= 0) {
+                lineno++;
+                len = (size_t)n;
+                if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+                if (line_selected(line, len)) break;
+                emit_line(name, line, len, lineno, '-');
+                after_left--;
+            }
+            break;
         }
     }
-    if (alen > 0 && !is_binary) {
-        acc[alen] = '\0';
-        line++;
-        int m = match_line(acc, pat, (grep_opts_t *)o);
-        if (o->invert) m = !m;
-        if (m) {
-            matched_in_file++;
-            if (any) *any = 1;
-            if (!o->quiet && !o->count_only && !o->files_with_match) {
-                if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
-                if (o->show_lineno) fprintf(stdout, "%d:", line);
-                fputs(acc, stdout);
-                putchar('\n');
-            }
-        }
+    if (ring) {
+        for (long k = 0; k < g_before; k++) free(ring[k].line);
+        free(ring);
     }
+    free(line);
 
-    if (o->count_only) {
-        if (prefix && !o->no_filename) { fputs(prefix, stdout); fputs(":", stdout); }
-        printf("%d\n", matched_in_file);
+    if (g_count) {
+        if (name) { fputs(name, stdout); putchar(':'); }
+        printf("%ld\n", selected);
     }
-    return matched_in_file > 0 ? 0 : 1;
+    if (g_list && selected) puts(display);
+    if (g_list_missing && !selected) puts(display);
+    fflush(stdout);
+    return selected > 0;
 }
 
-static int grep_path(const char *path, const char *pat,
-                     const grep_opts_t *o, int show_prefix, int *any);
+static int name_matches(char **list, int n, const char *path) {
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    for (int i = 0; i < n; i++)
+        if (fnmatch(list[i], base, 0) == 0) return 1;
+    return 0;
+}
 
-static int grep_dir(const char *dir, const char *pat,
-                    const grep_opts_t *o, int *any)
-{
+static int grep_path(const char *path, int top);
+
+static int grep_dir(const char *dir) {
     DIR *d = opendir(dir);
-    if (!d) { fprintf(stderr, "grep: cannot open directory '%s'\n", dir); return 1; }
+    if (!d) {
+        if (!g_silent) fprintf(stderr, "grep: %s: cannot open directory\n", dir);
+        g_error = 1;
+        return 0;
+    }
+    int any = 0;
     struct dirent *de;
     while ((de = readdir(d)) != NULL) {
         const char *nm = de->d_name;
         if (nm[0] == '.' && (nm[1] == '\0' || (nm[1] == '.' && nm[2] == '\0'))) continue;
-        char child[512];
-        snprintf(child, sizeof(child), "%s/%s", dir, nm);
-        grep_path(child, pat, o, 1, any);
+        size_t need = strlen(dir) + strlen(nm) + 2;
+        char *child = xrealloc(NULL, need);
+        if (g_implicit_dot && strcmp(dir, ".") == 0) snprintf(child, need, "%s", nm);
+        else if (strcmp(dir, "/") == 0) snprintf(child, need, "/%s", nm);
+        else snprintf(child, need, "%s/%s", dir, nm);
+        any |= grep_path(child, 0);
+        free(child);
+        if (any && g_quiet) break;
     }
     closedir(d);
-    return 0;
+    return any;
 }
 
-static int grep_path(const char *path, const char *pat,
-                     const grep_opts_t *o, int show_prefix, int *any)
-{
+static int grep_path(const char *path, int top) {
+    if (strcmp(path, "-") == 0 && top) return grep_stream(stdin, "(standard input)");
     struct stat st;
-    if (stat(path, &st) != 0) {
-        fprintf(stderr, "grep: '%s': no such file or directory\n", path);
-        return 1;
+    int rc = (top || g_deref) ? stat(path, &st) : lstat(path, &st);
+    if (rc != 0) {
+        if (!g_silent) fprintf(stderr, "grep: %s: No such file or directory\n", path);
+        g_error = 1;
+        return 0;
     }
+    if (S_ISLNK(st.st_mode)) return 0;
     if (S_ISDIR(st.st_mode)) {
-        if (!o->recursive) { fprintf(stderr, "grep: '%s': is a directory (use -r)\n", path); return 1; }
-        return grep_dir(path, pat, o, any);
+        if (!g_recursive) {
+            if (!g_silent) fprintf(stderr, "grep: %s: Is a directory\n", path);
+            return 0;
+        }
+        if (!top && name_matches(g_exclude_dir, g_nexclude_dir, path)) return 0;
+        return grep_dir(path);
     }
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) { fprintf(stderr, "grep: cannot open '%s'\n", path); return 1; }
-    const char *prefix = show_prefix ? path : NULL;
-    grep_fd(fd, pat, prefix, o, any, 1);
-    close(fd);
-    return 0;
+    if (!top || g_recursive) {
+        if (g_ninclude && !name_matches(g_include, g_ninclude, path)) return 0;
+        if (name_matches(g_exclude, g_nexclude, path)) return 0;
+    }
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        if (!g_silent) fprintf(stderr, "grep: %s: cannot open\n", path);
+        g_error = 1;
+        return 0;
+    }
+    int r = grep_stream(f, path);
+    fclose(f);
+    return r;
 }
 
 static const char USAGE[] =
-    "Usage: grep [-cEFHhilnqrRsvx] [-e pattern] pattern [file ...]\nSearch for PATTERN in each FILE.\n\n  -c   only print count of matching lines\n  -e   pattern (allows pattern beginning with -)\n  -H   print filename prefix\n  -h   suppress filename prefix\n  -i   ignore case\n  -l   list filenames with matches only\n  -n   prefix each line with line number\n  -q   quiet, exit 0 on first match\n  -r, -R  recurse into directories\n  -v   invert match\n";
+    "Usage: grep [OPTION]... PATTERNS [FILE]...\n"
+    "Search for PATTERNS in each FILE.\n\n"
+    "  -E, --extended-regexp     PATTERNS are extended regular expressions\n"
+    "  -F, --fixed-strings       PATTERNS are strings\n"
+    "  -G, --basic-regexp        PATTERNS are basic regular expressions\n"
+    "  -e, --regexp=PATTERNS     use PATTERNS for matching (repeatable)\n"
+    "  -f, --file=FILE           take PATTERNS from FILE\n"
+    "  -i, --ignore-case         ignore case distinctions\n"
+    "  -w, --word-regexp         match only whole words\n"
+    "  -x, --line-regexp         match only whole lines\n"
+    "  -v, --invert-match        select non-matching lines\n"
+    "  -c, --count               print only a count of selected lines per FILE\n"
+    "  -l, --files-with-matches  print only names of FILEs with selected lines\n"
+    "  -L, --files-without-match print only names of FILEs with no selected lines\n"
+    "  -m, --max-count=NUM       stop after NUM selected lines\n"
+    "  -o, --only-matching       show only the matching parts of lines\n"
+    "  -q, --quiet, --silent     suppress all normal output\n"
+    "  -s, --no-messages         suppress error messages\n"
+    "  -n, --line-number         print line number with output lines\n"
+    "  -H, --with-filename       print file name with output lines\n"
+    "  -h, --no-filename         suppress the file name prefix on output\n"
+    "  -A, --after-context=NUM   print NUM lines of trailing context\n"
+    "  -B, --before-context=NUM  print NUM lines of leading context\n"
+    "  -C, --context=NUM         print NUM lines of output context\n"
+    "  -a, --text                process a binary file as if it were text\n"
+    "  -I                        skip binary files\n"
+    "  -r, --recursive           search directories recursively\n"
+    "  -R, --dereference-recursive  likewise, following all symlinks\n"
+    "      --include=GLOB        search only files that match GLOB\n"
+    "      --exclude=GLOB        skip files that match GLOB\n"
+    "      --exclude-dir=GLOB    skip directories that match GLOB\n";
 
-static void usage(void) { fputs(USAGE, stderr); }
+enum { OPT_INCLUDE = 256, OPT_EXCLUDE, OPT_EXCLUDE_DIR, OPT_COLOR, OPT_IGNORED };
 
-int main(int argc, char **argv)
-{
+static long parse_num(const char *s, const char *opt) {
+    char *end;
+    long v = strtol(s, &end, 10);
+    if (*s == '\0' || *end != '\0' || v < 0) {
+        fprintf(stderr, "grep: invalid %s argument '%s'\n", opt, s);
+        exit(2);
+    }
+    return v;
+}
+
+int main(int argc, char **argv) {
     if (cervus_check_help_version(argc, argv, USAGE, "grep")) return 0;
-    argc = cervus_end_of_options(argc, argv);
 
-    grep_opts_t o;
-    memset(&o, 0, sizeof(o));
-    const char *e_pat = NULL;
+    static const struct option longopts[] = {
+        { "extended-regexp", no_argument, 0, 'E' },
+        { "fixed-strings", no_argument, 0, 'F' },
+        { "basic-regexp", no_argument, 0, 'G' },
+        { "regexp", required_argument, 0, 'e' },
+        { "file", required_argument, 0, 'f' },
+        { "ignore-case", no_argument, 0, 'i' },
+        { "word-regexp", no_argument, 0, 'w' },
+        { "line-regexp", no_argument, 0, 'x' },
+        { "invert-match", no_argument, 0, 'v' },
+        { "count", no_argument, 0, 'c' },
+        { "files-with-matches", no_argument, 0, 'l' },
+        { "files-without-match", no_argument, 0, 'L' },
+        { "max-count", required_argument, 0, 'm' },
+        { "only-matching", no_argument, 0, 'o' },
+        { "quiet", no_argument, 0, 'q' },
+        { "silent", no_argument, 0, 'q' },
+        { "no-messages", no_argument, 0, 's' },
+        { "line-number", no_argument, 0, 'n' },
+        { "with-filename", no_argument, 0, 'H' },
+        { "no-filename", no_argument, 0, 'h' },
+        { "after-context", required_argument, 0, 'A' },
+        { "before-context", required_argument, 0, 'B' },
+        { "context", required_argument, 0, 'C' },
+        { "text", no_argument, 0, 'a' },
+        { "recursive", no_argument, 0, 'r' },
+        { "dereference-recursive", no_argument, 0, 'R' },
+        { "include", required_argument, 0, OPT_INCLUDE },
+        { "exclude", required_argument, 0, OPT_EXCLUDE },
+        { "exclude-dir", required_argument, 0, OPT_EXCLUDE_DIR },
+        { "color", optional_argument, 0, OPT_COLOR },
+        { "colour", optional_argument, 0, OPT_COLOR },
+        { "line-buffered", no_argument, 0, OPT_IGNORED },
+        { 0, 0, 0, 0 }
+    };
 
+    int have_pat = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "cEFHe:hilnqrRsvx")) != -1) {
+    while ((opt = getopt_long(argc, argv, "EFGe:f:iywxvclLm:oqsnHhA:B:C:aIrR", longopts, NULL)) != -1) {
         switch (opt) {
-            case 'c': o.count_only = 1; break;
-            case 'E': o.extended = 1; break;
-            case 'F': o.fixed = 1; break;
-            case 'H': o.no_filename = 0; break;
-            case 'e': e_pat = optarg; break;
-            case 'h': o.no_filename = 1; break;
-            case 'i': o.ignore_case = 1; break;
-            case 'l': o.files_with_match = 1; break;
-            case 'n': o.show_lineno = 1; break;
-            case 'q': o.quiet = 1; break;
-            case 'r': case 'R': o.recursive = 1; break;
-            case 's': break;
-            case 'v': o.invert = 1; break;
-            case 'x': break;
-            default: usage(); return 2;
-        }
-    }
-
-    const char *pat = e_pat;
-    int file_start = optind;
-    if (!pat) {
-        if (optind >= argc) { usage(); return 2; }
-        pat = argv[optind];
-        file_start = optind + 1;
-    }
-
-    if (!o.fixed) {
-        int cflags = 0;
-        if (o.extended) cflags |= REG_EXTENDED;
-        if (o.ignore_case) cflags |= REG_ICASE;
-        cflags |= REG_NOSUB;
-        int rc = regcomp(&o.re, pat, cflags);
-        if (rc != 0) {
-            char err[128];
-            regerror(rc, &o.re, err, sizeof(err));
-            fprintf(stderr, "grep: bad pattern: %s\n", err);
+        case 'E': g_mode = MODE_EXTENDED; break;
+        case 'F': g_mode = MODE_FIXED; break;
+        case 'G': g_mode = MODE_BASIC; break;
+        case 'e': add_patterns(optarg); have_pat = 1; break;
+        case 'f': if (add_pattern_file(optarg) < 0) return 2; have_pat = 1; break;
+        case 'i': case 'y': g_icase = 1; break;
+        case 'w': g_word = 1; break;
+        case 'x': g_xline = 1; break;
+        case 'v': g_invert = 1; break;
+        case 'c': g_count = 1; break;
+        case 'l': g_list = 1; break;
+        case 'L': g_list_missing = 1; break;
+        case 'm': g_max_count = parse_num(optarg, "max count"); break;
+        case 'o': g_only = 1; break;
+        case 'q': g_quiet = 1; break;
+        case 's': g_silent = 1; break;
+        case 'n': g_lineno = 1; break;
+        case 'H': g_with_name = 1; break;
+        case 'h': g_with_name = 0; break;
+        case 'A': g_after = parse_num(optarg, "context length"); break;
+        case 'B': g_before = parse_num(optarg, "context length"); break;
+        case 'C': g_after = g_before = parse_num(optarg, "context length"); break;
+        case 'a': g_binary_text = 1; break;
+        case 'I': g_binary_skip = 1; break;
+        case 'r': g_recursive = 1; break;
+        case 'R': g_recursive = 1; g_deref = 1; break;
+        case OPT_INCLUDE: add_list(&g_include, &g_ninclude, optarg); break;
+        case OPT_EXCLUDE: add_list(&g_exclude, &g_nexclude, optarg); break;
+        case OPT_EXCLUDE_DIR: add_list(&g_exclude_dir, &g_nexclude_dir, optarg); break;
+        case OPT_COLOR: case OPT_IGNORED: break;
+        default:
+            fputs(USAGE, stderr);
             return 2;
         }
-        o.re_ready = 1;
     }
+
+    if (!have_pat) {
+        if (optind >= argc) { fputs(USAGE, stderr); return 2; }
+        add_patterns(argv[optind++]);
+    }
+    if (g_only && (g_after || g_before)) g_after = g_before = 0;
+    if (compile_patterns() < 0) return 2;
+
+    int nfiles = argc - optind;
+    if (g_with_name < 0) g_with_name = nfiles > 1 || g_recursive;
 
     int any = 0;
-    int nf = argc - file_start;
-
-    int rc_final = 0;
-    if (o.recursive && nf == 0) {
-        grep_path(".", pat, &o, 1, &any);
-        rc_final = any ? 0 : 1;
-        goto out;
+    if (g_max_count == 0) {
+        any = 0;
+    } else if (nfiles == 0) {
+        if (g_recursive) { g_implicit_dot = 1; any = grep_dir("."); }
+        else any = grep_stream(stdin, "(standard input)");
+    } else {
+        for (int i = optind; i < argc; i++) {
+            any |= grep_path(argv[i], 1);
+            if (any && g_quiet) break;
+        }
     }
 
-    if (nf == 0) {
-        grep_fd(0, pat, NULL, &o, &any, 0);
-        rc_final = any ? 0 : 1;
-        goto out;
+    for (int i = 0; i < g_npats; i++) {
+        if (g_pats[i].re_ok) regfree(&g_pats[i].re);
+        free(g_pats[i].text);
     }
-
-    int show_prefix = (nf > 1 || o.recursive) && !o.no_filename;
-    for (int i = file_start; i < argc; i++) {
-        char resolved[512];
-        snprintf(resolved, sizeof(resolved), "%s", argv[i]);
-        grep_path(resolved, pat, &o, show_prefix, &any);
-    }
-    rc_final = any ? 0 : 1;
-out:
-    if (o.re_ready) regfree(&o.re);
-    return rc_final;
+    free(g_pats);
+    if (any && g_quiet) return 0;
+    if (g_error) return 2;
+    return any ? 0 : 1;
 }
