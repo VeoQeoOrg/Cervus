@@ -9,8 +9,13 @@ int usb_get_device_descriptor(usb_ctrl_ops_t *o, uint8_t *desc18) {
 
 int usb_get_config(usb_ctrl_ops_t *o, uint8_t *cfg_full, uint16_t cap,
                    uint16_t *out_total, uint8_t *out_cfg_value) {
+    return usb_get_config_index(o, 0, cfg_full, cap, out_total, out_cfg_value);
+}
+
+int usb_get_config_index(usb_ctrl_ops_t *o, uint8_t index, uint8_t *cfg_full, uint16_t cap,
+                         uint16_t *out_total, uint8_t *out_cfg_value) {
     uint8_t hdr[9] = {0};
-    uint8_t setup_hdr[8] = { 0x80, 0x06, 0x00, 0x02, 0x00, 0x00, 9, 0x00 };
+    uint8_t setup_hdr[8] = { 0x80, 0x06, index, 0x02, 0x00, 0x00, 9, 0x00 };
     int r = o->control(o->handle, setup_hdr, hdr, 9, true);
     if (r < 0) return r;
 
@@ -18,7 +23,7 @@ int usb_get_config(usb_ctrl_ops_t *o, uint8_t *cfg_full, uint16_t cap,
     if (total < 9) return -EINVAL;
     if (total > cap) total = cap;
 
-    uint8_t setup_full[8] = { 0x80, 0x06, 0x00, 0x02, 0x00, 0x00,
+    uint8_t setup_full[8] = { 0x80, 0x06, index, 0x02, 0x00, 0x00,
                               (uint8_t)(total & 0xFF), (uint8_t)(total >> 8) };
     r = o->control(o->handle, setup_full, cfg_full, total, true);
     if (r < 0) return r;

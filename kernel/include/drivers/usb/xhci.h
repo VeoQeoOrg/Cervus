@@ -103,6 +103,13 @@ struct xhci_controller {
     bool               irq_enabled;
 
     volatile uint32_t  drain_lock;
+
+    struct {
+        uint64_t   param;
+        xhci_trb_t ev;
+        bool       valid;
+    }                  recent[32];
+    uint32_t           recent_head;
 };
 
 #define TRB_CYCLE             (1u << 0)
@@ -225,6 +232,16 @@ int  xhci_msc_register(xhci_controller_t *c, uint8_t slot_id,
 void xhci_msc_post_init(void);
 void xhci_msc_disconnect_slot(uint8_t slot_id);
 bool xhci_msc_handle_xfer_event(uint8_t slot_id, uint8_t dci, uint8_t cc,
+                                uint32_t resid, uint64_t param);
+
+int  xhci_net_register(xhci_controller_t *c, uint8_t slot_id,
+                       const xhci_topology_t *topo,
+                       xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
+                       uint16_t enq, uint8_t cyc,
+                       uint16_t vid, uint16_t pid, const void *net_iface);
+void xhci_net_post_init(void);
+void xhci_net_disconnect_slot(uint8_t slot_id);
+bool xhci_net_handle_xfer_event(uint8_t slot_id, uint8_t dci, uint8_t cc,
                                 uint32_t resid, uint64_t param);
 
 int  xhci_hub_register(xhci_controller_t *c, uint8_t slot_id,

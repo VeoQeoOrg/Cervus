@@ -3,6 +3,7 @@
 #include "../../../../include/drivers/usb/usb_hid.h"
 #include "../../../../include/drivers/usb/usb_config.h"
 #include "../../../../include/drivers/usb/usb_enum.h"
+#include "../../../../include/drivers/usb/usb_net.h"
 #include "../../../../include/drivers/pci.h"
 #include "../../../../include/memory/dma.h"
 #include "../../../../include/memory/pmm.h"
@@ -305,6 +306,32 @@ static void xhci_cmd_enqueue(xhci_controller_t *c, uint64_t param,
     c->doorbells[0] = 0;
 }
 
+static void recent_store_locked(xhci_controller_t *c, const xhci_trb_t *ev) {
+    uint32_t i = c->recent_head++ % 32;
+    c->recent[i].param = ev->parameter;
+    c->recent[i].ev    = *ev;
+    c->recent[i].valid = true;
+}
+
+static bool recent_take(xhci_controller_t *c, uint64_t param, xhci_trb_t *out) {
+    uint64_t rflags;
+    asm volatile("pushfq; cli; pop %0" : "=r"(rflags) :: "memory");
+    while (__atomic_exchange_n(&c->drain_lock, 1, __ATOMIC_ACQUIRE))
+        asm volatile("pause");
+    bool found = false;
+    for (int i = 0; i < 32; i++) {
+        if (c->recent[i].valid && c->recent[i].param == param) {
+            if (out) *out = c->recent[i].ev;
+            c->recent[i].valid = false;
+            found = true;
+            break;
+        }
+    }
+    __atomic_store_n(&c->drain_lock, 0, __ATOMIC_RELEASE);
+    if (rflags & 0x200) asm volatile("sti" ::: "memory");
+    return found;
+}
+
 static int xhci_poll_event(xhci_controller_t *c, uintptr_t wait_trb_phys,
                            xhci_trb_t *out_event, uint64_t timeout_ms)
 {
@@ -312,33 +339,8 @@ static int xhci_poll_event(xhci_controller_t *c, uintptr_t wait_trb_phys,
     uint64_t deadline_ns = timeout_ms * 1000000ULL;
 
     for (;;) {
-        xhci_trb_t *e = &c->evt_ring[c->evt_dequeue];
-        uint32_t ctl = e->control;
-
-        if ((ctl & TRB_CYCLE) == c->evt_cycle) {
-            xhci_trb_t snap = *e;
-
-            uint16_t new_dq = (uint16_t)(c->evt_dequeue + 1);
-            if (new_dq >= XHCI_EVT_RING_TRBS) {
-                new_dq = 0;
-                c->evt_cycle ^= 1;
-            }
-            c->evt_dequeue = new_dq;
-
-            uint64_t erdp =
-                (uint64_t)c->evt_ring_phys + (uint64_t)c->evt_dequeue * sizeof(xhci_trb_t);
-            rt_w64(c, XHCI_RT_IR0_ERDP, erdp | ERDP_BUSY);
-
-            uint32_t type = TRB_TYPE_GET(snap.control);
-            if (type == TRB_CMD_COMPLETION_EVT || type == TRB_TRANSFER_EVT) {
-                if (wait_trb_phys == 0 || snap.parameter == (uint64_t)wait_trb_phys) {
-                    if (out_event) *out_event = snap;
-                    return 0;
-                }
-            }
-            continue;
-        }
-
+        xhci_drain_events(c);
+        if (recent_take(c, (uint64_t)wait_trb_phys, out_event)) return 0;
         if (clocksource_now_ns() - start > deadline_ns) return -ETIMEDOUT;
         asm volatile("pause");
     }
@@ -511,13 +513,14 @@ int xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
 
     uintptr_t buf_phys = 0;
     uint8_t *buf = NULL;
+    bool dir_in = (bmRequestType & 0x80) != 0;
+
     if (wLength > 0) {
         buf = (uint8_t *)dma_alloc_coherent(4096, &buf_phys);
         if (!buf) return -ENOMEM;
         memset(buf, 0, 4096);
+        if (!dir_in && data_out) memcpy(buf, data_out, wLength);
     }
-
-    bool dir_in = (bmRequestType & 0x80) != 0;
 
     uint8_t setup[8] = {
         bmRequestType, bRequest,
@@ -593,7 +596,9 @@ int xhci_control_xfer(xhci_controller_t *c, uint8_t slot_id,
         return -EIO;
     }
 
-    if (data_out && wLength > 0) memcpy(data_out, buf, wLength);
+    uint32_t resid = ev.status & 0x00FFFFFFu;
+    (void)resid;
+    if (dir_in && data_out && wLength > 0) memcpy(data_out, buf, wLength);
     if (buf) dma_free_coherent(buf, 4096);
     return 0;
 }
@@ -681,15 +686,17 @@ int xhci_list_devs(xhci_pub_dev_t *out, int max) {
     return n;
 }
 
-static void xhci_handle_xfer_event(xhci_controller_t *c, const xhci_trb_t *ev) {
+static bool xhci_handle_xfer_event(xhci_controller_t *c, const xhci_trb_t *ev) {
     (void)c;
     uint8_t  slot_id = (uint8_t)((ev->control >> 24) & 0xFFu);
     uint8_t  dci     = (uint8_t)((ev->control >> 16) & 0x1Fu);
     uint8_t  cc      = (uint8_t)((ev->status  >> 24) & 0xFFu);
     uint32_t resid   = ev->status & 0x00FFFFFFu;
 
-    if (xhci_hid_kbd_handle_xfer_event(slot_id, dci, cc)) return;
-    if (xhci_msc_handle_xfer_event(slot_id, dci, cc, resid, ev->parameter)) return;
+    if (xhci_hid_kbd_handle_xfer_event(slot_id, dci, cc)) return true;
+    if (xhci_msc_handle_xfer_event(slot_id, dci, cc, resid, ev->parameter)) return true;
+    if (xhci_net_handle_xfer_event(slot_id, dci, cc, resid, ev->parameter)) return true;
+    return false;
 }
 
 void xhci_drain_events(xhci_controller_t *c) {
@@ -714,8 +721,11 @@ void xhci_drain_events(xhci_controller_t *c) {
         c->evt_dequeue = new_dq;
 
         uint32_t type = TRB_TYPE_GET(snap.control);
-        if (type == TRB_TRANSFER_EVT)
-            xhci_handle_xfer_event(c, &snap);
+        if (type == TRB_TRANSFER_EVT) {
+            if (!xhci_handle_xfer_event(c, &snap)) recent_store_locked(c, &snap);
+        } else if (type == TRB_CMD_COMPLETION_EVT) {
+            recent_store_locked(c, &snap);
+        }
     }
 
     uint64_t erdp =
@@ -867,6 +877,30 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         return;
     }
 
+    usb_net_iface_t net;
+    bool have_net = usb_parse_net(cfg_full, total, &net);
+    {
+        usb_ifaces_t probe;
+        usb_parse_config(cfg_full, total, &probe);
+        bool known = (have_net && net.proto != USBNET_RNDIS) || probe.msc.present ||
+                     probe.hid.present || probe.hub.present || dcls == 0x09;
+        for (uint8_t ci = 1; !known && ci < n_cfg; ci++) {
+            uint8_t alt_cfg[512];
+            uint16_t at = 0;
+            uint8_t av = 0;
+            usb_net_iface_t alt;
+            if (usb_get_config_index(&ops, ci, alt_cfg, sizeof alt_cfg, &at, &av) < 0) continue;
+            if (!usb_parse_net(alt_cfg, at, &alt)) continue;
+            if (have_net && alt.proto == USBNET_RNDIS) continue;
+            net = alt;
+            memcpy(cfg_full, alt_cfg, at);
+            total = at;
+            cfg_value = av;
+            have_net = known = true;
+            serial_printf("[xhci]   using configuration %u for its network function\n", av);
+        }
+    }
+
     xhci_parse_config(cfg_full, total);
 
     if (usb_set_configuration(&ops, cfg_value) < 0) {
@@ -947,6 +981,11 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         if (xhci_msc_register(c, slot_id, topo->root_hub_port, topo->speed,
                               &msc) < 0)
             serial_writestring("[xhci]   MSC register failed\n");
+    }
+
+    if (have_net) {
+        if (xhci_net_register(c, slot_id, topo, ep0_ring, ep0_phys, enq, cyc, vid, pid, &net) < 0)
+            serial_writestring("[xhci]   network function register failed\n");
     }
 }
 
@@ -1195,6 +1234,7 @@ static void disconnect_slot(uint8_t slot_id) {
     xhci_hid_kbd_disconnect_slot(slot_id);
     xhci_msc_disconnect_slot(slot_id);
     xhci_hub_disconnect_slot(slot_id);
+    xhci_net_disconnect_slot(slot_id);
 }
 
 void xhci_hcd_disconnect_subtree(uint8_t root_slot) {
@@ -1263,6 +1303,7 @@ void xhci_worker(void *arg) {
     serial_writestring("[xhci-worker] started\n");
     xhci_hub_post_init();
     xhci_msc_post_init();
+    xhci_net_post_init();
     uint32_t slow_tick = 0;
     while (1) {
         int n_ctl = xhci_controller_count();
