@@ -8,6 +8,8 @@
 #include "../../include/apic/apic.h"
 #include "../../include/gdt/gdt.h"
 #include "../../include/interrupts/idt.h"
+#include "../../include/interrupts/interrupts.h"
+#include "../../include/memory/tlb.h"
 #include "../../include/signal/signal.h"
 #include "../../include/syscall/errno.h"
 #include "../../include/drivers/timer.h"
@@ -123,6 +125,10 @@ typedef struct {
 static vmx_caps_t g_vmx;
 static void      *g_vmxon[MAX_CPUS];
 static bool       g_vmx_on[MAX_CPUS];
+static uint64_t   g_cur_vmcs[MAX_CPUS];
+static kvm_vcpu_t *volatile g_clear_req[MAX_CPUS];
+
+#define IPI_VMCS_CLEAR 0x43
 static spinlock_t g_vpid_lock = SPINLOCK_INIT;
 static uint8_t    g_vpid_map[65536 / 8];
 
@@ -533,26 +539,65 @@ static void vcpu_reset_soft(kvm_vcpu_t *vcpu) {
     memcpy(vcpu->guest_fpu + 24, &mxcsr, 4);
 }
 
-void vmx_vmcs_enter(kvm_vcpu_t *vcpu) {
-    asm volatile("cli" ::: "memory");
-    spin_depth_inc();
+static void vmcs_drop_here(kvm_vcpu_t *vcpu, uint32_t cpu) {
+    vmclear(vcpu->vmcs_phys);
+    if (g_cur_vmcs[cpu] == vcpu->vmcs_phys) g_cur_vmcs[cpu] = 0;
+    vcpu->launched = false;
+    __atomic_store_n(&vcpu->loaded_cpu, -1, __ATOMIC_RELEASE);
+}
+
+static void serve_clear(void) {
     uint32_t cpu = smp_cpu_index();
-    vmx_cpu_enable(cpu);
-    if (vcpu->loaded_cpu != (int)cpu) {
-        vmptrld(vcpu->vmcs_phys);
-        vcpu->loaded_cpu = (int)cpu;
+    kvm_vcpu_t *v = __atomic_load_n(&g_clear_req[cpu], __ATOMIC_ACQUIRE);
+    if (!v) return;
+    if (__atomic_load_n(&v->loaded_cpu, __ATOMIC_ACQUIRE) == (int)cpu) vmcs_drop_here(v, cpu);
+    __atomic_store_n(&g_clear_req[cpu], NULL, __ATOMIC_RELEASE);
+}
+
+DEFINE_IRQ(IPI_VMCS_CLEAR, ipi_vmcs_clear_handler)
+{
+    (void)frame;
+    serve_clear();
+    lapic_eoi();
+}
+
+static void vmcs_claim(kvm_vcpu_t *vcpu) {
+    for (;;) {
+        asm volatile("cli" ::: "memory");
+        uint32_t cpu = smp_cpu_index();
+        int c = __atomic_load_n(&vcpu->loaded_cpu, __ATOMIC_ACQUIRE);
+        if (c < 0 || c == (int)cpu) return;
+        asm volatile("sti" ::: "memory");
+        kvm_vcpu_t *none = NULL;
+        while (!__atomic_compare_exchange_n(&g_clear_req[c], &none, vcpu, false,
+                                            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            none = NULL;
+            asm volatile("pause");
+        }
+        lapic_send_ipi(smp_get_lapic_id_for_cpu((uint32_t)c), IPI_VMCS_CLEAR);
+        while (__atomic_load_n(&g_clear_req[c], __ATOMIC_ACQUIRE) == vcpu) {
+            tlb_poll();
+            asm volatile("pause");
+        }
     }
 }
 
+static void vmcs_load(kvm_vcpu_t *vcpu);
+
+void vmx_vmcs_enter(kvm_vcpu_t *vcpu) {
+    vmcs_claim(vcpu);
+    spin_depth_inc();
+    vmcs_load(vcpu);
+}
+
 void vmx_vmcs_leave(kvm_vcpu_t *vcpu) {
-    vmclear(vcpu->vmcs_phys);
-    vcpu->loaded_cpu = -1;
-    vcpu->launched = false;
+    (void)vcpu;
     spin_depth_dec();
     asm volatile("sti" ::: "memory");
 }
 
 int vmx_vcpu_create(kvm_vcpu_t *vcpu) {
+    vcpu->loaded_cpu = -1;
     if (!vmx_probe()) return -ENODEV;
     vcpu->vmcs = pmm_alloc_zero(1);
     vcpu->guest_fpu = pmm_alloc_zero(1);
@@ -566,9 +611,13 @@ int vmx_vcpu_create(kvm_vcpu_t *vcpu) {
     vcpu->vpid = vpid_alloc();
     vcpu->mcg_cap = KVM_MCE_BANKS;
     vcpu_reset_soft(vcpu);
+    asm volatile("cli" ::: "memory");
+    if (!vmx_cpu_enable(smp_cpu_index()) || !vmclear(vcpu->vmcs_phys)) {
+        asm volatile("sti" ::: "memory");
+        return -EIO;
+    }
+    asm volatile("sti" ::: "memory");
     vmx_vmcs_enter(vcpu);
-    vmclear(vcpu->vmcs_phys);
-    vmptrld(vcpu->vmcs_phys);
     vmcs_setup(vcpu);
     vmcs_reset_guest(vcpu);
     vmx_vmcs_leave(vcpu);
@@ -583,6 +632,11 @@ void vmx_vcpu_reset(kvm_vcpu_t *vcpu) {
 }
 
 void vmx_vcpu_destroy(kvm_vcpu_t *vcpu) {
+    if (vcpu->vmcs && vcpu->loaded_cpu >= 0) {
+        vmcs_claim(vcpu);
+        if (vcpu->loaded_cpu == (int)smp_cpu_index()) vmcs_drop_here(vcpu, smp_cpu_index());
+        asm volatile("sti" ::: "memory");
+    }
     if (vcpu->vmcs) pmm_free(vcpu->vmcs, 1);
     if (vcpu->guest_fpu) pmm_free(vcpu->guest_fpu, 1);
     vpid_free(vcpu->vpid);
@@ -627,20 +681,24 @@ static void guest_state_put(kvm_vcpu_t *vcpu) {
 
 void vmx_sched_out(kvm_vcpu_t *vcpu) {
     guest_state_put(vcpu);
-    if (vcpu->loaded_cpu == (int)smp_cpu_index()) {
-        vmclear(vcpu->vmcs_phys);
-        vcpu->loaded_cpu = -1;
-        vcpu->launched = false;
-    }
+    uint32_t cpu = smp_cpu_index();
+    if (vcpu->loaded_cpu == (int)cpu) vmcs_drop_here(vcpu, cpu);
 }
 
 static void vmcs_load(kvm_vcpu_t *vcpu) {
     uint32_t cpu = smp_cpu_index();
-    if (vcpu->loaded_cpu == (int)cpu) return;
+    if (vcpu->loaded_cpu == (int)cpu) {
+        if (g_cur_vmcs[cpu] != vcpu->vmcs_phys) {
+            vmptrld(vcpu->vmcs_phys);
+            g_cur_vmcs[cpu] = vcpu->vmcs_phys;
+        }
+        return;
+    }
     vmx_cpu_enable(cpu);
     vmptrld(vcpu->vmcs_phys);
-    vcpu->loaded_cpu = (int)cpu;
+    g_cur_vmcs[cpu] = vcpu->vmcs_phys;
     vcpu->launched = false;
+    __atomic_store_n(&vcpu->loaded_cpu, (int)cpu, __ATOMIC_RELEASE);
     vmwrite(VMCS_HOST_TR_SEL, TSS_SELECTOR_BASE + cpu * 0x10);
     vmwrite(VMCS_HOST_TR_BASE, (uint64_t)tss[cpu]);
     vmwrite(VMCS_HOST_GS_BASE, (uint64_t)percpu_regions[cpu]);
@@ -1527,7 +1585,7 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
     struct kvm_run *run = vcpu->run;
     int r = 1;
 
-    asm volatile("cli" ::: "memory");
+    vmcs_claim(vcpu);
     vcpu->owner = me;
     me->kvm_vcpu = vcpu;
     vmcs_load(vcpu);
@@ -1628,9 +1686,6 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
     vmcs_load(vcpu);
     fill_run_state(vcpu);
     guest_state_put(vcpu);
-    vmclear(vcpu->vmcs_phys);
-    vcpu->loaded_cpu = -1;
-    vcpu->launched = false;
     me->kvm_vcpu = NULL;
     asm volatile("sti" ::: "memory");
     return r < 0 ? r : 0;
