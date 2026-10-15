@@ -7,7 +7,8 @@ cd "$ROOT"
 say() { printf '\033[96m[bootstrap]\033[0m %s\n' "$*"; }
 die() { printf '\033[91m[bootstrap] %s\033[0m\n' "$*" >&2; exit 1; }
 
-LIMINE_VERSION=12.9.0
+LIMINE_VERSION=12.9.3
+LIMINE_SHA256=9f42fe9ea2e84d71056529969b1d5c24ba9a2287ffcc01bcce58b0ef8aa98b1d
 LIMINE_TARBALL=limine-binary.tar.gz
 LIMINE_URL="https://github.com/limine-bootloader/limine/releases/download/v${LIMINE_VERSION}/${LIMINE_TARBALL}"
 
@@ -47,19 +48,22 @@ extract_hdd_bin() {
 }
 
 do_limine() {
-    if [ -f limine/limine ]; then
-        say "limine already built"
+    if [ -f limine/limine ] && [ "$(cat limine/.version 2>/dev/null)" = "$LIMINE_VERSION" ]; then
+        say "limine $LIMINE_VERSION already built"
         extract_hdd_bin
         return 0
     fi
     say "fetching Limine v$LIMINE_VERSION"
-    rm -rf limine "$LIMINE_TARBALL"
+    rm -rf limine limine-binary "$LIMINE_TARBALL"
     curl -fL --retry 3 -o "$LIMINE_TARBALL" "$LIMINE_URL"
+    got=$(sha256sum "$LIMINE_TARBALL" | cut -d' ' -f1)
+    [ "$got" = "$LIMINE_SHA256" ] || die "Limine tarball checksum mismatch: $got"
     tar -xzf "$LIMINE_TARBALL"
     rm -f "$LIMINE_TARBALL"
     [ -f limine-binary/Makefile ] || die "tarball missing limine-binary/Makefile"
     mv limine-binary limine
     make -C limine
+    printf '%s\n' "$LIMINE_VERSION" > limine/.version
     extract_hdd_bin
 }
 

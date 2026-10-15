@@ -269,7 +269,7 @@ rule grubiso
 
 build $DEPS_STAMP: bootstrap
   step = deps
-build $LIMINE_STAMP: bootstrap
+build $LIMINE_STAMP: bootstrap builder/bootstrap.sh
   step = limine
 build $CINDER_STAMP: bootstrap
   step = cinder
