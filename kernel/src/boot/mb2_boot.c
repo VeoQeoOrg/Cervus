@@ -96,6 +96,13 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
         }
         const uint8_t *d = p + 8;
         switch (type) {
+        case 1: {
+            size_t n = tlen - 8;
+            if (n >= sizeof bi->cmdline) n = sizeof bi->cmdline - 1;
+            memcpy(bi->cmdline, d, n);
+            bi->cmdline[n] = 0;
+            break;
+        }
         case 6:
             mmap_tag = p;
             break;
@@ -141,6 +148,16 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
 
     if (g_rsv_lost)
         serial_writestring("[mb2] too many reserved ranges: dropping usable memory to stay safe\n");
+
+    {
+        uint32_t a, b, c, dd;
+        asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(dd) : "a"(1), "c"(0));
+        bool hv = (c >> 31) & 1;
+        bool want = hv || strstr(bi->cmdline, "serial") != NULL;
+        serial_printf("[mb2] cmdline '%s', serial console %s\n", bi->cmdline,
+                      want ? "on" : "off (add 'serial' to the kernel command line)");
+        if (!want) serial_set_default_port(0);
+    }
 
     if (mmap_tag) {
         uint32_t size = rd32(mmap_tag + 4);

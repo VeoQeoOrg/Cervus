@@ -37,6 +37,7 @@ typedef struct {
 
 typedef struct {
     uint64_t hhdm_offset;
+    char     cmdline[256];
 
     struct {
         uint64_t addr;

@@ -688,7 +688,6 @@ static void xhci_handle_xfer_event(xhci_controller_t *c, const xhci_trb_t *ev) {
     uint8_t  cc      = (uint8_t)((ev->status  >> 24) & 0xFFu);
     uint32_t resid   = ev->status & 0x00FFFFFFu;
 
-    serial_printf("[XFEREV] slot=%u dci=%u cc=%u resid=%u\n", slot_id, dci, cc, resid);
     if (xhci_hid_kbd_handle_xfer_event(slot_id, dci, cc)) return;
     if (xhci_msc_handle_xfer_event(slot_id, dci, cc, resid, ev->parameter)) return;
 }
