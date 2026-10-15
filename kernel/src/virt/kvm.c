@@ -114,6 +114,8 @@ static int check_extension(uint64_t cap) {
         return KVM_MCE_BANKS;
     case KVM_CAP_ADJUST_CLOCK:
         return KVM_CLOCK_TSC_STABLE;
+    case KVM_CAP_TSC_DEADLINE_TIMER:
+        return 1;
     case KVM_CAP_NR_VCPUS:
     case KVM_CAP_MAX_VCPUS:
     case KVM_CAP_MAX_VCPU_ID:
@@ -147,7 +149,7 @@ static void filter_leaf(struct kvm_cpuid_entry2 *e) {
     case 1:
         e->ecx &= (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 17) | (1u << 19) |
                   (1u << 20) | (1u << 22) | (1u << 23) | (1u << 25) | (1u << 30);
-        e->ecx |= 1u << 21;
+        e->ecx |= (1u << 21) | (1u << 24);
         e->ecx |= 1u << 31;
         e->edx &= (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6) |
                   (1u << 7) | (1u << 8) | (1u << 9) | (1u << 11) | (1u << 12) | (1u << 13) | (1u << 14) |

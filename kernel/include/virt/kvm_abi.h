@@ -511,6 +511,7 @@ struct kvm_run {
 #define KVM_CAP_XCRS                        56
 #define KVM_CAP_GET_TSC_KHZ                 61
 #define KVM_CAP_MAX_VCPUS                   66
+#define KVM_CAP_TSC_DEADLINE_TIMER          72
 #define KVM_CAP_SIGNAL_MSI                  77
 #define KVM_CAP_READONLY_MEM                81
 #define KVM_CAP_IOEVENTFD_NO_LENGTH         100

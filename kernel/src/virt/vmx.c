@@ -63,6 +63,7 @@ extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index);
 #define MSR_IA32_TSC            0x010
 #define MSR_IA32_PLATFORM_ID    0x017
 #define MSR_IA32_APIC_BASE      0x01B
+#define MSR_IA32_TSC_DEADLINE   0x6E0
 #define MSR_IA32_TSC_ADJUST     0x03B
 #define MSR_IA32_SPEC_CTRL      0x048
 #define MSR_IA32_PRED_CMD       0x049
@@ -877,6 +878,10 @@ int vmx_get_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t *data, bool host) {
     switch (msr) {
     case MSR_IA32_TSC: *data = rdtsc_now() + vmread(VMCS_TSC_OFFSET); return 0;
     case MSR_IA32_APIC_BASE: *data = vcpu->apic_base; return 0;
+    case MSR_IA32_TSC_DEADLINE:
+        if (!vcpu->vm->irqchip_split) return -1;
+        *data = kvm_lapic_get_tscdeadline(vcpu);
+        return 0;
     case MSR_IA32_FEATURE_CONTROL: *data = vcpu->msr_feature_control; return 0;
     case MSR_IA32_TSC_ADJUST: *data = vcpu->msr_tsc_adjust; return 0;
     case MSR_IA32_PLATFORM_ID: *data = 0; return 0;
@@ -934,6 +939,10 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
         vcpu->tsc_offset = kvm_tsc_offset_for_write(vcpu, data, host);
         vmwrite(VMCS_TSC_OFFSET, (uint64_t)vcpu->tsc_offset);
         vcpu->pvclock_dirty = true;
+        return 0;
+    case MSR_IA32_TSC_DEADLINE:
+        if (!vcpu->vm->irqchip_split) return -1;
+        kvm_lapic_set_tscdeadline(vcpu, data);
         return 0;
     case MSR_IA32_APIC_BASE:
         if (!host && (data & ~(APIC_BASE_ADDR | APIC_BASE_ENABLE | APIC_BASE_EXTD | APIC_BASE_BSP)))
@@ -1056,7 +1065,7 @@ static const uint32_t g_msr_list[] = {
     MSR_IA32_TSC, MSR_IA32_SYSENTER_CS, MSR_IA32_SYSENTER_ESP, MSR_IA32_SYSENTER_EIP,
     MSR_STAR, MSR_LSTAR, MSR_CSTAR, MSR_SFMASK, MSR_KERNEL_GS_BASE, MSR_TSC_AUX,
     MSR_IA32_MISC_ENABLE, MSR_IA32_FEATURE_CONTROL, MSR_IA32_TSC_ADJUST, MSR_IA32_PAT,
-    MSR_IA32_MCG_STATUS, MSR_IA32_MCG_CTL,
+    MSR_IA32_MCG_STATUS, MSR_IA32_MCG_CTL, MSR_IA32_TSC_DEADLINE,
 };
 
 uint32_t vmx_msr_index_list(uint32_t *out, uint32_t max) {

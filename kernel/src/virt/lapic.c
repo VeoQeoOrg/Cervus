@@ -5,6 +5,7 @@
 #include "../../include/fs/vfs.h"
 #include "../../include/sched/sched.h"
 #include "../../include/drivers/timer.h"
+#include "../../include/apic/apic.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -39,6 +40,8 @@ extern int eventfd_set_hook(vnode_t *n, void (*fn)(void *), void *ctx);
 #define APIC_VERSION     0x00050014u
 #define LVT_MASKED       (1u << 16)
 #define LVT_PERIODIC     (1u << 17)
+#define LVT_TIMER_MODE   (3u << 17)
+#define LVT_TSCDEADLINE  (2u << 17)
 #define LVT_REMOTE_IRR   (1u << 14)
 #define SVR_ENABLED      (1u << 8)
 #define ESR_RECV_ILLEGAL (1u << 6)
@@ -121,6 +124,16 @@ static uint32_t timer_current_locked(kvm_lapic_t *a, uint64_t now) {
     return left > init ? init : (uint32_t)left;
 }
 
+static inline bool tscdl_mode(kvm_lapic_t *a) {
+    return (reg_get(a, APIC_LVTT) & LVT_TIMER_MODE) == LVT_TSCDEADLINE;
+}
+
+static inline uint64_t host_rdtsc(void) {
+    uint32_t lo, hi;
+    asm volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static void request_event(kvm_vcpu_t *v) {
     __atomic_or_fetch(&v->requests, VCPU_REQ_EVENT, __ATOMIC_SEQ_CST);
 }
@@ -147,7 +160,41 @@ void kvm_lapic_reset(kvm_vcpu_t *v, bool init) {
     a->timer_deadline = 0;
     a->timer_period = 0;
     a->timer_divide = divide_of(0);
+    a->tscdeadline = 0;
     spinlock_release_irqrestore(&a->lock, f);
+}
+
+void kvm_lapic_set_tscdeadline(kvm_vcpu_t *v, uint64_t guest_tsc) {
+    kvm_lapic_t *a = &v->lapic;
+    uint64_t f = spinlock_acquire_irqsave(&a->lock);
+    if (!tscdl_mode(a)) {
+        spinlock_release_irqrestore(&a->lock, f);
+        return;
+    }
+    a->tscdeadline = guest_tsc;
+    a->timer_period = 0;
+    if (!guest_tsc || !g_tsc_khz) {
+        a->timer_deadline = 0;
+    } else {
+        uint64_t host_dl = guest_tsc - (uint64_t)v->tsc_offset;
+        uint64_t now_tsc = host_rdtsc();
+        uint64_t now = sched_now_ns();
+        if ((int64_t)(host_dl - now_tsc) <= 0) {
+            a->timer_deadline = now ? now : 1;
+        } else {
+            uint64_t dt = host_dl - now_tsc;
+            uint64_t q = dt / g_tsc_khz;
+            if (q > 0xFFFFFFFFFull) q = 0xFFFFFFFFFull;
+            uint64_t d = q * 1000000ULL + (dt % g_tsc_khz) * 1000000ULL / g_tsc_khz;
+            a->timer_deadline = now + d;
+        }
+    }
+    spinlock_release_irqrestore(&a->lock, f);
+    request_event(v);
+}
+
+uint64_t kvm_lapic_get_tscdeadline(kvm_vcpu_t *v) {
+    return v->lapic.tscdeadline;
 }
 
 void kvm_lapic_get_state(kvm_vcpu_t *v, struct kvm_lapic_state *s) {
@@ -351,10 +398,19 @@ static int lapic_reg_write(kvm_vcpu_t *v, uint32_t off, uint32_t val) {
     case APIC_ICR2:
         reg_set(a, APIC_ICR2, val & 0xFF000000u);
         break;
-    case APIC_LVTT:
+    case APIC_LVTT: {
         if (!sw_on) val |= LVT_MASKED;
-        reg_set(a, APIC_LVTT, val & (0xFFu | LVT_MASKED | LVT_PERIODIC));
+        uint32_t old = reg_get(a, APIC_LVTT);
+        if ((val & LVT_TIMER_MODE) == LVT_TIMER_MODE) val &= ~LVT_TIMER_MODE;
+        reg_set(a, APIC_LVTT, val & (0xFFu | LVT_MASKED | LVT_TIMER_MODE));
+        if ((old ^ val) & LVT_TIMER_MODE) {
+            a->timer_deadline = 0;
+            a->timer_period = 0;
+            a->tscdeadline = 0;
+            reg_set(a, APIC_TMICT, 0);
+        }
         break;
+    }
     case APIC_LVTTHMR:
     case APIC_LVTPC:
     case APIC_LVT0:
@@ -368,6 +424,7 @@ static int lapic_reg_write(kvm_vcpu_t *v, uint32_t off, uint32_t val) {
         break;
     }
     case APIC_TMICT:
+        if (tscdl_mode(a)) break;
         reg_set(a, APIC_TMICT, val);
         timer_start_locked(a, val, now);
         break;
@@ -390,7 +447,7 @@ static uint32_t lapic_reg_read(kvm_vcpu_t *v, uint32_t off) {
     uint32_t r;
     switch (off) {
     case APIC_PPR: r = ppr_locked(a); break;
-    case APIC_TMCCT: r = timer_current_locked(a, sched_now_ns()); break;
+    case APIC_TMCCT: r = tscdl_mode(a) ? 0 : timer_current_locked(a, sched_now_ns()); break;
     case APIC_LVR: r = APIC_VERSION; break;
     case APIC_EOI: r = 0; break;
     default: r = reg_get(a, off); break;
@@ -566,6 +623,7 @@ void kvm_lapic_timer_check(kvm_vcpu_t *v, uint64_t now) {
             if (a->timer_deadline <= now) a->timer_deadline = now + a->timer_period;
         } else {
             a->timer_deadline = 0;
+            if ((lvt & LVT_TIMER_MODE) == LVT_TSCDEADLINE) a->tscdeadline = 0;
         }
         int vec = (int)(lvt & 0xFF);
         if (!(lvt & LVT_MASKED) && (reg_get(a, APIC_SVR) & SVR_ENABLED) && vec >= 16) {

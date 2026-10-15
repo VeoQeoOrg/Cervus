@@ -66,6 +66,7 @@ typedef struct {
     uint64_t   timer_deadline;
     uint64_t   timer_period;
     uint32_t   timer_divide;
+    uint64_t   tscdeadline;
 } kvm_lapic_t;
 
 typedef struct {
@@ -299,6 +300,8 @@ bool     kvm_x2apic_msr(uint32_t msr);
 int      kvm_x2apic_read(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t *val);
 int      kvm_x2apic_write(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t val);
 int      kvm_lapic_set_base(kvm_vcpu_t *vcpu, uint64_t val, bool host);
+void     kvm_lapic_set_tscdeadline(kvm_vcpu_t *vcpu, uint64_t guest_tsc);
+uint64_t kvm_lapic_get_tscdeadline(kvm_vcpu_t *vcpu);
 uint8_t  kvm_lapic_get_cr8(kvm_vcpu_t *vcpu);
 void     kvm_lapic_set_cr8(kvm_vcpu_t *vcpu, uint8_t cr8);
 void     kvm_lapic_timer_check(kvm_vcpu_t *vcpu, uint64_t now);
