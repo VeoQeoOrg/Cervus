@@ -221,10 +221,25 @@ static int accept_irq(kvm_vcpu_t *v, int dm, int vector, bool level, bool trig) 
     }
 }
 
-static bool match_dest(kvm_vcpu_t *v, uint32_t dest, bool logical) {
+static bool is_x2apic(kvm_vcpu_t *v) {
+    return (v->apic_base & (APIC_BASE_ENABLE | APIC_BASE_EXTD)) == (APIC_BASE_ENABLE | APIC_BASE_EXTD);
+}
+
+static uint32_t x2apic_ldr(uint32_t id) {
+    return ((id >> 4) << 16) | (1u << (id & 0xF));
+}
+
+static bool match_dest(kvm_vcpu_t *v, uint32_t dest, bool logical, bool wide) {
     kvm_lapic_t *a = &v->lapic;
     if (!(v->apic_base & APIC_BASE_ENABLE)) return false;
-    if (!logical) return dest == 0xFF || (reg_get(a, APIC_ID) >> 24) == dest;
+    uint32_t bcast = wide ? 0xFFFFFFFFu : 0xFFu;
+    if (dest == bcast) return true;
+    if (!logical) return (reg_get(a, APIC_ID) >> 24) == dest;
+    if (is_x2apic(v)) {
+        if (!wide) return false;
+        uint32_t ldr = reg_get(a, APIC_LDR);
+        return (dest >> 16) == (ldr >> 16) && (dest & ldr & 0xFFFF);
+    }
     uint32_t ldr = reg_get(a, APIC_LDR) >> 24;
     uint32_t model = reg_get(a, APIC_DFR) >> 28;
     if (model == 0xF) return (ldr & dest) != 0;
@@ -235,7 +250,7 @@ static bool match_dest(kvm_vcpu_t *v, uint32_t dest, bool logical) {
     return false;
 }
 
-static int deliver(kvm_vm_t *vm, kvm_vcpu_t *src, int shorthand, uint32_t dest, bool logical,
+static int deliver(kvm_vm_t *vm, kvm_vcpu_t *src, int shorthand, uint32_t dest, bool logical, bool wide,
                    int dm, int vector, bool level, bool trig) {
     int ret = -1;
     for (uint32_t i = 0; i < vm->nvcpus && i < KVM_MAX_VCPUS; i++) {
@@ -246,7 +261,7 @@ static int deliver(kvm_vm_t *vm, kvm_vcpu_t *src, int shorthand, uint32_t dest, 
         case 1: hit = v == src; break;
         case 2: hit = true; break;
         case 3: hit = v != src; break;
-        default: hit = match_dest(v, dest, logical); break;
+        default: hit = match_dest(v, dest, logical, wide); break;
         }
         if (!hit) continue;
         int r = accept_irq(v, dm, vector, level, trig);
@@ -264,11 +279,12 @@ int kvm_deliver_msi(kvm_vm_t *vm, uint64_t addr, uint32_t data) {
     int dm = (int)((data >> 8) & 7);
     bool trig = (data >> 15) & 1;
     bool level = trig || ((data >> 14) & 1);
-    return deliver(vm, NULL, 0, dest, logical, dm, vector, level, trig);
+    return deliver(vm, NULL, 0, dest, logical, false, dm, vector, level, trig);
 }
 
 static void send_ipi(kvm_vcpu_t *v, uint32_t low, uint32_t high) {
-    deliver(v->vm, v, (int)((low >> 18) & 3), high >> 24, (low >> 11) & 1,
+    bool wide = is_x2apic(v);
+    deliver(v->vm, v, (int)((low >> 18) & 3), wide ? high : high >> 24, (low >> 11) & 1, wide,
             (int)((low >> 8) & 7), (int)(low & 0xFF), (low >> 14) & 1, (low >> 15) & 1);
 }
 
@@ -388,6 +404,97 @@ static bool lapic_mmio_hit(kvm_vcpu_t *v, uint64_t gpa) {
     if (!(v->apic_base & APIC_BASE_ENABLE) || (v->apic_base & APIC_BASE_EXTD)) return false;
     uint64_t base = v->apic_base & APIC_BASE_ADDR;
     return gpa >= base && gpa < base + 4096;
+}
+
+bool kvm_x2apic_msr(uint32_t msr) {
+    return msr >= 0x800 && msr <= 0x8FF;
+}
+
+int kvm_x2apic_read(kvm_vcpu_t *v, uint32_t msr, uint64_t *val) {
+    if (!v->vm->irqchip_split || !is_x2apic(v)) return -1;
+    uint32_t off = (msr - 0x800) << 4;
+    switch (off) {
+    case APIC_EOI:
+    case APIC_DFR:
+    case APIC_ICR2:
+    case 0x3F0:
+        return -1;
+    case APIC_ID:
+        *val = reg_get(&v->lapic, APIC_ID) >> 24;
+        return 0;
+    case APIC_ICR: {
+        uint64_t f = spinlock_acquire_irqsave(&v->lapic.lock);
+        *val = ((uint64_t)reg_get(&v->lapic, APIC_ICR2) << 32) | reg_get(&v->lapic, APIC_ICR);
+        spinlock_release_irqrestore(&v->lapic.lock, f);
+        return 0;
+    }
+    default:
+        break;
+    }
+    if (off < APIC_ID || off > APIC_TDCR || (off > APIC_TMCCT && off < APIC_TDCR) ||
+        (off > APIC_LVTERR && off < APIC_TMICT) || off == 0x40 || off == 0x50 || off == 0x60 ||
+        off == 0x70 || off == APIC_APR || off == 0xC0 || (off > APIC_ESR && off < APIC_LVTCMCI))
+        return -1;
+    *val = lapic_reg_read(v, off);
+    return 0;
+}
+
+int kvm_x2apic_write(kvm_vcpu_t *v, uint32_t msr, uint64_t val) {
+    if (!v->vm->irqchip_split || !is_x2apic(v)) return -1;
+    uint32_t off = (msr - 0x800) << 4;
+    if (off != APIC_ICR && (val >> 32)) return -1;
+    switch (off) {
+    case APIC_TPR:
+    case APIC_SVR:
+    case APIC_LVTT:
+    case APIC_LVTTHMR:
+    case APIC_LVTPC:
+    case APIC_LVT0:
+    case APIC_LVT1:
+    case APIC_LVTERR:
+    case APIC_LVTCMCI:
+    case APIC_TMICT:
+    case APIC_TDCR:
+        return lapic_reg_write(v, off, (uint32_t)val);
+    case APIC_EOI:
+    case APIC_ESR:
+        if (val) return -1;
+        return lapic_reg_write(v, off, 0);
+    case APIC_ICR: {
+        kvm_lapic_t *a = &v->lapic;
+        uint64_t f = spinlock_acquire_irqsave(&a->lock);
+        reg_set(a, APIC_ICR2, (uint32_t)(val >> 32));
+        reg_set(a, APIC_ICR, (uint32_t)val & ~(1u << 12));
+        spinlock_release_irqrestore(&a->lock, f);
+        send_ipi(v, (uint32_t)val, (uint32_t)(val >> 32));
+        return 1;
+    }
+    case 0x3F0:
+        deliver(v->vm, v, 1, 0, false, true, DM_FIXED, (int)(val & 0xFF), false, false);
+        return 1;
+    default:
+        return -1;
+    }
+}
+
+int kvm_lapic_set_base(kvm_vcpu_t *v, uint64_t val, bool host) {
+    uint64_t old = v->apic_base;
+    uint64_t on = APIC_BASE_ENABLE | APIC_BASE_EXTD;
+    if (!host) {
+        if ((val & on) == APIC_BASE_EXTD) return -1;
+        if ((old & on) == on && (val & on) == APIC_BASE_ENABLE) return -1;
+        if ((old & on) == 0 && (val & on) == on) return -1;
+    }
+    v->apic_base = val;
+    kvm_lapic_t *a = &v->lapic;
+    uint64_t f = spinlock_acquire_irqsave(&a->lock);
+    if ((val & on) == on && (old & on) != on)
+        reg_set(a, APIC_LDR, x2apic_ldr(reg_get(a, APIC_ID) >> 24));
+    else if ((old & on) == on && (val & on) != on)
+        reg_set(a, APIC_LDR, 0);
+    spinlock_release_irqrestore(&a->lock, f);
+    request_event(v);
+    return 0;
 }
 
 bool kvm_mmio_kernel_read(kvm_vcpu_t *v, uint64_t gpa, int size, uint64_t *val) {

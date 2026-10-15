@@ -936,11 +936,14 @@ int vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t msr, uint64_t data, bool host) {
         vcpu->pvclock_dirty = true;
         return 0;
     case MSR_IA32_APIC_BASE:
-        if (!host && ((data & APIC_BASE_EXTD) ||
-                      (data & ~(APIC_BASE_ADDR | APIC_BASE_ENABLE | APIC_BASE_EXTD | APIC_BASE_BSP))))
+        if (!host && (data & ~(APIC_BASE_ADDR | APIC_BASE_ENABLE | APIC_BASE_EXTD | APIC_BASE_BSP)))
             return -1;
-        vcpu->apic_base = data;
-        return 0;
+        if (!vcpu->vm->irqchip_split) {
+            if (!host && (data & APIC_BASE_EXTD)) return -1;
+            vcpu->apic_base = data;
+            return 0;
+        }
+        return kvm_lapic_set_base(vcpu, data, host);
     case MSR_IA32_FEATURE_CONTROL:
         if (!host && (vcpu->msr_feature_control & FEATURE_CONTROL_LOCKED)) return -1;
         vcpu->msr_feature_control = data;
@@ -1065,7 +1068,8 @@ uint32_t vmx_msr_index_list(uint32_t *out, uint32_t max) {
 static int handle_rdmsr(kvm_vcpu_t *vcpu) {
     uint32_t msr = (uint32_t)vcpu->regs.gpr[VCPU_REG_RCX];
     uint64_t v;
-    if (vmx_get_msr(vcpu, msr, &v, false) < 0) {
+    int r = kvm_x2apic_msr(msr) ? kvm_x2apic_read(vcpu, msr, &v) : vmx_get_msr(vcpu, msr, &v, false);
+    if (r < 0) {
         emu_inject_gp(vcpu);
         return 1;
     }
@@ -1078,6 +1082,15 @@ static int handle_rdmsr(kvm_vcpu_t *vcpu) {
 static int handle_wrmsr(kvm_vcpu_t *vcpu) {
     uint32_t msr = (uint32_t)vcpu->regs.gpr[VCPU_REG_RCX];
     uint64_t v = (uint32_t)vcpu->regs.gpr[VCPU_REG_RAX] | (vcpu->regs.gpr[VCPU_REG_RDX] << 32);
+    if (kvm_x2apic_msr(msr)) {
+        int r = kvm_x2apic_write(vcpu, msr, v);
+        if (r < 0) {
+            emu_inject_gp(vcpu);
+            return 1;
+        }
+        skip_instruction(vcpu);
+        return r;
+    }
     if (vmx_set_msr(vcpu, msr, v, false) < 0) {
         emu_inject_gp(vcpu);
         return 1;
