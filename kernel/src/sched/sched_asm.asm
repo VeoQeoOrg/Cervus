@@ -1,5 +1,6 @@
 section .text
 extern task_exit
+extern fpu_xcr0
 global context_switch
 global first_task_start
 global fpu_save
@@ -77,10 +78,24 @@ first_task_start:
     ret
 
 fpu_save:
+    cmp qword [rel fpu_xcr0], 0
+    je .fx
+    mov eax, -1
+    mov edx, -1
+    xsave64 [rdi]
+    ret
+.fx:
     fxsave [rdi]
     ret
 
 fpu_restore:
+    cmp qword [rel fpu_xcr0], 0
+    je .fx
+    mov eax, -1
+    mov edx, -1
+    xrstor64 [rdi]
+    ret
+.fx:
     fxrstor [rdi]
     ret
 

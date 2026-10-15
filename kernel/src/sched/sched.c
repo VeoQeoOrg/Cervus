@@ -635,7 +635,7 @@ task_t* task_fork(task_t* parent) {
     child->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     fpu_state_init(child->fpu_state);
     if (child->fpu_state && parent->fpu_state) {
-        memcpy(child->fpu_state, parent->fpu_state, sizeof(fpu_state_t));
+        fpu_save(child->fpu_state);
         child->fpu_used = parent->fpu_used;
     }
 

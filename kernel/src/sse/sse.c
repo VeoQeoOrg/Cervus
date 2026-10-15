@@ -1,6 +1,7 @@
 #include "../../include/sse/sse.h"
 #include "../../include/io/serial.h"
 #include "../../include/apic/apic.h"
+#include "../../include/sse/fpu.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -64,28 +65,12 @@ void sse_init(void) {
     asm volatile("mov %%cr4, %0" : "=r"(cr4));
     cr4 |= (1 << 9);
     cr4 |= (1 << 10);
-
-    if (avx_supported()) {
-        uint32_t ecx;
-        asm volatile(
-            "mov $1, %%eax\n"
-            "cpuid\n"
-            "mov %%ecx, %0\n"
-            : "=r"(ecx)
-            :
-            : "eax", "ebx", "edx"
-        );
-        if (ecx & (1 << 27)) {
-            serial_writestring("[SSE] AVX supported, enabling...\n");
-            cr4 |= (1 << 18);
-            uint64_t xcr0;
-            asm volatile("xgetbv" : "=a"(xcr0) : "c"(0) : "edx");
-            xcr0 |= (1 << 1) | (1 << 2);
-            asm volatile("xsetbv" : : "c"(0), "a"(xcr0), "d"(xcr0 >> 32));
-        }
-    }
-
     asm volatile("mov %0, %%cr4" : : "r"(cr4));
+
+    fpu_xsave_setup();
+    if (fpu_xcr0)
+        serial_printf("[SSE] XSAVE enabled: xcr0=0x%llx, %u-byte state\n",
+                      (unsigned long long)fpu_xcr0, fpu_area_size);
 
     sse_set_mxcsr(MXCSR_DEFAULT);
 

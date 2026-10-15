@@ -10,7 +10,9 @@
 #include "../../include/sched/spinlock.h"
 #include "../../include/drivers/timer.h"
 #include "../../include/syscall/syscall_nums.h"
+#include "../../include/sse/fpu.h"
 #include <string.h>
+#include <stdlib.h>
 
 extern void task_unblock(task_t *t);
 extern int  task_collect_pids(uint32_t *out, int max);
@@ -289,11 +291,93 @@ typedef struct {
 #define FRAME_EXT     (FRAME_UC + sizeof(sig_ucontext_t))
 #define FRAME_INFO    144
 #define FRAME_UCTX    272
-#define FRAME_FPU     592
-#define FRAME_SIZE    1104
+#define FRAME_FPU     640
+
+#define FP_XSTATE_MAGIC1 0x46505853u
+#define FP_XSTATE_MAGIC2 0x46505845u
+#define FX_SW_BYTES      464
 
 _Static_assert(FRAME_EXT + sizeof(sig_ext_t) <= FRAME_INFO, "signal frame: ext overlaps siginfo");
 _Static_assert(FRAME_UCTX + sizeof(k_ucontext_t) <= FRAME_FPU, "signal frame: ucontext overlaps fpu");
+_Static_assert((FRAME_FPU & 63) == 0, "signal frame: fpu area must be 64-byte aligned");
+
+typedef struct {
+    uint32_t magic1;
+    uint32_t extended_size;
+    uint64_t xfeatures;
+    uint32_t xstate_size;
+    uint32_t padding[7];
+} fpx_sw_bytes_t;
+
+static uint32_t fpu_frame_bytes(void) {
+    return fpu_xcr0 ? fpu_area_size + 4 : 512;
+}
+
+static uint64_t frame_size(void) {
+    return (FRAME_FPU + fpu_frame_bytes() + 63) & ~63ULL;
+}
+
+static void save_user_fpu(task_t *t, uint8_t *dst) {
+    if (!fpu_xcr0 || !t->fpu_state) {
+        uint8_t fx[512] __attribute__((aligned(16)));
+        __asm__ volatile("fxsave64 (%0)" :: "r"(fx) : "memory");
+        memcpy(dst, fx, 512);
+        return;
+    }
+    fpu_save(t->fpu_state);
+    memcpy(dst, t->fpu_state, fpu_area_size);
+    fpx_sw_bytes_t sw;
+    memset(&sw, 0, sizeof sw);
+    sw.magic1 = FP_XSTATE_MAGIC1;
+    sw.extended_size = fpu_area_size + 4;
+    sw.xfeatures = fpu_xcr0;
+    sw.xstate_size = fpu_area_size;
+    memcpy(dst + FX_SW_BYTES, &sw, sizeof sw);
+    uint32_t m2 = FP_XSTATE_MAGIC2;
+    memcpy(dst + fpu_area_size, &m2, 4);
+}
+
+static void restore_user_fpu(task_t *t, uint64_t up) {
+    if (!syscall_uptr_validate((void *)up, 512)) signal_terminate(t, SIGSEGV);
+    if (!fpu_xcr0) {
+        uint8_t fx[512] __attribute__((aligned(16)));
+        memcpy(fx, (void *)up, 512);
+        uint32_t mxcsr;
+        memcpy(&mxcsr, fx + 24, 4);
+        mxcsr &= fpu_mxcsr_mask;
+        memcpy(fx + 24, &mxcsr, 4);
+        __asm__ volatile("fxrstor64 (%0)" :: "r"(fx) : "memory");
+        return;
+    }
+    uint32_t sz = fpu_area_size;
+    fpx_sw_bytes_t sw;
+    memcpy(&sw, (void *)(up + FX_SW_BYTES), sizeof sw);
+    bool ext = sw.magic1 == FP_XSTATE_MAGIC1 && sw.xstate_size == sz &&
+               sw.extended_size == sz + 4 && syscall_uptr_validate((void *)up, sz + 4);
+    if (ext) {
+        uint32_t m2;
+        memcpy(&m2, (void *)(up + sz), 4);
+        ext = m2 == FP_XSTATE_MAGIC2;
+    }
+    uint8_t *raw = malloc(sz + 64);
+    if (!raw) signal_terminate(t, SIGSEGV);
+    uint8_t *a = (uint8_t *)(((uintptr_t)raw + 63) & ~(uintptr_t)63);
+    memset(a, 0, sz);
+    memcpy(a, (void *)up, ext ? sz : 512);
+    uint32_t mxcsr;
+    memcpy(&mxcsr, a + 24, 4);
+    mxcsr &= fpu_mxcsr_mask;
+    memcpy(a + 24, &mxcsr, 4);
+    uint64_t bv = 3;
+    if (ext) {
+        memcpy(&bv, a + 512, 8);
+        bv &= fpu_xcr0;
+    }
+    memset(a + 512, 0, 64);
+    memcpy(a + 512, &bv, 8);
+    fpu_restore((fpu_state_t *)a);
+    free(raw);
+}
 
 void signal_send_from(task_t *t, int sig, task_t *from) {
     ksiginfo_t si = {
@@ -347,15 +431,16 @@ static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, 
                    !(t->ss_flags & SS_DISABLE_F) && !on_altstack(t, r->rsp);
     if (use_alt) top = t->ss_sp + t->ss_size;
     else top -= 128;
-    uint64_t sp = (top - FRAME_SIZE) & ~0xFULL;
+    uint64_t fsz = frame_size();
+    uint64_t sp = (top - fsz) & ~0x3FULL;
     if (sp < 0x1000 || top > USER_TOP) return -1;
-    if (!syscall_uptr_validate_write((void *)sp, FRAME_SIZE)) return -1;
+    if (!syscall_uptr_validate_write((void *)sp, fsz)) return -1;
 
     uint64_t mask = t->sig_saved_valid ? t->sig_saved_mask : t->sig_blocked;
     t->sig_saved_valid = 0;
 
     uint8_t *f = (uint8_t *)sp;
-    memset(f, 0, FRAME_SIZE);
+    memset(f, 0, fsz);
     uint64_t *base = (uint64_t *)f;
     base[0] = h;
     base[1] = (uint64_t)sig;
@@ -394,9 +479,7 @@ static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, 
     kc->fpregs = sp + FRAME_FPU;
     kc->sigmask[0] = mask;
 
-    uint8_t fx[512] __attribute__((aligned(16)));
-    __asm__ volatile("fxsave64 (%0)" :: "r"(fx) : "memory");
-    memcpy(f + FRAME_FPU, fx, 512);
+    save_user_fpu(t, f + FRAME_FPU);
 
     t->sig_blocked |= t->sig_mask[sig];
     if (!(t->sig_flags[sig] & SA_NODEFER)) t->sig_blocked |= (1ULL << sig);
@@ -765,18 +848,7 @@ int64_t sys_rt_sigreturn(void) {
     uint64_t *g = kc.gregs;
     if (g[16] >= USER_TOP || g[15] >= USER_TOP) signal_terminate(t, SIGSEGV);
 
-    if (kc.fpregs) {
-        if (!syscall_uptr_validate((void *)kc.fpregs, 512)) signal_terminate(t, SIGSEGV);
-        uint8_t fx[512] __attribute__((aligned(16)));
-        memcpy(fx, (void *)kc.fpregs, 512);
-        uint32_t mxcsr;
-        memcpy(&mxcsr, fx + 24, 4);
-        mxcsr &= 0xFFBFu;
-        memcpy(fx + 24, &mxcsr, 4);
-        uint32_t mask_bits = 0xFFBFu;
-        memcpy(fx + 28, &mask_bits, 4);
-        __asm__ volatile("fxrstor64 (%0)" :: "r"(fx) : "memory");
-    }
+    if (kc.fpregs) restore_user_fpu(t, kc.fpregs);
 
     t->user_saved_r8  = g[0];
     t->user_saved_r9  = g[1];
