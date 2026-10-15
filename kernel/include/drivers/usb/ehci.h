@@ -183,6 +183,10 @@ void ehci_hid_kbd_deactivate_addr(uint8_t addr);
 int  ehci_msc_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                     const ehci_msc_info_t *info);
 void ehci_msc_deactivate_addr(uint8_t addr);
+int  ehci_net_setup(ehci_controller_t *c, uint8_t addr, uint8_t speed, uint16_t ep0_mps,
+                    uint16_t vid, uint16_t pid, const void *ifc);
+void ehci_net_post_init(void);
+void ehci_net_deactivate_addr(uint8_t addr);
 
 int  ehci_hub_setup(ehci_controller_t *c, uint8_t addr,
                     uint8_t root_port, uint8_t parent_addr,

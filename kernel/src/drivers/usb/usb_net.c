@@ -414,6 +414,7 @@ static void usbnet_thread(void *arg) {
     while (u->alive) {
         bool work = false;
         int idx;
+        if (u->g.polled && u->g.poll) u->g.poll(u->g.dev);
         while ((idx = pop_done(u)) >= 0) {
             work = true;
             if (u->rx_ok[idx]) {
@@ -435,7 +436,7 @@ static void usbnet_thread(void *arg) {
             spinlock_release_irqrestore(&u->lock, f);
             continue;
         }
-        waitq_block(&u->wq, &u->lock, f, sched_now_ns() + 20000000ULL);
+        waitq_block(&u->wq, &u->lock, f, sched_now_ns() + (u->g.polled ? 1000000ULL : 20000000ULL));
     }
     task_exit();
 }
@@ -450,11 +451,11 @@ usbnet_t *usbnet_create(const usbnet_glue_t *g, const usb_net_iface_t *ifc,
     u->pid = pid;
     u->lock = (spinlock_t)SPINLOCK_INIT;
     for (int i = 0; i < USBNET_RX_BUFS; i++) {
-        u->rx[i] = dma_alloc_coherent(USBNET_BUF, &u->rx_phys[i]);
-        if (!u->rx[i]) return NULL;
+        u->rx[i] = dma_alloc_coherent_low(USBNET_BUF, &u->rx_phys[i]);
+        if (!u->rx[i] || u->rx_phys[i] >= 0xFFFFFFFFULL) return NULL;
     }
-    u->tx = dma_alloc_coherent(USBNET_BUF, &u->tx_phys);
-    if (!u->tx) return NULL;
+    u->tx = dma_alloc_coherent_low(USBNET_BUF, &u->tx_phys);
+    if (!u->tx || u->tx_phys >= 0xFFFFFFFFULL) return NULL;
     return u;
 }
 

@@ -1,6 +1,7 @@
 #include "../../../../include/drivers/usb/ehci.h"
 #include "../../../../include/drivers/usb/usb_config.h"
 #include "../../../../include/drivers/usb/usb_enum.h"
+#include "../../../../include/drivers/usb/usb_net.h"
 #include "../../../../include/drivers/pci.h"
 #include "../../../../include/drivers/disk/blkdev.h"
 #include "../../../../include/drivers/disk/partition.h"
@@ -401,6 +402,7 @@ static void ehci_handle_root_port(ehci_controller_t *c, uint8_t port);
 void ehci_worker(void *arg) {
     (void)arg;
     serial_writestring("[ehci-worker] started\n");
+    ehci_net_post_init();
     uint32_t slow = 0;
     while (1) {
         ehci_hid_kbd_tick();
@@ -531,6 +533,27 @@ void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
     usb_ifaces_t ifaces;
     usb_parse_config(cfg_full, total, &ifaces);
 
+    usb_net_iface_t net;
+    bool have_net = usb_parse_net(cfg_full, total, &net);
+    bool known = (have_net && net.proto != USBNET_RNDIS) || ifaces.msc.present ||
+                 ifaces.hid.present || ifaces.hub.present || desc[4] == 0x09;
+    for (uint8_t ci = 1; !known && ci < n_cfg; ci++) {
+        uint8_t alt_cfg[1024];
+        uint16_t at = 0;
+        uint8_t av = 0;
+        usb_net_iface_t alt;
+        if (usb_get_config_index(&ops, ci, alt_cfg, sizeof alt_cfg, &at, &av) < 0) continue;
+        if (!usb_parse_net(alt_cfg, at, &alt)) continue;
+        if (have_net && alt.proto == USBNET_RNDIS) continue;
+        net = alt;
+        memcpy(cfg_full, alt_cfg, at);
+        total = at;
+        cfg_value = av;
+        have_net = known = true;
+        usb_parse_config(cfg_full, total, &ifaces);
+        serial_printf("[ehci]   using configuration %u for its network function\n", av);
+    }
+
     ehci_msc_info_t msc_info;
     ehci_hid_info_t hid_info;
     memset(&msc_info, 0, sizeof(msc_info));
@@ -583,6 +606,9 @@ void ehci_finalize_device(ehci_controller_t *c, uint8_t addr, uint8_t speed,
                       hid_info.interval);
         if (ehci_hid_kbd_setup(c, addr, speed, &hid_info) < 0)
             serial_writestring("[ehci]   HID setup failed\n");
+    } else if (have_net) {
+        if (ehci_net_setup(c, addr, speed, ep0_mps, vid, pid, &net) < 0)
+            serial_writestring("[ehci]   network function setup failed\n");
     } else if (desc[4] == 0x09 || (pd && pd->intf_class == 0x09)) {
         if (speed == EHCI_SPEED_HS) {
             if (ehci_hub_setup(c, addr, root_port, parent_addr,
@@ -639,6 +665,7 @@ static void ehci_teardown_addr(uint8_t addr) {
     ehci_msc_deactivate_addr(addr);
     ehci_hid_kbd_deactivate_addr(addr);
     ehci_hub_deactivate_addr(addr);
+    ehci_net_deactivate_addr(addr);
 }
 
 static void ehci_disconnect_port(uint8_t port) {

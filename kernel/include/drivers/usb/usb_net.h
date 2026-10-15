@@ -40,6 +40,7 @@ typedef struct {
     int  (*bulk_out)(void *dev, uintptr_t phys, uint32_t len);
     int  (*rx_post)(void *dev, int idx, uintptr_t phys, uint32_t len);
     void (*poll)(void *dev);
+    bool polled;
 } usbnet_glue_t;
 
 typedef struct usbnet usbnet_t;
