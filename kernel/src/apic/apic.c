@@ -79,7 +79,7 @@ static bool map_mmio_region(uintptr_t phys_base, size_t size) {
         }
 
         if (!vmm_map_page(kernel_pagemap, virt_addr, phys_addr,
-                         VMM_PRESENT | VMM_WRITE | VMM_NOEXEC)) {
+                         VMM_PRESENT | VMM_WRITE | VMM_NOEXEC | VMM_PCD | VMM_PWT)) {
             return false;
         }
     }
@@ -361,6 +361,7 @@ void apic_init(void) {
     if (!lapic_base) return;
 
     hpet_init();
+    tsc_calibrate_early();
     lapic_enable();
 
     outb(0x22, 0x70);
@@ -491,12 +492,20 @@ static uint32_t apic_calibrate_pit_once(uint64_t *out_tsc_khz) {
 
     uint64_t tsc_start = rdtsc();
 
-    while (!(inb(0x61) & 0x20)) asm volatile("pause");
+    uint32_t spins = 0;
+    while (!(inb(0x61) & 0x20)) {
+        if (++spins > 2000000) break;
+        asm volatile("pause");
+    }
 
     uint64_t tsc_end = rdtsc();
     uint32_t remaining = lapic_read(LAPIC_TIMER_CCR);
     lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0xFF);
 
+    if (spins == 0 || spins > 2000000) {
+        if (out_tsc_khz) *out_tsc_khz = 0;
+        return 0;
+    }
     if (out_tsc_khz && tsc_end > tsc_start)
         *out_tsc_khz = (tsc_end - tsc_start) / WAIT_MS;
 
@@ -520,6 +529,93 @@ static uint32_t apic_calibrate_pit(void) {
     if (best_khz && g_tsc_khz == 0)
         g_tsc_khz = best_khz;
     return best_ticks;
+}
+
+static uint64_t tsc_khz_from_hpet(void) {
+    if (!hpet_is_available()) return 0;
+    uint64_t want = (10000000ULL * 1000000ULL) / hpet_period;
+    uint64_t r[3];
+    for (int i = 0; i < 3; i++) {
+        uint64_t h0 = hpet_read_counter();
+        uint64_t t0 = rdtsc();
+        uint64_t h1;
+        uint32_t spins = 0;
+        do {
+            h1 = hpet_read_counter();
+            if (++spins > 20000000) return 0;
+        } while (h1 - h0 < want);
+        uint64_t t1 = rdtsc();
+        uint64_t ns = ((h1 - h0) * (uint64_t)hpet_period) / 1000000ULL;
+        if (!ns) return 0;
+        r[i] = ((t1 - t0) * 1000000ULL) / ns;
+    }
+    uint64_t a = r[0], b = r[1], c = r[2];
+    if (a > b) { uint64_t t = a; a = b; b = t; }
+    if (b > c) { uint64_t t = b; b = c; c = t; }
+    if (a > b) { uint64_t t = a; a = b; b = t; }
+    return b;
+}
+
+static uint64_t tsc_khz_from_cpuid(bool *exact) {
+    uint32_t a, b, c, d;
+    *exact = false;
+    cpuid(0, &a, &b, &c, &d);
+    uint32_t max = a;
+    if (b != 0x756e6547u) return 0;
+    if (max >= 0x15) {
+        uint32_t den, num, crystal, unused;
+        cpuid(0x15, &den, &num, &crystal, &unused);
+        if (den && num && crystal) {
+            *exact = true;
+            return (uint64_t)crystal * num / den / 1000;
+        }
+    }
+    if (max >= 0x16) {
+        cpuid(0x16, &a, &b, &c, &d);
+        if (a) return (uint64_t)a * 1000;
+    }
+    return 0;
+}
+
+static uint64_t tsc_khz_from_pit(void) {
+    uint64_t best = 0;
+    for (int round = 0; round < 3; round++) {
+        uint64_t khz = 0;
+        (void)apic_calibrate_pit_once(&khz);
+        if (khz && (best == 0 || khz < best)) best = khz;
+    }
+    return best;
+}
+
+static bool khz_close(uint64_t x, uint64_t y) {
+    uint64_t d = x > y ? x - y : y - x;
+    return d * 20 <= y;
+}
+
+void tsc_calibrate_early(void) {
+    if (g_tsc_khz != 0) return;
+    bool exact = false;
+    uint64_t cpu = tsc_khz_from_cpuid(&exact);
+    uint64_t hpet = tsc_khz_from_hpet();
+    uint64_t khz = 0;
+    const char *src = "none";
+    if (cpu && exact) {
+        khz = cpu; src = "CPUID 15h";
+    } else if (hpet && (!cpu || khz_close(hpet, cpu))) {
+        khz = hpet; src = "HPET";
+    } else if (cpu) {
+        khz = cpu; src = hpet ? "CPUID 16h (HPET disagrees)" : "CPUID 16h";
+    } else {
+        uint64_t pit = tsc_khz_from_pit();
+        if (pit) { khz = pit; src = "PIT"; }
+    }
+    serial_printf("[APIC] TSC: cpuid=%llu%s hpet=%llu -> %llu kHz via %s\n",
+                  (unsigned long long)cpu, exact ? " (exact)" : "", (unsigned long long)hpet,
+                  (unsigned long long)khz, src);
+    if (!khz) return;
+    g_tsc_khz = khz;
+    g_tsc_boot = rdtsc();
+    printf("tsc: %llu MHz (%s)\n", (unsigned long long)(khz / 1000), src);
 }
 
 void tsc_calibrate_bsp(void) {

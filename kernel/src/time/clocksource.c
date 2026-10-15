@@ -92,6 +92,7 @@ uint64_t clocksource_now_ns(void) {
         now = cs_now(cs);
     } else {
         now = tsc_elapsed_ns();
+        if (!now) now = hpet_elapsed_ns();
         if (!now) now = timer_get_ticks() * 1000000ULL;
     }
 

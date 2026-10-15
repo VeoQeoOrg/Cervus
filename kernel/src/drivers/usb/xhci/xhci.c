@@ -1144,7 +1144,7 @@ static int xhci_probe(pci_device_t *pd) {
 
     printf("[xhci] enumerating ports...\n");
     xhci_enumerate_ports(c);
-    printf("[xhci] ports enumerated\n");
+    printf("[xhci] ports enumerated, %d device(s)\n", g_usb_count);
 
     if (pd->cap_msix_off && pd->msix_table_size >= 1) {
         op_w32(c, XHCI_OP_USBSTS, USBSTS_EINT);
@@ -1170,9 +1170,6 @@ static int xhci_probe(pci_device_t *pd) {
             }
         }
     }
-
-    xhci_hub_post_init();
-    xhci_msc_post_init();
 
     c->ready = true;
     g_count++;
@@ -1265,6 +1262,8 @@ static void xhci_handle_root_port(xhci_controller_t *c, int port_idx) {
 void xhci_worker(void *arg) {
     (void)arg;
     serial_writestring("[xhci-worker] started\n");
+    xhci_hub_post_init();
+    xhci_msc_post_init();
     uint32_t slow_tick = 0;
     while (1) {
         int n_ctl = xhci_controller_count();

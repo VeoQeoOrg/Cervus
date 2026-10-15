@@ -18,6 +18,7 @@
 #include "../include/memory/vmalloc.h"
 #include "../include/acpi/acpi.h"
 #include "../include/apic/apic.h"
+#include "../include/time/clocksource.h"
 #include "../include/io/ports.h"
 #include "../include/drivers/timer.h"
 #include "../include/smp/smp.h"
@@ -226,15 +227,17 @@ static bool find_installed_root(char *out, size_t out_cap) {
 static int g_stage_echo = 1;
 
 static void kstage(const char *name) {
-    serial_printf("[stage] %s\n", name);
-    if (g_stage_echo) printf("  .. %s\n", name);
+    unsigned long long ms = (unsigned long long)(clocksource_now_ns() / 1000000ULL);
+    serial_printf("[stage] %s (%llu ms)\n", name, ms);
+    if (g_stage_echo) printf("  .. %s [%llu ms]\n", name, ms);
 }
 
 void kernel_stage_echo_off(void) { g_stage_echo = 0; }
 
 void kernel_substage(const char *name) {
-    serial_printf("[stage]   %s\n", name);
-    if (g_stage_echo) printf("  .... %s\n", name);
+    unsigned long long ms = (unsigned long long)(clocksource_now_ns() / 1000000ULL);
+    serial_printf("[stage]   %s (%llu ms)\n", name, ms);
+    if (g_stage_echo) printf("  .... %s [%llu ms]\n", name, ms);
 }
 
 void kmain(void) {

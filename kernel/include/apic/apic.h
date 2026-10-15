@@ -97,6 +97,7 @@ void apic_dump_diag(void);
 void apic_timer_calibrate(void);
 extern uint64_t g_tsc_khz;
 void tsc_calibrate_bsp(void);
+void tsc_calibrate_early(void);
 uint64_t tsc_read(void);
 void apic_udelay(uint64_t us);
 void tsc_recalibrate(uint64_t new_khz);
