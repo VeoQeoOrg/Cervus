@@ -65,9 +65,7 @@ void tlb_flush_mm(uint64_t cr3, const uintptr_t *addrs, size_t count) {
     uint64_t gen = __atomic_add_fetch(&g_req_gen, 1, __ATOMIC_ACQ_REL);
     if (self < MAX_CPUS) g_seen_gen[self] = gen;
 
-    lapic_write(0x310, 0);
-    lapic_write(0x300, IPI_TLB_SYNC | (1 << 14) | (3 << 18));
-    while (lapic_read(0x300) & (1 << 12)) asm volatile("pause");
+    lapic_send_ipi_to_all_but_self(IPI_TLB_SYNC);
 
     uint64_t spins = 0;
     while (__atomic_load_n(&g_req_acks, __ATOMIC_ACQUIRE) > 0) {

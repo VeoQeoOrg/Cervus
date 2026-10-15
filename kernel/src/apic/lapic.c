@@ -95,56 +95,43 @@ uint32_t lapic_timer_get_current(void) {
     return lapic_read(LAPIC_TIMER_CCR);
 }
 
-void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector)
+static void icr_send(uint32_t icr_high, uint32_t icr_low, int max_wait)
 {
-    uint32_t icr_low  = vector | (0 << 8) | (1 << 14);
-    uint32_t icr_high = target_lapic_id << 24;
+    uint64_t rf;
+    asm volatile("pushfq; pop %0; cli" : "=r"(rf) :: "memory");
 
     lapic_write(0x310, icr_high);
     lapic_write(0x300, icr_low);
 
-    while (lapic_read(0x300) & (1 << 12))
+    for (int w = 0; (max_wait < 0 || w < max_wait) && (lapic_read(0x300) & (1 << 12)); w++)
         asm volatile ("pause");
+
+    asm volatile("push %0; popfq" :: "r"(rf) : "memory", "cc");
+}
+
+void lapic_send_ipi(uint32_t target_lapic_id, uint8_t vector)
+{
+    icr_send(target_lapic_id << 24, vector | (0 << 8) | (1 << 14), -1);
 }
 
 void lapic_send_init(uint32_t target_lapic_id)
 {
-    lapic_write(0x310, target_lapic_id << 24);
-    lapic_write(0x300, 0x00004500);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    icr_send(target_lapic_id << 24, 0x00004500, -1);
 }
 
 void lapic_send_startup(uint32_t target_lapic_id, uint8_t vector)
 {
-    lapic_write(0x310, target_lapic_id << 24);
-    lapic_write(0x300, 0x00004600 | vector);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    icr_send(target_lapic_id << 24, 0x00004600 | vector, -1);
 }
 
 void lapic_send_ipi_to_all_but_self(uint8_t vector)
 {
-    uint32_t icr_low = vector | (0 << 8) | (1 << 14) | (3 << 18);
-
-    lapic_write(0x310, 0);
-    lapic_write(0x300, icr_low);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    icr_send(0, vector | (0 << 8) | (1 << 14) | (3 << 18), -1);
 }
 
 void lapic_send_nmi_to_all_but_self(void)
 {
-    uint32_t icr_low = 0x02 | (0x4 << 8) | (1 << 14) | (3 << 18);
-
-    lapic_write(0x310, 0);
-    lapic_write(0x300, icr_low);
-
-    for (int _w = 0; _w < 10000 && (lapic_read(0x300) & (1 << 12)); _w++)
-        asm volatile ("pause");
+    icr_send(0, 0x02 | (0x4 << 8) | (1 << 14) | (3 << 18), 10000);
 
     serial_printf("NMI broadcast (all but self) sent\n");
 }
@@ -158,14 +145,7 @@ void ipi_reschedule_cpu(uint32_t lapic_id) {
 }
 
 void ipi_reschedule_single(uint32_t target_lapic_id) {
-    uint32_t icr_high = target_lapic_id << 24;
-    uint32_t icr_low = IPI_RESCHEDULE_VECTOR | (0 << 8) | (1 << 14);
-
-    lapic_write(0x310, icr_high);
-    lapic_write(0x300, icr_low);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    lapic_send_ipi(target_lapic_id, IPI_RESCHEDULE_VECTOR);
 }
 
 void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
@@ -188,16 +168,7 @@ void ipi_tlb_shootdown_broadcast(const uintptr_t* addrs, size_t count) {
 
     asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
 
-    uint32_t icr_low = IPI_TLB_SHOOTDOWN
-                     | (0 << 8)
-                     | (1 << 14)
-                     | (3 << 18);
-
-    lapic_write(0x310, 0);
-    lapic_write(0x300, icr_low);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    lapic_send_ipi_to_all_but_self(IPI_TLB_SHOOTDOWN);
 }
 
 void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
@@ -209,14 +180,7 @@ void ipi_tlb_shootdown_single(uint32_t target_lapic_id, uintptr_t addr) {
 
     asm volatile ("lock addl $0, (%%rsp)" ::: "memory", "cc");
 
-    uint32_t icr_high = target_lapic_id << 24;
-    uint32_t icr_low  = IPI_TLB_SHOOTDOWN | (0 << 8) | (1 << 14);
-
-    lapic_write(0x310, icr_high);
-    lapic_write(0x300, icr_low);
-
-    while (lapic_read(0x300) & (1 << 12))
-        asm volatile ("pause");
+    lapic_send_ipi(target_lapic_id, IPI_TLB_SHOOTDOWN);
 
     serial_printf("TLB shootdown sent to LAPIC %u for virt 0x%llx\n",
                   target_lapic_id, addr);
