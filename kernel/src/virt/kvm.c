@@ -8,6 +8,7 @@
 #include "../../include/sched/sched.h"
 #include "../../include/time/clocksource.h"
 #include "../../include/io/serial.h"
+#include "../../include/sse/fpu.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -103,6 +104,7 @@ static int check_extension(uint64_t cap) {
     case KVM_CAP_X86_ROBUST_SINGLESTEP:
     case KVM_CAP_ENABLE_CAP:
     case KVM_CAP_XSAVE:
+    case KVM_CAP_XCRS:
     case KVM_CAP_GET_TSC_KHZ:
     case KVM_CAP_SIGNAL_MSI:
     case KVM_CAP_READONLY_MEM:
@@ -146,16 +148,20 @@ static uint32_t add_leaf(struct kvm_cpuid_entry2 *out, uint32_t n, uint32_t max,
 
 static void filter_leaf(struct kvm_cpuid_entry2 *e) {
     switch (e->function) {
-    case 1:
+    case 1: {
+        uint32_t c0 = e->ecx;
         e->ecx &= (1u << 0) | (1u << 1) | (1u << 9) | (1u << 13) | (1u << 17) | (1u << 19) |
                   (1u << 20) | (1u << 22) | (1u << 23) | (1u << 25) | (1u << 30);
         e->ecx |= (1u << 21) | (1u << 24);
+        if (fpu_xcr0) e->ecx |= c0 & (1u << 26);
+        if (fpu_xcr0 & XFEAT_YMM) e->ecx |= c0 & ((1u << 12) | (1u << 28) | (1u << 29));
         e->ecx |= 1u << 31;
         e->edx &= (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6) |
                   (1u << 7) | (1u << 8) | (1u << 9) | (1u << 11) | (1u << 12) | (1u << 13) | (1u << 14) |
                   (1u << 15) | (1u << 16) | (1u << 17) | (1u << 19) | (1u << 23) | (1u << 24) |
                   (1u << 25) | (1u << 26) | (1u << 27) | (1u << 28);
         break;
+    }
     case 5:
     case 0xA:
         e->eax = e->ebx = e->ecx = e->edx = 0;
@@ -175,16 +181,43 @@ static void filter_leaf(struct kvm_cpuid_entry2 *e) {
             if (!(cr4 & (1ull << 21))) ebx_ok &= ~(1u << 20);
             uint64_t p2 = vmx_rdmsr(MSR_IA32_VMX_PROCBASED_CTLS2) >> 32;
             if (p2 & PROC2_ENABLE_INVPCID) ebx_ok |= 1u << 10;
+            uint32_t ecx_ok = (cr4 & (1ull << 11)) ? (1u << 2) : 0;
+            uint32_t edx_ok = 0;
+            ecx_ok |= 1u << 8;
+            if (fpu_xcr0 & XFEAT_YMM) {
+                ebx_ok |= 1u << 5;
+                ecx_ok |= (1u << 9) | (1u << 10);
+            }
+            if ((fpu_xcr0 & XFEAT_AVX512) == XFEAT_AVX512) {
+                ebx_ok |= (1u << 16) | (1u << 17) | (1u << 21) | (1u << 26) | (1u << 27) |
+                          (1u << 28) | (1u << 30) | (1u << 31);
+                ecx_ok |= (1u << 1) | (1u << 6) | (1u << 11) | (1u << 12) | (1u << 14);
+                edx_ok |= (1u << 2) | (1u << 3) | (1u << 8) | (1u << 23);
+            }
             e->ebx &= ebx_ok;
-            e->ecx &= (cr4 & (1ull << 11)) ? (1u << 2) : 0;
-            e->edx = 0;
+            e->ecx &= ecx_ok;
+            e->edx &= edx_ok;
             e->eax = 0;
         } else {
             e->eax = e->ebx = e->ecx = e->edx = 0;
         }
         break;
     case 0xD:
-        e->eax = e->ebx = e->ecx = e->edx = 0;
+        if (!fpu_xcr0) {
+            e->eax = e->ebx = e->ecx = e->edx = 0;
+        } else if (e->index == 0) {
+            e->eax = (uint32_t)fpu_xcr0;
+            e->edx = (uint32_t)(fpu_xcr0 >> 32);
+            e->ebx = e->ecx = fpu_xsave_size_for(fpu_xcr0);
+        } else if (e->index == 1) {
+            e->eax &= (1u << 0) | (1u << 2);
+            e->ebx = e->ecx = e->edx = 0;
+        } else if (e->index < 63 && (fpu_xcr0 & (1ull << e->index))) {
+            e->ecx &= 2u;
+            e->edx = 0;
+        } else {
+            e->eax = e->ebx = e->ecx = e->edx = 0;
+        }
         break;
     case 0x80000001: {
         e->ecx &= (1u << 0) | (1u << 5) | (1u << 8);
@@ -223,7 +256,12 @@ static uint32_t build_supported_cpuid(struct kvm_cpuid_entry2 *out, uint32_t max
             n = add_leaf(out, n, max, 7, 0, KVM_CPUID_FLAG_SIGNIFCANT_INDEX);
         } else if (fn == 0xB || fn == 0x1F) {
             for (uint32_t i = 0; i < 4; i++) n = add_leaf(out, n, max, fn, i, KVM_CPUID_FLAG_SIGNIFCANT_INDEX);
-        } else if (fn == 0xD || fn == 0xF || fn == 0x10 || fn == 0x12 || fn == 0x14 || fn == 0x17 || fn == 0x18) {
+        } else if (fn == 0xD) {
+            if (!fpu_xcr0) continue;
+            for (uint32_t i = 0; i < 63; i++)
+                if (i < 2 || (fpu_xcr0 & (1ull << i)))
+                    n = add_leaf(out, n, max, 0xD, i, KVM_CPUID_FLAG_SIGNIFCANT_INDEX);
+        } else if (fn == 0xF || fn == 0x10 || fn == 0x12 || fn == 0x14 || fn == 0x17 || fn == 0x18) {
             continue;
         } else {
             n = add_leaf(out, n, max, fn, 0, 0);
@@ -678,7 +716,7 @@ static void kvm_to_fpu(const struct kvm_fpu *f, uint8_t *fx) {
     memcpy(fx + 6, &f->last_opcode, 2);
     memcpy(fx + 8, &f->last_ip, 8);
     memcpy(fx + 16, &f->last_dp, 8);
-    uint32_t mxcsr = f->mxcsr & 0xFFFF;
+    uint32_t mxcsr = f->mxcsr & fpu_mxcsr_mask;
     memcpy(fx + 24, &mxcsr, 4);
     for (int i = 0; i < 8; i++) memcpy(fx + 32 + i * 16, f->fpr[i], 16);
     for (int i = 0; i < 16; i++) memcpy(fx + 160 + i * 16, f->xmm[i], 16);
@@ -783,15 +821,25 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         struct kvm_fpu f;
         if (copy_in(&f, arg, sizeof f) < 0) return -EFAULT;
         kvm_to_fpu(&f, v->guest_fpu);
+        if (fpu_xcr0) {
+            uint64_t bv;
+            memcpy(&bv, v->guest_fpu + 512, 8);
+            bv |= 3;
+            memcpy(v->guest_fpu + 512, &bv, 8);
+        }
         return 0;
     }
     case KVM_GET_XSAVE:
     case KVM_GET_XSAVE2: {
         struct kvm_xsave *x = calloc(1, sizeof *x);
         if (!x) return -ENOMEM;
-        memcpy(x->region, v->guest_fpu, 512);
-        uint64_t bv = 3;
-        memcpy((uint8_t *)x->region + 512, &bv, 8);
+        if (fpu_xcr0) {
+            memcpy(x->region, v->guest_fpu, fpu_area_size);
+        } else {
+            memcpy(x->region, v->guest_fpu, 512);
+            uint64_t bv = 3;
+            memcpy((uint8_t *)x->region + 512, &bv, 8);
+        }
         int r = copy_out(arg, x, sizeof *x);
         free(x);
         return r;
@@ -805,9 +853,17 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         uint8_t *fx = (uint8_t *)x->region;
         uint32_t mxcsr;
         memcpy(&mxcsr, fx + 24, 4);
-        mxcsr &= 0xFFFF;
+        mxcsr &= fpu_mxcsr_mask;
         memcpy(fx + 24, &mxcsr, 4);
-        if (bv & 3) memcpy(v->guest_fpu, x->region, 512);
+        if (fpu_xcr0) {
+            uint64_t comp;
+            memcpy(&comp, fx + 520, 8);
+            if (comp & (1ull << 63)) { free(x); return -EINVAL; }
+            bv &= fpu_xcr0;
+            memset(fx + 512, 0, 64);
+            memcpy(fx + 512, &bv, 8);
+            memcpy(v->guest_fpu, fx, fpu_area_size);
+        } else if (bv & 3) memcpy(v->guest_fpu, x->region, 512);
         else {
             uint16_t fcw = 0x37F;
             uint32_t mx = 0x1F80;
@@ -816,6 +872,24 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
             memcpy(v->guest_fpu + 24, &mx, 4);
         }
         free(x);
+        return 0;
+    }
+    case KVM_GET_XCRS: {
+        struct kvm_xcrs xc;
+        memset(&xc, 0, sizeof xc);
+        xc.nr_xcrs = 1;
+        xc.xcrs[0].xcr = 0;
+        xc.xcrs[0].value = v->xcr0;
+        return copy_out(arg, &xc, sizeof xc);
+    }
+    case KVM_SET_XCRS: {
+        struct kvm_xcrs xc;
+        if (copy_in(&xc, arg, sizeof xc) < 0) return -EFAULT;
+        if (xc.nr_xcrs > KVM_MAX_XCRS || xc.flags) return -EINVAL;
+        for (uint32_t i = 0; i < xc.nr_xcrs; i++) {
+            if (xc.xcrs[i].xcr != 0 || !vmx_xcr0_valid(v, xc.xcrs[i].value)) return -EINVAL;
+            v->xcr0 = xc.xcrs[i].value;
+        }
         return 0;
     }
     case KVM_GET_MSRS:

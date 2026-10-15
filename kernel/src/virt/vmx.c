@@ -13,6 +13,7 @@
 #include "../../include/signal/signal.h"
 #include "../../include/syscall/errno.h"
 #include "../../include/drivers/timer.h"
+#include "../../include/sse/fpu.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -254,6 +255,7 @@ uint64_t vmx_supported_cr4(void) {
                  CR4_PCE | CR4_OSFXSR | CR4_OSXMMEXCPT;
     uint64_t host = read_cr4();
     s |= host & (CR4_FSGSBASE | CR4_PCIDE | CR4_SMEP | CR4_SMAP | CR4_UMIP);
+    if (fpu_xcr0) s |= CR4_OSXSAVE;
     uint32_t a, b, c, d;
     cpuid_raw(7, 0, &a, &b, &c, &d);
     if (b & (1u << 0)) s |= CR4_FSGSBASE;
@@ -534,7 +536,7 @@ static void vcpu_reset_soft(kvm_vcpu_t *vcpu) {
     kvm_lapic_reset(vcpu, false);
     uint16_t fcw = 0x37F;
     uint32_t mxcsr = 0x1F80;
-    memset(vcpu->guest_fpu, 0, 512);
+    memset(vcpu->guest_fpu, 0, 4096);
     memcpy(vcpu->guest_fpu, &fcw, 2);
     memcpy(vcpu->guest_fpu + 24, &mxcsr, 4);
 }
@@ -600,9 +602,9 @@ int vmx_vcpu_create(kvm_vcpu_t *vcpu) {
     vcpu->loaded_cpu = -1;
     if (!vmx_probe()) return -ENODEV;
     vcpu->vmcs = pmm_alloc_zero(1);
-    vcpu->guest_fpu = pmm_alloc_zero(1);
+    vcpu->guest_fpu = pmm_alloc_zero(2);
     if (!vcpu->vmcs || !vcpu->guest_fpu) return -ENOMEM;
-    vcpu->host_fpu = vcpu->guest_fpu + 2048;
+    vcpu->host_fpu = vcpu->guest_fpu + 4096;
     *(uint32_t *)vcpu->vmcs = g_vmx.revision;
     vcpu->vmcs_phys = pmm_virt_to_phys(vcpu->vmcs);
     vcpu->loaded_cpu = -1;
@@ -638,7 +640,7 @@ void vmx_vcpu_destroy(kvm_vcpu_t *vcpu) {
         asm volatile("sti" ::: "memory");
     }
     if (vcpu->vmcs) pmm_free(vcpu->vmcs, 1);
-    if (vcpu->guest_fpu) pmm_free(vcpu->guest_fpu, 1);
+    if (vcpu->guest_fpu) pmm_free(vcpu->guest_fpu, 2);
     vpid_free(vcpu->vpid);
     vcpu->vmcs = NULL;
     vcpu->guest_fpu = NULL;
@@ -887,6 +889,30 @@ static const struct kvm_cpuid_entry2 *find_cpuid(kvm_vcpu_t *vcpu, uint32_t fn, 
     return NULL;
 }
 
+bool vmx_xcr0_valid(kvm_vcpu_t *vcpu, uint64_t v) {
+    if (!fpu_xcr0) return v == 1;
+    uint64_t allowed = fpu_xcr0;
+    const struct kvm_cpuid_entry2 *e = find_cpuid(vcpu, 0xD, 0);
+    if (e) allowed &= (e->eax | ((uint64_t)e->edx << 32)) | 1;
+    if (!(v & 1) || (v & ~allowed)) return false;
+    if ((v & 4) && !(v & 2)) return false;
+    if ((v & 0xE0) && ((v & 0xE0) != 0xE0 || !(v & 4))) return false;
+    return true;
+}
+
+static int handle_xsetbv(kvm_vcpu_t *vcpu) {
+    uint32_t idx = (uint32_t)vcpu->regs.gpr[VCPU_REG_RCX];
+    uint64_t v = (uint32_t)vcpu->regs.gpr[VCPU_REG_RAX] | ((uint64_t)(uint32_t)vcpu->regs.gpr[VCPU_REG_RDX] << 32);
+    bool cpl0 = !(vcpu->cr0 & CR0_PE) || ((vmread(VMCS_GUEST_SS_AR) >> 5) & 3) == 0;
+    if (idx != 0 || !cpl0 || !vmx_xcr0_valid(vcpu, v)) {
+        emu_inject_gp(vcpu);
+        return 1;
+    }
+    vcpu->xcr0 = v;
+    skip_instruction(vcpu);
+    return 1;
+}
+
 static int handle_cpuid(kvm_vcpu_t *vcpu) {
     uint32_t fn = (uint32_t)vcpu->regs.gpr[VCPU_REG_RAX];
     uint32_t idx = (uint32_t)vcpu->regs.gpr[VCPU_REG_RCX];
@@ -902,7 +928,9 @@ static int handle_cpuid(kvm_vcpu_t *vcpu) {
         }
     }
     if (e) { a = e->eax; b = e->ebx; c = e->ecx; d = e->edx; }
-    if (fn == 1) {
+    if (fn == 0xD && idx == 0 && e) {
+        b = fpu_xsave_size_for(vcpu->xcr0 & fpu_xcr0);
+    } else if (fn == 1) {
         c &= ~(1u << 27);
         if (vcpu->cr4 & CR4_OSXSAVE) c |= 1u << 27;
         if (!(vcpu->apic_base & APIC_BASE_ENABLE)) d &= ~(1u << 9);
@@ -1437,8 +1465,9 @@ static int handle_exit(kvm_vcpu_t *vcpu, uint32_t reason) {
         vcpu->regs.gpr[VCPU_REG_RAX] = (uint64_t)-1000;
         skip_instruction(vcpu);
         return 1;
-    case EXIT_REASON_RDPMC:
     case EXIT_REASON_XSETBV:
+        return handle_xsetbv(vcpu);
+    case EXIT_REASON_RDPMC:
         emu_inject_gp(vcpu);
         return 1;
     case EXIT_REASON_GETSEC:
@@ -1572,6 +1601,10 @@ static void arm_preemption_timer(kvm_vcpu_t *vcpu) {
     if ((uint32_t)vmread(VMCS_PIN_CONTROLS) != pin) vmwrite(VMCS_PIN_CONTROLS, pin);
 }
 
+static inline void xsetbv0(uint64_t v) {
+    asm volatile("xsetbv" :: "c"(0), "a"((uint32_t)v), "d"((uint32_t)(v >> 32)) : "memory");
+}
+
 static int complete_pending(kvm_vcpu_t *vcpu) {
     if (!vcpu->pend.active) return 1;
     if (vcpu->pend.kind == PEND_PIO) return pio_complete_in(vcpu);
@@ -1647,7 +1680,10 @@ int vmx_vcpu_run(kvm_vcpu_t *vcpu) {
             asm volatile("sti" ::: "memory");
             continue;
         }
+        bool xsw = fpu_xcr0 && (vcpu->cr4 & CR4_OSXSAVE) && vcpu->xcr0 != fpu_xcr0;
+        if (xsw) xsetbv0(vcpu->xcr0);
         int er = vmx_enter(&vcpu->regs, vcpu->launched ? 1 : 0);
+        if (xsw) xsetbv0(fpu_xcr0);
         vcpu->mode = VCPU_OUTSIDE_GUEST;
         if (er) {
             uint64_t ierr = vmread(VMCS_INSTR_ERROR);

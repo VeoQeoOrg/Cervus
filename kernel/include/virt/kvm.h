@@ -250,6 +250,7 @@ void     vmx_vcpu_reset(kvm_vcpu_t *vcpu);
 void     vmx_sched_out(kvm_vcpu_t *vcpu);
 void     vmx_sched_in(kvm_vcpu_t *vcpu);
 void     vmx_vmcs_enter(kvm_vcpu_t *vcpu);
+bool     vmx_xcr0_valid(kvm_vcpu_t *vcpu, uint64_t v);
 void     vmx_vmcs_leave(kvm_vcpu_t *vcpu);
 void     vmx_get_regs(kvm_vcpu_t *vcpu, struct kvm_regs *r);
 void     vmx_set_regs(kvm_vcpu_t *vcpu, const struct kvm_regs *r);
