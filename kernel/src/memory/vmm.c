@@ -3,6 +3,7 @@
 #include "../../include/smp/smp.h"
 #include "../../include/apic/apic.h"
 #include "../../include/io/serial.h"
+#include "../../include/boot/boot_info.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -457,6 +458,92 @@ static void nx_setup(void) {
     serial_printf("VMM: CPU has no NX, mappings stay executable\n");
 }
 
+enum { MEM_NONE, MEM_RAM, MEM_MIXED };
+
+#define HHDM_PML4_INDEX 256
+#define PTE_UC          (VMM_PCD | VMM_PWT)
+#define GIB             0x40000000ULL
+#define MIB2            0x200000ULL
+
+static int classify(uint64_t base, uint64_t len) {
+    const boot_info_t *bi = boot_info();
+    uint64_t end = base + len, covered = 0;
+    for (int i = 0; i < bi->ram_count; i++) {
+        uint64_t rb = bi->ram[i].base, re = rb + bi->ram[i].length;
+        uint64_t lo = rb > base ? rb : base;
+        uint64_t hi = re < end ? re : end;
+        if (hi > lo) covered += hi - lo;
+    }
+    if (covered >= len) return MEM_RAM;
+    return covered ? MEM_MIXED : MEM_NONE;
+}
+
+static bool cpu_has_1g_pages(void) {
+    uint32_t a, b, c, d;
+    asm volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000000u), "c"(0));
+    if (a < 0x80000001u) return false;
+    asm volatile ("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0x80000001u), "c"(0));
+    return (d & (1u << 26)) != 0;
+}
+
+static void vmm_rebuild_hhdm(void) {
+    const boot_info_t *bi = boot_info();
+    if (bi->ram_count == 0) {
+        serial_printf("VMM: no RAM ranges from the boot loader, keeping the boot HHDM\n");
+        return;
+    }
+    uint64_t ram_end = 0;
+    for (int i = 0; i < bi->ram_count; i++) {
+        uint64_t e = bi->ram[i].base + bi->ram[i].length;
+        if (e > ram_end) ram_end = e;
+    }
+    bool gb = cpu_has_1g_pages();
+    uint64_t limit = 512 * GIB;
+    if (!gb) {
+        limit = ram_end > 4 * GIB ? ram_end : 4 * GIB;
+        limit = (limit + GIB - 1) & ~(GIB - 1);
+        if (limit > 512 * GIB) limit = 512 * GIB;
+    }
+
+    vmm_pte_t *pdpt = alloc_table();
+    size_t tables = 1, small = 0;
+    for (uint64_t g = 0; g < limit / GIB; g++) {
+        uint64_t base = g * GIB;
+        int cls = classify(base, GIB);
+        if (gb && cls != MEM_MIXED) {
+            pdpt[g] = (base | VMM_PRESENT | VMM_WRITE | VMM_PSE | (cls == MEM_RAM ? 0 : PTE_UC)) & g_pte_mask;
+            continue;
+        }
+        vmm_pte_t *pd = alloc_table();
+        tables++;
+        pdpt[g] = (pmm_virt_to_phys(pd) | VMM_PRESENT | VMM_WRITE) & g_pte_mask;
+        for (uint64_t m = 0; m < 512; m++) {
+            uint64_t b2 = base + m * MIB2;
+            int c2 = classify(b2, MIB2);
+            if (c2 != MEM_MIXED) {
+                pd[m] = (b2 | VMM_PRESENT | VMM_WRITE | VMM_PSE | (c2 == MEM_RAM ? 0 : PTE_UC)) & g_pte_mask;
+                continue;
+            }
+            vmm_pte_t *pt = alloc_table();
+            tables++;
+            pd[m] = (pmm_virt_to_phys(pt) | VMM_PRESENT | VMM_WRITE) & g_pte_mask;
+            for (uint64_t k = 0; k < 512; k++) {
+                uint64_t b4 = b2 + k * 0x1000;
+                int c4 = classify(b4, 0x1000);
+                if (c4 == MEM_NONE) small++;
+                pt[k] = (b4 | VMM_PRESENT | VMM_WRITE | (c4 == MEM_NONE ? PTE_UC : 0)) & g_pte_mask;
+            }
+        }
+    }
+
+    kernel_pagemap.pml4[HHDM_PML4_INDEX] = (pmm_virt_to_phys(pdpt) | VMM_PRESENT | VMM_WRITE) & g_pte_mask;
+    asm volatile ("mov %%cr3, %%rax; mov %%rax, %%cr3" ::: "rax", "memory");
+    serial_printf("VMM: HHDM rebuilt from %d RAM ranges up to %llu GiB (%s pages, %zu tables, "
+                  "%zu uncached 4K pages next to RAM)\n",
+                  bi->ram_count, (unsigned long long)(limit / GIB), gb ? "1G" : "2M",
+                  tables, small);
+}
+
 void vmm_init(void) {
     nx_setup();
     uintptr_t cr3;
@@ -466,6 +553,29 @@ void vmm_init(void) {
     serial_printf("VMM: kernel pagemap initialized\n");
     serial_printf("VMM: kernel PML4 phys = 0x%llx\n", kernel_pml4_phys);
     pat_setup_wc();
+    vmm_rebuild_hhdm();
+}
+
+static bool split_large_pdpte(vmm_pte_t *pdpte) {
+    uint64_t e = *pdpte;
+    vmm_pte_t *pd = (vmm_pte_t *)pmm_alloc_zero(1);
+    if (!pd) return false;
+    uint64_t base = e & 0x000FFFFFC0000000ULL;
+    uint64_t flags = e & (0xFFFULL | (1ULL << 12) | VMM_NOEXEC);
+    for (uint64_t i = 0; i < 512; i++) pd[i] = (base + i * MIB2) | flags;
+    *pdpte = (pmm_virt_to_phys(pd) | VMM_PRESENT | VMM_WRITE | (e & VMM_USER)) & g_pte_mask;
+    return true;
+}
+
+static bool split_large_pde(vmm_pte_t *pde) {
+    uint64_t e = *pde;
+    vmm_pte_t *pt = (vmm_pte_t *)pmm_alloc_zero(1);
+    if (!pt) return false;
+    uint64_t base = e & 0x000FFFFFFFE00000ULL;
+    uint64_t flags = (e & (0xFFFULL & ~VMM_PSE)) | ((e >> 12) & 1ULL) << 7 | (e & VMM_NOEXEC);
+    for (uint64_t i = 0; i < 512; i++) pt[i] = (base + i * 0x1000) | flags;
+    *pde = (pmm_virt_to_phys(pt) | VMM_PRESENT | VMM_WRITE | (e & VMM_USER)) & g_pte_mask;
+    return true;
 }
 
 bool vmm_remap_range_wc(vmm_pagemap_t *map, uintptr_t virt_base, size_t pages) {
@@ -484,6 +594,9 @@ bool vmm_remap_range_wc(vmm_pagemap_t *map, uintptr_t virt_base, size_t pages) {
         vmm_pte_t *pdpt = (vmm_pte_t *)pmm_phys_to_virt(map->pml4[pml4_i] & PTE_PHYS_MASK);
         if (!(pdpt[pdpt_i] & VMM_PRESENT)) return false;
 
+        if ((pdpt[pdpt_i] & VMM_PSE) && ((v & (GIB - 1)) || end - v < GIB)) {
+            if (!split_large_pdpte(&pdpt[pdpt_i])) return false;
+        }
         if (pdpt[pdpt_i] & VMM_PSE) {
             uint64_t e = pdpt[pdpt_i];
             e &= ~((1ULL << 3) | (1ULL << 4) | (1ULL << 12));
@@ -496,6 +609,9 @@ bool vmm_remap_range_wc(vmm_pagemap_t *map, uintptr_t virt_base, size_t pages) {
         vmm_pte_t *pd = (vmm_pte_t *)pmm_phys_to_virt(pdpt[pdpt_i] & PTE_PHYS_MASK);
         if (!(pd[pd_i] & VMM_PRESENT)) return false;
 
+        if ((pd[pd_i] & VMM_PSE) && ((v & (MIB2 - 1)) || end - v < MIB2)) {
+            if (!split_large_pde(&pd[pd_i])) return false;
+        }
         if (pd[pd_i] & VMM_PSE) {
             uint64_t e = pd[pd_i];
             e &= ~((1ULL << 3) | (1ULL << 4) | (1ULL << 12));

@@ -150,6 +150,11 @@ void mb2_main(uint32_t magic, uint32_t info_phys) {
             uint64_t base = rd64(e);
             uint64_t len  = rd64(e + 8);
             uint32_t mt   = rd32(e + 16);
+            if ((mt == 1 || mt == 3 || mt == 4) && len && bi->ram_count < BOOT_MMAP_MAX) {
+                bi->ram[bi->ram_count].base   = base;
+                bi->ram[bi->ram_count].length = len;
+                bi->ram_count++;
+            }
             if (mt == 1) {
                 mmap_add_carved(bi, base, base + len);
             } else {

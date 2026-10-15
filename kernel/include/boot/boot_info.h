@@ -53,6 +53,12 @@ typedef struct {
     int               mmap_count;
     boot_mmap_entry_t mmap[BOOT_MMAP_MAX];
 
+    int               ram_count;
+    struct {
+        uint64_t base;
+        uint64_t length;
+    } ram[BOOT_MMAP_MAX];
+
     int               module_count;
     boot_module_t     modules[BOOT_MOD_MAX];
 
