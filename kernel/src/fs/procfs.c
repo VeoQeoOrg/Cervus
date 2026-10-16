@@ -291,6 +291,12 @@ static int read_user_range(task_t *t, uintptr_t start, uintptr_t end, char *buf,
     return n < 0 ? 0 : n;
 }
 
+static int gen_pid_comm(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    return snprintf(buf, max, "%.15s\n", t->name);
+}
+
 static int gen_pid_environ(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
@@ -426,6 +432,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "maps",    gen_pid_maps    },
     { "environ", gen_pid_environ },
     { "auxv",    gen_pid_auxv    },
+    { "comm",    gen_pid_comm    },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))
 

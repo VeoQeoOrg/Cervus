@@ -260,6 +260,7 @@
 #define SYS_CHROOT            684
 #define SYS_PTRACE            685
 #define SYS_PERSONALITY       686
+#define SYS_TKILL             687
 
 #define SYSCALL_TABLE_SIZE    768
 

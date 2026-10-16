@@ -797,6 +797,10 @@ int64_t sys_tgkill(uint64_t tgid_a, uint64_t tid_a, uint64_t sig_a) {
     return 0;
 }
 
+int64_t sys_tkill(uint64_t tid_a, uint64_t sig_a) {
+    return sys_tgkill((uint64_t)-1, tid_a, sig_a);
+}
+
 int64_t sys_sigqueue(uint64_t pid_a, uint64_t sig_a, uint64_t value) {
     int pid = (int)(int64_t)pid_a;
     int sig = (int)sig_a;

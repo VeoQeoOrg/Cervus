@@ -86,7 +86,7 @@ static void ctx_get(task_t *t, pt_ctx_t *c, user_regs_t *r) {
         r->rbp = f->rbp; r->rbx = f->rbx; r->r11 = f->r11; r->r10 = f->r10;
         r->r9 = f->r9; r->r8 = f->r8; r->rax = f->rax; r->rcx = f->rcx;
         r->rdx = f->rdx; r->rsi = f->rsi; r->rdi = f->rdi;
-        r->rip = f->rip; r->cs = f->cs; r->eflags = f->rflags; r->rsp = f->rsp; r->ss = f->ss;
+        r->rip = f->rip; r->cs = 0x33; r->eflags = f->rflags; r->rsp = f->rsp; r->ss = 0x2B;
         r->orig_rax = c->orig_rax;
     } else {
         r->r15 = t->user_saved_r15; r->r14 = t->user_saved_r14;
@@ -98,9 +98,9 @@ static void ctx_get(task_t *t, pt_ctx_t *c, user_regs_t *r) {
         r->rcx = t->ret_iret ? t->user_saved_rcx : t->user_saved_rip;
         r->rdx = t->user_saved_rdx; r->rsi = t->user_saved_rsi; r->rdi = t->user_saved_rdi;
         r->orig_rax = c->orig_rax;
-        r->rip = t->user_saved_rip; r->cs = 0x23;
+        r->rip = t->user_saved_rip; r->cs = 0x33;
         r->eflags = (t->user_saved_r11 & 0x3C0FFF) | 0x202;
-        r->rsp = t->user_rsp; r->ss = 0x1B;
+        r->rsp = t->user_rsp; r->ss = 0x2B;
     }
     r->fs_base = t->fs_base;
 }
@@ -740,6 +740,10 @@ int64_t sys_ptrace(uint64_t req, uint64_t pid_a, uint64_t addr, uint64_t data) {
 int64_t sys_personality(uint64_t persona) {
     task_t *me = self_task();
     if (!me) return -ESRCH;
-    (void)persona;
-    return 0;
+    uint32_t old = me->persona;
+    if ((uint32_t)persona != 0xFFFFFFFFu) {
+        if ((persona & 0xFF) != 0) return -EINVAL;
+        me->persona = (uint32_t)persona;
+    }
+    return old;
 }

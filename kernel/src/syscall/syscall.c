@@ -239,6 +239,7 @@ extern int64_t sys_semtimedop(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_chroot(uint64_t);
 extern int64_t sys_ptrace(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_personality(uint64_t);
+extern int64_t sys_tkill(uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -360,7 +361,7 @@ W0(sys_gettid) W3(sys_tgkill) W5(sys_execveat)
 W3(sys_timer_create) W4(sys_timer_settime) W2(sys_timer_gettime) W1(sys_timer_getoverrun) W1(sys_timer_delete)
 W5(sys_mremap) W3(sys_mincore)
 W2(sys_msgget) W4(sys_msgsnd) W5(sys_msgrcv) W3(sys_msgctl) W4(sys_semtimedop)
-W1(sys_chroot) W4(sys_ptrace) W1(sys_personality)
+W1(sys_chroot) W4(sys_ptrace) W1(sys_personality) W2(sys_tkill)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -544,6 +545,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_CHROOT]          = _sys_chroot,
     [SYS_PTRACE]          = _sys_ptrace,
     [SYS_PERSONALITY]     = _sys_personality,
+    [SYS_TKILL]           = _sys_tkill,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

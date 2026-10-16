@@ -578,6 +578,7 @@ task_t* task_fork(task_t* parent) {
     child->gid             = parent->gid;
     child->umask           = parent->umask;
     child->ctty            = parent->ctty;
+    child->persona         = parent->persona;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     memcpy(child->root, parent->root, sizeof(child->root));
     memcpy(child->exe, parent->exe, sizeof(child->exe));
