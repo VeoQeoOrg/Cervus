@@ -38,6 +38,7 @@ typedef unsigned long      size_t;
 #define DT_RPATH   15
 #define DT_RUNPATH 29
 #define DT_JMPREL  23
+#define DT_DEBUG   21
 #define DT_INIT_ARRAY 25
 #define DT_FINI_ARRAY 26
 #define DT_INIT_ARRAYSZ 27
@@ -162,6 +163,26 @@ typedef struct {
 } object_t;
 
 static object_t g_objs[MAX_OBJECTS];
+
+typedef struct link_map_s {
+    uintptr_t          l_addr;
+    const char        *l_name;
+    dyn_t             *l_ld;
+    struct link_map_s *l_next, *l_prev;
+} link_map_t;
+
+typedef struct {
+    int         r_version;
+    link_map_t *r_map;
+    uintptr_t   r_brk;
+    int         r_state;
+    uintptr_t   r_ldbase;
+} r_debug_t;
+
+static link_map_t g_lmap[MAX_OBJECTS];
+r_debug_t _r_debug;
+
+__attribute__((noinline, used)) void _dl_debug_state(void) { __asm__ volatile("" ::: "memory"); }
 static int      g_nobjs;
 static const char *g_library_path;
 static const char *g_fail;
@@ -685,6 +706,21 @@ static void ld_init_libs(int argc, char **argv, char **envp)
     for (int i = g_nobjs - 1; i >= 1; i--) run_init(&g_objs[i]);
 }
 
+static void debug_sync(void)
+{
+    for (int i = 0; i < g_nobjs; i++) {
+        link_map_t *l = &g_lmap[i];
+        l->l_addr = i == 0 ? g_objs[0].base : g_objs[i].base;
+        l->l_name = (char *)(i == 0 ? "" : g_objs[i].path);
+        l->l_ld   = g_objs[i].dyn;
+        l->l_prev = i ? &g_lmap[i - 1] : 0;
+        l->l_next = i + 1 < g_nobjs ? &g_lmap[i + 1] : 0;
+    }
+    _r_debug.r_version = 1;
+    _r_debug.r_map = g_nobjs ? &g_lmap[0] : 0;
+    _r_debug.r_brk = (uintptr_t)&_dl_debug_state;
+}
+
 static void *ld_dlopen(const char *path, int flags)
 {
     (void)flags;
@@ -696,6 +732,8 @@ static void *ld_dlopen(const char *path, int flags)
     if (g_nobjs >= MAX_OBJECTS) return 0;
 
     int first = g_nobjs;
+    _r_debug.r_state = 1;
+    _dl_debug_state();
     static char dl_paths[MAX_OBJECTS][256];
     static char dl_names[MAX_OBJECTS][256];
     dyn_t *dyn = NULL;
@@ -725,6 +763,9 @@ static void *ld_dlopen(const char *path, int flags)
         for (size_t i = 0; i < g_npending; i++) if (hook) hook(g_static_pending[i]);
         g_npending = 0;
     }
+    debug_sync();
+    _r_debug.r_state = 0;
+    _dl_debug_state();
     for (int i = g_nobjs - 1; i >= first; i--) run_init(&g_objs[i]);
     return o;
 }
@@ -939,8 +980,14 @@ uintptr_t ld_start_c(uint64_t *sp)
 
         uintptr_t slot = resolve("__cervus_dl_ops", 0);
         if (slot) *(dl_ops_t **)slot = &g_dl_ops;
+
+        _r_debug.r_ldbase = interp_base;
+        debug_sync();
+        for (dyn_t *d = exec_dyn; d->d_tag != DT_NULL; d++)
+            if (d->d_tag == DT_DEBUG) d->d_val = (uintptr_t)&_r_debug;
+        _r_debug.r_state = 0;
+        _dl_debug_state();
     }
 
-    (void)interp_base;
     return entry;
 }
