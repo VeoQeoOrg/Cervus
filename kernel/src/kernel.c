@@ -70,30 +70,6 @@ static fb_info_t s_fb;
 __attribute__((unused))
 void kernel_stage_echo_off(void);
 
-static void ps2_diag_task(void *arg) {
-    (void)arg;
-    extern void apic_dump_irq(uint8_t);
-    extern void apic_dump_diag(void);
-    uint32_t last = 0xFFFFFFFFu;
-    bool dumped = false;
-    for (int iter = 0; iter < 12; iter++) {
-        task_sleep_ms(2500);
-        if (!dumped) {
-            apic_dump_diag();
-            printf("[ps2diag] keyboard IOAPIC entry:\n");
-            apic_dump_irq(1);
-            dumped = true;
-        }
-        uint32_t n = ps2_kb_irq_count();
-        if (n != last) {
-            printf("[ps2diag] keyboard IRQ fired %u times (press keys to test)\n", n);
-            serial_printf("[ps2diag] keyboard IRQ count=%u\n", n);
-            last = n;
-        }
-    }
-    task_exit();
-}
-
 static void load_elf_module(void) {
     const boot_info_t *bi = boot_info();
     if (bi->module_count == 0) {

@@ -1,3 +1,4 @@
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/memory/vmm.h"
@@ -28,6 +29,7 @@ int64_t sys_thread_create(uint64_t entry, uint64_t stack_top, uint64_t arg,
 
     task_t *th = task_spawn_thread(me, (uintptr_t)entry, (uintptr_t)stack_top, arg, a4);
     if (!th) return -ENOMEM;
+    ptrace_note_child(me, th, PTRACE_EVENT_CLONE);
     return (int64_t)th->pid;
 }
 

@@ -1,3 +1,4 @@
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/signal/signal.h"
 #include "../../../include/memory/vmm.h"
@@ -9,6 +10,9 @@
 #define WEXITED_K    0x00000004
 #define WCONTINUED_K 0x00000008
 #define WNOWAIT_K    0x01000000
+#define WNOTHREAD_K  0x20000000
+#define WALL_K       0x40000000
+#define WCLONE_K     0x80000000
 
 #define P_ALL_K  0
 #define P_PID_K  1
@@ -118,6 +122,18 @@ static int64_t do_wait(int idtype, uint32_t id, int options, wait_result_t *res)
     for (;;) {
         task_t *zombie = NULL;
         bool any = false, busy = false;
+        int pst = 0;
+        int ppid = ptrace_wait(self, idtype, id, options, &pst, &any);
+        if (ppid > 0) {
+            task_t *tc = task_find_by_pid((uint32_t)ppid);
+            res->pid = (uint32_t)ppid;
+            res->uid = tc ? tc->uid : 0;
+            res->status = pst;
+            if ((pst & 0x7F) == 0x7F) { res->code = 4; res->si_status = (pst >> 8) & 0xFF; }
+            else if (pst & 0x7F) { res->code = CLD_KILLED_CODE; res->si_status = pst & 0x7F; }
+            else { res->code = CLD_EXITED_CODE; res->si_status = (pst >> 8) & 0xFF; }
+            return ppid;
+        }
         uint64_t f = spinlock_acquire_irqsave(&children_lock);
         for (task_t *c = parent->children; c; c = c->sibling) {
             if (!child_selected(parent, c, idtype, id)) continue;
@@ -167,7 +183,8 @@ static void ns_to_tv(uint64_t ns, int64_t *sec, int64_t *usec)
 
 int64_t sys_wait4(uint64_t pid_arg, uint64_t status_ptr, uint64_t options, uint64_t rusage_ptr)
 {
-    if (options & ~(uint64_t)(WNOHANG_K | WUNTRACED_K | WCONTINUED_K)) return -EINVAL;
+    options &= 0xFFFFFFFFu;
+    if (options & ~(uint64_t)(WNOHANG_K | WUNTRACED_K | WCONTINUED_K | WNOTHREAD_K | WALL_K | WCLONE_K)) return -EINVAL;
     int idtype;
     uint32_t id;
     select_from_pid(syscall_cur_task(), (int64_t)pid_arg, &idtype, &id);
@@ -202,7 +219,9 @@ int64_t sys_waitid(uint64_t idtype_a, uint64_t id_a, uint64_t info_ptr, uint64_t
 {
     int idtype = (int)idtype_a;
     if (idtype != P_ALL_K && idtype != P_PID_K && idtype != P_PGID_K) return -EINVAL;
-    if (options & ~(uint64_t)(WNOHANG_K | WUNTRACED_K | WEXITED_K | WCONTINUED_K | WNOWAIT_K)) return -EINVAL;
+    options &= 0xFFFFFFFFu;
+    if (options & ~(uint64_t)(WNOHANG_K | WUNTRACED_K | WEXITED_K | WCONTINUED_K | WNOWAIT_K |
+                              WNOTHREAD_K | WALL_K | WCLONE_K)) return -EINVAL;
     if (!(options & (WEXITED_K | WUNTRACED_K | WCONTINUED_K))) return -EINVAL;
 
     k_waitinfo_t info;

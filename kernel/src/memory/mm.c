@@ -347,6 +347,12 @@ mm_t *mm_fork(mm_t *parent) {
     child->brk_start = parent->brk_start;
     child->brk = parent->brk;
     child->mmap_top = parent->mmap_top;
+    child->arg_start = parent->arg_start;
+    child->arg_end = parent->arg_end;
+    child->env_start = parent->env_start;
+    child->env_end = parent->env_end;
+    child->nauxv = parent->nauxv;
+    memcpy(child->auxv, parent->auxv, sizeof child->auxv);
     if (parent->exe) {
         vnode_ref(parent->exe);
         __atomic_fetch_add(&parent->exe->deny_write, 1, __ATOMIC_ACQ_REL);
@@ -538,6 +544,54 @@ int mm_user_phys(mm_t *mm, uintptr_t addr, int write, uintptr_t *phys_out) {
     *phys_out = (*pte & PTE_ADDR) | (addr & (PG - 1));
     kmutex_unlock(&mm->lock);
     return 0;
+}
+
+int mm_access_remote(mm_t *mm, uintptr_t addr, void *buf, size_t len, int write) {
+    if (!mm) return -EIO;
+    uint8_t *b = buf;
+    size_t done = 0;
+    while (done < len) {
+        uintptr_t va = addr + done;
+        uintptr_t page = pdown(va);
+        size_t chunk = PG - (va & (PG - 1));
+        if (chunk > len - done) chunk = len - done;
+        if (va >= MM_USER_TOP) return done ? (int)done : -EIO;
+        kmutex_lock(&mm->lock);
+        vm_area_t *v = mm_find_vma(mm, va);
+        if (!v || (v->flags & VM_PFNMAP) || fault_locked(mm, va, 0) < 0) {
+            kmutex_unlock(&mm->lock);
+            return done ? (int)done : -EIO;
+        }
+        vmm_pte_t *pte = vmm_pte_lookup(mm->pagemap, page);
+        if (!pte || !(*pte & VMM_PRESENT)) {
+            kmutex_unlock(&mm->lock);
+            return done ? (int)done : -EIO;
+        }
+        vmm_pte_t e = *pte;
+        uintptr_t phys = e & PTE_ADDR;
+        if (write) {
+            if ((v->flags & VM_SHARED) || (e & VMM_SHARED)) {
+                *pte = e | VMM_DIRTY;
+            } else if (page_refcount(phys) > 1) {
+                uintptr_t np = page_alloc_user();
+                if (!np) { kmutex_unlock(&mm->lock); return done ? (int)done : -ENOMEM; }
+                memcpy(pmm_phys_to_virt(np), pmm_phys_to_virt(phys), PG);
+                *pte = np | (e & ~PTE_ADDR);
+                flushbuf_t fb = { .mm = mm };
+                fb_add(&fb, page);
+                fb_done(&fb);
+                mm_notify(mm, page, page + PG);
+                page_unref(phys);
+                phys = np;
+            }
+            memcpy((uint8_t *)pmm_phys_to_virt(phys) + (va & (PG - 1)), b + done, chunk);
+        } else {
+            memcpy(b + done, (uint8_t *)pmm_phys_to_virt(phys) + (va & (PG - 1)), chunk);
+        }
+        kmutex_unlock(&mm->lock);
+        done += chunk;
+    }
+    return (int)done;
 }
 
 int mm_copy_to(mm_t *mm, uintptr_t dst, const void *src, size_t len) {

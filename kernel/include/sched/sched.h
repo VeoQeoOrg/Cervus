@@ -255,6 +255,20 @@ typedef struct task {
     volatile int32_t sleep_noint;
     char root[256];
     void *kvm_vcpu;
+    struct task *ptracer;
+    struct task *pt_next;
+    uint32_t   pt_opts;
+    volatile uint32_t pt_flags;
+    uint32_t   pt_pending;
+    int32_t    pt_status;
+    int32_t    pt_resume_sig;
+    int32_t    pt_event;
+    uint64_t   pt_msg;
+    void      *pt_ctx;
+    uint8_t    pt_siginfo[128];
+    uint64_t   pt_dr[8];
+    uint32_t   pt_dr_on;
+    uint32_t   pt_pad;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

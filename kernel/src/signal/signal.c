@@ -1,3 +1,4 @@
+#include "../../include/sched/ptrace.h"
 #include "../../include/sched/capabilities.h"
 #include "../../include/signal/signal.h"
 #include "../../include/time/ptimer.h"
@@ -65,7 +66,7 @@ static int post(task_t *t, int sig, const ksiginfo_t *si) {
     if (sig != SIGKILL && signalfd_deliver(t->pid, sig, si)) return 0;
     uint64_t bit = 1ULL << sig;
     if (sig != SIGKILL && sig != SIGCONT && !(t->sig_blocked & bit) && !(t->sig_waitset & bit) &&
-        signal_ignored(t, sig))
+        signal_ignored(t, sig) && !ptrace_traced(t))
         return 0;
 
     int merged = 0;
@@ -205,7 +206,7 @@ static void discard_signal(task_t *t, int sig) {
     for (int i = 0; i < nt; i++) ptimer_signal_dropped(t, timers[i]);
 }
 
-static void fill_siginfo(uint8_t *info, int sig, const ksiginfo_t *si) {
+void signal_fill_siginfo(uint8_t *info, int sig, const ksiginfo_t *si) {
     int32_t si_signo = sig, si_errno = 0, si_code = si->code;
     memset(info, 0, 128);
     memcpy(info + 0, &si_signo, 4);
@@ -464,7 +465,7 @@ static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, 
     ext->uctx  = sp + FRAME_UCTX;
     ext->info  = sp + FRAME_INFO;
 
-    fill_siginfo(f + FRAME_INFO, sig, si);
+    signal_fill_siginfo(f + FRAME_INFO, sig, si);
 
     k_ucontext_t *kc = (k_ucontext_t *)(f + FRAME_UCTX);
     kc->ss_sp    = t->ss_sp;
@@ -498,6 +499,7 @@ static int pick_signal(task_t *t) {
         if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~1ULL; continue; }
         uint64_t h = t->sig_handler[sig];
         if (sig == SIGKILL) return sig;
+        if (ptrace_traced(t)) return sig;
         if (h == SIG_IGN_ADDR || (h == SIG_DFL_ADDR && sig_default_ignore(sig))) {
             discard_signal(t, sig);
             continue;
@@ -519,52 +521,84 @@ static bool syscall_restartable(uint64_t nr) {
     return false;
 }
 
+static void regs_from_task(task_t *t, int64_t retval, sig_regs_t *r) {
+    r->r8  = t->user_saved_r8;
+    r->r9  = t->user_saved_r9;
+    r->r10 = t->user_saved_r10;
+    r->r11 = t->ret_iret ? t->user_iret_r11 : t->user_saved_r11;
+    r->r12 = t->user_saved_r12;
+    r->r13 = t->user_saved_r13;
+    r->r14 = t->user_saved_r14;
+    r->r15 = t->user_saved_r15;
+    r->rdi = t->user_saved_rdi;
+    r->rsi = t->user_saved_rsi;
+    r->rbp = t->user_saved_rbp;
+    r->rbx = t->user_saved_rbx;
+    r->rdx = t->user_saved_rdx;
+    r->rax = (uint64_t)retval;
+    r->rcx = t->ret_iret ? t->user_saved_rcx : t->user_saved_rip;
+    r->rsp = t->user_rsp;
+    r->rip = t->user_saved_rip;
+    r->rflags = t->user_saved_r11;
+}
+
+static void regs_from_frame(const struct int_frame_t *f, sig_regs_t *r) {
+    r->r8 = f->r8; r->r9 = f->r9; r->r10 = f->r10; r->r11 = f->r11;
+    r->r12 = f->r12; r->r13 = f->r13; r->r14 = f->r14; r->r15 = f->r15;
+    r->rdi = f->rdi; r->rsi = f->rsi; r->rbp = f->rbp; r->rbx = f->rbx;
+    r->rdx = f->rdx; r->rax = f->rax; r->rcx = f->rcx;
+    r->rsp = f->rsp; r->rip = f->rip; r->rflags = f->rflags;
+}
+
 int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
     if (!t || !t->is_userspace) return retval;
 
-    int sig = pick_signal(t);
-    if (!sig) { signal_restore_saved_mask(t); return retval; }
+    for (;;) {
+        int sig = pick_signal(t);
+        if (!sig) { signal_restore_saved_mask(t); return retval; }
 
-    sig_regs_t r;
-    r.r8  = t->user_saved_r8;
-    r.r9  = t->user_saved_r9;
-    r.r10 = t->user_saved_r10;
-    r.r11 = t->ret_iret ? t->user_iret_r11 : t->user_saved_r11;
-    r.r12 = t->user_saved_r12;
-    r.r13 = t->user_saved_r13;
-    r.r14 = t->user_saved_r14;
-    r.r15 = t->user_saved_r15;
-    r.rdi = t->user_saved_rdi;
-    r.rsi = t->user_saved_rsi;
-    r.rbp = t->user_saved_rbp;
-    r.rbx = t->user_saved_rbx;
-    r.rdx = t->user_saved_rdx;
-    r.rax = (uint64_t)retval;
-    r.rcx = t->ret_iret ? t->user_saved_rcx : t->user_saved_rip;
-    r.rsp = t->user_rsp;
-    r.rip = t->user_saved_rip;
-    r.rflags = t->user_saved_r11;
+        sig_regs_t r;
+        ksiginfo_t si;
+        if (ptrace_traced(t) && sig != SIGKILL) {
+            take_signal(t, sig, &si);
+            pt_ctx_t ctx = { .kind = PT_CTX_SYSCALL, .rax = &retval, .orig_rax = nr };
+            sig = ptrace_signal_stop(t, sig, &si, &ctx);
+            if (t->pending_kill) signal_kill_exit(t);
+            if (!sig || signal_ignored(t, sig)) {
+                if (retval == -EINTR && !t->ret_iret && syscall_restartable(nr)) {
+                    t->user_saved_rip -= 2;
+                    retval = (int64_t)nr;
+                }
+                continue;
+            }
+            if (t->sig_handler[sig] == SIG_DFL_ADDR) {
+                regs_from_task(t, retval, &r);
+                terminate_with_report(t, sig, &r);
+            }
+        } else {
+            if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
+                regs_from_task(t, retval, &r);
+                discard_signal(t, sig);
+                terminate_with_report(t, sig, &r);
+            }
+            take_signal(t, sig, &si);
+        }
 
-    if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
-        discard_signal(t, sig);
-        terminate_with_report(t, sig, &r);
+        regs_from_task(t, retval, &r);
+        if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(nr)) {
+            r.rax = nr;
+            r.rip -= 2;
+        }
+
+        uint64_t sp, rip;
+        if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
+            terminate_with_report(t, SIGSEGV, &r);
+        t->ret_iret = 0;
+        t->user_rsp = sp;
+        t->user_saved_rip = rip;
+        t->user_saved_r11 &= ~0x500ULL;
+        return retval;
     }
-
-    if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(nr)) {
-        r.rax = nr;
-        r.rip -= 2;
-    }
-
-    ksiginfo_t si;
-    take_signal(t, sig, &si);
-    uint64_t sp, rip;
-    if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
-        terminate_with_report(t, SIGSEGV, &r);
-    t->ret_iret = 0;
-    t->user_rsp = sp;
-    t->user_saved_rip = rip;
-    t->user_saved_r11 &= ~0x500ULL;
-    return retval;
 }
 
 void signal_irq_return(struct int_frame_t *f) {
@@ -575,30 +609,41 @@ void signal_irq_return(struct int_frame_t *f) {
     if (!(t->sig_pending & ~t->sig_blocked)) return;
 
     __asm__ volatile("sti" ::: "memory");
-    int sig = pick_signal(t);
-    if (!sig) { __asm__ volatile("cli" ::: "memory"); return; }
+    for (;;) {
+        int sig = pick_signal(t);
+        if (!sig) { __asm__ volatile("cli" ::: "memory"); return; }
 
-    sig_regs_t r;
-    r.r8 = f->r8; r.r9 = f->r9; r.r10 = f->r10; r.r11 = f->r11;
-    r.r12 = f->r12; r.r13 = f->r13; r.r14 = f->r14; r.r15 = f->r15;
-    r.rdi = f->rdi; r.rsi = f->rsi; r.rbp = f->rbp; r.rbx = f->rbx;
-    r.rdx = f->rdx; r.rax = f->rax; r.rcx = f->rcx;
-    r.rsp = f->rsp; r.rip = f->rip; r.rflags = f->rflags;
+        sig_regs_t r;
+        ksiginfo_t si;
+        if (ptrace_traced(t) && sig != SIGKILL) {
+            take_signal(t, sig, &si);
+            pt_ctx_t ctx = { .kind = PT_CTX_FRAME, .f = f, .orig_rax = (uint64_t)-1 };
+            sig = ptrace_signal_stop(t, sig, &si, &ctx);
+            if (t->pending_kill) signal_kill_exit(t);
+            if (!sig || signal_ignored(t, sig)) continue;
+            if (t->sig_handler[sig] == SIG_DFL_ADDR) {
+                regs_from_frame(f, &r);
+                terminate_with_report(t, sig, &r);
+            }
+        } else {
+            if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
+                regs_from_frame(f, &r);
+                discard_signal(t, sig);
+                terminate_with_report(t, sig, &r);
+            }
+            take_signal(t, sig, &si);
+        }
 
-    if (sig == SIGKILL || t->sig_handler[sig] == SIG_DFL_ADDR) {
-        discard_signal(t, sig);
-        terminate_with_report(t, sig, &r);
+        regs_from_frame(f, &r);
+        uint64_t sp, rip;
+        if (build_frame(t, sig, &si, &r, true, &sp, &rip) < 0)
+            terminate_with_report(t, SIGSEGV, &r);
+        __asm__ volatile("cli" ::: "memory");
+        f->rsp = sp;
+        f->rip = rip;
+        f->rflags &= ~0x500ULL;
+        return;
     }
-
-    ksiginfo_t si;
-    take_signal(t, sig, &si);
-    uint64_t sp, rip;
-    if (build_frame(t, sig, &si, &r, true, &sp, &rip) < 0)
-        terminate_with_report(t, SIGSEGV, &r);
-    __asm__ volatile("cli" ::: "memory");
-    f->rsp = sp;
-    f->rip = rip;
-    f->rflags &= ~0x500ULL;
 }
 
 int64_t sys_sigaltstack(uint64_t ss_ptr, uint64_t old_ptr) {
@@ -795,7 +840,7 @@ int64_t sys_sigtimedwait(uint64_t set_ptr, uint64_t info_ptr, uint64_t ts_ptr) {
             take_signal(t, sig, &si);
             if (info_ptr) {
                 uint8_t info[128];
-                fill_siginfo(info, sig, &si);
+                signal_fill_siginfo(info, sig, &si);
                 if (syscall_copy_to_user((void *)info_ptr, info, sizeof(info)) < 0) return -EFAULT;
             }
             return sig;

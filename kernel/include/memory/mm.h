@@ -63,8 +63,12 @@ typedef struct mm {
     uint32_t       def_flags;
     void         (*notify[4])(void *ctx, uintptr_t start, uintptr_t end);
     void          *notify_ctx[4];
+    uintptr_t      arg_start, arg_end, env_start, env_end;
+    uint32_t       nauxv;
+    uint64_t       auxv[48];
 } mm_t;
 
+int  mm_access_remote(mm_t *mm, uintptr_t addr, void *buf, size_t len, int write);
 int  mm_notifier_add(mm_t *mm, void (*fn)(void *, uintptr_t, uintptr_t), void *ctx);
 void mm_notifier_del(mm_t *mm, void *ctx);
 

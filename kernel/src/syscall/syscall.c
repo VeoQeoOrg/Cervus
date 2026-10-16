@@ -1,3 +1,4 @@
+#include "../../include/sched/ptrace.h"
 #include "../../include/syscall/syscall.h"
 #include "../../include/syscall/syscall_nums.h"
 #include "../../include/syscall/syscall_internal.h"
@@ -236,6 +237,8 @@ extern int64_t sys_msgrcv(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_msgctl(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_semtimedop(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_chroot(uint64_t);
+extern int64_t sys_ptrace(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_personality(uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -357,7 +360,7 @@ W0(sys_gettid) W3(sys_tgkill) W5(sys_execveat)
 W3(sys_timer_create) W4(sys_timer_settime) W2(sys_timer_gettime) W1(sys_timer_getoverrun) W1(sys_timer_delete)
 W5(sys_mremap) W3(sys_mincore)
 W2(sys_msgget) W4(sys_msgsnd) W5(sys_msgrcv) W3(sys_msgctl) W4(sys_semtimedop)
-W1(sys_chroot)
+W1(sys_chroot) W4(sys_ptrace) W1(sys_personality)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -539,6 +542,8 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_MSGCTL]          = _sys_msgctl,
     [SYS_SEMTIMEDOP]      = _sys_semtimedop,
     [SYS_CHROOT]          = _sys_chroot,
+    [SYS_PTRACE]          = _sys_ptrace,
+    [SYS_PERSONALITY]     = _sys_personality,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,
@@ -650,6 +655,20 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         return -ENOSYS;
     }
 
+    int64_t ret;
+    if (t && t->ptracer) {
+        uint64_t args[6] = { a1, a2, a3, a4, a5, a6 };
+        bool skip = false;
+        ptrace_syscall_enter(t, &nr, args, &ret, &skip);
+        if (t->pending_kill) signal_kill_exit(t);
+        a1 = args[0]; a2 = args[1]; a3 = args[2]; a4 = args[3]; a5 = args[4]; a6 = args[5];
+        if (skip || nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
+            if (!skip) ret = -ENOSYS;
+            ptrace_syscall_exit(t, nr, &ret);
+            return signal_deliver_pending(t, ret, nr);
+        }
+    }
+
     if (t) {
         t->cur_syscall = nr;
         t->cur_syscall_args[0] = a1;
@@ -661,11 +680,15 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         t->in_syscall = true;
     }
 
-    int64_t ret = syscall_table[nr](a1, a2, a3, a4, a5, a6);
+    ret = syscall_table[nr](a1, a2, a3, a4, a5, a6);
 
     task_t *me = syscall_cur_task();
     if (me) me->in_syscall = false;
     if (me && me->pending_kill) signal_kill_exit(me);
+    if (me && me->ptracer && nr != SYS_RT_SIGRETURN) {
+        ptrace_syscall_exit(me, nr, &ret);
+        if (me->pending_kill) signal_kill_exit(me);
+    }
     if (me && nr != SYS_RT_SIGRETURN)
         ret = signal_deliver_pending(me, ret, nr);
     return ret;

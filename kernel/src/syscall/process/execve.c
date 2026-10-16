@@ -1,3 +1,4 @@
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/elf/elf.h"
 #include "../../../include/fs/vfs.h"
@@ -148,6 +149,12 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
     };
     size_t nauxv = sizeof auxv / sizeof auxv[0];
     size_t nptr = 1 + (size_t)argv->count + 1 + (size_t)envp->count + 1 + nauxv;
+    mm->arg_start = u_arg;
+    mm->arg_end = u_arg + argv->used;
+    mm->env_start = u_env;
+    mm->env_end = u_env + envp->used;
+    mm->nauxv = (uint32_t)(nauxv < 48 ? nauxv : 48);
+    memcpy(mm->auxv, auxv, mm->nauxv * sizeof(uint64_t));
 
     sp -= nptr * 8;
     sp &= ~(uintptr_t)0xF;
@@ -379,7 +386,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
             if (strcmp(envp.buf + envp.offs[i], "PUZZLE=0") == 0) puzzle_on = 0;
             if (strcmp(envp.buf + envp.offs[i], "CERVUS_PROFILE=1") == 0) profile_start(t);
         }
-        if (puzzle_on)
+        if (puzzle_on && !ptrace_traced(t))
             puzzle_create(t, &elf, elf.mm->brk_start, elf.stack_top, elf.stack_size,
                           vfile->vnode, fsize);
     }
@@ -392,5 +399,6 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
 
     asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
     vmm_switch_pagemap(t->pagemap);
+    ptrace_note_exec(t);
     return 0;
 }

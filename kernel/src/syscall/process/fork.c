@@ -1,3 +1,4 @@
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/io/serial.h"
 
@@ -10,5 +11,6 @@ int64_t sys_fork(void)
         return -EAGAIN;
     task_t *child = task_fork(parent);
     if (!child) return -ENOMEM;
+    ptrace_note_child(parent, child, (child->flags & TASK_FLAG_VFORK) ? PTRACE_EVENT_VFORK : PTRACE_EVENT_FORK);
     return (int64_t)child->pid;
 }

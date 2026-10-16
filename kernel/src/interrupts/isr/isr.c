@@ -1,3 +1,4 @@
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/signal/signal.h"
 #include "../../../include/interrupts/interrupts.h"
 #include "../../../include/io/serial.h"
@@ -222,8 +223,8 @@ static bool user_exception_to_signal(struct int_frame_t *regs) {
     uint64_t addr = regs->rip;
     switch (regs->interrupt) {
         case EXCEPTION_DIVIDE_ERROR:          sig = SIGFPE;  code = 1; break;
-        case EXCEPTION_DEBUG:                 sig = SIGTRAP; code = 2; break;
-        case EXCEPTION_BREAKPOINT:            sig = SIGTRAP; code = 1; break;
+        case EXCEPTION_DEBUG:                 sig = SIGTRAP; code = ptrace_debug_trap(me, regs, &addr); break;
+        case EXCEPTION_BREAKPOINT:            sig = SIGTRAP; code = 0x80; break;
         case EXCEPTION_OVERFLOW:
         case EXCEPTION_BOUND_RANGE:           sig = SIGSEGV; addr = 0; break;
         case EXCEPTION_INVALID_OPCODE:        sig = SIGILL;  code = 2; break;
@@ -280,6 +281,17 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
                 asm volatile("cli" ::: "memory");
                 if (r == 0) return;
             }
+        }
+    }
+
+    if (regs->interrupt == EXCEPTION_DEBUG && (regs->cs & 3) == 0) {
+        task_t *cur = isr_current();
+        uint64_t addr = 0;
+        int code = ptrace_debug_trap(cur, regs, &addr);
+        regs->rflags &= ~0x100ULL;
+        if (cur && cur->is_userspace) {
+            if (code == 4) signal_force_fault(cur, SIGTRAP, 4, addr, 1, 0);
+            return;
         }
     }
 

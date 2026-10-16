@@ -1,3 +1,4 @@
+#include "../../include/sched/ptrace.h"
 #include "../../include/virt/kvm.h"
 #include "../include/memory/mm.h"
 #include "../include/sched/capabilities.h"
@@ -673,6 +674,7 @@ void task_destroy(task_t* task) {
                   task->pid, task->flags, (int)atomic_load_bool_acq(&task->on_cpu));
 
     pid_unregister(task);
+    ptrace_unlink(task);
 
     if (task->fpu_state) {
         pmm_free(task->fpu_state, 1);
@@ -961,6 +963,14 @@ uint64_t task_group_cputime(task_t* leader)
     return ns;
 }
 
+static int exit_wait_status(task_t *t)
+{
+    task_t *l = task_leader(t);
+    int code = t->exit_code, sig = t->term_sig;
+    if (l->group_exiting) { code = l->group_exit_code; sig = l->group_term_sig; }
+    return sig ? (sig & 0x7F) : ((code & 0xFF) << 8);
+}
+
 __attribute__((noreturn)) void task_exit(void)
 {
     asm volatile("cli");
@@ -971,6 +981,12 @@ __attribute__((noreturn)) void task_exit(void)
     if (!me) kernel_panic("task_exit: no current task");
 
     LOG_D("[EXIT] task_exit called cpu=%u me=%p pid=%u\n", cpu, (void*)me, me->pid);
+
+    if (me->ptracer && me->irq_nest == 0) {
+        asm volatile("sti" ::: "memory");
+        ptrace_task_exit(me, exit_wait_status(me));
+        asm volatile("cli" ::: "memory");
+    }
 
     tty_clear_nonblock_owner(me);
     tty_restore_sane(me);
@@ -1025,6 +1041,7 @@ __attribute__((noreturn)) void task_exit(void)
     me->runnable = false;
     me->state = TASK_ZOMBIE;
     me->cr3 = 0;
+    ptrace_task_dead(me, exit_wait_status(me));
 
     signal_flush_timers(me);
     int live = group_detach(me);
@@ -1309,6 +1326,7 @@ void sched_reschedule(void) {
     next->cpu_id = cpu;
     next->state  = TASK_RUNNING;
     if (next->fpu_state) fpu_restore(next->fpu_state);
+    ptrace_switch_dr(old, next);
     if (next->is_userspace)
         asm volatile("wrmsr" :: "c"(0xC0000100u),
                      "a"((uint32_t)next->fs_base),

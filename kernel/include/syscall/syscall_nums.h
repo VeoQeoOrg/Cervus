@@ -258,6 +258,8 @@
 #define SYS_MSGCTL            682
 #define SYS_SEMTIMEDOP        683
 #define SYS_CHROOT            684
+#define SYS_PTRACE            685
+#define SYS_PERSONALITY       686
 
 #define SYSCALL_TABLE_SIZE    768
 
