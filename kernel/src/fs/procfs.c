@@ -1,3 +1,4 @@
+#include "../../include/sched/ptrace.h"
 #include "../../include/memory/mm.h"
 #include <string.h>
 #include <stddef.h>
@@ -229,13 +230,13 @@ static const vnode_ops_t procfile_ops = {
 
 #include "../../include/memory/vmm.h"
 
-static const char *state_name(task_state_t s) {
-    switch (s) {
-        case TASK_RUNNING: return "running";
-        case TASK_READY:   return "ready";
-        case TASK_BLOCKED: return "sleeping";
-        case TASK_ZOMBIE:  return "zombie";
-        default:           return "dead";
+static const char *linux_state(task_t *t) {
+    switch (t->state) {
+        case TASK_RUNNING:
+        case TASK_READY:   return "R (running)";
+        case TASK_BLOCKED: return (t->pt_flags & PT_STOPPED) ? "t (tracing stop)" : "S (sleeping)";
+        case TASK_ZOMBIE:  return "Z (zombie)";
+        default:           return "X (dead)";
     }
 }
 
@@ -247,27 +248,65 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
     uint64_t vsz = 0;
     struct mm *m = t->mm;
     if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
+    task_t *tr = t->ptracer;
     return snprintf(buf, max,
-        "Name:    %s\n"
-        "Tgid:    %u\n"
-        "Pid:     %u\n"
-        "PPid:    %u\n"
-        "PGid:    %u\n"
-        "Sid:     %u\n"
-        "Uid:     %u\n"
-        "Gid:     %u\n"
-        "State:   %s\n"
-        "Prio:    %d\n"
-        "VmSize:  %llu kB\n"
-        "VmRSS:   %llu kB\n"
-        "Runtime: %llu ns\n"
-        "Threads: %d\n",
-        t->name, task_tgid(t), t->pid, task_leader(t)->ppid, t->pgid, t->sid, t->uid, t->gid,
-        state_name(t->state), t->priority,
+        "Name:\t%s\n"
+        "Umask:\t%04o\n"
+        "State:\t%s\n"
+        "Tgid:\t%u\n"
+        "Ngid:\t0\n"
+        "Pid:\t%u\n"
+        "PPid:\t%u\n"
+        "TracerPid:\t%u\n"
+        "Uid:\t%u\t%u\t%u\t%u\n"
+        "Gid:\t%u\t%u\t%u\t%u\n"
+        "FDSize:\t%d\n"
+        "PGid:\t%u\n"
+        "Sid:\t%u\n"
+        "Prio:\t%d\n"
+        "VmSize:\t%llu kB\n"
+        "VmRSS:\t%llu kB\n"
+        "Runtime:\t%llu ns\n"
+        "Threads:\t%d\n"
+        "SigPnd:\t%016llx\n"
+        "SigBlk:\t%016llx\n",
+        t->name, t->umask & 0777, linux_state(t), task_tgid(t), t->pid, task_leader(t)->ppid,
+        tr ? task_tgid(tr) : 0,
+        t->uid, t->uid, t->uid, t->uid, t->gid, t->gid, t->gid, t->gid,
+        TASK_MAX_FDS, t->pgid, t->sid, t->priority,
         (unsigned long long)(vsz / 1024),
         (unsigned long long)(rss / 1024),
         (unsigned long long)t->total_runtime,
-        task_leader(t)->group_live > 0 ? (int)task_leader(t)->group_live : 1);
+        task_leader(t)->group_live > 0 ? (int)task_leader(t)->group_live : 1,
+        (unsigned long long)t->sig_pending, (unsigned long long)t->sig_blocked);
+}
+
+static int read_user_range(task_t *t, uintptr_t start, uintptr_t end, char *buf, size_t max) {
+    struct mm *m = t->mm;
+    if (!m || !start || end <= start || !mm_tryget(m)) return 0;
+    size_t len = end - start;
+    if (len > max) len = max;
+    int n = mm_access_remote(m, start, buf, len, 0);
+    mm_put(m);
+    return n < 0 ? 0 : n;
+}
+
+static int gen_pid_environ(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    struct mm *m = t->mm;
+    return m ? read_user_range(t, m->env_start, m->env_end, buf, max) : 0;
+}
+
+static int gen_pid_auxv(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    struct mm *m = t->mm;
+    if (!m) return 0;
+    size_t n = (size_t)m->nauxv * 8;
+    if (n > max) n = max;
+    memcpy(buf, m->auxv, n);
+    return (int)n;
 }
 
 static int gen_pid_syscall(uint32_t pid, char *buf, size_t max) {
@@ -285,15 +324,33 @@ static int gen_pid_syscall(uint32_t pid, char *buf, size_t max) {
 static int gen_pid_cmdline(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
-    return snprintf(buf, max, "%s\n", t->name);
+    struct mm *m = t->mm;
+    int n = m ? read_user_range(t, m->arg_start, m->arg_end, buf, max) : 0;
+    if (n > 0) return n;
+    return snprintf(buf, max, "%s", t->name) + 1;
 }
 
 static int gen_pid_stat(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
-    return snprintf(buf, max, "%u (%s) %c %u %u %u\n",
-        t->pid, t->name, state_name(t->state)[0],
-        t->ppid, t->pgid, t->sid);
+    struct mm *m = t->mm;
+    uint64_t vsz = 0, rss = 0;
+    if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
+    if (t->is_userspace && t->pagemap) rss = vmm_count_user_pages(t->pagemap);
+    uint64_t ticks = t->total_runtime / 10000000ULL;
+    uint64_t start = t->create_time_ns / 10000000ULL;
+    int threads = task_leader(t)->group_live > 0 ? (int)task_leader(t)->group_live : 1;
+    return snprintf(buf, max,
+        "%u (%s) %c %u %u %u 0 -1 0 0 0 0 0 %llu 0 0 0 %d %d %d 0 %llu %llu %llu "
+        "18446744073709551615 0 0 0 0 0 %llu %llu 0 0 0 0 0 17 %u 0 0 0 0 0 0 0 0 "
+        "%llu %llu %llu %llu %d\n",
+        t->pid, t->name, linux_state(t)[0], task_leader(t)->ppid, t->pgid, t->sid,
+        (unsigned long long)ticks, t->priority, t->nice, threads,
+        (unsigned long long)start, (unsigned long long)vsz, (unsigned long long)rss,
+        (unsigned long long)t->sig_pending, (unsigned long long)t->sig_blocked, t->cpu_id,
+        (unsigned long long)(m ? m->arg_start : 0), (unsigned long long)(m ? m->arg_end : 0),
+        (unsigned long long)(m ? m->env_start : 0), (unsigned long long)(m ? m->env_end : 0),
+        t->exit_code);
 }
 
 static const char *vnode_type_name(int type) {
@@ -367,6 +424,8 @@ static const proc_pid_file_t g_pid_files[] = {
     { "syscall", gen_pid_syscall },
     { "puzzle",  gen_pid_puzzle  },
     { "maps",    gen_pid_maps    },
+    { "environ", gen_pid_environ },
+    { "auxv",    gen_pid_auxv    },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))
 
@@ -570,6 +629,103 @@ static const vnode_ops_t fddir_ops = {
     .unref   = fddir_unref,
 };
 
+static bool mem_allowed(task_t *t) {
+    task_t *me = (task_t *)percpu_current_task();
+    if (!me || !t) return false;
+    if (me->uid == 0 || me->uid == t->uid) return true;
+    return t->ptracer && task_leader(t->ptracer) == task_leader(me);
+}
+
+static int64_t pidmem_rw(vnode_t *node, void *buf, size_t len, uint64_t offset, bool write) {
+    task_t *t = task_find_by_pid((uint32_t)(uintptr_t)node->fs_data);
+    if (!t) return -ESRCH;
+    if (!mem_allowed(t)) return -EACCES;
+    if (offset >= 0x0000800000000000ULL) return -EIO;
+    if (len > 0x0000800000000000ULL - offset) len = 0x0000800000000000ULL - offset;
+    int n = ptrace_access(t, (uintptr_t)offset, buf, len, write);
+    return n < 0 ? -EIO : n;
+}
+
+static int64_t pidmem_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
+    return pidmem_rw(node, buf, len, offset, false);
+}
+
+static int64_t pidmem_write(vnode_t *node, const void *buf, size_t len, uint64_t offset) {
+    return pidmem_rw(node, (void *)buf, len, offset, true);
+}
+
+static int pidmem_stat(vnode_t *node, vfs_stat_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->st_ino  = node->ino;
+    out->st_type = VFS_NODE_FILE;
+    out->st_mode = 0600;
+    out->st_atime = out->st_mtime = out->st_ctime = vfs_boot_time();
+    return 0;
+}
+
+static const vnode_ops_t pidmem_ops = {
+    .read  = pidmem_read,
+    .write = pidmem_write,
+    .stat  = pidmem_stat,
+    .ref   = proc_ref,
+    .unref = pidexe_unref,
+};
+
+static int make_piddir(uint32_t pid, vnode_t **out);
+
+static int taskdir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
+    task_t *leader = task_find_by_pid((uint32_t)(uintptr_t)dir->fs_data);
+    uint32_t tid = 0;
+    for (const char *p = name; *p; p++) {
+        if (*p < '0' || *p > '9') return -ENOENT;
+        tid = tid * 10 + (uint32_t)(*p - '0');
+    }
+    task_t *t = task_find_by_pid(tid);
+    if (!leader || !t || task_leader(t) != task_leader(leader)) return -ENOENT;
+    return make_piddir(tid, out);
+}
+
+static int taskdir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
+    task_t *leader = task_find_by_pid((uint32_t)(uintptr_t)dir->fs_data);
+    if (!leader) return -ENOENT;
+    uint32_t all[256];
+    int n = task_collect_pids(all, 256);
+    uint64_t k = 0;
+    for (int i = 0; i < n; i++) {
+        task_t *t = task_find_by_pid(all[i]);
+        if (!t || task_leader(t) != task_leader(leader)) continue;
+        if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD) continue;
+        if (k++ < *pos) continue;
+        out->d_ino  = all[i];
+        out->d_type = (uint8_t)VFS_NODE_DIR;
+        snprintf(out->d_name, VFS_MAX_NAME, "%u", all[i]);
+        (*pos)++;
+        return 0;
+    }
+    return -ENOENT;
+}
+
+static const vnode_ops_t taskdir_ops = {
+    .lookup  = taskdir_lookup,
+    .readdir = taskdir_readdir,
+    .stat    = fddir_stat,
+    .ref     = proc_ref,
+    .unref   = fddir_unref,
+};
+
+static int simple_node(uint32_t pid, int type, uint32_t mode, const vnode_ops_t *ops, vnode_t **out) {
+    vnode_t *v = kzalloc(sizeof(vnode_t));
+    if (!v) return -ENOMEM;
+    v->type = type;
+    v->mode = mode;
+    v->ino  = g_proc_ino++;
+    v->ops  = ops;
+    v->fs_data = (void *)(uintptr_t)pid;
+    v->refcount = 1;
+    *out = v;
+    return 0;
+}
+
 static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
     uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
     if (strcmp(name, "fd") == 0) {
@@ -584,6 +740,8 @@ static int piddir_lookup(vnode_t *dir, const char *name, vnode_t **out) {
         *out = v;
         return 0;
     }
+    if (strcmp(name, "mem") == 0) return simple_node(pid, VFS_NODE_FILE, 0600, &pidmem_ops, out);
+    if (strcmp(name, "task") == 0) return simple_node(pid, VFS_NODE_DIR, 0555, &taskdir_ops, out);
     if (strcmp(name, "exe") == 0) {
         vnode_t *v = kzalloc(sizeof(vnode_t));
         if (!v) return -ENOMEM;
@@ -636,6 +794,18 @@ static int piddir_readdir_at(vnode_t *dir, uint64_t index, vfs_dirent_t *out) {
         out->d_ino  = index + 1;
         out->d_type = (uint8_t)VFS_NODE_DIR;
         strcpy(out->d_name, "fd");
+        return 0;
+    }
+    if (index == PROC_PID_NFILES + 2) {
+        out->d_ino  = index + 1;
+        out->d_type = (uint8_t)VFS_NODE_FILE;
+        strcpy(out->d_name, "mem");
+        return 0;
+    }
+    if (index == PROC_PID_NFILES + 3) {
+        out->d_ino  = index + 1;
+        out->d_type = (uint8_t)VFS_NODE_DIR;
+        strcpy(out->d_name, "task");
         return 0;
     }
     if (index >= PROC_PID_NFILES) return -ENOENT;
