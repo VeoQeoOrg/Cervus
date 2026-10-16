@@ -54,14 +54,14 @@ static void dump_rip_bytes_safe(uint64_t rip) {
         return;
     }
 
-    volatile uint64_t *pdpt = (volatile uint64_t*)(hhdm + (e4 & ~0xFFFULL));
+    volatile uint64_t *pdpt = (volatile uint64_t*)(hhdm + (e4 & 0x000FFFFFFFFFF000ULL));
     uint64_t e3 = pdpt[(vpage >> 30) & 0x1FF];
     if (!(e3 & 1)) {
         serial_printf("[ISR-UD] RIP=0x%llx: PDPT not present\n", rip);
         return;
     }
 
-    volatile uint64_t *pd = (volatile uint64_t*)(hhdm + (e3 & ~0xFFFULL));
+    volatile uint64_t *pd = (volatile uint64_t*)(hhdm + (e3 & 0x000FFFFFFFFFF000ULL));
     uint64_t e2 = pd[(vpage >> 21) & 0x1FF];
     if (!(e2 & 1)) {
         serial_printf("[ISR-UD] RIP=0x%llx: PD not present\n", rip);
@@ -69,7 +69,7 @@ static void dump_rip_bytes_safe(uint64_t rip) {
     }
 
     if (e2 & (1ULL << 7)) {
-        uintptr_t hp_phys = (e2 & ~0x1FFFFFULL) + (vpage & 0x1FFFFFULL);
+        uintptr_t hp_phys = (e2 & 0x000FFFFFFFE00000ULL) + (vpage & 0x1FFFFFULL);
         volatile uint8_t *bytes = (volatile uint8_t*)(hhdm + hp_phys + off);
         serial_printf("[ISR-UD] RIP=0x%llx (huge page) bytes: "
                       "%02x %02x %02x %02x %02x %02x %02x %02x\n",
@@ -81,14 +81,14 @@ static void dump_rip_bytes_safe(uint64_t rip) {
         return;
     }
 
-    volatile uint64_t *pt = (volatile uint64_t*)(hhdm + (e2 & ~0xFFFULL));
+    volatile uint64_t *pt = (volatile uint64_t*)(hhdm + (e2 & 0x000FFFFFFFFFF000ULL));
     uint64_t pte = pt[(vpage >> 12) & 0x1FF];
     if (!(pte & 1)) {
         serial_printf("[ISR-UD] RIP=0x%llx: PT not present (pte=0x%llx)\n", rip, pte);
         return;
     }
 
-    uintptr_t phys_page = pte & ~0xFFFULL;
+    uintptr_t phys_page = pte & 0x000FFFFFFFFFF000ULL;
     volatile uint8_t *bytes = (volatile uint8_t*)(hhdm + phys_page + off);
 
     serial_printf("[ISR-UD] RIP=0x%llx phys=0x%llx flags=0x%03llx bytes: "
