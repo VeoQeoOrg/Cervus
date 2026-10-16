@@ -60,48 +60,88 @@ static const char sc_upper[89] = {
     0,    0,    0,    0,    0,    0,    '|',  0,    0,
 };
 
-static void ps2_wait_read(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) return;
+#define PS2_STATUS_AUX     0x20
+#define PS2_CMD_AUX_LOOP   0xD3
+#define PS2_CTR_KBDDIS     0x10
+#define PS2_CTR_AUXDIS     0x20
+
+extern uint64_t clocksource_now_ns(void);
+
+static uint64_t ps2_deadline(uint32_t ms) { return clocksource_now_ns() + (uint64_t)ms * 1000000ULL; }
+
+static bool ps2_wait_write(void) {
+    uint64_t end = ps2_deadline(50);
+    do {
+        if (!(inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL)) return true;
         io_wait();
-    }
+    } while (clocksource_now_ns() < end);
+    return false;
 }
 
-static void ps2_wait_write(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (!(inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL)) return;
+static int ps2_read(uint32_t ms, int want_aux) {
+    uint64_t end = ps2_deadline(ms);
+    do {
+        uint8_t st = inb(PS2_STATUS_PORT);
+        if (st & PS2_STATUS_OUTPUT_FULL) {
+            uint8_t b = inb(PS2_DATA_PORT);
+            int aux = (st & PS2_STATUS_AUX) ? 1 : 0;
+            if (want_aux < 0 || aux == want_aux) return b;
+            continue;
+        }
         io_wait();
-    }
+    } while (clocksource_now_ns() < end);
+    return -1;
 }
 
-static void ps2_send_cmd(uint8_t cmd)   { ps2_wait_write(); outb(PS2_CMD_PORT,  cmd);  }
-static void ps2_send_data(uint8_t data) { ps2_wait_write(); outb(PS2_DATA_PORT, data); }
-static uint8_t ps2_recv_data(void)      { ps2_wait_read();  return inb(PS2_DATA_PORT); }
+static bool ps2_send_cmd(uint8_t cmd)   { if (!ps2_wait_write()) return false; outb(PS2_CMD_PORT, cmd);   return true; }
+static bool ps2_send_data(uint8_t data) { if (!ps2_wait_write()) return false; outb(PS2_DATA_PORT, data); return true; }
 
 static void ps2_flush_output(void) {
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 64; i++) {
         if (!(inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL)) break;
         inb(PS2_DATA_PORT);
-        io_wait();
+        uint64_t end = ps2_deadline(1);
+        while (clocksource_now_ns() < end) io_wait();
     }
+}
+
+static int ps2_read_ctr(void) {
+    for (int tries = 0; tries < 10; tries++) {
+        ps2_flush_output();
+        if (!ps2_send_cmd(PS2_CMD_READ_CONFIG)) continue;
+        int v = ps2_read(50, 0);
+        if (v >= 0) return v;
+    }
+    return -1;
+}
+
+static bool ps2_write_ctr(uint8_t v) {
+    return ps2_send_cmd(PS2_CMD_WRITE_CONFIG) && ps2_send_data(v);
+}
+
+static bool ps2_kbd_cmd(uint8_t cmd) {
+    for (int tries = 0; tries < 3; tries++) {
+        if (!ps2_send_data(cmd)) return false;
+        int r = ps2_read(200, 0);
+        if (r == 0xFA) return true;
+        if (r != 0xFE) return false;
+    }
+    return false;
 }
 
 static bool ps2_mouse_wait_ack(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-            uint8_t r = inb(PS2_DATA_PORT);
-            if (r == 0xFA) return true;
-            if (r == 0xFE || r == 0xFC) return false;
-        }
-        io_wait();
+    uint64_t end = ps2_deadline(200);
+    while (clocksource_now_ns() < end) {
+        int r = ps2_read(10, 1);
+        if (r == 0xFA) return true;
+        if (r == 0xFE || r == 0xFC) return false;
     }
     serial_writestring("[PS2] mouse_wait_ack: TIMEOUT\n");
     return false;
 }
 
 static bool ps2_mouse_cmd(uint8_t cmd) {
-    ps2_send_cmd(PS2_CMD_WRITE_PORT2);
-    ps2_send_data(cmd);
+    if (!ps2_send_cmd(PS2_CMD_WRITE_PORT2) || !ps2_send_data(cmd)) return false;
     return ps2_mouse_wait_ack();
 }
 
@@ -110,12 +150,8 @@ static bool ps2_mouse_cmd_param(uint8_t cmd, uint8_t param) {
 }
 
 static uint8_t ps2_mouse_read_byte(void) {
-    for (int i = 0; i < 100000; i++) {
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL)
-            return inb(PS2_DATA_PORT);
-        io_wait();
-    }
-    return 0xFF;
+    int r = ps2_read(200, 1);
+    return r < 0 ? 0xFF : (uint8_t)r;
 }
 
 static uint8_t ps2_mouse_get_id(void) {
@@ -161,8 +197,19 @@ static bool ps2_detect_absolute(void) {
         serial_writestring("[PS2] Detected: QEMU absolute mode (ID=0x08)\n");
         return true;
     }
-
     return false;
+}
+
+static bool ps2_aux_present(void) {
+    ps2_flush_output();
+    if (ps2_send_cmd(PS2_CMD_AUX_LOOP) && ps2_send_data(0x5A)) {
+        int r = ps2_read(100, -1);
+        if (r == 0x5A) return true;
+    }
+    ps2_flush_output();
+    if (!ps2_send_cmd(PS2_CMD_TEST_PORT2)) return false;
+    int r = ps2_read(100, -1);
+    return r == 0x00;
 }
 
 static char scancode_to_char(uint8_t sc) {
@@ -353,109 +400,77 @@ bool ps2_init(void) {
         return false;
     }
 
-    serial_writestring("[PS2] Initializing PS/2 controller...\n");
-    ps2_send_cmd(PS2_CMD_DISABLE_PORT1);
-    ps2_send_cmd(PS2_CMD_DISABLE_PORT2);
-    ps2_flush_output();
-
-    ps2_send_cmd(PS2_CMD_READ_CONFIG);
-    uint8_t cfg = ps2_recv_data();
-    cfg &= ~(PS2_CFG_PORT1_IRQ | PS2_CFG_PORT2_IRQ);
-    cfg |=  PS2_CFG_PORT1_XLAT;
-    ps2_send_cmd(PS2_CMD_WRITE_CONFIG);
-    ps2_send_data(cfg);
-
-    ps2_send_cmd(PS2_CMD_SELF_TEST);
-    uint8_t result = ps2_recv_data();
-    if (result == 0xFF) {
-        serial_writestring("[PS2] Controller not responding (no i8042?), skipping PS/2\n");
+    if (inb(PS2_STATUS_PORT) == 0xFF) {
+        serial_writestring("[PS2] no i8042 controller\n");
         return false;
     }
-    if (result != 0x55)
-        serial_printf("[PS2] Self-test returned 0x%02x (expected 0x55), continuing anyway\n",
-                      result);
-    else
-        serial_writestring("[PS2] Self-test PASSED\n");
-    ps2_send_cmd(PS2_CMD_WRITE_CONFIG);
-    ps2_send_data(cfg);
 
-    ps2_send_cmd(PS2_CMD_TEST_PORT1);
-    uint8_t port1_res = ps2_recv_data();
-    bool kb_ok = (port1_res == 0x00);
-    serial_printf("[PS2] Port 1 (keyboard): %s\n", kb_ok ? "OK" : "FAIL");
-    if (!kb_ok && port1_res != 0xFF) {
-        serial_printf("[PS2] Port 1 test=0x%02x, trying keyboard anyway\n", port1_res);
-        kb_ok = true;
+    ps2_flush_output();
+    int ctr0 = ps2_read_ctr();
+    if (ctr0 < 0) {
+        serial_writestring("[PS2] controller does not answer, skipping PS/2\n");
+        return false;
     }
+    uint8_t ctr = (uint8_t)ctr0;
+    ctr |= PS2_CTR_KBDDIS | PS2_CTR_AUXDIS;
+    ctr &= (uint8_t)~(PS2_CFG_PORT1_IRQ | PS2_CFG_PORT2_IRQ);
+    ctr |= PS2_CFG_PORT1_XLAT;
+    ps2_write_ctr(ctr);
+    ps2_flush_output();
 
-    ps2_send_cmd(PS2_CMD_TEST_PORT2);
-    bool mouse_ok = (ps2_recv_data() == 0x00);
-    serial_printf("[PS2] Port 2 (mouse):    %s\n", mouse_ok ? "OK" : "FAIL");
+    bool mouse_ok = ps2_aux_present();
+    ps2_flush_output();
 
-    if (kb_ok)    ps2_send_cmd(PS2_CMD_ENABLE_PORT1);
-    if (mouse_ok) ps2_send_cmd(PS2_CMD_ENABLE_PORT2);
-
-    if (kb_ok) {
-        ps2_flush_output();
-        ps2_send_data(0xF5);
-        for (int i = 0; i < 50000; i++) {
-            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-                uint8_t r = inb(PS2_DATA_PORT);
-                if (r == 0xFA || r == 0xFE) break;
-            }
-            io_wait();
-        }
-        ps2_flush_output();
-        ps2_send_data(0xF4);
-        for (int i = 0; i < 50000; i++) {
-            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-                uint8_t r = inb(PS2_DATA_PORT);
-                if (r == 0xFA || r == 0xFE) break;
-            }
-            io_wait();
-        }
-        ps2_flush_output();
-        serial_writestring("[PS2] Keyboard ready (XLAT in controller -> set 1)\n");
-    }
+    ps2_send_cmd(PS2_CMD_ENABLE_PORT1);
+    bool kb_ack = ps2_kbd_cmd(0xF4);
+    bool kb_ok = true;
+    ps2_flush_output();
 
     if (mouse_ok) {
-        ps2_mouse_cmd(0xFF);
-        extern uint64_t clocksource_now_ns(void);
-        uint64_t mdl = clocksource_now_ns() + 600000000ULL;
-        bool bat_done = false;
-        while (clocksource_now_ns() < mdl) {
-            if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
-                uint8_t b = inb(PS2_DATA_PORT);
+        ps2_send_cmd(PS2_CMD_ENABLE_PORT2);
+        if (!ps2_mouse_cmd(0xFF)) {
+            mouse_ok = false;
+        } else {
+            uint64_t mdl = ps2_deadline(800);
+            bool bat_done = false;
+            while (clocksource_now_ns() < mdl) {
+                int b = ps2_read(10, 1);
+                if (b < 0) continue;
                 if (bat_done) break;
                 if (b == 0xAA) bat_done = true;
             }
-            io_wait();
-        }
-        ps2_flush_output();
-        ps2_mouse_cmd(0xF6);
+            ps2_flush_output();
+            ps2_mouse_cmd(0xF6);
 
-        bool is_abs = ps2_detect_absolute();
-        if (is_abs) {
-            mouse_mode = MOUSE_MODE_ABSOLUTE;
-            mouse_has_scroll = false;
-            serial_writestring("[PS2] Mouse mode: ABSOLUTE (QEMU tablet)\n");
-        } else {
-            mouse_mode = MOUSE_MODE_RELATIVE;
-            mouse_has_scroll = ps2_mouse_init_scroll();
-            serial_printf("[PS2] Mouse mode: RELATIVE, scroll=%s\n",
-                          mouse_has_scroll ? "YES" : "NO");
+            bool is_abs = ps2_detect_absolute();
+            if (is_abs) {
+                mouse_mode = MOUSE_MODE_ABSOLUTE;
+                mouse_has_scroll = false;
+                serial_writestring("[PS2] Mouse mode: ABSOLUTE (QEMU tablet)\n");
+            } else {
+                mouse_mode = MOUSE_MODE_RELATIVE;
+                mouse_has_scroll = ps2_mouse_init_scroll();
+                serial_printf("[PS2] Mouse mode: RELATIVE, scroll=%s\n",
+                              mouse_has_scroll ? "YES" : "NO");
+            }
+            ps2_mouse_cmd_param(0xF3, 100);
+            ps2_mouse_cmd(0xF4);
+            serial_writestring("[PS2] Mouse: data reporting enabled\n");
         }
-        ps2_mouse_cmd_param(0xF3, 100);
-        ps2_mouse_cmd(0xF4);
-        serial_writestring("[PS2] Mouse: data reporting enabled\n");
+        if (!mouse_ok) ps2_send_cmd(PS2_CMD_DISABLE_PORT2);
     }
 
-    ps2_send_cmd(PS2_CMD_READ_CONFIG);
-    cfg = ps2_recv_data();
-    if (kb_ok)    cfg |= PS2_CFG_PORT1_IRQ;
-    if (mouse_ok) cfg |= PS2_CFG_PORT2_IRQ;
-    ps2_send_cmd(PS2_CMD_WRITE_CONFIG);
-    ps2_send_data(cfg);
+    int cur = ps2_read_ctr();
+    ctr = cur >= 0 ? (uint8_t)cur : ctr;
+    ctr &= (uint8_t)~PS2_CTR_KBDDIS;
+    ctr |= PS2_CFG_PORT1_IRQ | PS2_CFG_PORT1_XLAT;
+    if (mouse_ok) { ctr &= (uint8_t)~PS2_CTR_AUXDIS; ctr |= PS2_CFG_PORT2_IRQ; }
+    ps2_write_ctr(ctr);
+    int fin = ps2_read_ctr();
+    serial_printf("[PS2] ctr 0x%02x -> 0x%02x, keyboard %s, aux %s\n", (unsigned)ctr0,
+                  fin < 0 ? 0xFFu : (unsigned)fin, kb_ack ? "acked" : "silent",
+                  mouse_ok ? "present" : "absent");
+    ps2_flush_output();
 
     if (kb_ok) {
         apic_setup_irq(KB_IRQ_LINE, KB_IRQ_VECTOR, false, 0);
@@ -466,10 +481,6 @@ bool ps2_init(void) {
         apic_setup_irq(MOUSE_IRQ_LINE, MOUSE_IRQ_VECTOR, false, 0);
         serial_printf("[PS2] Mouse     IRQ%d -> vector 0x%02x\n", MOUSE_IRQ_LINE, MOUSE_IRQ_VECTOR);
     }
-
-    printf("[PS2] IOAPIC keyboard/mouse IRQ routing:\n");
-    if (kb_ok)    apic_dump_irq(KB_IRQ_LINE);
-    if (mouse_ok) apic_dump_irq(MOUSE_IRQ_LINE);
 
     kb_state  = (kb_state_t){0};
     kb_buf    = (kb_buf_t){0};
@@ -486,7 +497,7 @@ bool ps2_init(void) {
     serial_printf("[PS2] Screen: %dx%d\n",
                   (int)mouse_screen_w, (int)mouse_screen_h);
     serial_writestring("[PS2] Driver ready.\n");
-    return true;
+    return kb_ok;
 }
 
 const kb_state_t*    ps2_kb_get_state(void)    {
