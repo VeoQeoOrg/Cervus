@@ -65,10 +65,21 @@ kvm_memslot_t *kvm_gfn_slot(kvm_vm_t *vm, uint64_t gfn) {
 }
 
 void kvm_mark_dirty(kvm_vm_t *vm, uint64_t gfn) {
+    uint64_t f = spinlock_acquire_irqsave(&vm->mmu_lock);
     kvm_memslot_t *s = kvm_gfn_slot(vm, gfn);
-    if (!s || !s->dirty) return;
-    uint64_t rel = gfn - s->gfn;
-    __atomic_fetch_or(&s->dirty[rel / 64], 1ull << (rel % 64), __ATOMIC_RELAXED);
+    if (s && s->dirty) {
+        uint64_t rel = gfn - s->gfn;
+        __atomic_fetch_or(&s->dirty[rel / 64], 1ull << (rel % 64), __ATOMIC_RELAXED);
+    }
+    spinlock_release_irqrestore(&vm->mmu_lock, f);
+}
+
+uint64_t *kvm_slot_swap_dirty(kvm_vm_t *vm, kvm_memslot_t *s, uint64_t *bm) {
+    uint64_t f = spinlock_acquire_irqsave(&vm->mmu_lock);
+    uint64_t *old = s->dirty;
+    s->dirty = bm;
+    spinlock_release_irqrestore(&vm->mmu_lock, f);
+    return old;
 }
 
 static int hva_pin(kvm_vm_t *vm, uint64_t hva, bool write, uint64_t *hpa, bool *pinned) {
@@ -92,6 +103,7 @@ int ept_fault(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t qual) {
     kvm_vm_t *vm = vcpu->vm;
     uint64_t gfn = gpa >> 12;
     uint64_t gen = __atomic_load_n(&vm->slots_gen, __ATOMIC_ACQUIRE);
+    uint64_t seq = __atomic_load_n(&vm->mmu_seq, __ATOMIC_ACQUIRE);
     kvm_memslot_t *slot = kvm_gfn_slot(vm, gfn);
     if (!slot) return -EFAULT;
     bool write = (qual & EPT_VIOL_WRITE) != 0;
@@ -111,7 +123,8 @@ int ept_fault(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t qual) {
     uint64_t entry = hpa | perm | attr | (pinned ? EPT_PINNED : 0);
 
     uint64_t f = spinlock_acquire_irqsave(&vm->mmu_lock);
-    if (__atomic_load_n(&vm->slots_gen, __ATOMIC_ACQUIRE) != gen) {
+    if (__atomic_load_n(&vm->slots_gen, __ATOMIC_ACQUIRE) != gen ||
+        __atomic_load_n(&vm->mmu_seq, __ATOMIC_ACQUIRE) != seq) {
         spinlock_release_irqrestore(&vm->mmu_lock, f);
         if (pinned) page_unref(hpa);
         return 0;
@@ -197,20 +210,32 @@ void ept_zap_range(kvm_vm_t *vm, uint64_t gfn, uint64_t npages) {
     range_walk(vm, gfn, npages, WALK_RELEASE);
 }
 
+void kvm_mmu_notify(void *ctx, uintptr_t start, uintptr_t end) {
+    kvm_vm_t *vm = ctx;
+    __atomic_add_fetch(&vm->mmu_seq, 1, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < KVM_MAX_MEMSLOTS; i++) {
+        kvm_memslot_t *s = &vm->slots[i];
+        if (!s->used || !s->npages) continue;
+        uint64_t hs = s->hva, he = s->hva + (s->npages << 12);
+        uint64_t a = start > hs ? start : hs;
+        uint64_t b = end < he ? end : he;
+        if (a >= b) continue;
+        ept_zap_range(vm, s->gfn + ((a - hs) >> 12), (b - a + 0xFFF) >> 12);
+    }
+}
+
 void ept_write_protect_range(kvm_vm_t *vm, uint64_t gfn, uint64_t npages) {
     range_walk(vm, gfn, npages, WALK_WRITE_PROTECT);
     ept_flush_all(vm);
 }
 
-int kvm_gpa_to_hpa(kvm_vm_t *vm, uint64_t gpa, bool write, uint64_t *hpa) {
+static int gpa_pin(kvm_vm_t *vm, uint64_t gpa, bool write, uint64_t *hpa, bool *pinned) {
     kvm_memslot_t *s = kvm_gfn_slot(vm, gpa >> 12);
     if (!s) return -EFAULT;
     if (write && (s->flags & KVM_MEM_READONLY)) return -EFAULT;
-    uint64_t hva = s->hva + (((gpa >> 12) - s->gfn) << 12) + (gpa & 0xFFF);
-    uintptr_t phys;
-    int r = mm_user_phys(vm->mm, hva, write, &phys);
-    if (r < 0) return r;
-    *hpa = phys;
+    uint64_t hva = s->hva + (((gpa >> 12) - s->gfn) << 12);
+    if (hva_pin(vm, hva, write, hpa, pinned) < 0) return -EFAULT;
+    *hpa |= gpa & 0xFFF;
     if (write) kvm_mark_dirty(vm, gpa >> 12);
     return 0;
 }
@@ -221,8 +246,10 @@ int kvm_read_guest(kvm_vm_t *vm, uint64_t gpa, void *buf, uint64_t len) {
         uint64_t chunk = 4096 - (gpa & 0xFFF);
         if (chunk > len) chunk = len;
         uint64_t hpa;
-        if (kvm_gpa_to_hpa(vm, gpa, false, &hpa) < 0) return -EFAULT;
+        bool pinned;
+        if (gpa_pin(vm, gpa, false, &hpa, &pinned) < 0) return -EFAULT;
         memcpy(d, pmm_phys_to_virt(hpa), chunk);
+        if (pinned) page_unref(hpa & ~0xFFFull);
         d += chunk; gpa += chunk; len -= chunk;
     }
     return 0;
@@ -234,8 +261,10 @@ int kvm_write_guest(kvm_vm_t *vm, uint64_t gpa, const void *buf, uint64_t len) {
         uint64_t chunk = 4096 - (gpa & 0xFFF);
         if (chunk > len) chunk = len;
         uint64_t hpa;
-        if (kvm_gpa_to_hpa(vm, gpa, true, &hpa) < 0) return -EFAULT;
+        bool pinned;
+        if (gpa_pin(vm, gpa, true, &hpa, &pinned) < 0) return -EFAULT;
         memcpy(pmm_phys_to_virt(hpa), s, chunk);
+        if (pinned) page_unref(hpa & ~0xFFFull);
         s += chunk; gpa += chunk; len -= chunk;
     }
     return 0;

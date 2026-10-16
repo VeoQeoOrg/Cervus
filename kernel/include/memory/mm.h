@@ -61,7 +61,12 @@ typedef struct mm {
     uintptr_t      mmap_top;
     struct vnode  *exe;
     uint32_t       def_flags;
+    void         (*notify[4])(void *ctx, uintptr_t start, uintptr_t end);
+    void          *notify_ctx[4];
 } mm_t;
+
+int  mm_notifier_add(mm_t *mm, void (*fn)(void *, uintptr_t, uintptr_t), void *ctx);
+void mm_notifier_del(mm_t *mm, void *ctx);
 
 #define MM_REMAP_MAYMOVE   0x1
 #define MM_REMAP_FIXED     0x2

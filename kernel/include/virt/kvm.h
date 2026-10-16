@@ -217,6 +217,7 @@ struct kvm_vm {
 
     kvm_memslot_t    slots[KVM_MAX_MEMSLOTS];
     volatile uint64_t slots_gen;
+    volatile uint64_t mmu_seq;
 
     kvm_vcpu_t      *vcpus[KVM_MAX_VCPUS];
     uint32_t         nvcpus;
@@ -333,10 +334,11 @@ void     ept_write_protect_range(kvm_vm_t *vm, uint64_t gfn, uint64_t npages);
 void     ept_flush_all(kvm_vm_t *vm);
 
 kvm_memslot_t *kvm_gfn_slot(kvm_vm_t *vm, uint64_t gfn);
-int      kvm_gpa_to_hpa(kvm_vm_t *vm, uint64_t gpa, bool write, uint64_t *hpa);
 int      kvm_read_guest(kvm_vm_t *vm, uint64_t gpa, void *buf, uint64_t len);
 int      kvm_write_guest(kvm_vm_t *vm, uint64_t gpa, const void *buf, uint64_t len);
 void     kvm_mark_dirty(kvm_vm_t *vm, uint64_t gfn);
+uint64_t *kvm_slot_swap_dirty(kvm_vm_t *vm, kvm_memslot_t *s, uint64_t *bm);
+void     kvm_mmu_notify(void *ctx, uintptr_t start, uintptr_t end);
 bool     kvm_ioeventfd_signal(kvm_vm_t *vm, bool pio, uint64_t addr, uint32_t len, uint64_t data);
 
 int      emu_translate(kvm_vcpu_t *vcpu, uint64_t gva, bool write, bool fetch, uint64_t *gpa, uint32_t *pf_error);

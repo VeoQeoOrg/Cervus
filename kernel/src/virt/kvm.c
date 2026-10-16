@@ -65,6 +65,7 @@ static void vm_get(kvm_vm_t *vm) {
 
 static void vm_put(kvm_vm_t *vm) {
     if (__atomic_sub_fetch(&vm->refcount, 1, __ATOMIC_ACQ_REL) > 0) return;
+    if (vm->mm) mm_notifier_del(vm->mm, vm);
     kvm_irq_destroy(vm);
     ept_destroy(vm);
     for (int i = 0; i < KVM_MAX_MEMSLOTS; i++)
@@ -343,6 +344,7 @@ static int64_t create_vm(uint64_t type) {
     if (ept_init(vm) < 0) { free(vm); return -ENOMEM; }
     mm_get(t->mm);
     vm->mm = t->mm;
+    if (mm_notifier_add(vm->mm, kvm_mmu_notify, vm) < 0) { vm_put(vm); return -EBUSY; }
     int fd = make_fd(&kvm_vm_ops, vm);
     if (fd < 0) vm_put(vm);
     return fd;
@@ -398,12 +400,10 @@ static int64_t set_memory_region(kvm_vm_t *vm, const struct kvm_userspace_memory
         if (want && !was) {
             uint64_t *bm = calloc((npages + 63) / 64, sizeof(uint64_t));
             if (!bm) { kmutex_unlock(&vm->lock); return -ENOMEM; }
-            s->dirty = bm;
+            kvm_slot_swap_dirty(vm, s, bm);
             ept_write_protect_range(vm, gfn, npages);
         } else if (!want && was) {
-            uint64_t *bm = s->dirty;
-            s->dirty = NULL;
-            free(bm);
+            free(kvm_slot_swap_dirty(vm, s, NULL));
         }
         s->flags = m->flags;
         kmutex_unlock(&vm->lock);
@@ -427,7 +427,7 @@ static int64_t set_memory_region(kvm_vm_t *vm, const struct kvm_userspace_memory
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         __atomic_add_fetch(&vm->slots_gen, 1, __ATOMIC_SEQ_CST);
         ept_zap_range(vm, ogfn, onp);
-        if (s->dirty) { free(s->dirty); s->dirty = NULL; }
+        free(kvm_slot_swap_dirty(vm, s, NULL));
         s->npages = 0;
     }
     if (npages) {
@@ -441,7 +441,7 @@ static int64_t set_memory_region(kvm_vm_t *vm, const struct kvm_userspace_memory
         s->npages = npages;
         s->hva = m->userspace_addr;
         s->flags = m->flags;
-        s->dirty = bm;
+        kvm_slot_swap_dirty(vm, s, bm);
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         s->used = true;
         __atomic_add_fetch(&vm->slots_gen, 1, __ATOMIC_SEQ_CST);

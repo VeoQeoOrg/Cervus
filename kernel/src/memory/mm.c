@@ -204,7 +204,37 @@ static void writeback_range(mm_t *mm, vm_area_t *v, uintptr_t start, uintptr_t e
     fb_done(&fb);
 }
 
+static void mm_notify(mm_t *mm, uintptr_t start, uintptr_t end) {
+    for (int i = 0; i < 4; i++)
+        if (mm->notify[i]) mm->notify[i](mm->notify_ctx[i], start, end);
+}
+
+int mm_notifier_add(mm_t *mm, void (*fn)(void *, uintptr_t, uintptr_t), void *ctx) {
+    kmutex_lock(&mm->lock);
+    for (int i = 0; i < 4; i++) {
+        if (mm->notify[i]) continue;
+        mm->notify_ctx[i] = ctx;
+        mm->notify[i] = fn;
+        kmutex_unlock(&mm->lock);
+        return 0;
+    }
+    kmutex_unlock(&mm->lock);
+    return -ENOSPC;
+}
+
+void mm_notifier_del(mm_t *mm, void *ctx) {
+    kmutex_lock(&mm->lock);
+    for (int i = 0; i < 4; i++) {
+        if (mm->notify[i] && mm->notify_ctx[i] == ctx) {
+            mm->notify[i] = NULL;
+            mm->notify_ctx[i] = NULL;
+        }
+    }
+    kmutex_unlock(&mm->lock);
+}
+
 static void zap_range(mm_t *mm, vm_area_t *v, uintptr_t start, uintptr_t end) {
+    mm_notify(mm, start, end);
     writeback_range(mm, v, start, end);
     flushbuf_t fb = { .mm = mm };
     zap_ctx_t z = { mm, v, &fb };
@@ -447,6 +477,7 @@ static int fault_locked(mm_t *mm, uintptr_t addr, int how) {
                 flushbuf_t fb = { .mm = mm };
                 fb_add(&fb, page);
                 fb_done(&fb);
+                mm_notify(mm, page, page + PG);
                 page_unref(phys);
                 return 0;
             }
@@ -784,6 +815,7 @@ int64_t mm_remap(mm_t *mm, uintptr_t old, size_t old_len, size_t new_len, int fl
     if (n->vnode) vnode_ref(n->vnode);
     if (n->open) n->open(n);
 
+    mm_notify(mm, old, old + old_len);
     flushbuf_t fb = { .mm = mm };
     move_ctx_t mc = { mm, (intptr_t)dest - (intptr_t)old, &fb };
     walk_ptes(mm->pagemap, old, old + old_len, move_cb, &mc);
