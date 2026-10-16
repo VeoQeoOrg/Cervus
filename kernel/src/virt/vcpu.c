@@ -48,10 +48,12 @@
 #define APIC_BASE_ADDR   0x000FFFFFFFFFF000ull
 
 const kvm_arch_ops_t *kvm_arch;
+bool kvm_npt;
 
 bool kvm_arch_probe(void) {
     if (kvm_arch) return true;
     if (vmx_supported()) { kvm_arch = &vmx_ops; return true; }
+    if (svm_supported()) { kvm_arch = &svm_ops; kvm_npt = true; return true; }
     return false;
 }
 

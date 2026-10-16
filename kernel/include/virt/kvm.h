@@ -123,6 +123,12 @@ struct kvm_vcpu {
 
     void            *vmcs;
     uint64_t         vmcs_phys;
+    void            *vmcb;
+    uint64_t         vmcb_phys;
+    uint32_t         asid;
+    uint64_t         next_rip;
+    bool             nmi_iret_wait;
+    uint64_t         nmi_iret_rip;
     bool             launched;
     int              loaded_cpu;
     int              last_cpu;
@@ -288,8 +294,11 @@ typedef struct kvm_arch_ops {
 
 extern const kvm_arch_ops_t *kvm_arch;
 extern const kvm_arch_ops_t vmx_ops;
+extern const kvm_arch_ops_t svm_ops;
+extern bool kvm_npt;
 
 bool     vmx_supported(void);
+bool     svm_supported(void);
 bool     kvm_arch_probe(void);
 
 const struct kvm_cpuid_entry2 *kvm_find_cpuid(kvm_vcpu_t *v, uint32_t fn, uint32_t idx);

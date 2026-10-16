@@ -9,6 +9,8 @@
 
 #define PTE_ADDR 0x000FFFFFFFFFF000ull
 #define EPT_PINNED (1ull << 52)
+#define NPT_ACCESSED (1ull << 5)
+#define NPT_DIRTY    (1ull << 6)
 
 int ept_init(kvm_vm_t *vm) {
     vm->ept_root = pmm_alloc_zero(1);
@@ -105,7 +107,8 @@ int ept_fault(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t qual) {
 
     uint64_t perm = EPT_READ | EPT_EXEC;
     if (!readonly && (!logging || write)) perm |= EPT_WRITE;
-    uint64_t entry = hpa | perm | EPT_MT_WB | EPT_IGNORE_PAT | (pinned ? EPT_PINNED : 0);
+    uint64_t attr = kvm_npt ? (NPT_ACCESSED | NPT_DIRTY) : (EPT_MT_WB | EPT_IGNORE_PAT);
+    uint64_t entry = hpa | perm | attr | (pinned ? EPT_PINNED : 0);
 
     uint64_t f = spinlock_acquire_irqsave(&vm->mmu_lock);
     if (__atomic_load_n(&vm->slots_gen, __ATOMIC_ACQUIRE) != gen) {
