@@ -49,6 +49,7 @@ typedef struct slab {
     uint16_t     used;
     uint16_t     _pad;
     uint64_t     magic;
+    uint64_t     freemap[8];
 } slab_t;
 
 typedef struct {

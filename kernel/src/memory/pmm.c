@@ -163,6 +163,16 @@ static void _buddy_free_order(uintptr_t phys, int order) {
         g_buddy.free_pages = g_buddy.usable_pages;
 }
 
+static int _page_is_free(uintptr_t phys) {
+    if (!g_fstate) return 0;
+    for (int o = 0; o <= PMM_MAX_ORDER; o++) {
+        uintptr_t head = phys & ~(((uintptr_t)PAGE_SIZE << o) - 1);
+        if (head < g_buddy.mem_start || head >= g_buddy.mem_end) continue;
+        if (g_fstate[head >> PAGE_SHIFT] == (uint8_t)(o + 1)) return 1;
+    }
+    return 0;
+}
+
 static void _buddy_free_nocoalesce(uintptr_t phys) {
     _fl_push(&g_buddy.orders[0], _phys_to_block(phys), 0);
     g_buddy.free_pages += 1;
@@ -375,13 +385,13 @@ void pmm_free(void *addr, size_t pages) {
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     pmm_lock_acq();
 
-    pmm_block_t *existing = _fl_find(&g_buddy.orders[order], phys);
-    if (existing) {
-        serial_printf("[PMM_DOUBLE_FREE] addr=%p phys=0x%llx pages=%zu order=%d ALREADY FREE!\n",
-                      addr, (unsigned long long)phys, pages, order);
+    uintptr_t last = phys + (((uintptr_t)1 << order) - 1) * PAGE_SIZE;
+    if (_page_is_free(phys) || _page_is_free(last)) {
         pmm_lock_rel();
         asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
-        return;
+        serial_printf("[PMM] double free of %zu page(s) at phys 0x%llx from %p\n",
+                      pages, (unsigned long long)phys, __builtin_return_address(0));
+        kernel_panic("pmm: page freed twice");
     }
 
     memset(addr, 0, 64);
@@ -399,6 +409,13 @@ void pmm_free_single(void *addr) {
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
     pmm_lock_acq();
+    if (_page_is_free(phys)) {
+        pmm_lock_rel();
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        serial_printf("[PMM] double free of page 0x%llx from %p\n",
+                      (unsigned long long)phys, __builtin_return_address(0));
+        kernel_panic("pmm: page freed twice");
+    }
     _buddy_free_nocoalesce(phys);
     pmm_lock_rel();
     asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
@@ -486,7 +503,8 @@ static inline uint16_t _slab_capacity(size_t obj_size) {
     uintptr_t obj_start = _align_up(sizeof(slab_t), 8);
     size_t avail = pages * PAGE_SIZE - obj_start;
     uint16_t cap = (uint16_t)(avail / obj_size);
-    return cap > 0 ? cap : 0;
+    if (cap > 512) cap = 512;
+    return cap;
 }
 
 static void _slab_list_push(slab_t **head, slab_t *s) {
@@ -521,6 +539,8 @@ static slab_t *_slab_new(slab_cache_t *cache) {
 
     uintptr_t start = _slab_obj_start(s);
     s->freelist = (void *)start;
+    memset(s->freemap, 0, sizeof s->freemap);
+    for (uint16_t i = 0; i < s->total; i++) s->freemap[i >> 6] |= 1ULL << (i & 63);
     for (uint16_t i = 0; i < s->total; i++) {
         void **slot = (void **)(start + (uintptr_t)i * cache->obj_size);
         *slot = (i + 1 < s->total)
@@ -625,6 +645,18 @@ void *kmalloc(size_t size) {
     slab_t *s = cache->partial;
 
     void *obj   = s->freelist;
+    uintptr_t first = _slab_obj_start(s);
+    uintptr_t off = (uintptr_t)obj - first;
+    uint32_t idx = (uint32_t)(off / s->obj_size);
+    if ((uintptr_t)obj < first || off % s->obj_size || idx >= s->total ||
+        !(s->freemap[idx >> 6] & (1ULL << (idx & 63)))) {
+        slab_lock_rel();
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        serial_printf("[SLAB] free list of the %u-byte cache at %p points to %p: a freed object was written to\n",
+                      (unsigned)s->obj_size, (void *)s, obj);
+        kernel_panic("kmalloc: slab free list corrupted (use after free)");
+    }
+    s->freemap[idx >> 6] &= ~(1ULL << (idx & 63));
     s->freelist = *(void **)obj;
     s->used++;
     cache->total_allocs++;
@@ -680,6 +712,16 @@ void kfree(void *ptr) {
         }
     }
     if (!cache) { slab_lock_rel(); asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc"); return; }
+
+    uint32_t idx = (uint32_t)(((uintptr_t)ptr - first) / s->obj_size);
+    if (s->freemap[idx >> 6] & (1ULL << (idx & 63))) {
+        slab_lock_rel();
+        asm volatile("push %0; popfq" :: "r"(flags) : "memory", "cc");
+        serial_printf("[SLAB] double kfree of %p (%u-byte object) from %p\n",
+                      ptr, (unsigned)s->obj_size, __builtin_return_address(0));
+        kernel_panic("kfree: object freed twice");
+    }
+    s->freemap[idx >> 6] |= 1ULL << (idx & 63);
 
     bool was_full = (s->used == s->total);
     *(void **)ptr = s->freelist;
