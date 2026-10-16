@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <http.h>
@@ -73,6 +74,14 @@ static long g_dots;
 static int  g_active;
 static int  g_dl_share = 100;
 static int  g_last_pct = -1;
+static double g_dl_t0;
+
+static double mono_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
 
 static void progress_style(const char *name)
 {
@@ -93,6 +102,7 @@ static void progress_begin(const char *label, int will_unpack)
     g_active = 1;
     g_dl_share = will_unpack ? 60 : 100;
     g_last_pct = -1;
+    g_dl_t0 = mono_now();
     if (g_style == PG_PLAIN) {
         printf("BEGIN %s\n", g_label);
         fflush(stdout);
@@ -116,7 +126,7 @@ static void progress_render(int pct, int moving, const char *status)
     }
     if (!g_tty || g_style == PG_NONE || g_style == PG_DOTS) return;
     if (g_style == PG_PERCENT) {
-        fprintf(stderr, "\r%-*s %3d%%  %-12s", g_label_w, g_label, pct, status);
+        fprintf(stderr, "\r%-*s %3d%%  %-18s", g_label_w, g_label, pct, status);
         return;
     }
 
@@ -135,8 +145,8 @@ static void progress_render(int pct, int moving, const char *status)
     } else {
         for (int i = 0; i < W; i++) fputc(i < fill ? '#' : '-', stderr);
     }
-    if (moving >= 0) fprintf(stderr, "]       %-12s", status);
-    else             fprintf(stderr, "] %3d%%  %-12s", pct, status);
+    if (moving >= 0) fprintf(stderr, "]       %-18s", status);
+    else             fprintf(stderr, "] %3d%%  %-18s", pct, status);
 }
 
 static void progress_draw(void *ctx, long got, long total)
@@ -149,8 +159,10 @@ static void progress_draw(void *ctx, long got, long total)
         while (g_dots < want) { fputc('.', stderr); g_dots++; }
         return;
     }
-    char status[24];
-    snprintf(status, sizeof status, "%ldK", got / 1024);
+    char status[32];
+    double dt = mono_now() - g_dl_t0;
+    if (dt > 0.5 && got > 0) snprintf(status, sizeof status, "%ldK %ldK/s", got / 1024, (long)(got / 1024 / dt));
+    else snprintf(status, sizeof status, "%ldK", got / 1024);
     if (total > 0) progress_render((int)((long long)got * g_dl_share / total), -1, status);
     else           progress_render(0, (int)(got / 32768), status);
 }
@@ -1151,6 +1163,88 @@ static int abi_ok(const char *rec, const char *name)
     return 0;
 }
 
+static void package_url(const char *name, const char *ver, const char *filef,
+                        char *fname, size_t fn, char *url, size_t un)
+{
+    if (filef) snprintf(fname, fn, "%s", filef);
+    else snprintf(fname, fn, "%s-%s-x86_64.tar.gz", name, ver ? ver : "0");
+    if (!strncmp(fname, "http://", 7) || !strncmp(fname, "https://", 8))
+        snprintf(url, un, "%s", fname);
+    else
+        snprintf(url, un, "%s/%s", g_repo, fname);
+}
+
+static void cache_paths(const char *fname, char *path, size_t pn, char *part, size_t qn)
+{
+    char rel[512], dbuf[600], pbuf[600];
+    mkpath(rooted(CACHEDIR, dbuf, sizeof dbuf), 0755);
+    snprintf(rel, sizeof rel, CACHEDIR "/%s", base_name(fname));
+    snprintf(path, pn, "%s", rooted(rel, pbuf, sizeof pbuf));
+    snprintf(part, qn, "%s.part", path);
+}
+
+static int file_sha_ok(const char *path, const char *shaf, unsigned long want)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    sha256_ctx c;
+    sha256_init(&c);
+    static uint8_t buf[1 << 16];
+    unsigned long total = 0;
+    long n;
+    while ((n = read(fd, buf, sizeof buf)) > 0) { sha256_update(&c, buf, (size_t)n); total += (unsigned long)n; }
+    close(fd);
+    if (n < 0 || (want && total != want)) return 0;
+    if (!shaf) return 1;
+    uint8_t dg[32]; char hex[65];
+    sha256_final(&c, dg);
+    hex_of(dg, 32, hex);
+    return strcasecmp(hex, shaf) == 0;
+}
+
+static int prefetch_one(const char *idx, const char *name)
+{
+    char *rec = find_record(idx, name);
+    if (!rec) return 1;
+    char *ver = field(rec, "version");
+    char *filef = field(rec, "file");
+    char *shaf = field(rec, "sha256");
+    char *sizef = field(rec, "size");
+    int rc = 1;
+    if (shaf) {
+        char fname[256], url[800], path[600], part[640];
+        package_url(name, ver, filef, fname, sizeof fname, url, sizeof url);
+        cache_paths(fname, path, sizeof path, part, sizeof part);
+        unsigned long want = sizef ? strtoul(sizef, NULL, 10) : 0;
+        if (file_sha_ok(path, shaf, want)) rc = 0;
+        for (int attempt = 0; rc && attempt < 3; attempt++) {
+            if (attempt) sleep(2);
+            int fd = open(part, O_RDWR | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) break;
+            int status = 0;
+            http_opts o;
+            memset(&o, 0, sizeof o);
+            o.header_fd = -1;
+            o.method = "GET";
+            o.user_agent = "herd/1";
+            o.follow = 1;
+            o.max_redirs = 8;
+            o.fail_on_error = 1;
+            o.silent = 1;
+            o.out_status = &status;
+            int r = http_request(url, fd, &o);
+            close(fd);
+            if (status == 0 && r > 0) status = r;
+            if (r >= 0 && status >= 200 && status < 300 && file_sha_ok(part, shaf, want) &&
+                rename(part, path) == 0) rc = 0;
+            else unlink(part);
+            if (status >= 400) break;
+        }
+    }
+    free(rec); free(ver); free(filef); free(shaf); free(sizef);
+    return rc;
+}
+
 static int install_one(const char *idx, const char *name)
 {
     char *rec = find_record(idx, name);
@@ -1163,15 +1257,8 @@ static int install_one(const char *idx, const char *name)
     char *shaf = field(rec, "sha256");
     char *sizef = field(rec, "size");
 
-    char fname[256];
-    if (filef) snprintf(fname, sizeof fname, "%s", filef);
-    else snprintf(fname, sizeof fname, "%s-%s-x86_64.tar.gz", name, ver ? ver : "0");
-
-    char url[800];
-    if (!strncmp(fname, "http://", 7) || !strncmp(fname, "https://", 8))
-        snprintf(url, sizeof url, "%s", fname);
-    else
-        snprintf(url, sizeof url, "%s/%s", g_repo, fname);
+    char fname[256], url[800];
+    package_url(name, ver, filef, fname, sizeof fname, url, sizeof url);
 
     char plabel[64];
     snprintf(plabel, sizeof plabel, "%s-%s", name, ver ? ver : "");
@@ -1315,7 +1402,57 @@ static int apply_plan(const char *idx, char order[][64], int norder)
     }
     g_label_w = widest < 40 ? widest : 40;
 
+    enum { JOBS = 4 };
+    static pid_t pids[256];
+    int next = 0, running = 0;
+    memset(pids, 0, sizeof pids);
     for (int i = 0; i < norder; i++) {
+        if (!g_offline && norder > 1) {
+            while (running < JOBS && next < norder) {
+                pid_t pid = fork();
+                if (pid == 0) _exit(prefetch_one(idx, order[next]) ? 1 : 0);
+                if (pid > 0) { pids[next] = pid; running++; }
+                next++;
+            }
+            char wpart[640] = "";
+            long wtotal = 0;
+            if (pids[i] > 0 && g_style != PG_PLAIN) {
+                char *rec = find_record(idx, order[i]);
+                char *ver = rec ? field(rec, "version") : NULL;
+                char *filef = rec ? field(rec, "file") : NULL;
+                char *sizef = rec ? field(rec, "size") : NULL;
+                char fname[256], url[800], path[600], lbl[64];
+                package_url(order[i], ver, filef, fname, sizeof fname, url, sizeof url);
+                cache_paths(fname, path, sizeof path, wpart, sizeof wpart);
+                wtotal = sizef ? strtol(sizef, NULL, 10) : 0;
+                snprintf(lbl, sizeof lbl, "%s-%s", order[i], ver ? ver : "");
+                progress_begin(lbl, 1);
+                free(rec); free(ver); free(filef); free(sizef);
+            }
+            while (pids[i] > 0) {
+                int st;
+                pid_t done = waitpid(-1, &st, wpart[0] ? WNOHANG : 0);
+                if (done == 0) {
+                    struct stat ps;
+                    long got = stat(wpart, &ps) == 0 ? (long)ps.st_size : 0;
+                    progress_draw(NULL, got, wtotal);
+                    usleep(150000);
+                    continue;
+                }
+                if (done < 0) { pids[i] = 0; break; }
+                for (int j = 0; j < norder; j++) {
+                    if (pids[j] != done) continue;
+                    pids[j] = 0;
+                    running--;
+                }
+                while (running < JOBS && next < norder) {
+                    pid_t pid = fork();
+                    if (pid == 0) _exit(prefetch_one(idx, order[next]) ? 1 : 0);
+                    if (pid > 0) { pids[next] = pid; running++; }
+                    next++;
+                }
+            }
+        }
         if (g_style == PG_PLAIN) {
             printf("STEP %d %d\n", i + 1, norder);
             fflush(stdout);
