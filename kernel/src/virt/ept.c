@@ -21,9 +21,12 @@ int ept_init(kvm_vm_t *vm) {
 static void free_table(uint64_t *t, int level) {
     for (int i = 0; i < 512; i++) {
         uint64_t e = t[i];
+        if (level == 1) {
+            if (e & EPT_PINNED) page_unref(e & EPT_ADDR_MASK);
+            continue;
+        }
         if (!(e & EPT_RWX)) continue;
-        if (level > 1) free_table((uint64_t *)pmm_phys_to_virt(e & EPT_ADDR_MASK), level - 1);
-        else if (e & EPT_PINNED) page_unref(e & EPT_ADDR_MASK);
+        free_table((uint64_t *)pmm_phys_to_virt(e & EPT_ADDR_MASK), level - 1);
     }
     pmm_free(t, 1);
 }
@@ -117,6 +120,11 @@ int ept_fault(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t qual) {
         return -ENOMEM;
     }
     uint64_t old = *e;
+    if (!(old & EPT_RWX) && (old & EPT_PINNED)) {
+        spinlock_release_irqrestore(&vm->mmu_lock, f);
+        if (pinned) page_unref(hpa);
+        return 0;
+    }
     bool same = (old & EPT_RWX) && (old & EPT_ADDR_MASK) == hpa;
     if (same) {
         *e = (old | perm);
@@ -125,7 +133,10 @@ int ept_fault(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t qual) {
     } else {
         *e = entry;
         spinlock_release_irqrestore(&vm->mmu_lock, f);
-        if ((old & EPT_RWX) && (old & EPT_PINNED)) page_unref(old & EPT_ADDR_MASK);
+        if (old & EPT_RWX) {
+            ept_flush_all(vm);
+            if (old & EPT_PINNED) page_unref(old & EPT_ADDR_MASK);
+        }
     }
     if (write && logging) kvm_mark_dirty(vm, gfn);
     return 0;
@@ -150,34 +161,41 @@ void ept_flush_all(kvm_vm_t *vm) {
     }
 }
 
-static void range_walk(kvm_vm_t *vm, uint64_t gfn, uint64_t npages, bool zap) {
+enum { WALK_WRITE_PROTECT, WALK_KILL, WALK_RELEASE };
+
+static void range_walk(kvm_vm_t *vm, uint64_t gfn, uint64_t npages, int op) {
     uint64_t f = spinlock_acquire_irqsave(&vm->mmu_lock);
     for (uint64_t p = 0; p < npages; p++) {
         uint64_t *e = ept_walk(vm, (gfn + p) << 12, false);
-        if (!e || !(*e & EPT_RWX)) {
+        if (!e) {
             uint64_t gpa = (gfn + p) << 12;
             uint64_t step_pages = 512 - ((gpa >> 12) & 511);
-            if (!e && step_pages > 1) p += step_pages - 1;
+            if (step_pages > 1) p += step_pages - 1;
             continue;
         }
-        if (zap) {
-            uint64_t old = *e;
-            *e = 0;
-            if (old & EPT_PINNED) page_unref(old & EPT_ADDR_MASK);
-        } else {
-            *e &= ~EPT_WRITE;
+        uint64_t old = *e;
+        if (op == WALK_RELEASE) {
+            if (!(old & EPT_RWX) && (old & EPT_PINNED)) {
+                *e = 0;
+                page_unref(old & EPT_ADDR_MASK);
+            }
+            continue;
         }
+        if (!(old & EPT_RWX)) continue;
+        if (op == WALK_KILL) *e = (old & EPT_PINNED) ? (old & (EPT_ADDR_MASK | EPT_PINNED)) : 0;
+        else *e = old & ~EPT_WRITE;
     }
     spinlock_release_irqrestore(&vm->mmu_lock, f);
 }
 
 void ept_zap_range(kvm_vm_t *vm, uint64_t gfn, uint64_t npages) {
-    range_walk(vm, gfn, npages, true);
+    range_walk(vm, gfn, npages, WALK_KILL);
     ept_flush_all(vm);
+    range_walk(vm, gfn, npages, WALK_RELEASE);
 }
 
 void ept_write_protect_range(kvm_vm_t *vm, uint64_t gfn, uint64_t npages) {
-    range_walk(vm, gfn, npages, false);
+    range_walk(vm, gfn, npages, WALK_WRITE_PROTECT);
     ept_flush_all(vm);
 }
 
