@@ -556,6 +556,8 @@ static void cd_on_exit_take(void) {
     }
 }
 
+static int g_exec_replace;
+
 static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     char binpath[CSH_PATH_MAX];
     if (!find_in_path(argv[0], binpath, sizeof(binpath))) {
@@ -583,7 +585,7 @@ static int exec_external(int argc, char **argv, redir_t *redirs, int nr) {
     real_envp[ei_out] = NULL;
 
     fflush(NULL);
-    pid_t child = fork();
+    pid_t child = g_exec_replace ? 0 : fork();
     if (child < 0) { fputs(C_RED "csh: fork failed\n" C_RESET, stdout); return 1; }
     if (child == 0) {
         for (int i = 0; i < nr; i++) {
@@ -1537,6 +1539,29 @@ static int exec_tokens(char **tok, int n) {
     int nn = n;
     if (parse_redirects(tok, &nn, rd, CSH_REDIRS_MAX, &nr, g_tok_quoted) < 0) { rc_set(1); return 1; }
     if (nn == 0) return g_last_rc;
+
+    if (strcmp(tok[0], "exec") == 0) {
+        if (nn == 1) {
+            for (int i = 0; i < nr; i++) {
+                if (rd[i].type == CSH_REDIR_DUP) { dup2(rd[i].dup_fd, rd[i].src_fd); continue; }
+                int fl = rd[i].type == CSH_REDIR_OUT ? (O_WRONLY | O_CREAT | O_TRUNC)
+                       : rd[i].type == CSH_REDIR_APPEND ? (O_WRONLY | O_CREAT | O_APPEND) : O_RDONLY;
+                int fd = open(rd[i].path, fl, 0644);
+                if (fd < 0) { rc_set(1); return 1; }
+                dup2(fd, rd[i].src_fd);
+                close(fd);
+            }
+            rc_set(0);
+            return 0;
+        }
+        for (int i = 0; i + 1 < nn; i++) tok[i] = tok[i + 1];
+        nn--;
+        g_exec_replace = 1;
+        int rc = exec_external(nn, tok, rd, nr);
+        g_exec_replace = 0;
+        rc_set(rc);
+        return rc;
+    }
 
     int need_glob = 0;
     for (int i = 0; i < nn; i++)
@@ -2508,7 +2533,7 @@ static int gather_matches(const char *buf, int pos, char matches[][256],
             if (*p == ':') *p++ = '\0';
             if (seg[0]) list_dir_matches(seg, word, wlen, matches, &nmatch, max);
         }
-        const char *builtins[] = {"help","exit","cd","export","setenv","unset","unsetenv",
+        const char *builtins[] = {"help","exit","exec","cd","export","setenv","unset","unsetenv",
                                   "alias","unalias","history","clear","color","cursor","set",
                                   "jobs","fg","bg","umask",NULL};
         for (int i = 0; builtins[i] && nmatch < max; i++)
