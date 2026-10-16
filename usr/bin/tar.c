@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <inflate.h>
 #include <getopt.h>
 #include <stdarg.h>
 #include <time.h>
@@ -174,6 +175,61 @@ static void mkparents(const char *path)
     }
 }
 
+static uint32_t crc32_of(const uint8_t *p, size_t n)
+{
+    static uint32_t tab[256];
+    if (!tab[1]) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            tab[i] = c;
+        }
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) c = tab[(c ^ p[i]) & 0xFF] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+static int write_all(int fd, const uint8_t *p, size_t n)
+{
+    while (n) {
+        ssize_t w = write(fd, p, n);
+        if (w <= 0) return -1;
+        p += w; n -= (size_t)w;
+    }
+    return 0;
+}
+
+static int builtin_gzip(int compress)
+{
+    size_t cap = 1 << 20, n = 0;
+    uint8_t *in = malloc(cap);
+    if (!in) return 1;
+    for (;;) {
+        if (n == cap) {
+            uint8_t *g = realloc(in, cap *= 2);
+            if (!g) return 1;
+            in = g;
+        }
+        ssize_t r = read(0, in + n, cap - n);
+        if (r < 0) return 1;
+        if (r == 0) break;
+        n += (size_t)r;
+    }
+    uint8_t *out = NULL;
+    size_t outlen = 0;
+    if (!compress) {
+        if (gunzip(in, n, &out, &outlen) != 0) { fprintf(stderr, "tar: not in gzip format\n"); return 1; }
+        return write_all(1, out, outlen) ? 1 : 0;
+    }
+    if (raw_deflate(in, n, &out, &outlen) != 0) return 1;
+    uint8_t hdr[10] = { 0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3 };
+    uint32_t crc = crc32_of(in, n), isz = (uint32_t)n;
+    uint8_t tail[8] = { (uint8_t)crc, (uint8_t)(crc >> 8), (uint8_t)(crc >> 16), (uint8_t)(crc >> 24),
+                        (uint8_t)isz, (uint8_t)(isz >> 8), (uint8_t)(isz >> 16), (uint8_t)(isz >> 24) };
+    return (write_all(1, hdr, sizeof hdr) || write_all(1, out, outlen) || write_all(1, tail, sizeof tail)) ? 1 : 0;
+}
+
 static int pipe_through(const char *prog, int fd, int compress)
 {
     int pfd[2];
@@ -192,6 +248,7 @@ static int pipe_through(const char *prog, int fd, int compress)
         close(pfd[1]);
         if (fd > 1) close(fd);
         execlp(prog, prog, compress ? "-c" : "-dc", (char *)0);
+        if (!strcmp(prog, "gzip")) _exit(builtin_gzip(compress));
         fprintf(stderr, "tar: cannot run %s: %s\n", prog, strerror(errno));
         _exit(127);
     }
