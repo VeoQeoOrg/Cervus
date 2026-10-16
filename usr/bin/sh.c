@@ -2332,7 +2332,7 @@ static int is_builtin(const char *name)
         ":", ".", "source", "break", "cd", "continue", "echo", "eval", "exec",
         "exit", "export", "false", "hash", "local", "pwd", "read", "return",
         "set", "shift", "test", "[", "times", "trap", "true", "type", "umask",
-        "unset", "command", "getopts", NULL
+        "unset", "command", "getopts", "wait", NULL
     };
     for (int i = 0; B[i]; i++) if (!strcmp(name, B[i])) return 1;
     return 0;
@@ -2445,6 +2445,19 @@ static int run_builtin(int argc, char **argv, int *is_bi)
     if (!strcmp(c, ":") || !strcmp(c, "true")) return 0;
     if (!strcmp(c, "false")) return 1;
     if (!strcmp(c, "hash") || !strcmp(c, "times")) return 0;
+    if (!strcmp(c, "wait")) {
+        int st = 0, rc = 0;
+        if (argc > 1) {
+            for (int i = 1; i < argc; i++) {
+                pid_t p = (pid_t)strtol(argv[i][0] == '%' ? argv[i] + 1 : argv[i], NULL, 10);
+                if (p <= 0 || waitpid(p, &st, 0) < 0) { rc = 127; continue; }
+                rc = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+            }
+            return rc;
+        }
+        while (wait(&st) > 0) {}
+        return 0;
+    }
     if (!strcmp(c, "echo")) return bi_echo(argc, argv);
     if (!strcmp(c, "cd")) return bi_cd(argc, argv);
     if (!strcmp(c, "pwd")) {
