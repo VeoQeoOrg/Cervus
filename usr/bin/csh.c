@@ -1352,8 +1352,54 @@ static int glob_expand(char **tok, int n, char *out[], int max, char *freelist[]
     return oi;
 }
 
+static int assign_len(const char *t) {
+    if (!t || !(isalpha((unsigned char)t[0]) || t[0] == '_')) return 0;
+    int i = 1;
+    while (isalnum((unsigned char)t[i]) || t[i] == '_') i++;
+    return t[i] == '=' ? i : 0;
+}
+
 static int exec_tokens(char **tok, int n) {
     if (n <= 0) return g_last_rc;
+
+    {
+        int na = 0;
+        while (na < n && assign_len(tok[na]) && na < 16) na++;
+        if (na > 0 && !(na < n && assign_len(tok[na]))) {
+            char names[16][CSH_NAME_MAX];
+            for (int i = 0; i < na; i++) {
+                int k = assign_len(tok[i]);
+                if (k >= CSH_NAME_MAX) k = CSH_NAME_MAX - 1;
+                memcpy(names[i], tok[i], (size_t)k);
+                names[i][k] = '\0';
+            }
+            if (na == n) {
+                for (int i = 0; i < na; i++) {
+                    int vi = var_find(names[i]);
+                    if (vi >= 0 && g_vars[vi].is_env) var_setenv(names[i], tok[i] + assign_len(tok[i]) + 1);
+                    else var_set(names[i], tok[i] + assign_len(tok[i]) + 1);
+                }
+                rc_set(0);
+                return 0;
+            }
+            static char olds[16][CSH_VAL_MAX];
+            int had[16], wasenv[16];
+            for (int i = 0; i < na; i++) {
+                int vi = var_find(names[i]);
+                had[i] = vi >= 0;
+                wasenv[i] = vi >= 0 && g_vars[vi].is_env;
+                if (had[i]) snprintf(olds[i], sizeof olds[i], "%s", g_vars[vi].value);
+                var_setenv(names[i], tok[i] + assign_len(tok[i]) + 1);
+            }
+            int rc = exec_tokens(tok + na, n - na);
+            for (int i = na - 1; i >= 0; i--) {
+                if (!had[i]) var_unset(names[i]);
+                else if (wasenv[i]) var_setenv(names[i], olds[i]);
+                else var_set(names[i], olds[i]);
+            }
+            return rc;
+        }
+    }
 
     {
         const char *aval = alias_lookup(tok[0]);
