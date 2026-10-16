@@ -436,8 +436,7 @@ void wlan_set_authorized(wlan_local_t *l, bool on)
         char ssid[33];
         memcpy(ssid, l->cur.ssid, l->cur.ssid_len);
         ssid[l->cur.ssid_len] = 0;
-        printf("%s: connected to \"%s\" (channel %d, %d dBm)\n", l->name, ssid, l->cur.channel, l->cur.signal);
-        WLAN_LOG(l, "%s: connected to \"%s\"\n", l->name, ssid);
+        WLAN_LOG(l, "%s: connected to \"%s\" (channel %d, %d dBm)\n", l->name, ssid, l->cur.channel, l->cur.signal);
     }
 }
 
@@ -452,7 +451,6 @@ void wlan_mlme_disconnect(wlan_local_t *l, u16 reason, bool send_deauth, const c
             wlan_tx_mgmt(l, skb, false);
         }
     }
-    bool was_connected = l->authorized;
     wlan_set_authorized(l, false);
     wlan_keys_clear(l);
     wlan_ba_reset(l);
@@ -485,7 +483,6 @@ void wlan_mlme_disconnect(wlan_local_t *l, u16 reason, bool send_deauth, const c
     if (had || why) {
         if (why) WLAN_LOG(l, "%s: disconnected: %s\n", l->name, why);
         else WLAN_LOG(l, "%s: disconnected (reason %u)\n", l->name, reason);
-        if (was_connected) printf("%s: disconnected%s%s\n", l->name, why ? ": " : "", why ? why : "");
     }
     if (l->want_connected) {
         l->fail_count++;

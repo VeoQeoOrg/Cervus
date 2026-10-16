@@ -498,7 +498,7 @@ int usbnet_start(usbnet_t *u) {
         u->g.rx_post(u->g.dev, i, u->rx_phys[i], u->rx_size);
     task_create("usbnet", usbnet_thread, u, IRQ_THREAD_PRIORITY);
     nd->link_up = 1;
-    printf("usbnet: %s %04x:%04x as %s, %02x:%02x:%02x:%02x:%02x:%02x\n",
+    LOG_I("usbnet: %s %04x:%04x as %s, %02x:%02x:%02x:%02x:%02x:%02x\n",
            proto_name(u->ifc.proto), u->vid, u->pid, nd->name,
            u->mac[0], u->mac[1], u->mac[2], u->mac[3], u->mac[4], u->mac[5]);
     serial_printf("[usbnet] %s %04x:%04x as %s, rx %u bytes per transfer\n",

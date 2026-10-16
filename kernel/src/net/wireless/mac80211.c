@@ -211,7 +211,7 @@ int ieee80211_register_hw(struct ieee80211_hw *hw)
     wlan_ctl_register(l);
     l->thread = task_create(l->name, wlan_worker, l, 17);
     u8 *m = l->wiphy.perm_addr;
-    printf("%s: %s, address %02x:%02x:%02x:%02x:%02x:%02x, firmware %s\n", l->name,
+    LOG_I("%s: %s, address %02x:%02x:%02x:%02x:%02x:%02x, firmware %s\n", l->name,
            l->band && l->band->ht_cap.ht_supported ? "802.11bgn" : "802.11bg",
            m[0], m[1], m[2], m[3], m[4], m[5], l->wiphy.fw_version[0] ? l->wiphy.fw_version : "-");
     WLAN_LOG(l, "%s: registered, %d channels\n", l->name, l->nchans);
