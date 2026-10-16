@@ -23,14 +23,17 @@
 #define PARAM_FN_TYPE       0x05
 #define PARAM_WIDGET_CAP    0x09
 #define PARAM_PIN_CAP       0x0C
+#define PARAM_IN_AMP_CAP    0x0D
 #define PARAM_CONN_LEN      0x0E
 #define PARAM_OUT_AMP_CAP   0x12
 
 #define WIDGET_DAC          0x0
 #define WIDGET_ADC          0x1
+#define WIDGET_MIXER        0x2
 #define WIDGET_SELECTOR     0x3
 #define WIDGET_PIN          0x4
 
+#define WCAP_IN_AMP         (1u << 1)
 #define WCAP_OUT_AMP        (1u << 2)
 #define WCAP_CONN_LIST      (1u << 8)
 #define WCAP_DIGITAL        (1u << 9)
@@ -51,6 +54,7 @@
 #define DEV_HP_OUT          2
 
 #define AMP_SET_OUT         (1u << 15)
+#define AMP_SET_IN          (1u << 14)
 #define AMP_SET_LEFT        (1u << 13)
 #define AMP_SET_RIGHT       (1u << 12)
 #define AMP_MUTE            (1u << 7)
@@ -191,9 +195,21 @@ void hda_codec_enable(hda_cmd_fn cmd, const hda_path_t *p, uint16_t fmt, int str
     for (int i = 0; i < p->nchain; i++) {
         int nid = p->chain[i];
         uint32_t cap = param(cmd, nid, PARAM_WIDGET_CAP);
+        int type = (int)((cap >> 20) & 0xF);
         if (cap & WCAP_POWER) cmd(nid, VERB12(V_SET_POWER, 0x0));
-        if (((cap >> 20) & 0xF) == WIDGET_SELECTOR && p->sel[i] >= 0)
+        if (p->sel[i] < 0 || !(cap & WCAP_CONN_LIST)) continue;
+        if (type == WIDGET_SELECTOR || type == WIDGET_PIN) {
             cmd(nid, VERB12(V_SET_CONNSEL, p->sel[i]));
+        } else if (type == WIDGET_MIXER && (cap & WCAP_IN_AMP)) {
+            int n = (int)(param(cmd, nid, PARAM_CONN_LEN) & 0x7F);
+            uint32_t incap = param(cmd, nid, PARAM_IN_AMP_CAP);
+            int zero_db = (int)(incap & 0x7F);
+            for (int k = 0; k < n && k < 16; k++) {
+                uint16_t pl = (uint16_t)(AMP_SET_IN | AMP_SET_LEFT | AMP_SET_RIGHT | ((uint32_t)k << 8) |
+                                         (k == p->sel[i] ? (uint32_t)zero_db : AMP_MUTE));
+                cmd(nid, VERB4(V_SET_AMP, pl));
+            }
+        }
     }
 
     uint32_t pincap = param(cmd, p->nid, PARAM_PIN_CAP);
