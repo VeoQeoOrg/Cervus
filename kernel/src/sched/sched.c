@@ -55,6 +55,12 @@ void sched_note_wakeup(uint64_t deadline_ns) {
 
 extern tss_t* tss[MAX_CPUS];
 
+static inline uint64_t rdmsr_u64(uint32_t msr) {
+    uint32_t lo, hi;
+    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+
 static inline void fix_gs_base(percpu_t* pc) {
     uint64_t val = (uint64_t)pc;
     asm volatile("wrmsr"
@@ -309,6 +315,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     memcpy(t->sig_restorer, parent->sig_restorer, sizeof(t->sig_restorer));
     memcpy(t->sig_mask, parent->sig_mask, sizeof(t->sig_mask));
     t->sig_blocked = parent->sig_blocked;
+    t->gs_base = rdmsr_u64(0xC0000102u);
     t->brk_start   = parent->brk_start;
     t->brk_current = parent->brk_current;
     t->brk_max     = parent->brk_max;
@@ -609,7 +616,8 @@ task_t* task_fork(task_t* parent) {
     child->user_saved_r15 = parent->user_saved_r15;
     child->user_saved_r11 = parent->user_saved_r11 | (1ULL << 9);
 
-    child->fs_base    = parent->fs_base;
+    child->fs_base    = rdmsr_u64(0xC0000100u);
+    child->gs_base    = rdmsr_u64(0xC0000102u);
     child->tls_vaddr  = parent->tls_vaddr;
     child->tls_filesz = parent->tls_filesz;
     child->tls_memsz  = parent->tls_memsz;
@@ -1270,6 +1278,10 @@ void sched_reschedule(void) {
         fpu_save(old->fpu_state);
         old->fpu_used = true;
     }
+    if (old && old->is_userspace && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
+        old->fs_base = rdmsr_u64(0xC0000100u);
+        old->gs_base = rdmsr_u64(0xC0000102u);
+    }
 
     if (old && old != &idle_tasks[cpu]) {
         if (old->state == TASK_ZOMBIE) {
@@ -1328,10 +1340,14 @@ void sched_reschedule(void) {
     next->state  = TASK_RUNNING;
     if (next->fpu_state) fpu_restore(next->fpu_state);
     ptrace_switch_dr(old, next);
-    if (next->is_userspace)
+    if (next->is_userspace) {
         asm volatile("wrmsr" :: "c"(0xC0000100u),
                      "a"((uint32_t)next->fs_base),
                      "d"((uint32_t)(next->fs_base >> 32)));
+        asm volatile("wrmsr" :: "c"(0xC0000102u),
+                     "a"((uint32_t)next->gs_base),
+                     "d"((uint32_t)(next->gs_base >> 32)));
+    }
 
     if (!(next->flags & TASK_FLAG_STARTED)) {
         next->flags |= TASK_FLAG_STARTED;

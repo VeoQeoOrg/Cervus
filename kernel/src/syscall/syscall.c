@@ -240,6 +240,7 @@ extern int64_t sys_chroot(uint64_t);
 extern int64_t sys_ptrace(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_personality(uint64_t);
 extern int64_t sys_tkill(uint64_t, uint64_t);
+extern int64_t sys_arch_prctl(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_clock_set(uint64_t, uint64_t);
 extern int64_t sys_sendfd(uint64_t, uint64_t);
 extern int64_t sys_recvfd(uint64_t);
@@ -546,6 +547,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_PTRACE]          = _sys_ptrace,
     [SYS_PERSONALITY]     = _sys_personality,
     [SYS_TKILL]           = _sys_tkill,
+    [SYS_ARCH_PRCTL]      = sys_arch_prctl,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,

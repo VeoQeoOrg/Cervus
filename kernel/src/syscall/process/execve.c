@@ -97,6 +97,8 @@ static int copy_user_strings(strvec_t *v, uint64_t uvec, size_t *total) {
     return 0;
 }
 
+extern bool g_has_fsgsbase;
+
 static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv,
                              const strvec_t *envp, const elf_load_result_t *elf,
                              const char *execfn, uint32_t uid, uint32_t gid) {
@@ -141,7 +143,7 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
         AT_SECURE,   0,
         AT_CLKTCK,   100,
         AT_HWCAP,    0x178bfbff,
-        AT_HWCAP2,   0,
+        AT_HWCAP2,   g_has_fsgsbase ? 2 : 0,
         AT_RANDOM,   u_random,
         AT_PLATFORM, u_platform,
         AT_EXECFN,   u_execfn,
@@ -362,6 +364,9 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     }
 
     t->fs_base    = 0;
+    t->gs_base    = 0;
+    asm volatile("wrmsr" :: "c"(0xC0000100u), "a"(0), "d"(0));
+    asm volatile("wrmsr" :: "c"(0xC0000102u), "a"(0), "d"(0));
     t->tls_vaddr  = elf.tls_vaddr;
     t->tls_filesz = elf.tls_filesz;
     t->tls_memsz  = elf.tls_memsz;

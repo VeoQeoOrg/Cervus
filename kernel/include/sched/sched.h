@@ -269,6 +269,7 @@ typedef struct task {
     uint64_t   pt_dr[8];
     uint32_t   pt_dr_on;
     uint32_t   persona;
+    uint64_t   gs_base;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

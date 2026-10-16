@@ -103,10 +103,11 @@ static void ctx_get(task_t *t, pt_ctx_t *c, user_regs_t *r) {
         r->rsp = t->user_rsp; r->ss = 0x2B;
     }
     r->fs_base = t->fs_base;
+    r->gs_base = t->gs_base;
 }
 
 static int ctx_set(task_t *t, pt_ctx_t *c, const user_regs_t *r) {
-    if (r->rip >= USER_TOP || r->rsp >= USER_TOP || r->fs_base >= USER_TOP) return -EIO;
+    if (r->rip >= USER_TOP || r->rsp >= USER_TOP || r->fs_base >= USER_TOP || r->gs_base >= USER_TOP) return -EIO;
     if (c->kind == PT_CTX_FRAME) {
         struct int_frame_t *f = c->f;
         f->r15 = r->r15; f->r14 = r->r14; f->r13 = r->r13; f->r12 = r->r12;
@@ -130,7 +131,8 @@ static int ctx_set(task_t *t, pt_ctx_t *c, const user_regs_t *r) {
         c->orig_rax = r->orig_rax;
         t->ret_iret = 1;
     }
-    if (r->fs_base != t->fs_base) t->fs_base = r->fs_base;
+    t->fs_base = r->fs_base;
+    t->gs_base = r->gs_base;
     return 0;
 }
 
@@ -686,9 +688,9 @@ int64_t sys_ptrace(uint64_t req, uint64_t pid_a, uint64_t addr, uint64_t data) {
         return regset_set(t, addr, data);
     case PTRACE_ARCH_PRCTL: {
         if (addr == ARCH_GET_FS) return syscall_copy_to_user((void *)data, &t->fs_base, 8) < 0 ? -EFAULT : 0;
-        if (addr == ARCH_GET_GS) { uint64_t z = 0; return syscall_copy_to_user((void *)data, &z, 8) < 0 ? -EFAULT : 0; }
+        if (addr == ARCH_GET_GS) return syscall_copy_to_user((void *)data, &t->gs_base, 8) < 0 ? -EFAULT : 0;
         if (addr == ARCH_SET_FS) { if (data >= USER_TOP) return -EPERM; t->fs_base = data; return 0; }
-        if (addr == ARCH_SET_GS) return data ? -EPERM : 0;
+        if (addr == ARCH_SET_GS) { if (data >= USER_TOP) return -EPERM; t->gs_base = data; return 0; }
         return -EINVAL;
     }
     case PTRACE_SETOPTIONS:

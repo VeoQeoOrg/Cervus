@@ -251,6 +251,9 @@ extern "C" {
 #define SYS_PTRACE          685
 #define SYS_PERSONALITY     686
 #define SYS_TKILL           687
+#define SYS_ARCH_PRCTL      688
+#define SYS_arch_prctl      SYS_ARCH_PRCTL
+#define __NR_arch_prctl     SYS_ARCH_PRCTL
 #define SYS_tkill           SYS_TKILL
 #define __NR_tkill          SYS_TKILL
 #define SYS_tgkill          SYS_TGKILL
