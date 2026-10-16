@@ -13,6 +13,9 @@ extern "C" {
 #define WEXITED    0x4
 #define WCONTINUED 0x8
 #define WNOWAIT    0x01000000
+#define __WNOTHREAD 0x20000000
+#define __WALL      0x40000000
+#define __WCLONE    0x80000000
 
 typedef enum { P_ALL = 0, P_PID = 1, P_PGID = 2 } idtype_t;
 
