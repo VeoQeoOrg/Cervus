@@ -427,6 +427,9 @@ int   brk(void *addr);
 void  sched_yield_cervus(void);
 int   sched_yield(void);
 int   lchown(const char *path, uid_t owner, gid_t group);
+int   chown(const char *path, uid_t owner, gid_t group);
+long  syscall(long number, ...);
+int   fchown(int fd, uid_t owner, gid_t group);
 #define _POSIX_VDISABLE '\0'
 int   getgroups(int size, gid_t list[]);
 

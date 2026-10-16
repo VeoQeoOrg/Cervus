@@ -250,6 +250,13 @@ extern "C" {
 #define SYS_CHROOT          684
 #define SYS_PTRACE          685
 #define SYS_PERSONALITY     686
+#define SYS_TKILL           687
+#define SYS_tkill           SYS_TKILL
+#define __NR_tkill          SYS_TKILL
+#define SYS_tgkill          SYS_TGKILL
+#define __NR_tgkill         SYS_TGKILL
+#define SYS_gettid          SYS_GETTID
+#define __NR_gettid         SYS_GETTID
 
 static inline int64_t
 __syscall6(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,

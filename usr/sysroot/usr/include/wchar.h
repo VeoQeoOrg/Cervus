@@ -1,5 +1,9 @@
 #ifndef _WCHAR_H
 #define _WCHAR_H
+
+#ifndef __STDC_ISO_10646__
+#define __STDC_ISO_10646__ 201706L
+#endif
 #ifdef __cplusplus
 extern "C" {
 #endif

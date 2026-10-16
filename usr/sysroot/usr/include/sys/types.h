@@ -61,13 +61,13 @@ typedef uint64_t u_int64_t;
 }
 #endif
 
-#include <sys/select.h>
-
 typedef struct __pthread *pthread_t;
 
 typedef struct {
     size_t stacksize;
     int    detachstate;
 } pthread_attr_t;
+
+#include <sys/select.h>
 
 #endif
