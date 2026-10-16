@@ -9,6 +9,7 @@
 #include "../../include/time/clocksource.h"
 #include "../../include/io/serial.h"
 #include "../../include/sse/fpu.h"
+#include "../../include/apic/apic.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -175,12 +176,11 @@ static void filter_leaf(struct kvm_cpuid_entry2 *e) {
             uint32_t ebx_ok = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 6) | (1u << 7) | (1u << 8) |
                               (1u << 9) | (1u << 13) | (1u << 18) | (1u << 19) | (1u << 20) |
                               (1u << 23) | (1u << 24) | (1u << 29);
-            uint64_t cr4 = vmx_supported_cr4();
+            uint64_t cr4 = kvm_arch->supported_cr4();
             if (!(cr4 & (1ull << 16))) ebx_ok &= ~1u;
             if (!(cr4 & (1ull << 20))) ebx_ok &= ~(1u << 7);
             if (!(cr4 & (1ull << 21))) ebx_ok &= ~(1u << 20);
-            uint64_t p2 = vmx_rdmsr(MSR_IA32_VMX_PROCBASED_CTLS2) >> 32;
-            if (p2 & PROC2_ENABLE_INVPCID) ebx_ok |= 1u << 10;
+            ebx_ok |= 1u << 10;
             uint32_t ecx_ok = (cr4 & (1ull << 11)) ? (1u << 2) : 0;
             uint32_t edx_ok = 0;
             ecx_ok |= 1u << 8;
@@ -221,9 +221,7 @@ static void filter_leaf(struct kvm_cpuid_entry2 *e) {
         break;
     case 0x80000001: {
         e->ecx &= (1u << 0) | (1u << 5) | (1u << 8);
-        uint32_t edx_ok = (1u << 11) | (1u << 20) | (1u << 26) | (1u << 29);
-        uint64_t p2 = vmx_rdmsr(MSR_IA32_VMX_PROCBASED_CTLS2) >> 32;
-        if (p2 & PROC2_ENABLE_RDTSCP) edx_ok |= 1u << 27;
+        uint32_t edx_ok = (1u << 11) | (1u << 20) | (1u << 26) | (1u << 27) | (1u << 29);
         e->edx &= edx_ok;
         break;
     }
@@ -270,7 +268,10 @@ static uint32_t build_supported_cpuid(struct kvm_cpuid_entry2 *out, uint32_t max
     cpuid_host(0x80000000u, 0, &a, &b, &c, &d);
     uint32_t maxext = a > 0x80000008u ? 0x80000008u : a;
     for (uint32_t fn = 0x80000000u; fn <= maxext; fn++) n = add_leaf(out, n, max, fn, 0, 0);
-    for (uint32_t i = 0; i < n; i++) filter_leaf(&out[i]);
+    for (uint32_t i = 0; i < n; i++) {
+        filter_leaf(&out[i]);
+        kvm_arch->adjust_cpuid(&out[i]);
+    }
     if (n < max) {
         struct kvm_cpuid_entry2 *e = &out[n++];
         memset(e, 0, sizeof *e);
@@ -315,7 +316,7 @@ static int64_t msr_list_out(uint64_t arg, bool features) {
     struct kvm_msr_list hdr;
     if (copy_in(&hdr, arg, sizeof hdr) < 0) return -EFAULT;
     uint32_t list[64];
-    uint32_t n = features ? 0 : vmx_msr_index_list(list, 64);
+    uint32_t n = features ? 0 : kvm_arch->msr_index_list(list, 64);
     if (hdr.nmsrs < n) {
         hdr.nmsrs = n;
         copy_out(arg, &hdr, sizeof hdr);
@@ -329,7 +330,7 @@ static int64_t msr_list_out(uint64_t arg, bool features) {
 
 static int64_t create_vm(uint64_t type) {
     if (type != 0) return -EINVAL;
-    if (!vmx_supported()) return -ENODEV;
+    if (!kvm_arch) return -ENODEV;
     task_t *t = syscall_cur_task();
     if (!t || !t->mm) return -EINVAL;
     kvm_vm_t *vm = calloc(1, sizeof *vm);
@@ -574,9 +575,9 @@ static int64_t create_vcpu(kvm_vm_t *vm, uint64_t id) {
     if (!v->run) { free(v); kmutex_unlock(&vm->lock); return -ENOMEM; }
     v->run_phys = pmm_virt_to_phys(v->run);
     v->pio_data_off = KVM_PIO_PAGE_OFFSET * 4096;
-    int r = vmx_vcpu_create(v);
+    int r = kvm_arch->vcpu_create(v);
     if (r < 0) {
-        vmx_vcpu_destroy(v);
+        kvm_arch->vcpu_destroy(v);
         pmm_free(v->run, KVM_RUN_PAGES);
         free(v);
         kmutex_unlock(&vm->lock);
@@ -585,7 +586,7 @@ static int64_t create_vcpu(kvm_vm_t *vm, uint64_t id) {
     vm_get(vm);
     int fd = make_fd(&kvm_vcpu_ops, v);
     if (fd < 0) {
-        vmx_vcpu_destroy(v);
+        kvm_arch->vcpu_destroy(v);
         pmm_free(v->run, KVM_RUN_PAGES);
         free(v);
         kmutex_unlock(&vm->lock);
@@ -731,13 +732,13 @@ static int64_t vcpu_msrs(kvm_vcpu_t *v, uint64_t arg, bool set) {
     if (!ent) return -ENOMEM;
     if (copy_in(ent, arg + sizeof hdr, hdr.nmsrs * sizeof *ent) < 0) { free(ent); return -EFAULT; }
     uint32_t done = 0;
-    vmx_vmcs_enter(v);
+    kvm_arch->state_enter(v);
     for (; done < hdr.nmsrs; done++) {
-        int r = set ? vmx_set_msr(v, ent[done].index, ent[done].data, true)
-                    : vmx_get_msr(v, ent[done].index, &ent[done].data, true);
+        int r = set ? kvm_arch->set_msr(v, ent[done].index, ent[done].data, true)
+                    : kvm_arch->get_msr(v, ent[done].index, &ent[done].data, true);
         if (r < 0) break;
     }
-    vmx_vmcs_leave(v);
+    kvm_arch->state_leave(v);
     int64_t res = done;
     if (!set && copy_out(arg + sizeof hdr, ent, hdr.nmsrs * sizeof *ent) < 0) res = -EFAULT;
     free(ent);
@@ -790,27 +791,27 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
     switch (req) {
     case KVM_RUN:
         if (arg) return -EINVAL;
-        return vmx_vcpu_run(v);
+        return kvm_arch->vcpu_run(v);
     case KVM_GET_REGS: {
         struct kvm_regs r;
-        vmx_get_regs(v, &r);
+        kvm_arch->get_regs(v, &r);
         return copy_out(arg, &r, sizeof r);
     }
     case KVM_SET_REGS: {
         struct kvm_regs r;
         if (copy_in(&r, arg, sizeof r) < 0) return -EFAULT;
-        vmx_set_regs(v, &r);
+        kvm_arch->set_regs(v, &r);
         return 0;
     }
     case KVM_GET_SREGS: {
         struct kvm_sregs s;
-        vmx_get_sregs(v, &s);
+        kvm_arch->get_sregs(v, &s);
         return copy_out(arg, &s, sizeof s);
     }
     case KVM_SET_SREGS: {
         struct kvm_sregs s;
         if (copy_in(&s, arg, sizeof s) < 0) return -EFAULT;
-        return vmx_set_sregs(v, &s);
+        return kvm_arch->set_sregs(v, &s);
     }
     case KVM_GET_FPU: {
         struct kvm_fpu f;
@@ -887,7 +888,7 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         if (copy_in(&xc, arg, sizeof xc) < 0) return -EFAULT;
         if (xc.nr_xcrs > KVM_MAX_XCRS || xc.flags) return -EINVAL;
         for (uint32_t i = 0; i < xc.nr_xcrs; i++) {
-            if (xc.xcrs[i].xcr != 0 || !vmx_xcr0_valid(v, xc.xcrs[i].value)) return -EINVAL;
+            if (xc.xcrs[i].xcr != 0 || !kvm_xcr0_valid(v, xc.xcrs[i].value)) return -EINVAL;
             v->xcr0 = xc.xcrs[i].value;
         }
         return 0;
@@ -945,22 +946,22 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
     }
     case KVM_GET_VCPU_EVENTS: {
         struct kvm_vcpu_events e;
-        vmx_get_events(v, &e);
+        kvm_arch->get_events(v, &e);
         return copy_out(arg, &e, sizeof e);
     }
     case KVM_SET_VCPU_EVENTS: {
         struct kvm_vcpu_events e;
         if (copy_in(&e, arg, sizeof e) < 0) return -EFAULT;
-        return vmx_set_events(v, &e);
+        return kvm_arch->set_events(v, &e);
     }
     case KVM_GET_DEBUGREGS: {
         struct kvm_debugregs d;
         memset(&d, 0, sizeof d);
         memcpy(d.db, v->dr, sizeof d.db);
         d.dr6 = v->dr6;
-        vmx_vmcs_enter(v);
-        d.dr7 = vmread(VMCS_GUEST_DR7);
-        vmx_vmcs_leave(v);
+        kvm_arch->state_enter(v);
+        d.dr7 = kvm_arch->get_dr7(v);
+        kvm_arch->state_leave(v);
         return copy_out(arg, &d, sizeof d);
     }
     case KVM_SET_DEBUGREGS: {
@@ -969,9 +970,9 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         if (d.flags) return -EINVAL;
         memcpy(v->dr, d.db, sizeof v->dr);
         v->dr6 = (d.dr6 & 0xFFFFull) | 0xFFFF0FF0ull;
-        vmx_vmcs_enter(v);
-        vmwrite(VMCS_GUEST_DR7, (d.dr7 & 0xFFFFFFFFull) | 0x400);
-        vmx_vmcs_leave(v);
+        kvm_arch->state_enter(v);
+        kvm_arch->set_dr7(v, d.dr7);
+        kvm_arch->state_leave(v);
         return 0;
     }
     case KVM_X86_SETUP_MCE: {
@@ -1000,9 +1001,9 @@ static int64_t vcpu_ioctl_locked(kvm_vcpu_t *v, uint64_t req, uint64_t arg) {
         return 0;
     }
     case KVM_GET_TSC_KHZ:
-        return (int64_t)vmx_tsc_khz();
+        return (int64_t)g_tsc_khz;
     case KVM_SET_TSC_KHZ:
-        return arg == vmx_tsc_khz() ? 0 : -EINVAL;
+        return arg == g_tsc_khz ? 0 : -EINVAL;
     case KVM_SET_SIGNAL_MASK:
         return 0;
     case KVM_SET_GUEST_DEBUG: {
@@ -1048,7 +1049,7 @@ static void kvm_vcpu_release(vnode_t *node) {
         kmutex_lock(&vm->lock);
         if (vm->vcpus[v->id] == v) vm->vcpus[v->id] = NULL;
         kmutex_unlock(&vm->lock);
-        vmx_vcpu_destroy(v);
+        kvm_arch->vcpu_destroy(v);
         pmm_free(v->run, KVM_RUN_PAGES);
         free(v);
         vm_put(vm);
@@ -1092,8 +1093,8 @@ static const vnode_ops_t kvm_vcpu_ops = {
 static vnode_t g_kvm_node;
 
 void kvm_dev_init(void) {
-    if (!vmx_supported()) {
-        serial_printf("[kvm] no usable VMX, /dev/kvm not created\n");
+    if (!kvm_arch_probe()) {
+        serial_printf("[kvm] no usable VMX or SVM, /dev/kvm not created\n");
         return;
     }
     g_kvm_node.type = VFS_NODE_CHARDEV;

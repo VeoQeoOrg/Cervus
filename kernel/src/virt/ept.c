@@ -137,7 +137,7 @@ void ept_flush_all(kvm_vm_t *vm) {
         kvm_vcpu_t *v = vm->vcpus[i];
         if (!v) continue;
         __atomic_fetch_or(&v->requests, VCPU_REQ_TLB_FLUSH, __ATOMIC_SEQ_CST);
-        vmx_kick(v);
+        kvm_arch->kick(v);
     }
     for (uint32_t i = 0; i < KVM_MAX_VCPUS; i++) {
         kvm_vcpu_t *v = vm->vcpus[i];
@@ -145,7 +145,7 @@ void ept_flush_all(kvm_vm_t *vm) {
         for (uint64_t spins = 0; __atomic_load_n(&v->mode, __ATOMIC_ACQUIRE) == VCPU_IN_GUEST &&
                                  (__atomic_load_n(&v->requests, __ATOMIC_ACQUIRE) & VCPU_REQ_TLB_FLUSH); spins++) {
             asm volatile("pause");
-            if ((spins & 0xFFFFF) == 0xFFFFF) vmx_kick(v);
+            if ((spins & 0xFFFFF) == 0xFFFFF) kvm_arch->kick(v);
         }
     }
 }

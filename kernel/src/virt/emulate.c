@@ -42,11 +42,6 @@ enum {
 
 enum { ALU_ADD, ALU_OR, ALU_ADC, ALU_SBB, ALU_AND, ALU_SUB, ALU_XOR, ALU_CMP, ALU_TEST };
 
-static int guest_cpl(kvm_vcpu_t *vcpu) {
-    if (!(vcpu->cr0 & CR0_PE)) return 0;
-    return (int)((vmread(VMCS_GUEST_SS_AR) >> 5) & 3);
-}
-
 static int read_pte(kvm_vcpu_t *vcpu, uint64_t gpa, uint64_t *out, int width) {
     *out = 0;
     return kvm_read_guest(vcpu->vm, gpa, out, (uint64_t)width);
@@ -58,11 +53,11 @@ int emu_translate(kvm_vcpu_t *vcpu, uint64_t gva, bool write, bool fetch, uint64
         *gpa = lma ? gva : (gva & 0xFFFFFFFFull);
         return 0;
     }
-    bool user = guest_cpl(vcpu) == 3;
+    bool user = kvm_arch->cpl(vcpu) == 3;
     bool nxe = (vcpu->efer & EFER_NXE) != 0;
     uint32_t err = (write ? PFERR_W : 0) | (user ? PFERR_U : 0) | ((fetch && nxe) ? PFERR_I : 0);
     bool writable = true, usr = true, nx = false;
-    uint64_t cr3 = vmread(VMCS_GUEST_CR3);
+    uint64_t cr3 = kvm_arch->get_cr3(vcpu);
     uint64_t base = 0, offmask = 0xFFF;
     uint64_t e;
 
@@ -84,8 +79,7 @@ int emu_translate(kvm_vcpu_t *vcpu, uint64_t gva, bool write, bool fetch, uint64
             if (level == 1) base = table;
         }
     } else if (vcpu->cr4 & CR4_PAE) {
-        static const uint32_t pdpte_field[4] = { VMCS_GUEST_PDPTE0, VMCS_GUEST_PDPTE1, VMCS_GUEST_PDPTE2, VMCS_GUEST_PDPTE3 };
-        uint64_t pdpte = vmread(pdpte_field[(gva >> 30) & 3]);
+        uint64_t pdpte = kvm_arch->get_pdpte(vcpu, (int)((gva >> 30) & 3));
         if (!(pdpte & PG_P)) goto fault_np;
         uint64_t table = pdpte & PG_ADDR;
         if (read_pte(vcpu, table + ((gva >> 21) & 511) * 8, &e, 8) < 0 || !(e & PG_P)) goto fault_np;
@@ -181,8 +175,8 @@ typedef struct {
 } insn_t;
 
 static int fetch_insn(kvm_vcpu_t *vcpu, insn_t *in) {
-    uint64_t rip = vmread(VMCS_GUEST_RIP);
-    uint64_t lin = vmread(VMCS_GUEST_CS_BASE) + rip;
+    uint64_t rip = kvm_arch->get_rip(vcpu);
+    uint64_t lin = kvm_arch->seg_base(vcpu, SEG_CS) + rip;
     if (!in->mode64) lin &= 0xFFFFFFFFull;
     in->n = 0;
     while (in->n < 15) {
@@ -261,19 +255,19 @@ static uint64_t sext(uint64_t v, int size) {
 }
 
 static uint64_t greg_get(kvm_vcpu_t *vcpu, int reg, bool high, int size) {
-    uint64_t v = vmx_reg_read(vcpu, reg);
+    uint64_t v = kvm_arch->get_reg(vcpu, reg);
     if (high) return (v >> 8) & 0xFF;
     return v & size_mask(size);
 }
 
 static void greg_set(kvm_vcpu_t *vcpu, int reg, bool high, int size, uint64_t val) {
-    uint64_t v = vmx_reg_read(vcpu, reg);
+    uint64_t v = kvm_arch->get_reg(vcpu, reg);
     if (high) v = (v & ~0xFF00ull) | ((val & 0xFF) << 8);
     else if (size == 1) v = (v & ~0xFFull) | (val & 0xFF);
     else if (size == 2) v = (v & ~0xFFFFull) | (val & 0xFFFF);
     else if (size == 4) v = val & 0xFFFFFFFFull;
     else v = val;
-    vmx_reg_write(vcpu, reg, v);
+    kvm_arch->set_reg(vcpu, reg, v);
 }
 
 static void byte_reg(insn_t *in, int reg, int size, uint8_t *out_reg, bool *out_high) {
@@ -294,7 +288,7 @@ static uint64_t alu_exec(kvm_vcpu_t *vcpu, int op, uint64_t a, uint64_t b, int s
     (void)vcpu;
     uint64_t mask = size_mask(size);
     uint64_t sign = 1ull << (size * 8 - 1);
-    uint64_t fl = vmread(VMCS_GUEST_RFLAGS);
+    uint64_t fl = kvm_arch->get_rflags(vcpu);
     uint64_t cin = fl & RFLAGS_CF;
     a &= mask; b &= mask;
     uint64_t r = 0;
@@ -331,15 +325,12 @@ static uint64_t alu_exec(kvm_vcpu_t *vcpu, int op, uint64_t a, uint64_t b, int s
     if (!r) fl |= RFLAGS_ZF;
     if (r & sign) fl |= RFLAGS_SF;
     if (parity8(r)) fl |= RFLAGS_PF;
-    vmwrite(VMCS_GUEST_RFLAGS, fl);
+    kvm_arch->set_rflags(vcpu, fl);
     return r;
 }
 
 static void finish_insn(kvm_vcpu_t *vcpu, uint64_t next_rip) {
-    bool m64 = (vcpu->efer & EFER_LMA) && ((vmread(VMCS_GUEST_CS_AR) >> 13) & 1);
-    vmwrite(VMCS_GUEST_RIP, m64 ? next_rip : (next_rip & 0xFFFFFFFFull));
-    uint32_t intr = (uint32_t)vmread(VMCS_GUEST_INTERRUPTIBILITY);
-    if (intr & 3) vmwrite(VMCS_GUEST_INTERRUPTIBILITY, intr & ~3u);
+    kvm_finish_insn(vcpu, next_rip);
 }
 
 static int mmio_exit(kvm_vcpu_t *vcpu, uint64_t gpa, int size, bool write, uint64_t data) {
@@ -362,7 +353,7 @@ static int mmio_write(kvm_vcpu_t *vcpu, uint64_t gpa, int size, uint64_t data) {
 
 static int emu_fail(kvm_vcpu_t *vcpu, insn_t *in, uint64_t gpa) {
     struct kvm_run *run = vcpu->run;
-    serial_printf("[kvm] cannot emulate mmio at %llx rip=%llx bytes:", gpa, vmread(VMCS_GUEST_RIP));
+    serial_printf("[kvm] cannot emulate mmio at %llx rip=%llx bytes:", gpa, kvm_arch->get_rip(vcpu));
     for (int i = 0; i < in->n && i < 15; i++) serial_printf(" %02x", in->b[i]);
     serial_printf("\n");
     run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
@@ -384,27 +375,27 @@ static uint64_t addr_mask(int addrsize) {
 }
 
 static uint64_t string_linear(kvm_vcpu_t *vcpu, int seg, int reg, int addrsize) {
-    uint64_t off = vmx_reg_read(vcpu, reg) & addr_mask(addrsize);
+    uint64_t off = kvm_arch->get_reg(vcpu, reg) & addr_mask(addrsize);
     uint64_t lin = emu_seg_base(vcpu, seg) + off;
-    if (addrsize != 8 && !((vcpu->efer & EFER_LMA) && ((vmread(VMCS_GUEST_CS_AR) >> 13) & 1)))
+    if (addrsize != 8 && !((vcpu->efer & EFER_LMA) && (kvm_arch->cs_mode(vcpu) & KVM_CS_LONG)))
         lin &= 0xFFFFFFFFull;
     return lin;
 }
 
 static void string_advance(kvm_vcpu_t *vcpu, int reg, int addrsize, int size) {
     uint64_t m = addr_mask(addrsize);
-    uint64_t v = vmx_reg_read(vcpu, reg);
+    uint64_t v = kvm_arch->get_reg(vcpu, reg);
     uint64_t off = v & m;
-    off = (vmread(VMCS_GUEST_RFLAGS) & RFLAGS_DF) ? off - (uint64_t)size : off + (uint64_t)size;
-    vmx_reg_write(vcpu, reg, (v & ~m) | (off & m));
+    off = (kvm_arch->get_rflags(vcpu) & RFLAGS_DF) ? off - (uint64_t)size : off + (uint64_t)size;
+    kvm_arch->set_reg(vcpu, reg, (v & ~m) | (off & m));
 }
 
 static bool string_rep_done(kvm_vcpu_t *vcpu, bool rep, int addrsize) {
     if (!rep) return true;
     uint64_t m = addr_mask(addrsize);
-    uint64_t v = vmx_reg_read(vcpu, VCPU_REG_RCX);
+    uint64_t v = kvm_arch->get_reg(vcpu, VCPU_REG_RCX);
     uint64_t c = ((v & m) - 1) & m;
-    vmx_reg_write(vcpu, VCPU_REG_RCX, (v & ~m) | c);
+    kvm_arch->set_reg(vcpu, VCPU_REG_RCX, (v & ~m) | c);
     return c == 0;
 }
 
@@ -412,9 +403,9 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
     insn_t in;
     kvm_pending_t *p = &vcpu->pend;
     memset(&in, 0, sizeof in);
-    uint64_t cs_ar = vmread(VMCS_GUEST_CS_AR);
-    in.mode64 = (vcpu->efer & EFER_LMA) && ((cs_ar >> 13) & 1);
-    bool def32 = in.mode64 || ((cs_ar >> 14) & 1);
+    uint32_t csm = kvm_arch->cs_mode(vcpu);
+    in.mode64 = (vcpu->efer & EFER_LMA) && (csm & KVM_CS_LONG);
+    bool def32 = in.mode64 || (csm & KVM_CS_DB);
     in.opsize = def32 ? 4 : 2;
     in.addrsize = in.mode64 ? 8 : def32 ? 4 : 2;
     in.seg = -1;
@@ -468,7 +459,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             if (in.mod == 3) goto unsupported;
             uint8_t r; bool hi;
             byte_reg(&in, in.reg, size, &r, &hi);
-            uint64_t next = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            uint64_t next = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             if (op <= 0x89) {
                 uint64_t v = greg_get(vcpu, r, hi, size);
                 finish_insn(vcpu, next);
@@ -483,14 +474,14 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             if (!parse_modrm(&in)) goto truncated;
             if (in.mod == 3 || (in.reg & 7) != 0) goto unsupported;
             if (!read_imm(&in, size == 8 ? 4 : size, &imm)) goto truncated;
-            finish_insn(vcpu, vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos);
+            finish_insn(vcpu, kvm_arch->get_rip(vcpu) + (uint64_t)in.pos);
             return mmio_write(vcpu, gpa, size, (uint64_t)imm & size_mask(size));
         }
         if (op >= 0xA0 && op <= 0xA3) {
             size = (op & 1) ? in.opsize : 1;
             if (!need(&in, in.addrsize)) goto truncated;
             in.pos += in.addrsize;
-            uint64_t next = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            uint64_t next = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             if (op >= 0xA2) {
                 uint64_t v = greg_get(vcpu, VCPU_REG_RAX, false, size);
                 finish_insn(vcpu, next);
@@ -505,7 +496,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             if (in.mod == 3) goto unsupported;
             p->op = EOP_LOADX; p->size = 4; p->sign_extend = true;
             p->dst_reg = in.reg; p->dst_size = (uint8_t)in.opsize;
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op < 0x40 && (op & 7) < 4) {
@@ -517,7 +508,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             uint8_t r; bool hi;
             byte_reg(&in, in.reg, size, &r, &hi);
             p->size = (uint8_t)size; p->dst_reg = r; p->high_byte = hi; p->dst_size = (uint8_t)size;
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             if (to_rm) {
                 p->op = alu == ALU_CMP ? EOP_FLAGS : EOP_ALU_RM;
                 p->rmw_operand = greg_get(vcpu, r, hi, size);
@@ -543,7 +534,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             p->phase = (uint8_t)alu;
             p->size = (uint8_t)size;
             p->rmw_operand = (uint64_t)imm & size_mask(size);
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op == 0x84 || op == 0x85) {
@@ -554,7 +545,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             byte_reg(&in, in.reg, size, &r, &hi);
             p->op = EOP_FLAGS; p->phase = ALU_TEST; p->size = (uint8_t)size;
             p->rmw_operand = greg_get(vcpu, r, hi, size);
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op == 0xF6 || op == 0xF7) {
@@ -564,7 +555,7 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             if (!read_imm(&in, size == 8 ? 4 : size, &imm)) goto truncated;
             p->op = EOP_FLAGS; p->phase = ALU_TEST; p->size = (uint8_t)size;
             p->rmw_operand = (uint64_t)imm & size_mask(size);
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op == 0x86 || op == 0x87) {
@@ -575,14 +566,14 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             byte_reg(&in, in.reg, size, &r, &hi);
             p->op = EOP_XCHG; p->size = (uint8_t)size; p->dst_reg = r; p->high_byte = hi;
             p->dst_size = (uint8_t)size;
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op == 0xAA || op == 0xAB || op == 0xAC || op == 0xAD || op == 0xA4 || op == 0xA5) {
             size = (op & 1) ? in.opsize : 1;
             bool rep = in.rep != 0;
-            uint64_t next = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
-            if (rep && !(vmx_reg_read(vcpu, VCPU_REG_RCX) & addr_mask(in.addrsize))) {
+            uint64_t next = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
+            if (rep && !(kvm_arch->get_reg(vcpu, VCPU_REG_RCX) & addr_mask(in.addrsize))) {
                 finish_insn(vcpu, next);
                 return 1;
             }
@@ -634,14 +625,14 @@ int emu_mmio(kvm_vcpu_t *vcpu, uint64_t gpa) {
             p->sign_extend = op >= 0xBE;
             p->dst_reg = in.reg;
             p->dst_size = (uint8_t)in.opsize;
-            p->next_rip = vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos;
+            p->next_rip = kvm_arch->get_rip(vcpu) + (uint64_t)in.pos;
             goto do_read;
         }
         if (op == 0xC3) {
             if (!parse_modrm(&in)) goto truncated;
             if (in.mod == 3) goto unsupported;
             uint64_t v = greg_get(vcpu, in.reg, false, in.opsize);
-            finish_insn(vcpu, vmread(VMCS_GUEST_RIP) + (uint64_t)in.pos);
+            finish_insn(vcpu, kvm_arch->get_rip(vcpu) + (uint64_t)in.pos);
             return mmio_write(vcpu, gpa, in.opsize, v);
         }
     }

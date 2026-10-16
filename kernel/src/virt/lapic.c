@@ -140,7 +140,7 @@ static void request_event(kvm_vcpu_t *v) {
 
 void kvm_vcpu_kick(kvm_vcpu_t *v) {
     request_event(v);
-    vmx_kick(v);
+    kvm_arch->kick(v);
     uint64_t f = spinlock_acquire_irqsave(&v->halt_lock);
     waitq_wake_all(&v->halt_wq);
     spinlock_release_irqrestore(&v->halt_lock, f);

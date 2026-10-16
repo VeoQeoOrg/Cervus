@@ -1246,7 +1246,7 @@ void sched_reschedule(void) {
         }
     }
 
-    if (old && old->kvm_vcpu) vmx_sched_out(old->kvm_vcpu);
+    if (old && old->kvm_vcpu) kvm_arch->sched_out(old->kvm_vcpu);
 
     if (old && old->fpu_state && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
         fpu_save(old->fpu_state);
@@ -1332,7 +1332,7 @@ void sched_reschedule(void) {
 
     {
         task_t *resumed = current_task[smp_cpu_index()];
-        if (resumed && resumed->kvm_vcpu) vmx_sched_in(resumed->kvm_vcpu);
+        if (resumed && resumed->kvm_vcpu) kvm_arch->sched_in(resumed->kvm_vcpu);
     }
 
     asm volatile("sti");

@@ -242,30 +242,79 @@ struct kvm_vm {
     uint64_t         mcg_cap_supported;
 };
 
+typedef struct kvm_arch_ops {
+    const char *name;
+    int      (*vcpu_create)(kvm_vcpu_t *v);
+    void     (*vcpu_destroy)(kvm_vcpu_t *v);
+    int      (*vcpu_run)(kvm_vcpu_t *v);
+    void     (*sched_out)(kvm_vcpu_t *v);
+    void     (*sched_in)(kvm_vcpu_t *v);
+    void     (*state_enter)(kvm_vcpu_t *v);
+    void     (*state_leave)(kvm_vcpu_t *v);
+    void     (*kick)(kvm_vcpu_t *v);
+    void     (*get_regs)(kvm_vcpu_t *v, struct kvm_regs *r);
+    void     (*set_regs)(kvm_vcpu_t *v, const struct kvm_regs *r);
+    void     (*get_sregs)(kvm_vcpu_t *v, struct kvm_sregs *s);
+    int      (*set_sregs)(kvm_vcpu_t *v, const struct kvm_sregs *s);
+    void     (*get_events)(kvm_vcpu_t *v, struct kvm_vcpu_events *e);
+    int      (*set_events)(kvm_vcpu_t *v, const struct kvm_vcpu_events *e);
+    int      (*get_msr)(kvm_vcpu_t *v, uint32_t index, uint64_t *data, bool host);
+    int      (*set_msr)(kvm_vcpu_t *v, uint32_t index, uint64_t data, bool host);
+    uint64_t (*get_dr7)(kvm_vcpu_t *v);
+    void     (*set_dr7)(kvm_vcpu_t *v, uint64_t val);
+    uint64_t (*supported_cr4)(void);
+    void     (*adjust_cpuid)(struct kvm_cpuid_entry2 *e);
+    uint32_t (*msr_index_list)(uint32_t *out, uint32_t max);
+    void     (*apply_tsc_offset)(kvm_vcpu_t *v);
+    uint64_t (*get_rip)(kvm_vcpu_t *v);
+    void     (*set_rip)(kvm_vcpu_t *v, uint64_t rip);
+    uint64_t (*get_rflags)(kvm_vcpu_t *v);
+    void     (*set_rflags)(kvm_vcpu_t *v, uint64_t fl);
+    uint64_t (*get_reg)(kvm_vcpu_t *v, int reg);
+    void     (*set_reg)(kvm_vcpu_t *v, int reg, uint64_t val);
+    uint64_t (*seg_base)(kvm_vcpu_t *v, int seg);
+    uint32_t (*cs_mode)(kvm_vcpu_t *v);
+    int      (*cpl)(kvm_vcpu_t *v);
+    uint64_t (*get_cr3)(kvm_vcpu_t *v);
+    uint64_t (*get_pdpte)(kvm_vcpu_t *v, int i);
+    void     (*clear_int_shadow)(kvm_vcpu_t *v);
+    void     (*skip_insn)(kvm_vcpu_t *v);
+    void     (*init_reset)(kvm_vcpu_t *v);
+    void     (*sipi)(kvm_vcpu_t *v, uint8_t vector);
+} kvm_arch_ops_t;
+
+#define KVM_CS_LONG 1u
+#define KVM_CS_DB   2u
+
+extern const kvm_arch_ops_t *kvm_arch;
+extern const kvm_arch_ops_t vmx_ops;
+
 bool     vmx_supported(void);
-int      vmx_vcpu_create(kvm_vcpu_t *vcpu);
-void     vmx_vcpu_destroy(kvm_vcpu_t *vcpu);
-int      vmx_vcpu_run(kvm_vcpu_t *vcpu);
-void     vmx_vcpu_reset(kvm_vcpu_t *vcpu);
-void     vmx_sched_out(kvm_vcpu_t *vcpu);
-void     vmx_sched_in(kvm_vcpu_t *vcpu);
-void     vmx_vmcs_enter(kvm_vcpu_t *vcpu);
-bool     vmx_xcr0_valid(kvm_vcpu_t *vcpu, uint64_t v);
-void     vmx_vmcs_leave(kvm_vcpu_t *vcpu);
-void     vmx_get_regs(kvm_vcpu_t *vcpu, struct kvm_regs *r);
-void     vmx_set_regs(kvm_vcpu_t *vcpu, const struct kvm_regs *r);
-void     vmx_get_sregs(kvm_vcpu_t *vcpu, struct kvm_sregs *s);
-int      vmx_set_sregs(kvm_vcpu_t *vcpu, const struct kvm_sregs *s);
-void     vmx_get_events(kvm_vcpu_t *vcpu, struct kvm_vcpu_events *e);
-int      vmx_set_events(kvm_vcpu_t *vcpu, const struct kvm_vcpu_events *e);
-int      vmx_get_msr(kvm_vcpu_t *vcpu, uint32_t index, uint64_t *data, bool host);
-int      vmx_set_msr(kvm_vcpu_t *vcpu, uint32_t index, uint64_t data, bool host);
-uint64_t vmx_reg_read(kvm_vcpu_t *vcpu, int reg);
-void     vmx_reg_write(kvm_vcpu_t *vcpu, int reg, uint64_t val);
-uint64_t vmx_supported_cr4(void);
-uint32_t vmx_msr_index_list(uint32_t *out, uint32_t max);
-uint64_t vmx_tsc_khz(void);
-void     vmx_kick(kvm_vcpu_t *vcpu);
+bool     kvm_arch_probe(void);
+
+const struct kvm_cpuid_entry2 *kvm_find_cpuid(kvm_vcpu_t *v, uint32_t fn, uint32_t idx);
+bool     kvm_xcr0_valid(kvm_vcpu_t *v, uint64_t val);
+void     kvm_queue_exception(kvm_vcpu_t *v, uint8_t vec, bool has_err, uint32_t err);
+void     kvm_finish_insn(kvm_vcpu_t *v, uint64_t next_rip);
+bool     kvm_canonical(uint64_t v);
+int      kvm_msr_get_common(kvm_vcpu_t *v, uint32_t msr, uint64_t *data, bool host);
+int      kvm_msr_set_common(kvm_vcpu_t *v, uint32_t msr, uint64_t data, bool host);
+int      kvm_handle_cpuid(kvm_vcpu_t *v);
+int      kvm_handle_xsetbv(kvm_vcpu_t *v);
+int      kvm_handle_rdmsr(kvm_vcpu_t *v);
+int      kvm_handle_wrmsr(kvm_vcpu_t *v);
+int      kvm_handle_pio(kvm_vcpu_t *v, uint16_t port, uint8_t size, bool in, bool string, bool rep,
+                        int addr_size, int seg, uint64_t next_rip);
+int      kvm_complete_pending(kvm_vcpu_t *v);
+bool     kvm_should_stop(kvm_vcpu_t *v);
+int      kvm_vcpu_halt(kvm_vcpu_t *v);
+int      kvm_vcpu_mp_wait(kvm_vcpu_t *v);
+void     kvm_vcpu_reset_soft(kvm_vcpu_t *v);
+uint64_t kvm_vcpu_cr8(kvm_vcpu_t *v);
+bool     kvm_accepts_extint(kvm_vcpu_t *v);
+int      kvm_exit_internal(kvm_vcpu_t *v, uint32_t suberror, uint64_t d0, uint64_t d1);
+void     kvm_guest_fpu_load(kvm_vcpu_t *v);
+void     kvm_guest_fpu_put(kvm_vcpu_t *v);
 
 int      ept_init(kvm_vm_t *vm);
 void     ept_destroy(kvm_vm_t *vm);
