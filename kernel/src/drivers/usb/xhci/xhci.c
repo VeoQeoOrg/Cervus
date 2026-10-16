@@ -74,6 +74,7 @@ extern void devfs_register(const char *name, vnode_t *node);
 #define TRB_LINK              6
 #define TRB_NO_OP_CMD         23
 #define TRB_ENABLE_SLOT       9
+#define TRB_DISABLE_SLOT      10
 #define TRB_ADDRESS_DEVICE    11
 #define TRB_RESET_DEVICE      17
 #define TRB_RESET_ENDPOINT    14
@@ -445,17 +446,10 @@ static int xhci_address_device(xhci_controller_t *c, const xhci_topology_t *topo
     return 0;
 }
 
-static int xhci_reset_device(xhci_controller_t *c, uint8_t slot_id) {
+static void xhci_disable_slot(xhci_controller_t *c, uint8_t slot_id) {
     xhci_trb_t ev;
-    int r = xhci_send_cmd(c, 0, 0,
-                          TRB_TYPE(TRB_RESET_DEVICE) | ((uint32_t)slot_id << 24), &ev);
-    if (r < 0) return r;
-    uint8_t cc = (uint8_t)((ev.status >> 24) & 0xFFu);
-    if (cc != CC_SUCCESS) {
-        serial_printf("[xhci] RESET_DEVICE: cc=%u\n", cc);
-        return -EIO;
-    }
-    return 0;
+    xhci_send_cmd(c, 0, 0, TRB_TYPE(TRB_DISABLE_SLOT) | ((uint32_t)slot_id << 24), &ev);
+    c->dcbaa[slot_id] = 0;
 }
 
 int xhci_reset_endpoint(xhci_controller_t *c, uint8_t slot_id, uint8_t dci) {
@@ -797,7 +791,7 @@ static int xhci_evaluate_ep0_mps(xhci_controller_t *c, uint8_t slot_id, uint16_t
     return 0;
 }
 
-void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
+int enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
                       const char *path_label)
 {
     xhci_trb_t ev;
@@ -806,12 +800,12 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         serial_printf("[xhci] %s: ENABLE SLOT timed out (USBSTS=0x%x CRCR=0x%x IMAN=0x%x)\n",
                       path_label, op_r32(c, XHCI_OP_USBSTS), op_r32(c, XHCI_OP_CRCR),
                       rt_r32(c, XHCI_RT_IR0_IMAN));
-        return;
+        return -ETIMEDOUT;
     }
     if (((ev.status >> 24) & 0xFFu) != CC_SUCCESS) {
         serial_printf("[xhci] %s: ENABLE SLOT failed, completion code %u\n",
                       path_label, (ev.status >> 24) & 0xFFu);
-        return;
+        return -EIO;
     }
     uint8_t slot_id = (uint8_t)((ev.control >> 24) & 0xFFu);
 
@@ -819,16 +813,19 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
     xhci_trb_t *ep0_ring =
         (xhci_trb_t *)dma_alloc_coherent(XHCI_CMD_RING_TRBS * sizeof(xhci_trb_t),
                                          &ep0_phys);
-    if (!ep0_ring) return;
+    if (!ep0_ring) { xhci_disable_slot(c, slot_id); return -ENOMEM; }
     memset(ep0_ring, 0, XHCI_CMD_RING_TRBS * sizeof(xhci_trb_t));
     xhci_trb_t *link = &ep0_ring[XHCI_CMD_RING_TRBS - 1];
     link->parameter = (uint64_t)ep0_phys;
     link->control   = TRB_TYPE(TRB_LINK) | TRB_TC;
 
     uintptr_t inctx_phys = 0;
-    if (xhci_address_device(c, topo, slot_id, ep0_phys, 1, &inctx_phys) < 0) return;
-    xhci_reset_device(c, slot_id);
-    if (xhci_readdress_device(c, slot_id, inctx_phys) < 0) return;
+    if (xhci_address_device(c, topo, slot_id, ep0_phys, 1, &inctx_phys) < 0 ||
+        xhci_readdress_device(c, slot_id, inctx_phys) < 0) {
+        xhci_disable_slot(c, slot_id);
+        dma_free_coherent(ep0_ring, XHCI_CMD_RING_TRBS * sizeof(xhci_trb_t));
+        return -EIO;
+    }
 
     uint16_t enq = 0;
     uint8_t  cyc = 1;
@@ -848,8 +845,11 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
     }
 
     uint8_t  desc[18];
-    if (usb_get_device_descriptor(&ops, desc) < 0)
-        return;
+    if (usb_get_device_descriptor(&ops, desc) < 0) {
+        xhci_disable_slot(c, slot_id);
+        dma_free_coherent(ep0_ring, XHCI_CMD_RING_TRBS * sizeof(xhci_trb_t));
+        return -EIO;
+    }
 
     uint16_t bcd_usb = (uint16_t)desc[2] | ((uint16_t)desc[3] << 8);
     uint16_t vid     = (uint16_t)desc[8] | ((uint16_t)desc[9] << 8);
@@ -867,14 +867,14 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
                   dcls, usb_class_name(dcls),
                   (unsigned)desc[7], (unsigned)n_cfg);
 
-    if (n_cfg == 0) return;
+    if (n_cfg == 0) return 0;
 
     uint8_t cfg_full[512];
     uint16_t total = 0;
     uint8_t  cfg_value = 0;
     if (usb_get_config(&ops, cfg_full, sizeof(cfg_full), &total, &cfg_value) < 0) {
         serial_writestring("[xhci]   GET_DESCRIPTOR(config): failed\n");
-        return;
+        return 0;
     }
 
     usb_net_iface_t net;
@@ -905,7 +905,7 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
 
     if (usb_set_configuration(&ops, cfg_value) < 0) {
         serial_writestring("[xhci]   SET_CONFIGURATION: failed\n");
-        return;
+        return 0;
     }
     serial_printf("[xhci]   SET_CONFIGURATION %u: ok\n", cfg_value);
 
@@ -952,7 +952,7 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         if (xhci_hub_register(c, slot_id, topo,
                               ep0_ring, ep0_phys, &enq, &cyc) < 0)
             serial_writestring("[xhci]   Hub register failed\n");
-        return;
+        return 0;
     }
 
     if (ifaces.hid.present && ifaces.hid.in_ep) {
@@ -987,27 +987,32 @@ void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
         if (xhci_net_register(c, slot_id, topo, ep0_ring, ep0_phys, enq, cyc, vid, pid, &net) < 0)
             serial_writestring("[xhci]   network function register failed\n");
     }
+    return 0;
 }
 
 static void xhci_enumerate_port(xhci_controller_t *c, int port) {
-    uint8_t speed;
-    int r = xhci_port_reset(c, (uint8_t)port, &speed);
-    if (r < 0) {
-        serial_printf("[xhci] port %d reset failed (%d)\n", port + 1, r);
-        return;
-    }
+    for (int attempt = 0; attempt < 3; attempt++) {
+        uint8_t speed;
+        int r = xhci_port_reset(c, (uint8_t)port, &speed);
+        if (r < 0) {
+            serial_printf("[xhci] port %d reset failed (%d)\n", port + 1, r);
+            return;
+        }
+        hpet_sleep_ms(attempt ? 50 : 10);
 
-    xhci_topology_t topo = {
-        .speed         = speed,
-        .root_hub_port = (uint8_t)(port + 1),
-        .route_string  = 0,
-        .parent_slot   = 0,
-        .parent_port   = 0,
-        .depth         = 0,
-    };
-    char label[16];
-    snprintf(label, sizeof(label), "port %d", port + 1);
-    enumerate_device(c, &topo, label);
+        xhci_topology_t topo = {
+            .speed         = speed,
+            .root_hub_port = (uint8_t)(port + 1),
+            .route_string  = 0,
+            .parent_slot   = 0,
+            .parent_port   = 0,
+            .depth         = 0,
+        };
+        char label[16];
+        snprintf(label, sizeof(label), "port %d", port + 1);
+        if (enumerate_device(c, &topo, label) == 0) return;
+        serial_printf("[xhci] port %d: enumeration attempt %d failed\n", port + 1, attempt + 1);
+    }
 }
 
 static void xhci_enumerate_ports(xhci_controller_t *c) {

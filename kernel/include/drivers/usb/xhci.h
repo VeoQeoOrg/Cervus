@@ -252,7 +252,7 @@ void xhci_hub_post_init(void);
 void xhci_hub_tick(void);
 void xhci_hub_disconnect_slot(uint8_t slot_id);
 
-void enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
+int  enumerate_device(xhci_controller_t *c, const xhci_topology_t *topo,
                       const char *path_label);
 
 #endif
