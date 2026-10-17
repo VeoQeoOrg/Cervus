@@ -35,7 +35,7 @@ static int src_read(const elf_source_t *src, void *dst, uint64_t off, size_t len
     return -1;
 }
 
-#define ELF_PIE_BASE        0x0000000000400000ULL
+#define ELF_PIE_BASE        0x0000555555554000ULL
 #define ELF_INTERP_BASE     0x00007F0000000000ULL
 #define ELF_DEFAULT_STACK   (256 * 1024)
 
