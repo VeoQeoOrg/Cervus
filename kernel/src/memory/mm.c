@@ -618,7 +618,8 @@ static int64_t map_template(mm_t *mm, uintptr_t addr, size_t len, bool fixed, vm
     kmutex_lock(&mm->lock);
     uintptr_t at = pdown(addr);
     if (fixed) {
-        if (at + len > MM_USER_TOP || at + len < at || at < 0x1000) { kmutex_unlock(&mm->lock); kfree(v); return -EINVAL; }
+        if (at + len > MM_USER_TOP || at + len < at) { kmutex_unlock(&mm->lock); kfree(v); return -ENOMEM; }
+        if (at < 0x1000) { kmutex_unlock(&mm->lock); kfree(v); return -EPERM; }
         int r = unmap_locked(mm, at, at + len);
         if (r < 0) { kmutex_unlock(&mm->lock); kfree(v); return r; }
     } else if (!at || at + len > MM_USER_TOP || at < 0x10000 || !range_free(mm, at, at + len)) {

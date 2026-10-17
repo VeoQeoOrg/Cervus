@@ -45,8 +45,8 @@ int64_t sys_mmap(uint64_t hint, uint64_t length, uint64_t prot, uint64_t flags, 
     if (flags & MAP_FIXED_NOREPLACE) {
         uintptr_t a = hint & ~0xFFFULL;
         uintptr_t e = a + ((length + 0xFFF) & ~0xFFFULL);
-        for (uintptr_t p = a; p < e; p += 0x1000)
-            if (mm_find_vma(t->mm, p)) return -EEXIST;
+        if (e < a || e > MM_USER_TOP) return -ENOMEM;
+        if (!mm_range_free(t->mm, a, e)) return -EEXIST;
         fixed = true;
     }
     if (fixed && (hint & 0xFFFULL)) return -EINVAL;
