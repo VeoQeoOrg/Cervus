@@ -115,6 +115,8 @@ typedef struct vnode_ops {
     int     (*link)    (vnode_t *dir, const char *name, vnode_t *target);
     int     (*mknod)   (vnode_t *dir, const char *name, uint32_t mode, uint64_t rdev);
     int64_t (*ioctl_raw)(vnode_t *node, uint64_t req, uint64_t arg);
+    int     (*open_dev)(vnode_t *node, struct vfs_file *file);
+    void    (*release_file)(struct vfs_file *file);
 } vnode_ops_t;
 
 struct vnode {

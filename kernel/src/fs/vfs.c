@@ -323,6 +323,8 @@ void vfs_file_free(vfs_file_t *file) {
     if (!file) return;
     int old = __atomic_fetch_sub(&file->refcount, 1, __ATOMIC_ACQ_REL);
     if (old == 1) {
+        if (file->vnode && file->vnode->ops && file->vnode->ops->release_file)
+            file->vnode->ops->release_file(file);
         int acc = file->flags & O_ACCMODE;
         if (file->vnode && (acc == O_WRONLY || acc == O_RDWR))
             __atomic_fetch_sub(&file->vnode->writers, 1, __ATOMIC_ACQ_REL);
@@ -453,6 +455,16 @@ int vfs_open(const char *path, int flags, uint32_t mode, vfs_file_t **out) {
     }
 
     if (node->ops && node->ops->open_file) node->ops->open_file(node, file);
+    if (node->ops && node->ops->open_dev) {
+        int r = node->ops->open_dev(node, file);
+        if (r < 0) {
+            if (writing) __atomic_fetch_sub(&node->writers, 1, __ATOMIC_ACQ_REL);
+            vnode_unref(node);
+            if (file->path) kfree(file->path);
+            kfree(file);
+            return r;
+        }
+    }
 
     *out = file;
     return 0;
