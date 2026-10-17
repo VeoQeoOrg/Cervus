@@ -153,10 +153,53 @@ static const char *path_next_component(const char *src, char *dst, size_t maxlen
 
 static int lookup_path(const char *path, vnode_t **out, bool follow_final, int depth);
 
-static int walk_from(vnode_t *dir, const char *rel, vnode_t **out,
+static int follow_link(const char *dirpath, const char *target, const char *rest,
+                       vnode_t **out, bool follow_final, int depth) {
+    char full[VFS_MAX_PATH];
+    const char *root = task_fs_root();
+    size_t rl = (root && root[0] && !(root[0] == '/' && !root[1])) ? strlen(root) : 0;
+    size_t n = 0;
+    if (target[0] == '/') {
+        if (rl + strlen(target) + 1 > sizeof(full)) return -ENAMETOOLONG;
+        if (rl) memcpy(full, root, rl);
+        n = rl;
+    } else {
+        size_t dl = strlen(dirpath);
+        if (dl + 1 + strlen(target) + 1 > sizeof(full)) return -ENAMETOOLONG;
+        memcpy(full, dirpath, dl);
+        n = dl;
+        full[n++] = '/';
+    }
+    size_t tl = strlen(target);
+    memcpy(full + n, target, tl);
+    n += tl;
+    if (rest && *rest) {
+        size_t restl = strlen(rest);
+        if (n + 1 + restl + 1 > sizeof(full)) return -ENAMETOOLONG;
+        full[n++] = '/';
+        memcpy(full + n, rest, restl);
+        n += restl;
+    }
+    full[n] = '\0';
+    syscall_path_normalize(full);
+    if (rl && (strncmp(full, root, rl) != 0 || (full[rl] != '/' && full[rl] != '\0'))) {
+        memcpy(full, root, rl);
+        full[rl] = '\0';
+    }
+    return lookup_path(full, out, follow_final, depth + 1);
+}
+
+static int walk_from(vnode_t *dir, const char *base, const char *rel, vnode_t **out,
                      bool follow_final, int depth) {
     vnode_t *cur = dir;
     vnode_ref(cur);
+
+    char curpath[VFS_MAX_PATH];
+    size_t cl = strlen(base);
+    if (cl >= sizeof(curpath)) cl = sizeof(curpath) - 1;
+    memcpy(curpath, base, cl);
+    curpath[cl] = '\0';
+    while (cl > 1 && curpath[cl - 1] == '/') curpath[--cl] = '\0';
 
     char comp[VFS_MAX_NAME];
     const char *p = rel;
@@ -198,27 +241,18 @@ static int walk_from(vnode_t *dir, const char *rel, vnode_t **out,
             char target[VFS_MAX_PATH];
             int64_t n = next->ops->readlink(next, target, sizeof(target) - 1);
             vnode_unref(next);
-            if (n < 0) { vnode_unref(cur); return (int)n; }
+            vnode_unref(cur);
+            if (n < 0) return (int)n;
             target[n] = '\0';
+            return follow_link(curpath, target, p, out, follow_final, depth);
+        }
 
-            vnode_t *resolved = NULL;
-            const char *root = target[0] == '/' ? task_fs_root() : NULL;
-            if (root) {
-                char full[VFS_MAX_PATH];
-                size_t rl = strlen(root);
-                syscall_path_normalize(target);
-                if (rl + strlen(target) + 1 > sizeof(full)) { vnode_unref(cur); return -ENAMETOOLONG; }
-                memcpy(full, root, rl);
-                strcpy(full + rl, target[1] ? target : "");
-                if (!full[0]) strcpy(full, "/");
-                ret = lookup_path(full, &resolved, is_last ? follow_final : true, depth + 1);
-            } else if (target[0] == '/')
-                ret = lookup_path(target, &resolved, is_last ? follow_final : true, depth + 1);
-            else
-                ret = walk_from(cur, target, &resolved, is_last ? follow_final : true, depth + 1);
-            if (ret < 0) { vnode_unref(cur); return ret; }
-
-            next = resolved;
+        size_t compl = strlen(comp);
+        if (cl + 1 + compl < sizeof(curpath)) {
+            if (cl > 1 || curpath[0] != '/') curpath[cl++] = '/';
+            memcpy(curpath + cl, comp, compl);
+            cl += compl;
+            curpath[cl] = '\0';
         }
 
         vnode_unref(cur);
@@ -261,7 +295,12 @@ static int lookup_path(const char *path, vnode_t **out, bool follow_final, int d
         return 0;
     }
 
-    return walk_from(root, rel, out, follow_final, depth);
+    char base[VFS_MAX_PATH];
+    size_t bl = (size_t)(rel - path);
+    if (bl >= sizeof(base)) bl = sizeof(base) - 1;
+    memcpy(base, path, bl);
+    base[bl] = '\0';
+    return walk_from(root, base[0] ? base : "/", rel, out, follow_final, depth);
 }
 
 int vfs_lookup(const char *path, vnode_t **out) {
