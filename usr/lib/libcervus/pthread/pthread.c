@@ -9,6 +9,9 @@
 #include <sched.h>
 #include <time.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <sys/resource.h>
 
 #define TH_RUNNING  0
 #define TH_DONE     1
@@ -32,6 +35,9 @@ struct __pthread {
     void         *arg;
     void         *stack;
     size_t        stacksize;
+    void         *stack_lo;
+    size_t        stack_sz;
+    size_t        guard;
     int           tid;
     void         *tls;
     char          name[16];
@@ -39,6 +45,12 @@ struct __pthread {
 };
 
 #define DEFAULT_STACK (256 * 1024)
+#define DEFAULT_GUARD 4096
+
+#define AF_STACK    1
+#define AF_GUARD    2
+#define AF_SCHED    4
+#define AF_STACKTOP 8
 
 static struct __pthread g_main;
 
@@ -276,8 +288,14 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
 {
     if (!out || !fn) return EINVAL;
 
+    int aflags = attr ? attr->__flags : 0;
     size_t ssz = (attr && attr->stacksize) ? attr->stacksize : DEFAULT_STACK;
-    ssz = (ssz + 0xFFF) & ~(size_t)0xFFF;
+    void *user_lo = NULL;
+    if (aflags & AF_STACK) user_lo = attr->__stackaddr;
+    else if (aflags & AF_STACKTOP) user_lo = (char *)attr->__stackaddr - ssz;
+    size_t guard = (aflags & AF_GUARD) ? attr->__guardsize : DEFAULT_GUARD;
+    guard = (guard + 0xFFF) & ~(size_t)0xFFF;
+    if (!user_lo) ssz = (ssz + 0xFFF) & ~(size_t)0xFFF;
 
     reap_zombies();
 
@@ -288,14 +306,25 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     if (!th->tls) { free(th); return EAGAIN; }
     ((void **)th->tls)[__CERVUS_TCB_SELF] = th;
 
-    void *stk = mmap(NULL, ssz, PROT_READ | PROT_WRITE,
-                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (stk == MAP_FAILED) { __cervus_tls_free(th->tls); free(th); return EAGAIN; }
+    void *stk = NULL;
+    size_t map_sz = 0;
+    if (user_lo) {
+        th->stack_lo = user_lo;
+        th->stack_sz = ssz;
+    } else {
+        map_sz = ssz + guard;
+        stk = mmap(NULL, map_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (stk == MAP_FAILED) { __cervus_tls_free(th->tls); free(th); return EAGAIN; }
+        if (guard) mprotect(stk, guard, PROT_NONE);
+        th->stack_lo = (char *)stk + guard;
+        th->stack_sz = ssz;
+        th->guard = guard;
+    }
 
     th->fn = fn;
     th->arg = arg;
     th->stack = stk;
-    th->stacksize = ssz;
+    th->stacksize = map_sz;
     th->done = TH_RUNNING;
     th->dstate = (attr && attr->detachstate == PTHREAD_CREATE_DETACHED) ? DS_DETACHED : DS_JOINABLE;
     th->tid_word = -1;
@@ -305,7 +334,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         __atomic_store_n(&__cervus_threaded, 1, __ATOMIC_RELEASE);
     }
 
-    uintptr_t top = ((uintptr_t)stk + ssz) & ~(uintptr_t)0xF;
+    uintptr_t top = ((uintptr_t)th->stack_lo + th->stack_sz) & ~(uintptr_t)0xF;
     uint64_t *sp = (uint64_t *)top;
     *--sp = (uint64_t)(uintptr_t)th;
 
@@ -313,7 +342,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
                         (uint64_t)(uintptr_t)__cervus_thread_trampoline,
                         (uint64_t)(uintptr_t)sp, 0, (uint64_t)(uintptr_t)&th->tid_word);
     if (tid < 0) {
-        munmap(stk, ssz);
+        if (stk) munmap(stk, map_sz);
         __cervus_tls_free(th->tls);
         free(th);
         return EAGAIN;
@@ -405,6 +434,7 @@ int pthread_attr_init(pthread_attr_t *a)
     if (!a) return EINVAL;
     a->stacksize = DEFAULT_STACK;
     a->detachstate = PTHREAD_CREATE_JOINABLE;
+    a->__flags = 0;
     return 0;
 }
 int pthread_attr_destroy(pthread_attr_t *a) { (void)a; return 0; }
@@ -764,6 +794,170 @@ int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state)
 {
     if (!a || !state) return EINVAL;
     *state = a->detachstate;
+    return 0;
+}
+
+int pthread_attr_setstack(pthread_attr_t *a, void *addr, size_t sz)
+{
+    if (!a || sz < PTHREAD_STACK_MIN) return EINVAL;
+    a->__stackaddr = addr;
+    a->stacksize = sz;
+    a->__flags = (a->__flags & ~AF_STACKTOP) | AF_STACK;
+    return 0;
+}
+
+int pthread_attr_getstack(const pthread_attr_t *a, void **addr, size_t *sz)
+{
+    if (!a || !addr || !sz) return EINVAL;
+    if (a->__flags & AF_STACK) *addr = a->__stackaddr;
+    else if (a->__flags & AF_STACKTOP) *addr = (char *)a->__stackaddr - a->stacksize;
+    else *addr = NULL;
+    *sz = a->stacksize;
+    return 0;
+}
+
+int pthread_attr_setstackaddr(pthread_attr_t *a, void *addr)
+{
+    if (!a) return EINVAL;
+    a->__stackaddr = addr;
+    a->__flags = (a->__flags & ~AF_STACK) | AF_STACKTOP;
+    return 0;
+}
+
+int pthread_attr_getstackaddr(const pthread_attr_t *a, void **addr)
+{
+    if (!a || !addr) return EINVAL;
+    if (a->__flags & AF_STACKTOP) *addr = a->__stackaddr;
+    else if (a->__flags & AF_STACK) *addr = (char *)a->__stackaddr + a->stacksize;
+    else *addr = NULL;
+    return 0;
+}
+
+int pthread_attr_setguardsize(pthread_attr_t *a, size_t sz)
+{
+    if (!a) return EINVAL;
+    a->__guardsize = sz;
+    a->__flags |= AF_GUARD;
+    return 0;
+}
+
+int pthread_attr_getguardsize(const pthread_attr_t *a, size_t *sz)
+{
+    if (!a || !sz) return EINVAL;
+    *sz = (a->__flags & AF_GUARD) ? a->__guardsize : DEFAULT_GUARD;
+    return 0;
+}
+
+int pthread_attr_setscope(pthread_attr_t *a, int scope)
+{
+    if (!a) return EINVAL;
+    if (scope == PTHREAD_SCOPE_SYSTEM) return 0;
+    return scope == PTHREAD_SCOPE_PROCESS ? ENOTSUP : EINVAL;
+}
+
+int pthread_attr_getscope(const pthread_attr_t *a, int *scope)
+{
+    if (!a || !scope) return EINVAL;
+    *scope = PTHREAD_SCOPE_SYSTEM;
+    return 0;
+}
+
+int pthread_attr_setinheritsched(pthread_attr_t *a, int inherit)
+{
+    if (!a || (inherit != PTHREAD_INHERIT_SCHED && inherit != PTHREAD_EXPLICIT_SCHED)) return EINVAL;
+    if (!(a->__flags & AF_SCHED)) { a->__policy = SCHED_OTHER; a->__prio = 0; }
+    a->__inherit = inherit;
+    a->__flags |= AF_SCHED;
+    return 0;
+}
+
+int pthread_attr_getinheritsched(const pthread_attr_t *a, int *inherit)
+{
+    if (!a || !inherit) return EINVAL;
+    *inherit = (a->__flags & AF_SCHED) ? a->__inherit : PTHREAD_INHERIT_SCHED;
+    return 0;
+}
+
+int pthread_attr_setschedpolicy(pthread_attr_t *a, int policy)
+{
+    if (!a || policy < 0) return EINVAL;
+    if (!(a->__flags & AF_SCHED)) { a->__inherit = PTHREAD_INHERIT_SCHED; a->__prio = 0; }
+    a->__policy = policy;
+    a->__flags |= AF_SCHED;
+    return 0;
+}
+
+int pthread_attr_getschedpolicy(const pthread_attr_t *a, int *policy)
+{
+    if (!a || !policy) return EINVAL;
+    *policy = (a->__flags & AF_SCHED) ? a->__policy : SCHED_OTHER;
+    return 0;
+}
+
+int pthread_attr_setschedparam(pthread_attr_t *a, const struct sched_param *param)
+{
+    if (!a || !param) return EINVAL;
+    if (!(a->__flags & AF_SCHED)) { a->__inherit = PTHREAD_INHERIT_SCHED; a->__policy = SCHED_OTHER; }
+    a->__prio = param->sched_priority;
+    a->__flags |= AF_SCHED;
+    return 0;
+}
+
+int pthread_attr_getschedparam(const pthread_attr_t *a, struct sched_param *param)
+{
+    if (!a || !param) return EINVAL;
+    param->sched_priority = (a->__flags & AF_SCHED) ? a->__prio : 0;
+    return 0;
+}
+
+static int main_stack_bounds(void **lo, size_t *sz)
+{
+    int fd = open("/proc/self/maps", O_RDONLY);
+    if (fd < 0) return -1;
+    char buf[8192];
+    size_t len = 0;
+    for (;;) {
+        ssize_t n = read(fd, buf + len, sizeof buf - 1 - len);
+        if (n <= 0) break;
+        len += (size_t)n;
+        if (len >= sizeof buf - 1) break;
+    }
+    close(fd);
+    buf[len] = 0;
+    for (char *line = buf; line && *line; ) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        if (strstr(line, "[stack]")) {
+            char *end;
+            unsigned long a = strtoul(line, &end, 16);
+            unsigned long b = (*end == '-') ? strtoul(end + 1, NULL, 16) : 0;
+            if (b <= a) return -1;
+            struct rlimit rl;
+            size_t lim = 8u << 20;
+            if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur > 0)
+                lim = (size_t)rl.rlim_cur;
+            if (lim < b - a) lim = b - a;
+            *lo = (void *)(b - lim);
+            *sz = lim;
+            return 0;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    return -1;
+}
+
+int pthread_getattr_np(pthread_t th, pthread_attr_t *a)
+{
+    if (!th || !a) return EINVAL;
+    pthread_attr_init(a);
+    a->detachstate = th->dstate == DS_DETACHED ? PTHREAD_CREATE_DETACHED : PTHREAD_CREATE_JOINABLE;
+    void *lo = th->stack_lo;
+    size_t sz = th->stack_sz;
+    if (th == &g_main && main_stack_bounds(&lo, &sz) < 0) return ENOMEM;
+    a->__stackaddr = lo;
+    a->stacksize = sz;
+    a->__guardsize = th->guard;
+    a->__flags |= AF_STACK | AF_GUARD;
     return 0;
 }
 

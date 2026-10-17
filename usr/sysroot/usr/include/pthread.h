@@ -14,6 +14,11 @@ extern "C" {
 #define PTHREAD_CREATE_JOINABLE 0
 #define PTHREAD_CREATE_DETACHED 1
 
+#define PTHREAD_SCOPE_SYSTEM    0
+#define PTHREAD_SCOPE_PROCESS   1
+#define PTHREAD_INHERIT_SCHED   0
+#define PTHREAD_EXPLICIT_SCHED  1
+
 typedef struct { volatile int state; int type; void *volatile owner; int count; } pthread_mutex_t;
 typedef struct { int type; int pshared; } pthread_mutexattr_t;
 #define PTHREAD_MUTEX_INITIALIZER { 0, 0, 0, 0 }
@@ -80,6 +85,19 @@ int  pthread_attr_destroy(pthread_attr_t *a);
 int  pthread_attr_setstacksize(pthread_attr_t *a, size_t sz);
 int  pthread_attr_getstacksize(const pthread_attr_t *a, size_t *sz);
 int  pthread_attr_setdetachstate(pthread_attr_t *a, int state);
+int  pthread_attr_setstack(pthread_attr_t *a, void *addr, size_t sz);
+int  pthread_attr_getstack(const pthread_attr_t *a, void **addr, size_t *sz);
+int  pthread_attr_setstackaddr(pthread_attr_t *a, void *addr);
+int  pthread_attr_getstackaddr(const pthread_attr_t *a, void **addr);
+int  pthread_attr_setguardsize(pthread_attr_t *a, size_t sz);
+int  pthread_attr_getguardsize(const pthread_attr_t *a, size_t *sz);
+int  pthread_attr_setscope(pthread_attr_t *a, int scope);
+int  pthread_attr_getscope(const pthread_attr_t *a, int *scope);
+int  pthread_attr_setinheritsched(pthread_attr_t *a, int inherit);
+int  pthread_attr_getinheritsched(const pthread_attr_t *a, int *inherit);
+int  pthread_attr_setschedpolicy(pthread_attr_t *a, int policy);
+int  pthread_attr_getschedpolicy(const pthread_attr_t *a, int *policy);
+int  pthread_getattr_np(pthread_t th, pthread_attr_t *a);
 
 int  pthread_mutexattr_init(pthread_mutexattr_t *a);
 int  pthread_mutexattr_destroy(pthread_mutexattr_t *a);
@@ -125,6 +143,8 @@ int  pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const struct 
 int  pthread_cond_clockwait(pthread_cond_t *c, pthread_mutex_t *m, int clock, const struct timespec *abstime);
 
 struct sched_param;
+int  pthread_attr_setschedparam(pthread_attr_t *a, const struct sched_param *param);
+int  pthread_attr_getschedparam(const pthread_attr_t *a, struct sched_param *param);
 int  pthread_getschedparam(pthread_t th, int *policy, struct sched_param *param);
 int  pthread_setschedparam(pthread_t th, int policy, const struct sched_param *param);
 int  pthread_setschedprio(pthread_t th, int prio);

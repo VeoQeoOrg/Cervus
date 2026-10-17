@@ -66,6 +66,14 @@ typedef struct __pthread *pthread_t;
 typedef struct {
     size_t stacksize;
     int    detachstate;
+    int    __flags;
+    void  *__stackaddr;
+    size_t __guardsize;
+    int    __scope;
+    int    __inherit;
+    int    __policy;
+    int    __prio;
+    long   __reserved;
 } pthread_attr_t;
 
 #include <sys/select.h>
