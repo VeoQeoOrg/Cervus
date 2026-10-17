@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <libcervus.h>
 
 __mblock_t *__cervus_heap_start = NULL;
@@ -56,42 +57,49 @@ __mblock_t *__cervus_bin_fit(size_t need)
     return NULL;
 }
 
+static __mblock_t *segment_init(void *base, size_t len)
+{
+    uintptr_t addr    = (uintptr_t)base;
+    uintptr_t aligned = (addr + MB_ALIGN - 1) & ~(uintptr_t)(MB_ALIGN - 1);
+    size_t lost = aligned - addr;
+    if (lost + MB_HDR_SZ + MB_MIN_TOTAL > len) return NULL;
+    size_t first_sz = (len - lost - MB_HDR_SZ) & ~(size_t)(MB_ALIGN - 1);
+    __mblock_t *first = (__mblock_t *)aligned;
+    first->size      = first_sz | MB_FREE_BIT;
+    first->prev_size = 0;
+    __mblock_t *end = (__mblock_t *)((char *)first + first_sz);
+    end->size      = 0;
+    end->prev_size = first_sz;
+    return first;
+}
+
+static __mblock_t *mmap_segment(size_t chunk)
+{
+    size_t len = chunk < (1u << 20) ? (1u << 20) : chunk;
+    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    return segment_init(p, len);
+}
+
 __mblock_t *__cervus_heap_grow(size_t need)
 {
-    size_t chunk = __cervus_align_up(need + MB_HDR_SZ, 65536);
+    size_t chunk = __cervus_align_up(need + 2 * MB_HDR_SZ + MB_ALIGN, 65536);
 
     if (!__cervus_heap_start) {
         void *base = sbrk((intptr_t)chunk);
-        if (base == (void *)-1) return NULL;
-
-        uintptr_t addr    = (uintptr_t)base;
-        uintptr_t aligned = (addr + MB_ALIGN - 1) & ~(uintptr_t)(MB_ALIGN - 1);
-        size_t lost = aligned - addr;
-        if (lost >= chunk - MB_MIN_TOTAL - MB_HDR_SZ) {
-            __cervus_set_errno(ENOMEM);
-            return NULL;
-        }
-
-        __cervus_heap_start = (__mblock_t *)aligned;
-        size_t usable = chunk - lost;
-
-        __mblock_t *first = __cervus_heap_start;
-        size_t first_sz = usable - MB_HDR_SZ;
-        first->size      = first_sz | MB_FREE_BIT;
-        first->prev_size = 0;
-
-        __cervus_heap_end = (__mblock_t *)((char *)first + first_sz);
-        __cervus_heap_end->size      = 0;
-        __cervus_heap_end->prev_size = first_sz;
-
+        if (base == (void *)-1) return mmap_segment(chunk);
+        __mblock_t *first = segment_init(base, chunk);
+        if (!first) return mmap_segment(chunk);
+        __cervus_heap_start = first;
+        __cervus_heap_end = __cervus_mb_next(first);
         return first;
     }
 
     void *p = sbrk((intptr_t)chunk);
-    if (p == (void *)-1) return NULL;
+    if (p == (void *)-1) return mmap_segment(chunk);
     if ((uintptr_t)p != (uintptr_t)__cervus_heap_end + MB_HDR_SZ) {
-        __cervus_set_errno(ENOMEM);
-        return NULL;
+        __mblock_t *seg = segment_init(p, chunk);
+        return seg ? seg : mmap_segment(chunk);
     }
 
     __mblock_t *new_block = __cervus_heap_end;
