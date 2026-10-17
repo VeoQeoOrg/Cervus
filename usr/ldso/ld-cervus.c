@@ -74,6 +74,7 @@ typedef unsigned long      size_t;
 #define SYS_OPEN     22
 #define SYS_CLOSE    23
 #define SYS_SEEK     24
+#define SYS_FSTAT    26
 #define SYS_MMAP     40
 #define SYS_MPROTECT 42
 
@@ -158,6 +159,8 @@ typedef struct {
     int         inited;
     uintptr_t   map_start;
     uintptr_t   map_end;
+    const char *soname;
+    uint64_t    dev, ino;
     int         nneeded;
     short       needed[MAX_NEEDED];
 } object_t;
@@ -248,6 +251,7 @@ static void scan_dynamic(object_t *o) {
     o->strtab = NULL;
     o->symtab = NULL;
     o->hash   = NULL;
+    o->soname = NULL;
     for (dyn_t *d = o->dyn; d && d->d_tag != DT_NULL; d++) {
         switch (d->d_tag) {
             case DT_STRTAB: o->strtab = (const char *)(o->base + d->d_val); break;
@@ -256,6 +260,20 @@ static void scan_dynamic(object_t *o) {
             default: break;
         }
     }
+    if (o->strtab)
+        for (dyn_t *d = o->dyn; d && d->d_tag != DT_NULL; d++)
+            if (d->d_tag == DT_SONAME) o->soname = o->strtab + d->d_val;
+}
+
+static int find_loaded(const char *name)
+{
+    for (int i = 0; i < g_nobjs; i++) {
+        object_t *o = &g_objs[i];
+        if ((o->name && ld_streq(o->name, name)) || (o->soname && ld_streq(o->soname, name)) ||
+            (o->path && o->path[0] && ld_streq(o->path, name)))
+            return i;
+    }
+    return -1;
 }
 
 static sym_t *lookup_in(object_t *o, const char *name) {
@@ -515,6 +533,8 @@ static long find_library(char *full, size_t cap, const char *name, const object_
 }
 
 static uintptr_t g_map_lo, g_map_hi;
+static uint64_t  g_map_dev, g_map_ino;
+static int       g_dup;
 
 static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *req, char *full, size_t cap,
                              map_info_t *mi)
@@ -523,8 +543,24 @@ static uintptr_t map_library(const char *path, dyn_t **dyn_out, const object_t *
     mi->phnum = 0;
     mi->tls_image = 0;
     mi->tls_filesz = mi->tls_memsz = mi->tls_align = 0;
+    g_dup = -1;
+    g_map_dev = g_map_ino = 0;
     long fd = find_library(full, cap, path, req);
     if (fd < 0) { g_fail = "cannot find library"; return 0; }
+
+    uint64_t st[16];
+    for (int i = 0; i < 16; i++) st[i] = 0;
+    if (sys3(SYS_FSTAT, fd, (long)st, 0) == 0 && st[0]) {
+        g_map_ino = st[0];
+        g_map_dev = st[9];
+        for (int i = 0; i < g_nobjs; i++)
+            if (g_objs[i].ino == g_map_ino && g_objs[i].dev == g_map_dev) {
+                g_dup = i;
+                g_fail = "already loaded";
+                sys1(SYS_CLOSE, fd);
+                return 0;
+            }
+    }
 
     ehdr_t eh;
     if (sys3(SYS_READ, fd, (long)&eh, sizeof eh) != (long)sizeof eh ||
@@ -606,9 +642,7 @@ static void load_needed(object_t *o, int at_start)
         if (d->d_tag != DT_NEEDED) continue;
         const char *name = o->strtab + d->d_val;
 
-        int already = -1;
-        for (int i = 0; i < g_nobjs; i++)
-            if (g_objs[i].name && ld_streq(g_objs[i].name, name)) { already = i; break; }
+        int already = find_loaded(name);
         if (already >= 0) {
             if (o->nneeded < MAX_NEEDED) o->needed[o->nneeded++] = (short)already;
             continue;
@@ -623,6 +657,10 @@ static void load_needed(object_t *o, int at_start)
         dyn_t *ndyn = NULL;
         map_info_t mi;
         uintptr_t base = map_library(names[g_nobjs], &ndyn, o, paths[g_nobjs], sizeof paths[0], &mi);
+        if (!base && g_dup >= 0) {
+            if (o->nneeded < MAX_NEEDED) o->needed[o->nneeded++] = (short)g_dup;
+            continue;
+        }
         if (!base) ld_die(g_fail, names[g_nobjs]);
         if (!ndyn) ld_die("library has no dynamic section", names[g_nobjs]);
 
@@ -634,6 +672,8 @@ static void load_needed(object_t *o, int at_start)
         no->dyn  = ndyn;
         no->map_start = g_map_lo;
         no->map_end   = g_map_hi;
+        no->dev = g_map_dev;
+        no->ino = g_map_ino;
         no->relocated = 0;
         no->phdr  = mi.phdr;
         no->phnum = mi.phnum;
@@ -726,8 +766,8 @@ static void *ld_dlopen(const char *path, int flags)
     (void)flags;
     if (!path) return &g_objs[0];
 
-    for (int i = 0; i < g_nobjs; i++)
-        if (g_objs[i].name && ld_streq(g_objs[i].name, path)) return &g_objs[i];
+    int known = find_loaded(path);
+    if (known >= 0) return &g_objs[known];
 
     if (g_nobjs >= MAX_OBJECTS) return 0;
 
@@ -739,6 +779,11 @@ static void *ld_dlopen(const char *path, int flags)
     dyn_t *dyn = NULL;
     map_info_t mi;
     uintptr_t base = map_library(path, &dyn, &g_objs[0], dl_paths[g_nobjs], sizeof dl_paths[0], &mi);
+    if (!base && g_dup >= 0) {
+        _r_debug.r_state = 0;
+        _dl_debug_state();
+        return &g_objs[g_dup];
+    }
     if (!base || !dyn) return 0;
     object_t *o = &g_objs[g_nobjs];
     ld_copy(dl_names[g_nobjs], path, sizeof dl_names[0]);
@@ -749,6 +794,8 @@ static void *ld_dlopen(const char *path, int flags)
     o->dyn  = dyn;
     o->map_start = g_map_lo;
     o->map_end   = g_map_hi;
+    o->dev = g_map_dev;
+    o->ino = g_map_ino;
     o->phdr  = mi.phdr;
     o->phnum = mi.phnum;
     tls_register(o, &mi, 0);
