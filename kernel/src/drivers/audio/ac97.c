@@ -40,7 +40,7 @@
 #define GLOB_STA_PCR    0x0100
 
 #define AC97_NBUF       32
-#define AC97_BUFSZ      4096
+#define AC97_RING       65536
 
 typedef struct __attribute__((packed)) {
     uint32_t addr;
@@ -58,11 +58,9 @@ typedef struct {
     int       mute;
 
     ac97_bd_t *bdl;   uintptr_t bdl_phys;
-    uint8_t   *buf[AC97_NBUF];
-    uintptr_t  buf_phys[AC97_NBUF];
-
-    uint8_t   head;
-    int       running;
+    uint8_t   *ring;  uintptr_t ring_phys;
+    uint32_t   period;
+    int        running;
 } ac97_t;
 
 static ac97_t g_ac97;
@@ -83,95 +81,6 @@ static void po_reset(void) {
         if (!(po_r8(PO_CR) & CR_RR)) break;
         spin(10000);
     }
-}
-
-static void ac97_resync_if_starved(void) {
-    if (!g_ac97.running) return;
-    if (!(po_r16(PO_SR) & SR_DCH)) return;
-
-    po_w8(PO_CR, (uint8_t)(po_r8(PO_CR) & ~CR_RPBM));
-    po_w16(PO_SR, SR_CLEAR);
-    g_ac97.head    = (uint8_t)((po_r8(PO_CIV) + 1) % AC97_NBUF);
-    g_ac97.running = 0;
-}
-
-static void ac97_ensure_running(void) {
-    if (g_ac97.running) return;
-    po_w16(PO_SR, SR_CLEAR);
-    po_w8(PO_CR, CR_RPBM);
-    g_ac97.running = 1;
-}
-
-int ac97_open(uint32_t rate) {
-    if (!g_ac97.present) return -1;
-
-    po_reset();
-    if (g_ac97.vra) {
-        if (rate < 8000)  rate = 8000;
-        if (rate > 48000) rate = 48000;
-        nam_w16(NAM_PCM_RATE, (uint16_t)rate);
-    }
-
-    memset(g_ac97.bdl, 0, sizeof(ac97_bd_t) * AC97_NBUF);
-    po_w32(PO_BDBAR, (uint32_t)g_ac97.bdl_phys);
-    g_ac97.head    = 0;
-    g_ac97.running = 0;
-    return 0;
-}
-
-long ac97_write(const void *pcm, size_t bytes) {
-    if (!g_ac97.present) return -1;
-
-    const uint8_t *src = pcm;
-    size_t off = 0;
-    ac97_resync_if_starved();
-    while (off < bytes) {
-        uint8_t civ = po_r8(PO_CIV);
-        uint8_t head = g_ac97.head;
-        uint8_t inflight = (uint8_t)((head - civ + AC97_NBUF) % AC97_NBUF);
-        if (inflight >= AC97_NBUF - 1) {
-            ac97_ensure_running();
-            task_sleep_ms(2);
-            ac97_resync_if_starved();
-            continue;
-        }
-
-        size_t chunk = bytes - off;
-        if (chunk > AC97_BUFSZ) chunk = AC97_BUFSZ;
-        chunk &= ~(size_t)1;
-        if (chunk == 0) break;
-
-        memcpy(g_ac97.buf[head], src + off, chunk);
-        g_ac97.bdl[head].addr    = (uint32_t)g_ac97.buf_phys[head];
-        g_ac97.bdl[head].samples = (uint16_t)(chunk / 2);
-        g_ac97.bdl[head].ctrl    = 0;
-        po_w8(PO_LVI, head);
-
-        g_ac97.head = (uint8_t)((head + 1) % AC97_NBUF);
-        off += chunk;
-    }
-
-    ac97_ensure_running();
-    return (long)off;
-}
-
-int ac97_close(void) {
-    if (!g_ac97.present) return -1;
-
-    if (g_ac97.running) {
-        for (int guard = 0; guard < 20000; guard++) {
-            uint8_t  civ = po_r8(PO_CIV);
-            uint8_t  lvi = po_r8(PO_LVI);
-            uint16_t sr  = po_r16(PO_SR);
-            if (civ == lvi && (sr & SR_DCH)) break;
-            task_sleep_ms(5);
-        }
-        po_w8(PO_CR, 0);
-        po_reset();
-    }
-    g_ac97.running = 0;
-    g_ac97.head    = 0;
-    return 0;
 }
 
 static void ac97_apply_vol(void) {
@@ -213,13 +122,71 @@ static int ac97_set_mute(int mute) {
     return 0;
 }
 
-static int ac97_abort(void) {
+static uint32_t ac97_fix_rate(uint32_t rate) {
+    if (!g_ac97.vra) return 48000;
+    if (rate < 8000) rate = 8000;
+    if (rate > 48000) rate = 48000;
+    return rate;
+}
+
+static int ac97_prepare(uint32_t rate, uint32_t *period, uint32_t *periods) {
     if (!g_ac97.present) return -1;
-    po_w8(PO_CR, (uint8_t)(po_r8(PO_CR) & ~CR_RPBM));
-    po_w16(PO_SR, SR_CLEAR);
+    uint32_t pb = *period & ~3u;
+    if (pb < 256) pb = 256;
+    if (pb * AC97_NBUF > AC97_RING) pb = AC97_RING / AC97_NBUF;
+
+    po_w8(PO_CR, 0);
+    po_reset();
     g_ac97.running = 0;
-    g_ac97.head = 0;
+    if (g_ac97.vra) nam_w16(NAM_PCM_RATE, (uint16_t)rate);
+    for (int i = 0; i < AC97_NBUF; i++) {
+        g_ac97.bdl[i].addr    = (uint32_t)(g_ac97.ring_phys + (uint64_t)i * pb);
+        g_ac97.bdl[i].samples = (uint16_t)(pb / 2);
+        g_ac97.bdl[i].ctrl    = 0;
+    }
+    po_w32(PO_BDBAR, (uint32_t)g_ac97.bdl_phys);
+    po_w8(PO_LVI, AC97_NBUF - 1);
+    g_ac97.period = pb;
+    *period = pb;
+    *periods = AC97_NBUF;
     return 0;
+}
+
+static void ac97_trigger(int run) {
+    if (!g_ac97.present) return;
+    if (run) {
+        po_w8(PO_LVI, (uint8_t)((po_r8(PO_CIV) + AC97_NBUF - 1) % AC97_NBUF));
+        po_w16(PO_SR, SR_CLEAR);
+        po_w8(PO_CR, CR_RPBM);
+        g_ac97.running = 1;
+    } else {
+        po_w8(PO_CR, (uint8_t)(po_r8(PO_CR) & ~CR_RPBM));
+        po_w16(PO_SR, SR_CLEAR);
+        g_ac97.running = 0;
+    }
+}
+
+static uint32_t ac97_pointer(void) {
+    if (!g_ac97.period) return 0;
+    uint8_t civ;
+    uint16_t picb;
+    for (int i = 0; i < 4; i++) {
+        civ = po_r8(PO_CIV);
+        picb = po_r16(PO_PICB);
+        if (po_r8(PO_CIV) == civ) break;
+    }
+    uint32_t left = (uint32_t)picb * 2;
+    if (left > g_ac97.period) left = g_ac97.period;
+    return (uint32_t)(civ % AC97_NBUF) * g_ac97.period + (g_ac97.period - left);
+}
+
+static void ac97_tick(void) {
+    if (!g_ac97.running) return;
+    po_w8(PO_LVI, (uint8_t)((po_r8(PO_CIV) + AC97_NBUF - 1) % AC97_NBUF));
+    if (po_r16(PO_SR) & SR_DCH) {
+        po_w16(PO_SR, SR_CLEAR);
+        po_w8(PO_CR, CR_RPBM);
+    }
 }
 
 static int ac97_set_output(int idx) {
@@ -227,16 +194,19 @@ static int ac97_set_output(int idx) {
     return (idx <= 0) ? 0 : -1;
 }
 
-static const audio_backend_t g_ac97_backend = {
-    .name       = "ac97",
-    .open       = ac97_open,
-    .write      = ac97_write,
-    .close      = ac97_close,
-    .abort      = ac97_abort,
-    .mixer_get  = ac97_mixer_get,
-    .set_volume = ac97_set_volume,
-    .set_mute   = ac97_set_mute,
-    .set_output = ac97_set_output,
+static audio_backend_t g_ac97_backend = {
+    .name        = "ac97",
+    .ring_max    = AC97_RING,
+    .max_periods = AC97_NBUF,
+    .fix_rate    = ac97_fix_rate,
+    .prepare     = ac97_prepare,
+    .trigger     = ac97_trigger,
+    .pointer     = ac97_pointer,
+    .tick        = ac97_tick,
+    .mixer_get   = ac97_mixer_get,
+    .set_volume  = ac97_set_volume,
+    .set_mute    = ac97_set_mute,
+    .set_output  = ac97_set_output,
 };
 
 static int ac97_probe(pci_device_t *dev) {
@@ -278,10 +248,9 @@ static int ac97_probe(pci_device_t *dev) {
 
     g_ac97.bdl = dma_alloc_coherent_low(sizeof(ac97_bd_t) * AC97_NBUF, &g_ac97.bdl_phys);
     if (!g_ac97.bdl) { serial_printf("[ac97] BDL alloc failed\n"); return -1; }
-    for (int i = 0; i < AC97_NBUF; i++) {
-        g_ac97.buf[i] = dma_alloc_coherent_low(AC97_BUFSZ, &g_ac97.buf_phys[i]);
-        if (!g_ac97.buf[i]) { serial_printf("[ac97] buffer alloc failed\n"); return -1; }
-    }
+    g_ac97.ring = dma_alloc_coherent_low(AC97_RING, &g_ac97.ring_phys);
+    if (!g_ac97.ring) { serial_printf("[ac97] ring alloc failed\n"); return -1; }
+    g_ac97_backend.ring = g_ac97.ring;
 
     po_reset();
     g_ac97.present = 1;

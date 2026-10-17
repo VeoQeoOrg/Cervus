@@ -58,8 +58,8 @@
 #define SDCTL_SRST      (1u << 0)
 #define SDCTL_RUN       (1u << 1)
 
-#define HDA_NBUF        16
-#define HDA_BUFSZ       4096
+#define HDA_PCM_RING    65536
+#define HDA_MAX_BDL     256
 
 typedef struct __attribute__((packed)) {
     uint64_t addr;
@@ -93,14 +93,10 @@ typedef struct {
     int       timeouts;
 
     hda_bdl_t *bdl;   uintptr_t bdl_phys;
-    uint8_t   *buf[HDA_NBUF];
-    uintptr_t  buf_phys[HDA_NBUF];
+    uint8_t   *pcm;   uintptr_t pcm_phys;
+    uint32_t   ring_used;
     uintptr_t  sd_base;
-
-    uint8_t   w;
-    uint32_t  fill;
-    uint64_t  queued;
-    int       running;
+    int        running;
 } hda_t;
 
 static hda_t g_hda;
@@ -332,115 +328,67 @@ static void stream_reset(void) {
     for (int i = 0; i < 1000; i++) { if (!(sd_r8(SD_CTL) & SDCTL_SRST)) break; delay_us(10); }
 }
 
-int hda_open(uint32_t rate) {
-    if (!g_hda.present) return -1;
-    if (rate < 8000) rate = 8000;
-    if (rate > 96000) rate = 96000;
-    g_hda.cur_fmt = hda_fmt(rate, 2);
+static const uint32_t g_hda_rates[] = {
+    8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000
+};
 
-    g_hda.running = 0;
-    g_hda.w = 0;
-    g_hda.fill = 0;
-    g_hda.queued = 0;
+static uint32_t hda_fix_rate(uint32_t rate) {
+    uint32_t best = 48000, bd = 0xFFFFFFFFu;
+    for (unsigned i = 0; i < sizeof g_hda_rates / sizeof g_hda_rates[0]; i++) {
+        uint32_t r = g_hda_rates[i];
+        uint32_t d = r > rate ? r - rate : rate - r;
+        if (d < bd) { bd = d; best = r; }
+    }
+    return best;
+}
+
+static int hda_prepare(uint32_t rate, uint32_t *period, uint32_t *periods) {
+    if (!g_hda.present) return -1;
+    uint32_t pb = (*period + 127) & ~127u;
+    if (pb < 128) pb = 128;
+    uint32_t n = *periods;
+    if (n > HDA_MAX_BDL) n = HDA_MAX_BDL;
+    if (n * pb > HDA_PCM_RING) n = HDA_PCM_RING / pb;
+    if (n < 2) { n = 2; pb = HDA_PCM_RING / 2; }
 
     sd_w8(SD_CTL, 0);
     stream_reset();
-
-    for (int i = 0; i < HDA_NBUF; i++) memset(g_hda.buf[i], 0, HDA_BUFSZ);
-
+    g_hda.running = 0;
+    g_hda.cur_fmt = hda_fmt(rate, 2);
+    for (uint32_t i = 0; i < n; i++) {
+        g_hda.bdl[i].addr = g_hda.pcm_phys + (uint64_t)i * pb;
+        g_hda.bdl[i].len = pb;
+        g_hda.bdl[i].flags = 0;
+    }
+    g_hda.ring_used = n * pb;
     sd_w32(SD_BDLPL, (uint32_t)(g_hda.bdl_phys & 0xFFFFFFFF));
     sd_w32(SD_BDLPU, (uint32_t)(g_hda.bdl_phys >> 32));
-    sd_w32(SD_CBL, HDA_NBUF * HDA_BUFSZ);
-    sd_w16(SD_LVI, HDA_NBUF - 1);
+    sd_w32(SD_CBL, g_hda.ring_used);
+    sd_w16(SD_LVI, (uint16_t)(n - 1));
     sd_w16(SD_FMT, g_hda.cur_fmt);
     sd_w8(SD_CTL + 2, (uint8_t)(g_hda.stream_tag << 4));
-
     apply_current();
+    *period = pb;
+    *periods = n;
     return 0;
 }
 
-static void hda_start(void) {
-    if (g_hda.running) return;
-    sd_w8(SD_STS, 0x1C);
-    sd_w8(SD_CTL, (uint8_t)(sd_r8(SD_CTL) | SDCTL_RUN));
-    g_hda.running = 1;
-}
-
-static int hda_wait_slot(void) {
-    uint32_t lpib = sd_r32(SD_LPIB);
-    uint8_t play = (uint8_t)((lpib / HDA_BUFSZ) % HDA_NBUF);
-    uint8_t inflight = (uint8_t)((g_hda.w - play + HDA_NBUF) % HDA_NBUF);
-    return !(g_hda.running && inflight >= HDA_NBUF - 1);
-}
-
-long hda_write(const void *pcm, size_t bytes) {
-    if (!g_hda.present) return -1;
-    const uint8_t *src = pcm;
-    size_t off = 0;
-
-    while (off < bytes) {
-        if (g_hda.fill == 0 && !hda_wait_slot()) {
-            task_sleep_ms(2);
-            continue;
-        }
-
-        size_t space = HDA_BUFSZ - g_hda.fill;
-        size_t chunk = bytes - off;
-        if (chunk > space) chunk = space;
-        memcpy(g_hda.buf[g_hda.w] + g_hda.fill, src + off, chunk);
-        g_hda.fill += (uint32_t)chunk;
-        off += chunk;
-
-        if (g_hda.fill == HDA_BUFSZ) {
-            g_hda.fill = 0;
-            g_hda.w = (uint8_t)((g_hda.w + 1) % HDA_NBUF);
-            g_hda.queued++;
-            if (!g_hda.running && g_hda.queued >= 2) hda_start();
-        }
-    }
-
-    if (g_hda.queued >= 2) hda_start();
-    return (long)off;
-}
-
-int hda_close(void) {
-    if (!g_hda.present) return -1;
-
-    if (g_hda.fill > 0) {
-        memset(g_hda.buf[g_hda.w] + g_hda.fill, 0, HDA_BUFSZ - g_hda.fill);
-        g_hda.fill = 0;
-        g_hda.w = (uint8_t)((g_hda.w + 1) % HDA_NBUF);
-        g_hda.queued++;
-    }
-    if (g_hda.queued > 0) hda_start();
-
-    if (g_hda.running) {
-        for (int guard = 0; guard < 20000; guard++) {
-            uint32_t lpib = sd_r32(SD_LPIB);
-            uint8_t play = (uint8_t)((lpib / HDA_BUFSZ) % HDA_NBUF);
-            uint8_t inflight = (uint8_t)((g_hda.w - play + HDA_NBUF) % HDA_NBUF);
-            if (inflight <= 1) break;
-            task_sleep_ms(5);
-        }
+static void hda_trigger(int run) {
+    if (!g_hda.present) return;
+    if (run) {
+        sd_w8(SD_STS, 0x1C);
+        sd_w8(SD_CTL, (uint8_t)(sd_r8(SD_CTL) | SDCTL_RUN));
+        g_hda.running = 1;
+    } else {
         sd_w8(SD_CTL, (uint8_t)(sd_r8(SD_CTL) & ~SDCTL_RUN));
-        stream_reset();
+        sd_w8(SD_STS, 0x1C);
+        g_hda.running = 0;
     }
-    g_hda.running = 0;
-    g_hda.w = 0;
-    g_hda.fill = 0;
-    g_hda.queued = 0;
-    return 0;
 }
 
-static int hda_abort(void) {
-    if (!g_hda.present) return -1;
-    sd_w8(SD_CTL, (uint8_t)(sd_r8(SD_CTL) & ~SDCTL_RUN));
-    sd_w8(SD_STS, 0x1C);
-    g_hda.running = 0;
-    g_hda.w = 0;
-    g_hda.fill = 0;
-    g_hda.queued = 0;
-    return 0;
+static uint32_t hda_pointer(void) {
+    if (!g_hda.ring_used) return 0;
+    return sd_r32(SD_LPIB) % g_hda.ring_used;
 }
 
 static int hda_mixer_get(audio_mixer_t *m) {
@@ -489,16 +437,18 @@ static int hda_set_output(int idx) {
     return 0;
 }
 
-static const audio_backend_t g_hda_backend = {
-    .name       = "hda",
-    .open       = hda_open,
-    .write      = hda_write,
-    .close      = hda_close,
-    .abort      = hda_abort,
-    .mixer_get  = hda_mixer_get,
-    .set_volume = hda_set_volume,
-    .set_mute   = hda_set_mute,
-    .set_output = hda_set_output,
+static audio_backend_t g_hda_backend = {
+    .name        = "hda",
+    .ring_max    = HDA_PCM_RING,
+    .max_periods = HDA_MAX_BDL,
+    .fix_rate    = hda_fix_rate,
+    .prepare     = hda_prepare,
+    .trigger     = hda_trigger,
+    .pointer     = hda_pointer,
+    .mixer_get   = hda_mixer_get,
+    .set_volume  = hda_set_volume,
+    .set_mute    = hda_set_mute,
+    .set_output  = hda_set_output,
 };
 
 static int hda_probe(pci_device_t *dev) {
@@ -564,16 +514,11 @@ static int hda_probe(pci_device_t *dev) {
     g_hda.out_sd = iss;
     g_hda.sd_base = 0x80 + (uintptr_t)g_hda.out_sd * 0x20;
 
-    g_hda.bdl = dma_alloc_coherent_low(sizeof(hda_bdl_t) * HDA_NBUF, &g_hda.bdl_phys);
+    g_hda.bdl = dma_alloc_coherent_low(sizeof(hda_bdl_t) * HDA_MAX_BDL, &g_hda.bdl_phys);
     if (!g_hda.bdl) { serial_printf("[hda] BDL alloc failed\n"); return -1; }
-    memset(g_hda.bdl, 0, sizeof(hda_bdl_t) * HDA_NBUF);
-    for (int i = 0; i < HDA_NBUF; i++) {
-        g_hda.buf[i] = dma_alloc_coherent_low(HDA_BUFSZ, &g_hda.buf_phys[i]);
-        if (!g_hda.buf[i]) { serial_printf("[hda] buffer alloc failed\n"); return -1; }
-        g_hda.bdl[i].addr = g_hda.buf_phys[i];
-        g_hda.bdl[i].len = HDA_BUFSZ;
-        g_hda.bdl[i].flags = 0;
-    }
+    g_hda.pcm = dma_alloc_coherent_low(HDA_PCM_RING, &g_hda.pcm_phys);
+    if (!g_hda.pcm) { serial_printf("[hda] ring alloc failed\n"); return -1; }
+    g_hda_backend.ring = g_hda.pcm;
 
     for (int i = 0; i < g_hda.npaths; i++) hda_codec_disable(hda_cmd, &g_hda.paths[i]);
     if (g_hda.dead) { serial_printf("[hda] codec %d did not answer\n", g_hda.cad); return -1; }

@@ -4,21 +4,29 @@
 
 int64_t sys_audio_open(uint64_t rate) {
     int r = audio_open((uint32_t)rate);
-    if (r < 0) return -ENODEV;
-    audio_set_owner(syscall_cur_task());
-    return 0;
+    return r < 0 ? r : 0;
 }
 
 int64_t sys_audio_write(uint64_t buf_ptr, uint64_t len) {
     if (!buf_ptr || !len) return 0;
     if (len > (1u << 20)) return -EINVAL;
     if (!syscall_uptr_validate((void *)buf_ptr, (size_t)len)) return -EFAULT;
-    long r = audio_write((const void *)buf_ptr, (size_t)len);
-    return r < 0 ? -ENODEV : (int64_t)r;
+    uint8_t kbuf[2048];
+    uint64_t done = 0;
+    while (done < len) {
+        size_t n = len - done > sizeof kbuf ? sizeof kbuf : (size_t)(len - done);
+        if (syscall_copy_from_user(kbuf, (const void *)(buf_ptr + done), n) < 0)
+            return done ? (int64_t)done : -EFAULT;
+        long w = audio_write(kbuf, n);
+        if (w < 0) return done ? (int64_t)done : w;
+        done += (uint64_t)w;
+        if ((size_t)w < n) break;
+    }
+    return (int64_t)done;
 }
 
 int64_t sys_audio_close(void) {
-    return audio_close() < 0 ? -ENODEV : 0;
+    return audio_close();
 }
 
 #define AUDIO_MIXER_GET        0
