@@ -1,4 +1,5 @@
 #include "../../include/sched/ptrace.h"
+#include "../../include/gdt/gdt.h"
 #include "../../include/memory/mm.h"
 #include <string.h>
 #include <stddef.h>
@@ -334,6 +335,34 @@ static int gen_pid_syscall(uint32_t pid, char *buf, size_t max) {
         (unsigned long long)t->user_rsp, (unsigned long long)t->user_saved_rip);
 }
 
+extern const char *ksym_lookup(uint64_t addr, uint64_t *off_out);
+
+static int gen_pid_stack(uint32_t pid, char *buf, size_t max) {
+    task_t *t = task_find_by_pid(pid);
+    if (!t || !t->stack_base) return -1;
+    if (t->state == TASK_RUNNING) return snprintf(buf, max, "running\n");
+    uint64_t lo = t->stack_base, hi = t->stack_base + KERNEL_STACK_PAGES * 4096ULL;
+    uint64_t sp = t->rsp;
+    if (sp < lo || sp + 7 * 8 > hi) return snprintf(buf, max, "no saved frame\n");
+    const uint64_t *f = (const uint64_t *)sp;
+    uint64_t ret = f[6];
+    uint64_t rbp = f[5];
+    int n = 0;
+    for (int depth = 0; depth < 24 && (size_t)n < max; depth++) {
+        uint64_t off = 0;
+        const char *name = ksym_lookup(ret, &off);
+        n += snprintf(buf + n, max - (size_t)n, "[<%016llx>] %s+0x%llx\n",
+                      (unsigned long long)ret, name ? name : "?", (unsigned long long)off);
+        if (rbp < lo || rbp + 16 > hi || (rbp & 7)) break;
+        const uint64_t *fr = (const uint64_t *)rbp;
+        ret = fr[1];
+        uint64_t next = fr[0];
+        if (next <= rbp) break;
+        rbp = next;
+    }
+    return n;
+}
+
 static int gen_pid_cmdline(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
@@ -435,6 +464,7 @@ static const proc_pid_file_t g_pid_files[] = {
     { "stat",    gen_pid_stat    },
     { "fds",     gen_pid_fd      },
     { "syscall", gen_pid_syscall },
+    { "stack",   gen_pid_stack   },
     { "puzzle",  gen_pid_puzzle  },
     { "maps",    gen_pid_maps    },
     { "environ", gen_pid_environ },
