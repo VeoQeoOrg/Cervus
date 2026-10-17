@@ -1,4 +1,5 @@
 #include <string.h>
+#include "../../include/fs/pollwait.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -129,6 +130,7 @@ static void tty_queue_char(vt_tty_t *t, char c) {
         t->reader = NULL;
         task_unblock(r);
     }
+    poll_notify();
 }
 
 void tty_vt_input(int vt, char c) {

@@ -1,4 +1,5 @@
 #include "../../../include/security/auth.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/drm/drm_uapi.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/devfs.h"
@@ -298,6 +299,7 @@ static void queue_flip_event(uint32_t crtc_id, uint64_t user_data)
     g_ev_waiter = NULL;
     spinlock_release_irqrestore(&g_drm_lock, f);
     if (w) task_unblock(w);
+    poll_notify();
 }
 
 static int64_t drm_read(vnode_t *n, void *buf, size_t len, uint64_t off)

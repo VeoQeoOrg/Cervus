@@ -1,4 +1,5 @@
 #include "../../include/sched/waitq.h"
+#include "../../include/fs/pollwait.h"
 #include "../../include/sched/sched.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/drivers/timer.h"
@@ -26,6 +27,7 @@ void waitq_wake_all(waitq_t *q)
         q->slot[i] = NULL;
         task_unblock(w);
     }
+    poll_notify();
 }
 
 void waitq_block(waitq_t *q, spinlock_t *lock, uint64_t irqflags, uint64_t deadline_ns)

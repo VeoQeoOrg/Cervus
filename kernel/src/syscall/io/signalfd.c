@@ -1,4 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
@@ -89,6 +90,7 @@ int signalfd_deliver(uint32_t pid, int sig, const ksiginfo_t *si)
         s->waiter = NULL;
         spinlock_release_irqrestore(&s->lock, f);
         if (w) task_unblock(w);
+        poll_notify();
         taken = 1;
     }
     spinlock_release_irqrestore(&g_sfds_lock, gf);

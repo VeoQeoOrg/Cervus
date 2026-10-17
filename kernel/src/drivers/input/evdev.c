@@ -1,4 +1,5 @@
 #include "../../../include/security/auth.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/sched/capabilities.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/devfs.h"
@@ -100,6 +101,7 @@ static void ev_push_ex(evdev_t *d, uint16_t type, uint16_t code, int32_t value, 
     for (int i = 0; i < EV_WAITERS; i++) { wake[i] = d->waiters[i]; d->waiters[i] = NULL; }
     spinlock_release_irqrestore(&d->lock, f);
     for (int i = 0; i < EV_WAITERS; i++) if (wake[i]) task_unblock(wake[i]);
+    poll_notify();
 }
 
 static void ev_push(evdev_t *d, uint16_t type, uint16_t code, int32_t value)

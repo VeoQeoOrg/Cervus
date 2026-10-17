@@ -1,4 +1,5 @@
 #include "../../../include/syscall/syscall_internal.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/fs/vfs.h"
@@ -43,6 +44,7 @@ static void wake_all(task_t **list) {
         list[i] = NULL;
         task_unblock(w);
     }
+    poll_notify();
 }
 
 static int add_waiter(task_t **list, task_t *me) {

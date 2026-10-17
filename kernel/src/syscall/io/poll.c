@@ -2,6 +2,7 @@
 #include "../../../include/syscall/errno.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/poll.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/signal/signal.h"
 #include <string.h>
@@ -30,10 +31,13 @@ static int vnode_poll(vnode_t *vn, int events) {
     return POLLIN | POLLOUT;
 }
 
+#define POLL_FALLBACK_NS 20000000ULL
+
 static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ms) {
     task_t *me = syscall_cur_task();
     uint64_t start = sched_now_ns();
     for (;;) {
+        uint64_t seq = poll_seq();
         int ready = 0;
         for (int i = 0; i < n; i++) {
             pf[i].revents = 0;
@@ -51,7 +55,13 @@ static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ms) {
         if (timeout_ms == 0) return 0;
         if (timeout_ms > 0 && (sched_now_ns() - start) >= (uint64_t)timeout_ms * 1000000ULL) return 0;
         if (me && (me->pending_kill || signal_pending_deliverable(me))) return -EINTR;
-        task_sleep_ms(5);
+        uint64_t now = sched_now_ns();
+        uint64_t deadline = now + POLL_FALLBACK_NS;
+        if (timeout_ms > 0) {
+            uint64_t end = start + (uint64_t)timeout_ms * 1000000ULL;
+            if (end < deadline) deadline = end;
+        }
+        poll_wait_since(seq, deadline);
     }
 }
 
