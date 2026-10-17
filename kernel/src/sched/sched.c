@@ -206,9 +206,7 @@ static void process_deferred_free(void) {
 }
 
 void sched_init(void) {
-    memset(pid_table, 0, sizeof(pid_table));
     memset(bootstrap_tasks, 0, sizeof(bootstrap_tasks));
-    next_pid = 1;
     for (uint32_t i = 0; i < smp_get_cpu_count(); i++) {
         task_t* idle = &idle_tasks[i];
         memset(idle, 0, sizeof(task_t));
