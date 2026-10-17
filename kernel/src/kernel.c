@@ -59,6 +59,7 @@
 #include "../include/drivers/net/virtio_net.h"
 #include "../include/drivers/audio/ac97.h"
 #include "../include/drivers/audio/hda.h"
+#include "../include/drivers/audio/audio.h"
 #include "../include/drivers/net/ne2000.h"
 #include "../include/console/console.h"
 #include "../include/fs/ext2.h"
@@ -383,6 +384,7 @@ void kmain(void) {
 
     kstage("hda_init");
     hda_init();
+    audio_null_init();
 
     bool has_initramfs_module = (boot_info()->module_count >= 2);
     static char root_name[16] = {0};

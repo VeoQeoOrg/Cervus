@@ -187,6 +187,7 @@ static void update_locked(void) {
 
 static void pcm_worker(void *arg) {
     (void)arg;
+    uint64_t last_frag = 0;
     for (;;) {
         uint64_t f = spinlock_acquire_irqsave(&P.lock);
         if (!P.running) {
@@ -194,7 +195,11 @@ static void pcm_worker(void *arg) {
             continue;
         }
         update_locked();
-        waitq_wake_all(&P.wq);
+        uint64_t frag = P.period ? P.hw / P.period : 0;
+        if (frag != last_frag) {
+            last_frag = frag;
+            waitq_wake_all(&P.wq);
+        }
         spinlock_release_irqrestore(&P.lock, f);
         task_sleep_ms(2);
     }

@@ -103,5 +103,6 @@ int  audio_set_mute(int mute);
 int  audio_set_output(int idx);
 
 void oss_init(void);
+void audio_null_init(void);
 
 #endif
