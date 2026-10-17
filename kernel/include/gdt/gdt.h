@@ -3,18 +3,24 @@
 
 #include <stdint.h>
 
-#define GDT_CODE_SEGMENT      0x08
-#define GDT_DATA_SEGMENT      0x10
-#define GDT_USER_DATA_SEGMENT 0x18
-#define GDT_USER_CODE_SEGMENT 0x20
+#define GDT_CODE_SEGMENT        0x08
+#define GDT_DATA_SEGMENT        0x10
+#define GDT_USER_CODE32_SEGMENT 0x20
+#define GDT_USER_DATA_SEGMENT   0x28
+#define GDT_USER_CODE_SEGMENT   0x30
 
+#define GDT_USER_CODE32_RPL3  (GDT_USER_CODE32_SEGMENT | 3)
 #define GDT_USER_DATA_RPL3    (GDT_USER_DATA_SEGMENT | 3)
 #define GDT_USER_CODE_RPL3    (GDT_USER_CODE_SEGMENT | 3)
 
-#define GDT_STAR_SYSRET_BASE  (GDT_USER_DATA_RPL3 - 8)
+#define GDT_STAR_SYSRET_BASE  GDT_USER_CODE32_RPL3
 #define GDT_STAR_SYSCALL_CS   GDT_CODE_SEGMENT
 
-#define TSS_SELECTOR_BASE     0x28
+#define TSS_SELECTOR          0x38
+#define GDT_TLS_FIRST         12
+#define GDT_TLS_ENTRIES       3
+#define GDT_ENTRIES           16
+
 #define KERNEL_STACK_SIZE     (4096 * 8)
 #define KERNEL_STACK_PAGES (KERNEL_STACK_SIZE / 0x1000)
 
@@ -74,5 +80,9 @@ extern gdt_pointer_t gdtr;
 extern void load_tss(uint16_t sel);
 void gdt_init(void);
 void gdt_load(void);
+void gdt_setup_cpu(uint32_t cpu, void *tss);
+void gdt_load_cpu(uint32_t cpu);
+uint64_t gdt_cpu_base(uint32_t cpu);
+void gdt_set_tls(uint32_t cpu, const uint64_t *tls);
 
 #endif

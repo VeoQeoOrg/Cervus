@@ -316,6 +316,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     memcpy(t->sig_mask, parent->sig_mask, sizeof(t->sig_mask));
     t->sig_blocked = parent->sig_blocked;
     t->gs_base = rdmsr_u64(0xC0000102u);
+    memcpy(t->tls_desc, parent->tls_desc, sizeof(t->tls_desc));
     t->brk_start   = parent->brk_start;
     t->brk_current = parent->brk_current;
     t->brk_max     = parent->brk_max;
@@ -619,6 +620,12 @@ task_t* task_fork(task_t* parent) {
 
     child->fs_base    = rdmsr_u64(0xC0000100u);
     child->gs_base    = rdmsr_u64(0xC0000102u);
+    memcpy(child->tls_desc, parent->tls_desc, sizeof(child->tls_desc));
+    {
+        uint16_t fsel;
+        asm volatile("mov %%fs, %0" : "=r"(fsel));
+        child->fs_sel = (fsel & 3) == 3 ? fsel : 0;
+    }
     child->tls_vaddr  = parent->tls_vaddr;
     child->tls_filesz = parent->tls_filesz;
     child->tls_memsz  = parent->tls_memsz;
@@ -1301,6 +1308,11 @@ void sched_reschedule(void) {
         old->fpu_used = true;
     }
     if (old && old->is_userspace && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
+        uint16_t fsel, dsel, esel;
+        asm volatile("mov %%fs, %0; mov %%ds, %1; mov %%es, %2" : "=r"(fsel), "=r"(dsel), "=r"(esel));
+        old->fs_sel  = (fsel & 3) == 3 ? fsel : 0;
+        old->ds_sel  = dsel;
+        old->es_sel  = esel;
         old->fs_base = rdmsr_u64(0xC0000100u);
         old->gs_base = rdmsr_u64(0xC0000102u);
     }
@@ -1363,6 +1375,24 @@ void sched_reschedule(void) {
     if (next->fpu_state) fpu_restore(next->fpu_state);
     ptrace_switch_dr(old, next);
     if (next->is_userspace) {
+        gdt_set_tls(cpu, next->tls_desc);
+        uint16_t fsel = next->fs_sel;
+        uint16_t fidx = fsel >> 3;
+        if (fsel && !(fsel & 4)) {
+            if (fidx >= GDT_TLS_FIRST && fidx < GDT_TLS_FIRST + GDT_TLS_ENTRIES) {
+                if (!((next->tls_desc[fidx - GDT_TLS_FIRST] >> 47) & 1)) fsel = 0;
+            } else if (fsel != GDT_USER_DATA_RPL3) {
+                fsel = 0;
+            }
+        } else {
+            fsel = 0;
+        }
+        next->fs_sel = fsel;
+        asm volatile("mov %0, %%fs" :: "r"((uint32_t)fsel));
+        uint16_t dsel = next->ds_sel, esel = next->es_sel;
+        if (dsel != GDT_DATA_SEGMENT && dsel != GDT_USER_DATA_RPL3) dsel = 0;
+        if (esel != GDT_DATA_SEGMENT && esel != GDT_USER_DATA_RPL3) esel = 0;
+        asm volatile("mov %0, %%ds; mov %1, %%es" :: "r"((uint32_t)dsel), "r"((uint32_t)esel));
         asm volatile("wrmsr" :: "c"(0xC0000100u),
                      "a"((uint32_t)next->fs_base),
                      "d"((uint32_t)(next->fs_base >> 32)));

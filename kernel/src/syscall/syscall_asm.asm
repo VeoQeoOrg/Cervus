@@ -1,5 +1,6 @@
 section .text
 global syscall_entry
+global syscall_compat_entry
 extern syscall_handler_c
 extern sched_reschedule
 
@@ -41,6 +42,10 @@ TASK_USER_SAVED_RAX equ 704
 TASK_USER_SAVED_RCX equ 1152
 TASK_RET_IRET       equ 1160
 TASK_USER_IRET_R11  equ 1184
+
+syscall_compat_entry:
+    mov  eax, -38
+    sysret
 
 syscall_entry:
     swapgs
@@ -164,14 +169,21 @@ syscall_entry:
     o64 sysret
 
 .iret_return:
+    mov  ecx, [rax + TASK_RET_IRET]
     mov  dword [rax + TASK_RET_IRET], 0
-    push qword 0x1B
+    push qword 0x2B
     push qword [rax + TASK_USER_RSP]
     mov  r11, [rax + TASK_USER_SAVED_R11]
     and  r11, 0x00000000003C0FFF
     or   r11, 0x0000000000000202
     push r11
+    cmp  ecx, 2
+    je   .iret_compat
+    push qword 0x33
+    jmp  .iret_cs_done
+.iret_compat:
     push qword 0x23
+.iret_cs_done:
     push qword [rax + TASK_USER_SAVED_RIP]
     mov  rcx, [rax + TASK_USER_SAVED_RCX]
     mov  r11, [rax + TASK_USER_IRET_R11]

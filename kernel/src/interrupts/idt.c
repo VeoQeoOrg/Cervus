@@ -41,7 +41,7 @@ bool setup_specific_vectors(uint64_t kernel_code_segment, uint64_t vector) {
         return true;
     }
 
-    if(vector == EXCEPTION_BREAKPOINT) {
+    if(vector == EXCEPTION_BREAKPOINT || vector == 0x80) {
         idt_set_gate(vector, interrupts_stub_table[vector], kernel_code_segment, 0xEE, 0);
         return true;
     }

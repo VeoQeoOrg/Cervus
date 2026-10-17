@@ -458,7 +458,7 @@ static void vmcs_setup(kvm_vcpu_t *vcpu) {
     vmwrite(VMCS_HOST_FS_SEL, 0);
     vmwrite(VMCS_HOST_GS_SEL, 0);
     vmwrite(VMCS_HOST_IDTR_BASE, (uint64_t)idtr.base);
-    vmwrite(VMCS_HOST_GDTR_BASE, (uint64_t)gdtr.pointer);
+    vmwrite(VMCS_HOST_GDTR_BASE, gdt_cpu_base(smp_cpu_index()));
     vmwrite(VMCS_HOST_SYSENTER_CS, vmx_rdmsr(MSR_IA32_SYSENTER_CS));
     vmwrite(VMCS_HOST_SYSENTER_ESP, vmx_rdmsr(MSR_IA32_SYSENTER_ESP));
     vmwrite(VMCS_HOST_SYSENTER_EIP, vmx_rdmsr(MSR_IA32_SYSENTER_EIP));
@@ -658,8 +658,9 @@ static void vmcs_load(kvm_vcpu_t *vcpu) {
     g_cur_vmcs[cpu] = vcpu->vmcs_phys;
     vcpu->launched = false;
     __atomic_store_n(&vcpu->loaded_cpu, (int)cpu, __ATOMIC_RELEASE);
-    vmwrite(VMCS_HOST_TR_SEL, TSS_SELECTOR_BASE + cpu * 0x10);
+    vmwrite(VMCS_HOST_TR_SEL, TSS_SELECTOR);
     vmwrite(VMCS_HOST_TR_BASE, (uint64_t)tss[cpu]);
+    vmwrite(VMCS_HOST_GDTR_BASE, gdt_cpu_base(cpu));
     vmwrite(VMCS_HOST_GS_BASE, (uint64_t)percpu_regions[cpu]);
     if (vcpu->last_cpu != (int)cpu) {
         vcpu->last_cpu = (int)cpu;

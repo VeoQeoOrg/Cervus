@@ -276,6 +276,10 @@ typedef struct task {
     uint64_t   gs_base;
     int32_t    pdeathsig;
     uint32_t   pr_flags;
+    uint64_t   tls_desc[3];
+    uint16_t   fs_sel;
+    uint16_t   ds_sel;
+    uint16_t   es_sel;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

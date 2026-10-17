@@ -17,6 +17,7 @@ int64_t sys_set_fsbase(uint64_t base, uint64_t a2, uint64_t a3,
     if (base >= 0x0000800000000000ULL) return -EINVAL;
 
     t->fs_base = base;
+    asm volatile("mov %0, %%fs" :: "r"(0u));
     asm volatile("wrmsr" :: "c"(0xC0000100u),
                  "a"((uint32_t)base), "d"((uint32_t)(base >> 32)));
     return 0;
@@ -33,6 +34,7 @@ int64_t sys_arch_prctl(uint64_t code, uint64_t addr, uint64_t a3,
     case 0x1002:
         if (addr >= 0x0000800000000000ULL) return -EPERM;
         t->fs_base = addr;
+        asm volatile("mov %0, %%fs" :: "r"(0u));
         asm volatile("wrmsr" :: "c"(0xC0000100u), "a"((uint32_t)addr), "d"((uint32_t)(addr >> 32)));
         return 0;
     case 0x1001:

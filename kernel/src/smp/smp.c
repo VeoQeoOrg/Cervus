@@ -19,9 +19,6 @@
 #include <stdlib.h>
 
 extern tss_t *tss[MAX_CPUS];
-extern struct {
-    gdt_entry_t gdt_entries[5 + (MAX_CPUS * 2)];
-} __attribute__((packed)) gdt;
 
 static smp_info_t smp_info = {0};
 static volatile uint32_t ap_online_count = 0;
@@ -47,9 +44,6 @@ void ap_entry_init(void) {
 
     lapic_write(0xF0, 0);
 
-    gdt_load();
-    idt_load();
-
     uint32_t lapic_id = lapic_get_id();
     smp_info_t* info = smp_get_info();
     uint32_t my_index = 0;
@@ -67,8 +61,9 @@ void ap_entry_init(void) {
                       lapic_id);
         for (;;) asm volatile ("cli; hlt");
     }
-    load_tss(info->cpus[my_index].tss_selector);
-    serial_printf("TSS Loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
+    gdt_load_cpu(my_index);
+    idt_load();
+    serial_printf("GDT and TSS loaded (selector 0x%x)\n", info->cpus[my_index].tss_selector);
 
     fpu_init();
     sse_init();
@@ -319,25 +314,12 @@ void smp_init(void) {
 
         serial_printf("TSS[%u] base: 0x%llx\n", i, (uint64_t)tss[i]);
 
-        tss_entry_t *entry = (tss_entry_t *)&gdt.gdt_entries[5 + (i * 2)];
-        entry->limit_low            = sizeof(tss_t) - 1;
-        uint64_t addr               = (uint64_t)tss[i];
-        entry->base_low             = addr & 0xffff;
-        entry->base_middle          = (addr >> 16) & 0xff;
-        entry->access               = 0x89;
-        entry->limit_high_and_flags = 0;
-        entry->base_high            = (addr >> 24) & 0xff;
-        entry->base_higher          = addr >> 32;
-        entry->zero                 = 0;
-
-        smp_info.cpus[i].tss_selector = TSS_SELECTOR_BASE + (i * 0x10);
+        gdt_setup_cpu(i, tss[i]);
+        smp_info.cpus[i].tss_selector = TSS_SELECTOR;
     }
 
-    gdtr.size = (5 + (smp_info.cpu_count * 2)) * sizeof(gdt_entry_t) - 1;
-    serial_printf("Reloading extended GDT on BSP...\n");
-    gdt_load();
-
-    load_tss(smp_info.cpus[bsp_index].tss_selector);
+    serial_printf("Loading per-CPU GDT on BSP...\n");
+    gdt_load_cpu(bsp_index);
     serial_printf("BSP TSS loaded (selector 0x%x)\n",
                   smp_info.cpus[bsp_index].tss_selector);
 

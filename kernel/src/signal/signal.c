@@ -1,3 +1,4 @@
+#include "../../include/gdt/gdt.h"
 #include "../../include/sched/ptrace.h"
 #include "../../include/sched/capabilities.h"
 #include "../../include/signal/signal.h"
@@ -422,7 +423,7 @@ static __attribute__((noreturn)) void terminate_with_report(task_t *t, int sig, 
 }
 
 static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, bool full,
-                       uint64_t *new_sp, uint64_t *new_rip) {
+                       uint16_t cs, uint16_t ss, uint64_t *new_sp, uint64_t *new_rip) {
     uint64_t h = t->sig_handler[sig];
     uint64_t restorer = t->sig_restorer[sig];
     if (!restorer) return -1;
@@ -472,7 +473,9 @@ static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, 
     kc->ss_size  = t->ss_size;
     kc->ss_flags = t->ss_size ? (on_altstack(t, r->rsp) ? SS_ONSTACK_F : 0) : SS_DISABLE_F;
     memcpy(kc->gregs, r, sizeof(*r));
-    kc->gregs[18] = 0x23;
+    uint16_t fsel;
+    __asm__ volatile("mov %%fs, %0" : "=r"(fsel));
+    kc->gregs[18] = (uint64_t)cs | ((uint64_t)fsel << 32) | ((uint64_t)ss << 48);
     kc->gregs[19] = (uint64_t)(int64_t)si->err;
     kc->gregs[20] = (uint64_t)(int64_t)si->trapno;
     kc->gregs[21] = mask;
@@ -591,7 +594,8 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
         }
 
         uint64_t sp, rip;
-        if (build_frame(t, sig, &si, &r, t->ret_iret != 0, &sp, &rip) < 0)
+        uint16_t cs = t->ret_iret == 2 ? GDT_USER_CODE32_RPL3 : GDT_USER_CODE_RPL3;
+        if (build_frame(t, sig, &si, &r, t->ret_iret != 0, cs, GDT_USER_DATA_RPL3, &sp, &rip) < 0)
             terminate_with_report(t, SIGSEGV, &r);
         t->ret_iret = 0;
         t->user_rsp = sp;
@@ -636,11 +640,13 @@ void signal_irq_return(struct int_frame_t *f) {
 
         regs_from_frame(f, &r);
         uint64_t sp, rip;
-        if (build_frame(t, sig, &si, &r, true, &sp, &rip) < 0)
+        if (build_frame(t, sig, &si, &r, true, (uint16_t)f->cs, (uint16_t)f->ss, &sp, &rip) < 0)
             terminate_with_report(t, SIGSEGV, &r);
         __asm__ volatile("cli" ::: "memory");
         f->rsp = sp;
         f->rip = rip;
+        f->cs  = GDT_USER_CODE_RPL3;
+        f->ss  = GDT_USER_DATA_RPL3;
         f->rflags &= ~0x500ULL;
         return;
     }
@@ -917,7 +923,8 @@ int64_t sys_rt_sigreturn(void) {
     t->user_rsp       = g[15];
     t->user_saved_rip = g[16];
     t->sig_blocked    = kc.sigmask[0] & ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
-    t->ret_iret       = (ext->flags & SF_FULL) ? 1 : 0;
+    if ((uint16_t)g[18] == GDT_USER_CODE32_RPL3) t->ret_iret = 2;
+    else t->ret_iret = (ext->flags & SF_FULL) ? 1 : 0;
     return (int64_t)g[13];
 }
 

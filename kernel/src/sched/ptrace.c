@@ -1,3 +1,4 @@
+#include "../../include/gdt/gdt.h"
 #include "../../include/sched/ptrace.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
@@ -86,7 +87,7 @@ static void ctx_get(task_t *t, pt_ctx_t *c, user_regs_t *r) {
         r->rbp = f->rbp; r->rbx = f->rbx; r->r11 = f->r11; r->r10 = f->r10;
         r->r9 = f->r9; r->r8 = f->r8; r->rax = f->rax; r->rcx = f->rcx;
         r->rdx = f->rdx; r->rsi = f->rsi; r->rdi = f->rdi;
-        r->rip = f->rip; r->cs = 0x33; r->eflags = f->rflags; r->rsp = f->rsp; r->ss = 0x2B;
+        r->rip = f->rip; r->cs = f->cs; r->eflags = f->rflags; r->rsp = f->rsp; r->ss = f->ss;
         r->orig_rax = c->orig_rax;
     } else {
         r->r15 = t->user_saved_r15; r->r14 = t->user_saved_r14;
@@ -98,9 +99,10 @@ static void ctx_get(task_t *t, pt_ctx_t *c, user_regs_t *r) {
         r->rcx = t->ret_iret ? t->user_saved_rcx : t->user_saved_rip;
         r->rdx = t->user_saved_rdx; r->rsi = t->user_saved_rsi; r->rdi = t->user_saved_rdi;
         r->orig_rax = c->orig_rax;
-        r->rip = t->user_saved_rip; r->cs = 0x33;
+        r->rip = t->user_saved_rip;
+        r->cs = t->ret_iret == 2 ? GDT_USER_CODE32_RPL3 : GDT_USER_CODE_RPL3;
         r->eflags = (t->user_saved_r11 & 0x3C0FFF) | 0x202;
-        r->rsp = t->user_rsp; r->ss = 0x2B;
+        r->rsp = t->user_rsp; r->ss = GDT_USER_DATA_RPL3;
     }
     r->fs_base = t->fs_base;
     r->gs_base = t->gs_base;
@@ -116,6 +118,7 @@ static int ctx_set(task_t *t, pt_ctx_t *c, const user_regs_t *r) {
         f->rdx = r->rdx; f->rsi = r->rsi; f->rdi = r->rdi;
         f->rip = r->rip; f->rsp = r->rsp;
         f->rflags = sane_flags(f->rflags, r->eflags);
+        if (r->cs == GDT_USER_CODE32_RPL3 || r->cs == GDT_USER_CODE_RPL3) f->cs = r->cs;
     } else {
         t->user_saved_r15 = r->r15; t->user_saved_r14 = r->r14;
         t->user_saved_r13 = r->r13; t->user_saved_r12 = r->r12;
@@ -129,7 +132,7 @@ static int ctx_set(task_t *t, pt_ctx_t *c, const user_regs_t *r) {
         t->user_rsp       = r->rsp;
         if (c->rax) *c->rax = (int64_t)r->rax;
         c->orig_rax = r->orig_rax;
-        t->ret_iret = 1;
+        t->ret_iret = r->cs == GDT_USER_CODE32_RPL3 ? 2 : 1;
     }
     t->fs_base = r->fs_base;
     t->gs_base = r->gs_base;

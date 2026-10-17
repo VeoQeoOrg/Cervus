@@ -30,6 +30,12 @@ void base_trap(void *ctx) {
         return isr_common_handler(regs);
     }
 
+    if (regs->interrupt == 0x80 && (regs->cs & 3) == 3) {
+        extern void compat_int80(struct int_frame_t *f);
+        compat_int80(regs);
+        return;
+    }
+
     percpu_t *pc = get_percpu();
     task_t *t = pc ? (task_t *)pc->current_task : NULL;
     if (t) t->irq_nest++;

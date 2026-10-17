@@ -551,6 +551,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_PERSONALITY]     = _sys_personality,
     [SYS_TKILL]           = _sys_tkill,
     [SYS_ARCH_PRCTL]      = sys_arch_prctl,
+    [SYS_LINUX_ARCH_PRCTL] = sys_arch_prctl,
     [SYS_PRCTL]           = _sys_prctl,
     [SYS_FUTEX]           = _sys_futex,
     [SYS_MADVISE]           = _sys_madvise,
@@ -706,6 +707,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 void syscall_init(void)
 {
     extern void syscall_entry(void);
+    extern void syscall_compat_entry(void);
 
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE | EFER_NXE);
 
@@ -713,6 +715,7 @@ void syscall_init(void)
                   | ((uint64_t)GDT_STAR_SYSCALL_CS  << 32);
     wrmsr(MSR_STAR, star);
     wrmsr(MSR_LSTAR, (uint64_t)syscall_entry);
+    wrmsr(0xC0000083u, (uint64_t)syscall_compat_entry);
     wrmsr(MSR_SFMASK, (1U << 9) | (1U << 10) | (1U << 8) | (1U << 18));
 
     percpu_t *pc = get_percpu();

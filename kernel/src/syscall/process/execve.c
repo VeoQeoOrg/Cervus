@@ -1,3 +1,5 @@
+#include "../../../include/gdt/gdt.h"
+#include "../../../include/smp/percpu.h"
 #include "../../../include/sched/ptrace.h"
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/elf/elf.h"
@@ -365,6 +367,10 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
 
     t->fs_base    = 0;
     t->gs_base    = 0;
+    memset(t->tls_desc, 0, sizeof(t->tls_desc));
+    t->fs_sel     = 0;
+    gdt_set_tls(smp_cpu_index(), NULL);
+    asm volatile("mov %0, %%fs" :: "r"(0u));
     asm volatile("wrmsr" :: "c"(0xC0000100u), "a"(0), "d"(0));
     asm volatile("wrmsr" :: "c"(0xC0000102u), "a"(0), "d"(0));
     t->tls_vaddr  = elf.tls_vaddr;

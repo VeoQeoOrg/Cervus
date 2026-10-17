@@ -117,14 +117,14 @@ task_trampoline_user:
 
     xor  rbp, rbp
 
-    push qword 0x1B
+    push qword 0x2B
     push rcx
     pushfq
     pop  rdx
     or   rdx, (1 << 9)
     and  rdx, ~(3 << 12)
     push rdx
-    push qword 0x23
+    push qword 0x33
     push rax
 
     xor rax, rax
@@ -160,10 +160,10 @@ task_trampoline_fork:
 
     or r11, (1 << 9)
 
-    push qword 0x1B
+    push qword 0x2B
     push rcx
     push r11
-    push qword 0x23
+    push qword 0x33
     push rax
 
     xor rax, rax

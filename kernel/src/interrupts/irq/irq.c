@@ -34,6 +34,7 @@ void irq_runtime_init(void) {
 
     for (int v = 0; v < IRQ_VECTOR_MIN; v++)   vec_mark_used(v);
     for (int v = IRQ_VECTOR_MAX + 1; v < 256; v++) vec_mark_used(v);
+    vec_mark_used(0x80);
 
     g_irq_runtime_inited = true;
     serial_printf("[irq] runtime IRQ allocator ready, range 0x%02x..0x%02x\n",
