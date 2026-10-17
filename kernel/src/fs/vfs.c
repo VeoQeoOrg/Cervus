@@ -527,6 +527,12 @@ int64_t vfs_write(vfs_file_t *file, const void *buf, size_t len) {
     if (!file || !file->vnode) return -EBADF;
     if (len == 0) return 0;
     if ((file->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
+    if (file->vnode->ops && file->vnode->ops->write_file) {
+        int saved = io_enter(file);
+        int64_t n = file->vnode->ops->write_file(file, buf, len);
+        io_leave(saved);
+        return n;
+    }
     if (!file->vnode->ops || !file->vnode->ops->write) return -EIO;
 
     if (file->flags & O_APPEND) file->offset = file->vnode->size;

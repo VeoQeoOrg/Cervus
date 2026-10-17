@@ -78,6 +78,13 @@ int64_t sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg_ptr)
     vfs_file_t *f = fd_get(t->fd_table, (int)fd);
     if (!f) return -EBADF;
 
+    if (f->vnode && f->vnode->ops && f->vnode->ops->ioctl_file &&
+        request != FIONBIO && request != FIOASYNC && request != FIOCLEX && request != FIONCLEX) {
+        int64_t rr = f->vnode->ops->ioctl_file(f, request, arg_ptr);
+        fd_put(f);
+        return rr;
+    }
+
     if (f->vnode && f->vnode->ops && f->vnode->ops->ioctl_raw &&
         request != FIONBIO && request != FIOASYNC && request != FIOCLEX && request != FIONCLEX) {
         int64_t rr = f->vnode->ops->ioctl_raw(f->vnode, request, arg_ptr);
