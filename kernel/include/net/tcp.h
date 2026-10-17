@@ -44,6 +44,7 @@ void        tcp_abort(tcp_tcb_t *tcb);
 void        tcp_set_opts(tcp_tcb_t *tcb, const tcp_opts_t *o);
 void        tcp_get_bufs(tcp_tcb_t *tcb, uint32_t *rcvbuf, uint32_t *sndbuf);
 uint32_t    tcp_mss(tcp_tcb_t *tcb);
+uint32_t    tcp_fill_info(tcp_tcb_t *tcb, uint8_t *buf, uint32_t cap);
 uint32_t    tcp_outq(tcp_tcb_t *tcb);
 void        tcp_peer(tcp_tcb_t *tcb, uint32_t *ip, uint8_t ip6[16], uint16_t *port);
 void        tcp_local(tcp_tcb_t *tcb, uint32_t *ip, uint8_t ip6[16]);

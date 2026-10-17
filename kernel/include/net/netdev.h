@@ -48,6 +48,12 @@ netdev_t *netdev_register_named(const char *name, const uint8_t mac[ETH_ALEN], u
 netdev_t *netdev_first(void);
 netdev_t *netdev_loopback(void);
 netdev_t *netdev_get(const char *name);
+netdev_t *netdev_at(int index);
+int       netdev_index_of(const netdev_t *dev);
+int64_t   netdev_ifreq_ioctl(uint64_t req, void *ifr);
+int64_t   netdev_ifconf(void *ifc);
+int       netdev_proc_dev(char *buf, size_t max);
+int       netdev_proc_route(char *buf, size_t max);
 netdev_t *netdev_route(uint32_t dst, uint32_t *nexthop);
 netdev_t *netdev_default(void);
 int       netdev_transmit(netdev_t *dev, const void *frame, size_t len);

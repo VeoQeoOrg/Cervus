@@ -30,8 +30,18 @@
 #define IOC_WRITE    1u
 #define IOC_READ     2u
 
+static size_t sockio_size(uint64_t request)
+{
+    if (request == 0x8905) return sizeof(int);
+    if (request == 0x8912) return 16;
+    if ((request & 0xFF00) == 0x8900 && request >= 0x8910 && request < 0x8960) return 40;
+    if ((request & 0xFF00) == 0x8B00) return 32;
+    return 0;
+}
+
 static size_t ioctl_out_size(uint64_t request)
 {
+    if (sockio_size(request)) return sockio_size(request);
     switch (request) {
         case TIOCGWINSZ:  return 8;
         case TIOCGCURSOR: return 8;
@@ -45,6 +55,7 @@ static size_t ioctl_out_size(uint64_t request)
 
 static size_t ioctl_in_size(uint64_t request)
 {
+    if (request != 0x8905 && sockio_size(request)) return sockio_size(request);
     switch (request) {
         case TCSETS:
         case TCSETSW:

@@ -1680,3 +1680,39 @@ int tcp_proc_netstat(char *buf, size_t max) {
         (unsigned long)g_tstat.rcvq_drop, (unsigned long)g_tstat.win_probe,
         (unsigned long)g_tstat.keepalive);
 }
+
+static void put32le(uint8_t *b, size_t off, uint32_t v) { memcpy(b + off, &v, 4); }
+
+uint32_t tcp_fill_info(tcp_tcb_t *t, uint8_t *b, uint32_t cap) {
+    uint8_t info[104];
+    memset(info, 0, sizeof info);
+    if (t) {
+        uint64_t f = spinlock_acquire_irqsave(&t->lock);
+        info[0] = (uint8_t)linux_state(t);
+        info[2] = (uint8_t)(t->retries > 255 ? 255 : t->retries);
+        info[5] = t->wscale_ok ? 4 : 0;
+        info[6] = (uint8_t)((t->snd_wscale & 15) | ((t->rcv_wscale & 15) << 4));
+        put32le(info, 8, t->rto_ms * 1000u);
+        put32le(info, 12, 40000u);
+        put32le(info, 16, t->smss);
+        put32le(info, 20, t->mss);
+        uint32_t inflight = t->snd_nxt - t->snd_una;
+        uint32_t segs = t->smss ? (inflight + t->smss - 1) / t->smss : 0;
+        put32le(info, 24, segs);
+        put32le(info, 60, t->mss + 40);
+        put32le(info, 64, t->rcv_cap);
+        put32le(info, 68, t->srtt > 0 ? (uint32_t)t->srtt * 1000u : 0);
+        put32le(info, 72, (uint32_t)t->rttvar * 1000u);
+        put32le(info, 76, t->ssthresh);
+        put32le(info, 80, t->smss ? t->cwnd / t->smss : 0);
+        put32le(info, 84, t->mss);
+        put32le(info, 88, 3);
+        put32le(info, 96, t->rcv_cap);
+        spinlock_release_irqrestore(&t->lock, f);
+    } else {
+        info[0] = 0x07;
+    }
+    uint32_t n = cap < sizeof info ? cap : (uint32_t)sizeof info;
+    memcpy(b, info, n);
+    return n;
+}

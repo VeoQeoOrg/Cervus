@@ -19,6 +19,7 @@
 #include "../../include/sched/waitq.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 extern uint64_t sched_now_ns(void);
@@ -271,4 +272,48 @@ void net_init(void) {
     atl1c_init();
     atl1e_init();
     wifi_init();
+}
+
+netdev_t *netdev_at(int index) {
+    netdev_t *d = g_netdevs;
+    for (int i = 0; d && i < index; i++) d = d->next;
+    return d;
+}
+
+int netdev_index_of(const netdev_t *dev) {
+    int i = 1;
+    for (netdev_t *d = g_netdevs; d; d = d->next, i++)
+        if (d == dev) return i;
+    return 0;
+}
+
+static uint32_t bswap32_k(uint32_t v) { return __builtin_bswap32(v); }
+
+int netdev_proc_dev(char *buf, size_t max) {
+    int n = snprintf(buf, max,
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n");
+    for (netdev_t *d = g_netdevs; d && n >= 0 && (size_t)n < max; d = d->next)
+        n += snprintf(buf + n, max - (size_t)n,
+            "%6s: %8llu %7llu %4u %4llu %4u %5u %10u %9u %8llu %7llu %4u %4llu %4u %5u %7u %10u\n",
+            d->name, (unsigned long long)d->rx_bytes, (unsigned long long)d->rx_packets,
+            (unsigned)d->rx_bad_csum, (unsigned long long)d->rx_dropped, 0u, 0u, 0u, 0u,
+            (unsigned long long)d->tx_bytes, (unsigned long long)d->tx_packets,
+            0u, (unsigned long long)d->tx_dropped, 0u, 0u, 0u, 0u);
+    return n;
+}
+
+int netdev_proc_route(char *buf, size_t max) {
+    int n = snprintf(buf, max, "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n");
+    netdev_t *def = netdev_default();
+    for (netdev_t *d = g_netdevs; d && n >= 0 && (size_t)n < max; d = d->next) {
+        if (d->is_loopback || !d->ip) continue;
+        if (d == def && d->gateway)
+            n += snprintf(buf + n, max - (size_t)n, "%s\t%08X\t%08X\t%04X\t0\t0\t%d\t%08X\t0\t0\t0\n",
+                          d->name, 0u, bswap32_k(d->gateway), 0x3u, d->metric, 0u);
+        if ((size_t)n >= max) break;
+        n += snprintf(buf + n, max - (size_t)n, "%s\t%08X\t%08X\t%04X\t0\t0\t%d\t%08X\t0\t0\t0\n",
+                      d->name, bswap32_k(d->ip & d->netmask), 0u, 0x1u, d->metric, bswap32_k(d->netmask));
+    }
+    return n;
 }

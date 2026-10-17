@@ -4,6 +4,7 @@
 #include "../../include/drivers/timer.h"
 #include "../../include/io/serial.h"
 #include <string.h>
+#include <stdio.h>
 
 static uint64_t now_ms(void) { return sched_now_ns() / 1000000ull; }
 
@@ -119,4 +120,25 @@ void arp_rx(netdev_t *dev, const uint8_t *p, size_t len) {
                       (spa >> 24) & 0xff, (spa >> 16) & 0xff, (spa >> 8) & 0xff, spa & 0xff,
                       sha[0], sha[1], sha[2], sha[3], sha[4], sha[5]);
     }
+}
+
+int arp_proc_list(char *buf, size_t max) {
+    int n = snprintf(buf, max, "IP address       HW type     Flags       HW address            Mask     Device\n");
+    arp_entry_t snap[ARP_CACHE_SIZE];
+    spinlock_acquire(&g_arp_lock);
+    memcpy(snap, g_arp, sizeof snap);
+    spinlock_release(&g_arp_lock);
+    for (int i = 0; i < ARP_CACHE_SIZE && n >= 0 && (size_t)n < max; i++) {
+        if (!snap[i].valid) continue;
+        uint32_t nh = 0;
+        netdev_t *d = netdev_route(snap[i].ip, &nh);
+        char ip[16];
+        snprintf(ip, sizeof ip, "%u.%u.%u.%u", snap[i].ip >> 24, (snap[i].ip >> 16) & 0xFF,
+                 (snap[i].ip >> 8) & 0xFF, snap[i].ip & 0xFF);
+        const uint8_t *m = snap[i].mac;
+        n += snprintf(buf + n, max - (size_t)n,
+                      "%-16s 0x1         0x2         %02x:%02x:%02x:%02x:%02x:%02x     *        %s\n",
+                      ip, m[0], m[1], m[2], m[3], m[4], m[5], d ? d->name : "?");
+    }
+    return n;
 }

@@ -28,6 +28,8 @@
 
 #define FIONREAD_K 0x541B
 #define TIOCOUTQ_K 0x5411
+#define SIOCATMARK_K  0x8905
+#define SIOCGIFCONF_K 0x8912
 #define SIOCSTTL_K 0x5460
 
 typedef struct dgram {
@@ -545,7 +547,14 @@ static int64_t sock_ioctl_op(vnode_t *vn, uint64_t req, void *arg) {
         if (!arg) return -EFAULT;
         *(int *)arg = (s->type == SOCK_STREAM && s->tcb && !s->listening) ? (int)tcp_outq(s->tcb) : 0;
         return 0;
+    case SIOCATMARK_K:
+        if (!arg) return -EFAULT;
+        *(int *)arg = 0;
+        return 0;
+    case SIOCGIFCONF_K:
+        return netdev_ifconf(arg);
     default:
+        if ((req & 0xFF00) == 0x8900 || (req & 0xFF00) == 0x8B00) return netdev_ifreq_ioctl(req, arg);
         return -ENOTTY;
     }
 }
@@ -636,6 +645,7 @@ vnode_t *sock_new_vnode(int domain, int type, int proto) {
 
 #define TCP_NODELAY_K    1
 #define TCP_MAXSEG_K     2
+#define TCP_INFO_K       11
 #define TCP_KEEPIDLE_K   4
 #define TCP_KEEPINTVL_K  5
 #define TCP_KEEPCNT_K    6
@@ -773,6 +783,13 @@ int64_t sock_op_getopt(vnode_t *vn, int level, int optname,
         sock_linger_t l = { s->opt_linger_on, s->opt_linger_s };
         *(sock_linger_t *)val = l;
         *len = sizeof(sock_linger_t);
+        return 0;
+    }
+
+    if (level == SOL_TCP_K && optname == TCP_INFO_K) {
+        if (s->type != SOCK_STREAM) return -ENOPROTOOPT;
+        *len = tcp_fill_info(s->listening ? NULL : s->tcb, val, *len);
+        if (s->listening) ((uint8_t *)val)[0] = 0x0A;
         return 0;
     }
 

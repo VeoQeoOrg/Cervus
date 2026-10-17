@@ -7,6 +7,7 @@
 #include "../../include/fs/vfs.h"
 #include "../../include/net/socket.h"
 #include "../../include/net/tcp.h"
+#include "../../include/net/arp.h"
 #include "../../include/fs/procfs.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/smp/smp.h"
@@ -169,6 +170,9 @@ static int gen_net_snmp(char *buf, size_t max) {
 }
 
 static int gen_net_netstat(char *buf, size_t max) { return tcp_proc_netstat(buf, max); }
+static int gen_net_dev(char *buf, size_t max)   { return netdev_proc_dev(buf, max); }
+static int gen_net_route(char *buf, size_t max) { return netdev_proc_route(buf, max); }
+static int gen_net_arp(char *buf, size_t max)   { return arp_proc_list(buf, max); }
 
 static proc_file_t g_proc_net_files[] = {
     { "tcp",  gen_net_tcp,  {0} },
@@ -177,6 +181,9 @@ static proc_file_t g_proc_net_files[] = {
     { "udp6", gen_net_udp6, {0} },
     { "snmp", gen_net_snmp, {0} },
     { "netstat", gen_net_netstat, {0} },
+    { "dev",     gen_net_dev,     {0} },
+    { "route",   gen_net_route,   {0} },
+    { "arp",     gen_net_arp,     {0} },
 };
 #define PROC_NET_NFILES (sizeof(g_proc_net_files) / sizeof(g_proc_net_files[0]))
 

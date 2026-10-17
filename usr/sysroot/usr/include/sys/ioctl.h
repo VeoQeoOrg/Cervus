@@ -54,6 +54,8 @@ extern "C" {
 
 #define SIOCSTTL     0x5460
 
+#include <linux/sockios.h>
+
 struct winsize {
     uint16_t ws_row;
     uint16_t ws_col;

@@ -1,3 +1,4 @@
+#include "../../include/net/netdev.h"
 #include "../../include/net/socket.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/fs/poll.h"
@@ -968,6 +969,9 @@ static int64_t unix_ioctl_op(vnode_t *vn, uint64_t req, void *arg) {
         *(int *)arg = n;
         return 0;
     }
+    if (req == 0x8912) return netdev_ifconf(arg);
+    if (req >= 0x8910 && req < 0x8960) return netdev_ifreq_ioctl(req, arg);
+    if ((req & 0xFF00) == 0x8B00) return netdev_ifreq_ioctl(req, arg);
     return -ENOTTY;
 }
 
