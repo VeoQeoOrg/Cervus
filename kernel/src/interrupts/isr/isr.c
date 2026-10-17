@@ -216,7 +216,7 @@ static int simd_code(void) {
     return 0;
 }
 
-static bool user_exception_to_signal(struct int_frame_t *regs) {
+static bool user_exception_to_signal(struct int_frame_t *regs, uint64_t pf_addr) {
     task_t *me = isr_current();
     if (!me || !me->is_userspace) return false;
     int sig, code = 0x80;
@@ -236,8 +236,7 @@ static bool user_exception_to_signal(struct int_frame_t *regs) {
         case EXCEPTION_STACK_SEGMENT_FAULT:   sig = SIGBUS;  addr = 0; break;
         case EXCEPTION_GENERAL_PROTECTION_FAULT: sig = SIGSEGV; addr = 0; break;
         case EXCEPTION_PAGE_FAULT: {
-            uint64_t cr2v = 0;
-            asm volatile("mov %%cr2, %0" : "=r"(cr2v));
+            uint64_t cr2v = pf_addr;
             sig = SIGSEGV;
             addr = cr2v;
             code = (me->mm && cr2v < MM_USER_TOP && mm_find_vma(me->mm, cr2v)) ? 2 : 1;
@@ -258,9 +257,11 @@ static bool user_exception_to_signal(struct int_frame_t *regs) {
 
 void handle_intercpu_interrupt(struct int_frame_t *regs)
 {
+    uint64_t pf_addr = 0;
     if (regs->interrupt == EXCEPTION_PAGE_FAULT) {
         uint64_t cr2v = 0;
         asm volatile("mov %%cr2, %0" : "=r"(cr2v));
+        pf_addr = cr2v;
         percpu_t *pc = get_percpu();
         task_t   *cur = pc ? (task_t *)pc->current_task : NULL;
         if (!cur) { uint32_t cpu = smp_cpu_index(); cur = current_task[cpu]; }
@@ -302,7 +303,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
         kernel_panic_regs("Non-Maskable Interrupt (hardware)", regs);
     }
 
-    if ((regs->cs & 3) == 3 && user_exception_to_signal(regs)) return;
+    if ((regs->cs & 3) == 3 && user_exception_to_signal(regs, pf_addr)) return;
 
     serial_force_unlock();
     registers_dump(regs);
@@ -357,8 +358,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
             kernel_fault_recover_or_panic(regs, "General Protection Fault (kernel)");
 
         case EXCEPTION_PAGE_FAULT: {
-            uint64_t cr2val = 0;
-            asm volatile("mov %%cr2, %0" : "=r"(cr2val));
+            uint64_t cr2val = pf_addr;
             if ((regs->cs & 3) == 3) {
                 percpu_t *pc = get_percpu();
                 task_t   *me = pc ? (task_t *)pc->current_task : NULL;
@@ -396,7 +396,7 @@ void handle_intercpu_interrupt(struct int_frame_t *regs)
 }
 
 DEFINE_ISR(0x3, isr_breakpoint) {
-    if ((frame->cs & 3) == 3 && user_exception_to_signal(frame)) return;
+    if ((frame->cs & 3) == 3 && user_exception_to_signal(frame, 0)) return;
     serial_printf("Breakpoint hit\n");
 }
 
