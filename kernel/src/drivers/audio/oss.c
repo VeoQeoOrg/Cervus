@@ -190,8 +190,7 @@ static void fill_audioinfo(k_audioinfo_t *ai) {
     memset(ai, 0, sizeof *ai);
     ai->dev = 0;
     snprintf(ai->name, sizeof ai->name, "Cervus %s", audio_backend_name());
-    void *owner = pcm_owner();
-    ai->busy = owner ? 2 : 0;
+    ai->busy = 0;
     ai->pid = -1;
     ai->caps = CAP_OUTPUT | CAP_TRIGGER | CAP_REALTIME | CAP_ANALOGOUT | 1;
     ai->oformats = PCM_FMTS;
@@ -225,7 +224,7 @@ static int64_t common_ioctl(uint64_t req, uint64_t arg) {
             strcpy(si.version, "4.1");
             si.versionnum = 0x040100;
             si.numaudios = 1;
-            si.openedaudio[0] = pcm_owner() ? 1 : 0;
+            si.openedaudio[0] = 0;
             si.nummixers = 1;
             si.numcards = 1;
             si.numaudioengines = 1;
@@ -299,11 +298,8 @@ static int64_t common_ioctl(uint64_t req, uint64_t arg) {
                 int l = v & 0xFF, r = (v >> 8) & 0xFF;
                 int pct = l > r ? l : r;
                 if (pct > 100) pct = 100;
-                if (nr == MIXER_VOLUME) audio_set_volume(pct);
-                else pcm_set_volume(l | (r << 8));
-                vol = nr == MIXER_VOLUME ? pct : pcm_get_volume() & 0xFF;
-            } else if (nr == MIXER_PCM) {
-                return put_int(arg, pcm_get_volume());
+                audio_set_volume(pct);
+                vol = pct;
             }
             return put_int(arg, vol | (vol << 8));
         }
@@ -315,16 +311,18 @@ static int64_t common_ioctl(uint64_t req, uint64_t arg) {
 static int dsp_open(vnode_t *node, vfs_file_t *file) {
     (void)node;
     if ((file->flags & O_ACCMODE) == O_RDONLY) return -ENODEV;
-    return pcm_claim(file);
+    return pcm_open(file) ? 0 : -EBUSY;
 }
 
 static void dsp_release(vfs_file_t *file) {
-    pcm_release(file, (file->flags & O_NONBLOCK) ? 0 : 1);
+    pcm_stream_t *s = pcm_find(file);
+    if (s) pcm_close(s, (file->flags & O_NONBLOCK) ? 0 : 1);
 }
 
-static int64_t dsp_write(vnode_t *node, const void *buf, size_t len, uint64_t off) {
-    (void)node; (void)off;
-    return pcm_write(buf, len, vfs_io_nonblock());
+static int64_t dsp_write_file(vfs_file_t *file, const void *buf, size_t len) {
+    pcm_stream_t *s = pcm_find(file);
+    if (!s) return -EBADF;
+    return pcm_write(s, buf, len, vfs_io_nonblock());
 }
 
 static int64_t dsp_read(vnode_t *node, void *buf, size_t len, uint64_t off) {
@@ -332,55 +330,56 @@ static int64_t dsp_read(vnode_t *node, void *buf, size_t len, uint64_t off) {
     return -EINVAL;
 }
 
-static int dsp_poll(vnode_t *node, int events) {
-    (void)node;
+static int dsp_poll_file(vfs_file_t *file, int events) {
+    pcm_stream_t *s = pcm_find(file);
     int r = 0;
-    if ((events & POLLOUT) && pcm_writable()) r |= POLLOUT;
+    if (s && (events & POLLOUT) && pcm_writable(s)) r |= POLLOUT;
     return r;
 }
 
-static int64_t dsp_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
-    (void)node;
+static int64_t dsp_ioctl_file(vfs_file_t *file, uint64_t req, uint64_t arg) {
+    pcm_stream_t *s = pcm_find(file);
+    if (!s) return common_ioctl(req, arg);
     int v;
     switch (req) {
         case DSP_HALT:
         case DSP_HALT_OUTPUT:
-            pcm_reset();
+            pcm_reset(s);
             return 0;
         case DSP_HALT_INPUT:
             return 0;
         case DSP_SYNC:
-            return pcm_sync();
+            return pcm_sync(s);
         case DSP_POST:
-            pcm_post();
+            pcm_post(s);
             return 0;
         case DSP_SPEED:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            if (v <= 0) return put_int(arg, (int)pcm_get_rate());
-            return put_int(arg, (int)pcm_set_rate((uint32_t)v));
+            if (v <= 0) return put_int(arg, (int)pcm_get_rate(s));
+            return put_int(arg, (int)pcm_set_rate(s, (uint32_t)v));
         case PCM_READ_RATE:
-            return put_int(arg, (int)pcm_get_rate());
+            return put_int(arg, (int)pcm_get_rate(s));
         case DSP_STEREO:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            return put_int(arg, pcm_set_channels(v ? 2 : 1) - 1);
+            return put_int(arg, pcm_set_channels(s, v ? 2 : 1) - 1);
         case DSP_CHANNELS:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            if (v <= 0) return put_int(arg, pcm_get_channels());
-            return put_int(arg, pcm_set_channels(v));
+            if (v <= 0) return put_int(arg, pcm_get_channels(s));
+            return put_int(arg, pcm_set_channels(s, v));
         case PCM_READ_CHANNELS:
-            return put_int(arg, pcm_get_channels());
+            return put_int(arg, pcm_get_channels(s));
         case DSP_SETFMT:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            if (v == 0) return put_int(arg, pcm_get_format());
-            return put_int(arg, pcm_set_format(v));
+            if (v == 0) return put_int(arg, pcm_get_format(s));
+            return put_int(arg, pcm_set_format(s, v));
         case PCM_READ_BITS:
-            return put_int(arg, pcm_get_format());
+            return put_int(arg, pcm_get_format(s));
         case DSP_GETFMTS:
             return put_int(arg, PCM_FMTS);
         case DSP_GETBLKSIZE: {
-            pcm_space_t s;
-            pcm_space(&s);
-            return put_int(arg, (int)s.fragsize);
+            pcm_space_t sp;
+            pcm_space(s, &sp);
+            return put_int(arg, (int)sp.fragsize);
         }
         case DSP_SETFRAGMENT: {
             if (get_int(arg, &v) < 0) return -EFAULT;
@@ -389,7 +388,7 @@ static int64_t dsp_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
             if (shift < 4) shift = 4;
             if (shift > 16) shift = 16;
             if (n < 2) n = 2;
-            pcm_set_fragment(1u << shift, n == 0x7FFF ? 0 : n);
+            pcm_set_fragment(s, 1u << shift, n == 0x7FFF ? 0 : n);
             return 0;
         }
         case DSP_SUBDIVIDE:
@@ -407,15 +406,15 @@ static int64_t dsp_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
         case DSP_GETCAPS:
             return put_int(arg, CAP_OUTPUT | CAP_TRIGGER | CAP_REALTIME | CAP_ANALOGOUT | 1);
         case DSP_GETTRIGGER:
-            return put_int(arg, pcm_get_trigger() ? 2 : 0);
+            return put_int(arg, pcm_get_trigger(s) ? 2 : 0);
         case DSP_SETTRIGGER:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            pcm_set_trigger(v & 2);
+            pcm_set_trigger(s, v & 2);
             return 0;
         case DSP_GETOSPACE: {
-            pcm_space_t s;
-            pcm_space(&s);
-            k_buf_info_t bi = { (int)s.fragments, (int)s.fragstotal, (int)s.fragsize, (int)s.bytes };
+            pcm_space_t sp;
+            pcm_space(s, &sp);
+            k_buf_info_t bi = { (int)sp.fragments, (int)sp.fragstotal, (int)sp.fragsize, (int)sp.bytes };
             return put_user(arg, &bi, sizeof bi);
         }
         case DSP_GETISPACE:
@@ -423,7 +422,7 @@ static int64_t dsp_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
         case DSP_GETOPTR: {
             uint64_t played;
             uint32_t ptr, frags;
-            pcm_position(&played, &ptr, &frags);
+            pcm_position(s, &played, &ptr, &frags);
             k_count_info_t ci = { (unsigned int)played, (int)frags, (int)ptr };
             return put_user(arg, &ci, sizeof ci);
         }
@@ -434,28 +433,28 @@ static int64_t dsp_ioctl(vnode_t *node, uint64_t req, uint64_t arg) {
         case DSP_CURRENT_OPTR: {
             uint64_t played;
             uint32_t ptr, frags;
-            pcm_position(&played, &ptr, &frags);
+            pcm_position(s, &played, &ptr, &frags);
             k_oss_count_t c;
             memset(&c, 0, sizeof c);
-            int ch = pcm_get_channels();
-            int fmt = pcm_get_format();
+            int ch = pcm_get_channels(s);
+            int fmt = pcm_get_format(s);
             int sb = fmt == PCM_FMT_U8 ? 1 : fmt == PCM_FMT_S16_LE ? 2 : 4;
             c.samples = (long long)(played / (uint64_t)(sb * ch));
-            c.fifo_samples = (int)(pcm_delay() / (uint32_t)(sb * ch));
+            c.fifo_samples = (int)(pcm_delay(s) / (uint32_t)(sb * ch));
             return put_user(arg, &c, sizeof c);
         }
         case DSP_GETODELAY:
-            return put_int(arg, (int)pcm_delay());
+            return put_int(arg, (int)pcm_delay(s));
         case DSP_GETPLAYVOL:
-            return put_int(arg, pcm_get_volume());
+            return put_int(arg, pcm_get_volume(s));
         case DSP_SETPLAYVOL:
             if (get_int(arg, &v) < 0) return -EFAULT;
-            pcm_set_volume(v);
-            return put_int(arg, pcm_get_volume());
+            pcm_set_volume(s, v);
+            return put_int(arg, pcm_get_volume(s));
         case DSP_GETERROR: {
             k_errinfo_t e;
             memset(&e, 0, sizeof e);
-            e.play_underruns = (int)pcm_xruns();
+            e.play_underruns = (int)pcm_xruns(s);
             return put_user(arg, &e, sizeof e);
         }
         case DSP_GET_PLAYTGT:
@@ -487,11 +486,13 @@ static void chr_unref(vnode_t *n) { if (n->refcount > 1) __atomic_fetch_sub(&n->
 
 static int64_t sndstat_read(vnode_t *node, void *buf, size_t len, uint64_t off) {
     (void)node;
-    char tmp[256];
+    char tmp[1536];
     int n = snprintf(tmp, sizeof tmp,
-                     "Cervus OSS 4.1 compatible audio\n\nAudio devices:\n0: Cervus %s (%s)\n\nMixers:\n0: Cervus %s mixer\n",
-                     audio_backend_name(), pcm_owner() ? "BUSY" : "free", audio_backend_name());
+                     "Cervus OSS 4.1 compatible audio\n\nAudio devices:\n0: Cervus %s (%d streams)\n\nMixers:\n0: Cervus %s mixer\n\n",
+                     audio_backend_name(), pcm_streams_open(), audio_backend_name());
     if (n < 0) return 0;
+    if ((size_t)n < sizeof tmp) n += pcm_status(tmp + n, sizeof tmp - (size_t)n);
+    if (n > (int)sizeof tmp) n = (int)sizeof tmp;
     if (off >= (uint64_t)n) return 0;
     size_t k = (size_t)n - (size_t)off;
     if (k > len) k = len;
@@ -501,9 +502,9 @@ static int64_t sndstat_read(vnode_t *node, void *buf, size_t len, uint64_t off) 
 
 static const vnode_ops_t DSP_OPS = {
     .read         = dsp_read,
-    .write        = dsp_write,
-    .poll         = dsp_poll,
-    .ioctl_raw    = dsp_ioctl,
+    .write_file   = dsp_write_file,
+    .poll_file    = dsp_poll_file,
+    .ioctl_file   = dsp_ioctl_file,
     .stat         = chr_stat,
     .ref          = chr_ref,
     .unref        = chr_unref,

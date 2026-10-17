@@ -52,8 +52,9 @@ typedef struct {
 #define PCM_FMTS (PCM_FMT_U8 | PCM_FMT_S16_LE | PCM_FMT_S32_LE | PCM_FMT_FLOAT | PCM_FMT_S24_LE)
 
 #define PCM_MIN_RATE     8000
-#define PCM_MAX_RATE     96000
+#define PCM_MAX_RATE     192000
 #define PCM_MAX_CHANNELS 8
+#define PCM_MAX_STREAMS  8
 
 typedef struct {
     uint32_t bytes;
@@ -66,29 +67,34 @@ void audio_register(const audio_backend_t *b);
 int  audio_present(void);
 const char *audio_backend_name(void);
 
-int      pcm_claim(void *owner);
-void     pcm_release(void *owner, int drain);
-void    *pcm_owner(void);
-uint32_t pcm_set_rate(uint32_t rate);
-int      pcm_set_channels(int ch);
-int      pcm_set_format(int fmt);
-uint32_t pcm_set_fragment(uint32_t frag_bytes, uint32_t nfrags);
-long     pcm_write(const void *buf, size_t len, int nonblock);
-void     pcm_space(pcm_space_t *s);
-uint32_t pcm_delay(void);
-void     pcm_position(uint64_t *played, uint32_t *ptr, uint32_t *frags_done);
-void     pcm_reset(void);
-int      pcm_sync(void);
-void     pcm_post(void);
-void     pcm_set_trigger(int enable);
-int      pcm_get_trigger(void);
-int      pcm_get_volume(void);
-void     pcm_set_volume(int lr);
-int      pcm_get_format(void);
-int      pcm_get_channels(void);
-uint32_t pcm_get_rate(void);
-uint32_t pcm_xruns(void);
-int      pcm_writable(void);
+typedef struct pcm_stream pcm_stream_t;
+
+pcm_stream_t *pcm_open(void *owner);
+pcm_stream_t *pcm_find(void *owner);
+void     pcm_close(pcm_stream_t *s, int drain);
+int      pcm_streams_open(void);
+uint32_t pcm_device_rate(void);
+uint32_t pcm_set_rate(pcm_stream_t *s, uint32_t rate);
+int      pcm_set_channels(pcm_stream_t *s, int ch);
+int      pcm_set_format(pcm_stream_t *s, int fmt);
+uint32_t pcm_set_fragment(pcm_stream_t *s, uint32_t frag_bytes, uint32_t nfrags);
+long     pcm_write(pcm_stream_t *s, const void *buf, size_t len, int nonblock);
+void     pcm_space(pcm_stream_t *s, pcm_space_t *sp);
+uint32_t pcm_delay(pcm_stream_t *s);
+void     pcm_position(pcm_stream_t *s, uint64_t *played, uint32_t *ptr, uint32_t *frags_done);
+void     pcm_reset(pcm_stream_t *s);
+int      pcm_sync(pcm_stream_t *s);
+void     pcm_post(pcm_stream_t *s);
+void     pcm_set_trigger(pcm_stream_t *s, int enable);
+int      pcm_get_trigger(pcm_stream_t *s);
+int      pcm_get_volume(pcm_stream_t *s);
+void     pcm_set_volume(pcm_stream_t *s, int lr);
+int      pcm_get_format(pcm_stream_t *s);
+int      pcm_get_channels(pcm_stream_t *s);
+uint32_t pcm_get_rate(pcm_stream_t *s);
+uint32_t pcm_xruns(pcm_stream_t *s);
+int      pcm_writable(pcm_stream_t *s);
+int      pcm_status(char *buf, size_t max);
 
 int  audio_open(uint32_t rate);
 long audio_write(const void *pcm, size_t bytes);
