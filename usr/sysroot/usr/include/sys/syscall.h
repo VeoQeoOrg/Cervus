@@ -252,6 +252,12 @@ extern "C" {
 #define SYS_PERSONALITY     686
 #define SYS_TKILL           687
 #define SYS_ARCH_PRCTL      688
+#define SYS_PRCTL           689
+#define SYS_FUTEX           690
+#define SYS_prctl           SYS_PRCTL
+#define __NR_prctl          SYS_PRCTL
+#define SYS_futex           SYS_FUTEX
+#define __NR_futex          SYS_FUTEX
 #define SYS_arch_prctl      SYS_ARCH_PRCTL
 #define __NR_arch_prctl     SYS_ARCH_PRCTL
 #define SYS_tkill           SYS_TKILL

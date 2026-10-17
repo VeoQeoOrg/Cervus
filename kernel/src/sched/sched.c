@@ -586,6 +586,7 @@ task_t* task_fork(task_t* parent) {
     child->umask           = parent->umask;
     child->ctty            = parent->ctty;
     child->persona         = parent->persona;
+    child->pr_flags        = parent->pr_flags & ~PR_FLAG_SUBREAPER;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     memcpy(child->root, parent->root, sizeof(child->root));
     memcpy(child->exe, parent->exe, sizeof(child->exe));
@@ -799,16 +800,37 @@ static void group_report(task_t* leader)
     }
 
     task_t* init = task_find_by_pid(1);
+    uint32_t up = leader->ppid;
+    for (int depth = 0; up > 1 && depth < 64; depth++) {
+        task_t *p = task_find_by_pid(up);
+        if (!p || p == leader) break;
+        if ((p->pr_flags & PR_FLAG_SUBREAPER) && p->state != TASK_ZOMBIE && p->state != TASK_DEAD) {
+            init = p;
+            break;
+        }
+        up = p->ppid;
+    }
     if (init && init != leader) {
+        uint32_t notify[64];
+        int nnotify = 0;
+        bool zombies = false;
         uint64_t _cf = spinlock_acquire_irqsave(&children_lock);
         task_t* child = leader->children;
         leader->children = NULL;
         while (child) {
             task_t* sib = child->sibling;
+            if (child->pdeathsig && nnotify < 64) notify[nnotify++] = child->pid;
+            if (child->state == TASK_ZOMBIE) zombies = true;
             task_reparent(child, init);
             child = sib;
         }
         spinlock_release_irqrestore(&children_lock, _cf);
+        if (zombies && init->pid != 1) signal_send(init, SIGCHLD);
+        for (int i = 0; i < nnotify; i++) {
+            task_t *c = task_find_by_pid(notify[i]);
+            if (c && c->pdeathsig && c->state != TASK_ZOMBIE && c->state != TASK_DEAD)
+                signal_send(c, c->pdeathsig);
+        }
     }
 
     task_wakeup_waiters(leader->pid);

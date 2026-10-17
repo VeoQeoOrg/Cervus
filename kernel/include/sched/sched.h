@@ -76,6 +76,10 @@ typedef enum {
 #define RLIMIT_COUNT        16
 #define RLIM_INF_K          (~0ULL)
 
+#define PR_FLAG_NO_NEW_PRIVS  1u
+#define PR_FLAG_UNDUMPABLE    2u
+#define PR_FLAG_SUBREAPER     4u
+
 typedef struct task {
     uint64_t rsp;
     uint64_t rip;
@@ -270,6 +274,8 @@ typedef struct task {
     uint32_t   pt_dr_on;
     uint32_t   persona;
     uint64_t   gs_base;
+    int32_t    pdeathsig;
+    uint32_t   pr_flags;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

@@ -262,6 +262,8 @@
 #define SYS_PERSONALITY       686
 #define SYS_TKILL             687
 #define SYS_ARCH_PRCTL        688
+#define SYS_PRCTL             689
+#define SYS_FUTEX             690
 
 #define SYSCALL_TABLE_SIZE    768
 
