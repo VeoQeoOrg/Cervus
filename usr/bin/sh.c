@@ -1031,10 +1031,23 @@ static node_t *parse_list(lexer_t *lx, int allow_reserved_stop)
 static int run_string(const char *src);
 static int exec_node(node_t *n);
 
+static int hi_pipe(int pfd[2])
+{
+    if (pipe(pfd) < 0) return -1;
+    for (int i = 0; i < 2; i++) {
+        if (pfd[i] >= 10) continue;
+        int n = fcntl(pfd[i], F_DUPFD_CLOEXEC, 10);
+        if (n < 0) continue;
+        close(pfd[i]);
+        pfd[i] = n;
+    }
+    return 0;
+}
+
 static char *capture(const char *script, int *status)
 {
     int pfd[2];
-    if (pipe(pfd) < 0) return xstrdup("");
+    if (hi_pipe(pfd) < 0) return xstrdup("");
 
     fflush(NULL);
     pid_t pid = fork();
@@ -1969,7 +1982,7 @@ static int apply_redirs(redir_t *r, fdsave_t *save)
         int newfd;
         if (r->type == R_HEREDOC) {
             int pfd[2];
-            if (pipe(pfd) < 0) return -1;
+            if (hi_pipe(pfd) < 0) return -1;
             const char *body = r->here ? r->here : "";
             char *expanded = NULL;
             if (!r->here_raw) {
@@ -1999,7 +2012,7 @@ static int apply_redirs(redir_t *r, fdsave_t *save)
             if (got == -2) {
                 if (save && save->n < 16) {
                     save->fds[save->n] = r->fd;
-                    save->saved[save->n] = dup(r->fd);
+                    save->saved[save->n] = fcntl(r->fd, F_DUPFD_CLOEXEC, 10);
                     save->n++;
                 }
                 close(r->fd);
@@ -2009,7 +2022,7 @@ static int apply_redirs(redir_t *r, fdsave_t *save)
                 newfd = -3 - got;
                 if (save && save->n < 16) {
                     save->fds[save->n] = r->fd;
-                    save->saved[save->n] = dup(r->fd);
+                    save->saved[save->n] = fcntl(r->fd, F_DUPFD_CLOEXEC, 10);
                     save->n++;
                 }
                 if (newfd != r->fd) dup2(newfd, r->fd);
@@ -2024,7 +2037,7 @@ static int apply_redirs(redir_t *r, fdsave_t *save)
         }
         if (save && save->n < 16) {
             save->fds[save->n] = r->fd;
-            save->saved[save->n] = dup(r->fd);
+            save->saved[save->n] = fcntl(r->fd, F_DUPFD_CLOEXEC, 10);
             save->n++;
         }
         if (newfd != r->fd) {
@@ -2041,6 +2054,8 @@ static void restore_redirs(fdsave_t *save)
         if (save->saved[i] >= 0) {
             dup2(save->saved[i], save->fds[i]);
             close(save->saved[i]);
+        } else {
+            close(save->fds[i]);
         }
     }
     save->n = 0;
@@ -2335,6 +2350,16 @@ static int is_builtin(const char *name)
         "unset", "command", "getopts", "wait", NULL
     };
     for (int i = 0; B[i]; i++) if (!strcmp(name, B[i])) return 1;
+    return 0;
+}
+
+static int is_special_builtin(const char *name)
+{
+    static const char *const S[] = {
+        ":", ".", "source", "break", "continue", "eval", "exec", "exit", "export",
+        "readonly", "return", "set", "shift", "times", "trap", "unset", NULL
+    };
+    for (int i = 0; S[i]; i++) if (!strcmp(name, S[i])) return 1;
     return 0;
 }
 
@@ -2804,10 +2829,6 @@ static int exec_simple(node_t *n, int in_child)
         int rc;
         if (apply_redirs(n->redirs, &save) < 0) rc = 1;
         else {
-            int flush_needed = 1;
-            (void)flush_needed;
-            int nsave = g_nvars;
-            (void)nsave;
             svec oldvals;
             sv_init(&oldvals);
             for (int i = 0; i < assigns.n; i++) {
@@ -2819,8 +2840,17 @@ static int exec_simple(node_t *n, int in_child)
                 free(name);
             }
             int is_bi = 0;
+            int special = is_special_builtin(av[0]);
             rc = run_builtin(ac, av, &is_bi);
             fflush(NULL);
+            if (!special)
+                for (int i = 0; i < assigns.n; i++) {
+                    char *eq = strchr(assigns.v[i], '=');
+                    char *name = xstrndup(assigns.v[i], (size_t)(eq - assigns.v[i]));
+                    if (oldvals.v[i]) var_set(name, oldvals.v[i]);
+                    else var_unset(name);
+                    free(name);
+                }
             sv_free(&oldvals);
             restore_redirs(&save);
         }
@@ -2844,7 +2874,7 @@ static int exec_pipeline(node_t *n)
 
     for (int i = 0; i < nk; i++) {
         int pfd[2] = { -1, -1 };
-        if (i + 1 < nk && pipe(pfd) < 0) { fprintf(stderr, "%s: cannot pipe\n", g_shname); break; }
+        if (i + 1 < nk && hi_pipe(pfd) < 0) { fprintf(stderr, "%s: cannot pipe\n", g_shname); break; }
 
         fflush(NULL);
         pid_t pid = fork();
@@ -3267,6 +3297,9 @@ static void import_environ(void)
     char cwd[1024];
     if (getcwd(cwd, sizeof cwd)) { var_set("PWD", cwd); var_export("PWD"); }
     var_set("OPTIND", "1");
+    char ppid[16];
+    snprintf(ppid, sizeof ppid, "%d", (int)getppid());
+    var_set("PPID", ppid);
 }
 
 static void run_exit_trap(void)
