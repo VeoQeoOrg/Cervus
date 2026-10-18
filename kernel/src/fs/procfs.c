@@ -479,23 +479,46 @@ typedef struct {
     proc_pid_gen_fn gen;
 } proc_pid_data_t;
 
+#define PROC_PID_MAX (4u << 20)
+
+static char *pidfile_generate(proc_pid_data_t *pd, int *total) {
+    size_t cap = PROC_BUF_MAX;
+    for (;;) {
+        char *tmp = kmalloc(cap);
+        if (!tmp) { *total = -ENOMEM; return NULL; }
+        int n = pd->gen(pd->pid, tmp, cap);
+        if (n < 0) { kfree(tmp); *total = n; return NULL; }
+        if ((size_t)n + 1 < cap || cap >= PROC_PID_MAX) {
+            if ((size_t)n >= cap) n = (int)strnlen(tmp, cap);
+            *total = n;
+            return tmp;
+        }
+        kfree(tmp);
+        cap *= 2;
+    }
+}
+
 static int64_t pidfile_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     proc_pid_data_t *pd = (proc_pid_data_t *)node->fs_data;
-    char tmp[PROC_BUF_MAX];
-    int total = pd->gen(pd->pid, tmp, sizeof(tmp));
-    if (total < 0) return -ESRCH;
-    if ((size_t)total > sizeof(tmp)) total = sizeof(tmp);
-    if (offset >= (uint64_t)total) return 0;
-    size_t avail = (size_t)total - (size_t)offset;
-    if (len > avail) len = avail;
-    memcpy(buf, tmp + offset, len);
-    return (int64_t)len;
+    int total;
+    char *tmp = pidfile_generate(pd, &total);
+    if (!tmp) return total == -ENOMEM ? -ENOMEM : -ESRCH;
+    int64_t r = 0;
+    if (offset < (uint64_t)total) {
+        size_t avail = (size_t)total - (size_t)offset;
+        if (len > avail) len = avail;
+        memcpy(buf, tmp + offset, len);
+        r = (int64_t)len;
+    }
+    kfree(tmp);
+    return r;
 }
 
 static int pidfile_stat(vnode_t *node, vfs_stat_t *out) {
     proc_pid_data_t *pd = (proc_pid_data_t *)node->fs_data;
-    char tmp[PROC_BUF_MAX];
-    int total = pd->gen(pd->pid, tmp, sizeof(tmp));
+    int total;
+    char *tmp = pidfile_generate(pd, &total);
+    if (tmp) kfree(tmp);
     if (total < 0) total = 0;
     memset(out, 0, sizeof(*out));
     out->st_ino  = node->ino;

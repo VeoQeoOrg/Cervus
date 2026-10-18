@@ -1021,8 +1021,9 @@ uint64_t mm_vm_bytes(mm_t *mm) {
 int mm_format_maps(mm_t *mm, char *buf, size_t max) {
     if (!mm || !buf || !max) return 0;
     size_t n = 0;
+    vm_area_t *v;
     kmutex_lock(&mm->lock);
-    for (vm_area_t *v = mm->vmas; v && n + 128 < max; v = v->next) {
+    for (v = mm->vmas; v && n + 128 < max; v = v->next) {
         const char *name = "";
         if (v->flags & VM_STACK) name = "[stack]";
         else if (v->flags & VM_HEAP) name = "[heap]";
@@ -1039,5 +1040,5 @@ int mm_format_maps(mm_t *mm, char *buf, size_t max) {
         n += (size_t)w;
     }
     kmutex_unlock(&mm->lock);
-    return (int)n;
+    return v ? (int)max : (int)n;
 }
