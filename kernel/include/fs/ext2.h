@@ -7,6 +7,7 @@
 #include "../drivers/disk/blkdev.h"
 #include "vfs.h"
 #include "../sched/spinlock.h"
+#include "../sched/kmutex.h"
 
 #define EXT2_ICACHE_BUCKETS 512
 
@@ -171,7 +172,7 @@ typedef struct {
     uint32_t           alloc_group;
     uint32_t           alloc_bit;
     void              *wb;
-    volatile int       lock_held;
+    kmutex_t           lock_mutex;
     void              *lock_owner;
     int                lock_depth;
     spinlock_t         icache_lock;

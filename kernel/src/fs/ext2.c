@@ -39,7 +39,7 @@ static void fs_lock(ext2_t *fs) {
     void *me = syscall_cur_task();
     if (!me) me = (void *)1;
     if (fs->lock_owner == me) { fs->lock_depth++; return; }
-    while (__atomic_exchange_n(&fs->lock_held, 1, __ATOMIC_ACQUIRE)) task_yield();
+    kmutex_lock(&fs->lock_mutex);
     fs->lock_owner = me;
     fs->lock_depth = 1;
 }
@@ -47,28 +47,36 @@ static void fs_lock(ext2_t *fs) {
 static void fs_unlock(ext2_t *fs) {
     if (--fs->lock_depth > 0) return;
     fs->lock_owner = NULL;
-    __atomic_store_n(&fs->lock_held, 0, __ATOMIC_RELEASE);
+    kmutex_unlock(&fs->lock_mutex);
 }
 
 #define VFS_OF(n) (((ext2_vdata_t *)(n)->fs_data)->fs)
 
-#define WB_SLOTS     256
+#define WB_MAX       16384
+#define WB_HASH      4096
+#define WB_DIRTY_MAX 4096
 #define WB_FLUSH_RUN 32
 #define RA_SLOTS     4
 
 typedef struct {
-    int      depth;
-    int      persistent;
-    uint32_t tick;
-    uint32_t ndirty;
-    uint32_t blk[WB_SLOTS];
-    uint32_t used[WB_SLOTS];
-    uint8_t  valid[WB_SLOTS];
-    uint8_t  dirty[WB_SLOTS];
-    uint8_t *buf[WB_SLOTS];
-    uint8_t *flushbuf;
-    uint32_t ra_ino[RA_SLOTS], ra_fb[RA_SLOTS], ra_n[RA_SLOTS], ra_used[RA_SLOTS];
-    uint8_t *ra[RA_SLOTS];
+    int       depth;
+    int       persistent;
+    uint32_t  tick;
+    uint32_t  ndirty;
+    uint32_t  nslots;
+    uint32_t *blk;
+    uint8_t  *valid;
+    uint8_t  *dirty;
+    uint8_t **buf;
+    int32_t  *hnext;
+    int32_t  *lprev;
+    int32_t  *lnext;
+    int32_t   lhead;
+    int32_t   ltail;
+    int32_t   hash[WB_HASH];
+    uint8_t  *flushbuf;
+    uint32_t  ra_ino[RA_SLOTS], ra_fb[RA_SLOTS], ra_n[RA_SLOTS], ra_used[RA_SLOTS];
+    uint8_t  *ra[RA_SLOTS];
 } ext2_wb_t;
 
 #define WB(fs) ((ext2_wb_t *)(fs)->wb)
@@ -83,6 +91,10 @@ static int raw_block_read(ext2_t *fs, uint32_t block, void *buf) {
     return blkdev_read(fs->dev, (uint64_t)block * fs->block_size, buf, fs->block_size);
 }
 
+static uint32_t wb_bucket(uint32_t block) {
+    return (block * 2654435761u) >> 20;
+}
+
 static void wb_mark_dirty(ext2_wb_t *wb, int i) {
     if (!wb->dirty[i]) { wb->dirty[i] = 1; wb->ndirty++; }
 }
@@ -91,8 +103,53 @@ static void wb_mark_clean(ext2_wb_t *wb, int i) {
     if (wb->dirty[i]) { wb->dirty[i] = 0; wb->ndirty--; }
 }
 
+static void wb_lru_unlink(ext2_wb_t *wb, int i) {
+    int p = wb->lprev[i], n = wb->lnext[i];
+    if (p >= 0) wb->lnext[p] = n; else wb->lhead = n;
+    if (n >= 0) wb->lprev[n] = p; else wb->ltail = p;
+    wb->lprev[i] = wb->lnext[i] = -1;
+}
+
+static void wb_lru_front(ext2_wb_t *wb, int i) {
+    wb->lprev[i] = -1;
+    wb->lnext[i] = wb->lhead;
+    if (wb->lhead >= 0) wb->lprev[wb->lhead] = i;
+    wb->lhead = i;
+    if (wb->ltail < 0) wb->ltail = i;
+}
+
+static void wb_lru_back(ext2_wb_t *wb, int i) {
+    wb->lnext[i] = -1;
+    wb->lprev[i] = wb->ltail;
+    if (wb->ltail >= 0) wb->lnext[wb->ltail] = i;
+    wb->ltail = i;
+    if (wb->lhead < 0) wb->lhead = i;
+}
+
+static void wb_hash_insert(ext2_wb_t *wb, int i) {
+    uint32_t h = wb_bucket(wb->blk[i]);
+    wb->hnext[i] = wb->hash[h];
+    wb->hash[h] = i;
+}
+
+static void wb_hash_remove(ext2_wb_t *wb, int i) {
+    int32_t *pp = &wb->hash[wb_bucket(wb->blk[i])];
+    while (*pp >= 0 && *pp != i) pp = &wb->hnext[*pp];
+    if (*pp == i) *pp = wb->hnext[i];
+    wb->hnext[i] = -1;
+}
+
+static void wb_invalidate(ext2_wb_t *wb, int i) {
+    if (!wb->valid[i]) return;
+    wb_mark_clean(wb, i);
+    wb_hash_remove(wb, i);
+    wb->valid[i] = 0;
+    wb_lru_unlink(wb, i);
+    wb_lru_back(wb, i);
+}
+
 static int wb_find(ext2_wb_t *wb, uint32_t block) {
-    for (int i = 0; i < WB_SLOTS; i++)
+    for (int32_t i = wb->hash[wb_bucket(block)]; i >= 0; i = wb->hnext[i])
         if (wb->valid[i] && wb->blk[i] == block) return i;
     return -1;
 }
@@ -104,59 +161,91 @@ static int wb_flush_slot(ext2_t *fs, ext2_wb_t *wb, int i) {
     return r;
 }
 
+static void wb_sift(ext2_wb_t *wb, uint32_t *a, uint32_t root, uint32_t n) {
+    for (;;) {
+        uint32_t c = 2 * root + 1;
+        if (c >= n) return;
+        if (c + 1 < n && wb->blk[a[c + 1]] > wb->blk[a[c]]) c++;
+        if (wb->blk[a[root]] >= wb->blk[a[c]]) return;
+        uint32_t x = a[root]; a[root] = a[c]; a[c] = x;
+        root = c;
+    }
+}
+
 static int wb_flush_all(ext2_t *fs) {
     ext2_wb_t *wb = fs->wb;
     if (!wb || !wb->ndirty) return 0;
-    uint16_t order[WB_SLOTS];
-    int n = 0;
-    for (int i = 0; i < WB_SLOTS; i++)
-        if (wb->valid[i] && wb->dirty[i]) order[n++] = (uint16_t)i;
-    for (int a = 1; a < n; a++) {
-        uint16_t x = order[a];
-        int b = a - 1;
-        while (b >= 0 && wb->blk[order[b]] > wb->blk[x]) { order[b + 1] = order[b]; b--; }
-        order[b + 1] = x;
-    }
+    uint32_t *order = kmalloc((size_t)wb->ndirty * sizeof(uint32_t));
     int err = 0;
-    for (int a = 0; a < n; ) {
-        int len = 1;
+    if (!order) {
+        for (uint32_t i = 0; i < wb->nslots; i++) {
+            int r = wb_flush_slot(fs, wb, (int)i);
+            if (r < 0) err = r;
+        }
+        return err;
+    }
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < wb->nslots && n < wb->ndirty; i++)
+        if (wb->valid[i] && wb->dirty[i]) order[n++] = i;
+    for (uint32_t k = n / 2; k-- > 0; ) wb_sift(wb, order, k, n);
+    for (uint32_t e = n; e > 1; e--) {
+        uint32_t x = order[0]; order[0] = order[e - 1]; order[e - 1] = x;
+        wb_sift(wb, order, 0, e - 1);
+    }
+    for (uint32_t a = 0; a < n; ) {
+        uint32_t len = 1;
         while (a + len < n && len < WB_FLUSH_RUN &&
-               wb->blk[order[a + len]] == wb->blk[order[a]] + (uint32_t)len)
+               wb->blk[order[a + len]] == wb->blk[order[a]] + len)
             len++;
         int r = 0;
         if (len > 1 && wb->flushbuf && !fs->cur_txn) {
-            for (int k = 0; k < len; k++)
+            for (uint32_t k = 0; k < len; k++)
                 memcpy(wb->flushbuf + (size_t)k * fs->block_size, wb->buf[order[a + k]], fs->block_size);
             r = blkdev_write(fs->dev, (uint64_t)wb->blk[order[a]] * fs->block_size,
                              wb->flushbuf, (size_t)len * fs->block_size);
             if (r >= 0)
-                for (int k = 0; k < len; k++) wb_mark_clean(wb, order[a + k]);
+                for (uint32_t k = 0; k < len; k++) wb_mark_clean(wb, (int)order[a + k]);
         } else {
-            for (int k = 0; k < len; k++) {
-                int rr = wb_flush_slot(fs, wb, order[a + k]);
+            for (uint32_t k = 0; k < len; k++) {
+                int rr = wb_flush_slot(fs, wb, (int)order[a + k]);
                 if (rr < 0) r = rr;
             }
         }
         if (r < 0) err = r;
         a += len;
     }
+    kfree(order);
     return err;
 }
 
 static void wb_forget(ext2_t *fs, uint32_t start, uint32_t count) {
     ext2_wb_t *wb = fs->wb;
     if (!wb) return;
-    for (int i = 0; i < WB_SLOTS; i++) {
+    if (count <= 64) {
+        for (uint32_t b = 0; b < count; b++) {
+            int i = wb_find(wb, start + b);
+            if (i >= 0) wb_invalidate(wb, i);
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < wb->nslots; i++) {
         if (!wb->valid[i] || wb->blk[i] < start || wb->blk[i] - start >= count) continue;
-        wb_mark_clean(wb, i);
-        wb->valid[i] = 0;
+        wb_invalidate(wb, (int)i);
     }
 }
 
 static void wb_free(ext2_t *fs) {
     ext2_wb_t *wb = fs->wb;
     if (!wb) return;
-    for (int i = 0; i < WB_SLOTS; i++) if (wb->buf[i]) kfree(wb->buf[i]);
+    if (wb->buf)
+        for (uint32_t i = 0; i < wb->nslots; i++) if (wb->buf[i]) kfree(wb->buf[i]);
+    kfree(wb->buf);
+    kfree(wb->blk);
+    kfree(wb->valid);
+    kfree(wb->dirty);
+    kfree(wb->hnext);
+    kfree(wb->lprev);
+    kfree(wb->lnext);
     if (wb->flushbuf) kfree(wb->flushbuf);
     for (int i = 0; i < RA_SLOTS; i++) if (wb->ra[i]) kfree(wb->ra[i]);
     kfree(wb);
@@ -168,10 +257,19 @@ static ext2_wb_t *wb_init(ext2_t *fs) {
     ext2_wb_t *wb = kzalloc(sizeof *wb);
     if (!wb) return NULL;
     fs->wb = wb;
-    for (int i = 0; i < WB_SLOTS; i++) {
-        wb->buf[i] = kmalloc(fs->block_size);
-        if (!wb->buf[i]) { wb_free(fs); return NULL; }
+    wb->blk   = kzalloc(WB_MAX * sizeof(uint32_t));
+    wb->valid = kzalloc(WB_MAX);
+    wb->dirty = kzalloc(WB_MAX);
+    wb->buf   = kzalloc(WB_MAX * sizeof(uint8_t *));
+    wb->hnext = kmalloc(WB_MAX * sizeof(int32_t));
+    wb->lprev = kmalloc(WB_MAX * sizeof(int32_t));
+    wb->lnext = kmalloc(WB_MAX * sizeof(int32_t));
+    if (!wb->blk || !wb->valid || !wb->dirty || !wb->buf || !wb->hnext || !wb->lprev || !wb->lnext) {
+        wb_free(fs);
+        return NULL;
     }
+    for (int i = 0; i < WB_HASH; i++) wb->hash[i] = -1;
+    wb->lhead = wb->ltail = -1;
     wb->flushbuf = kmalloc((size_t)WB_FLUSH_RUN * fs->block_size);
     for (int i = 0; i < RA_SLOTS; i++) wb->ra[i] = kmalloc((size_t)WB_FLUSH_RUN * fs->block_size);
     wb->persistent = !(fs->sb.s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL);
@@ -188,10 +286,9 @@ static void wb_end(ext2_t *fs) {
     if (!wb || wb->depth == 0) return;
     if (--wb->depth > 0 || wb->persistent) return;
     wb_flush_all(fs);
-    for (int i = 0; i < WB_SLOTS; i++) {
-        wb_flush_slot(fs, wb, i);
-        wb_mark_clean(wb, i);
-        wb->valid[i] = 0;
+    for (uint32_t i = 0; i < wb->nslots; i++) {
+        wb_flush_slot(fs, wb, (int)i);
+        wb_invalidate(wb, (int)i);
     }
 }
 
@@ -207,30 +304,52 @@ static int wb_usable(ext2_t *fs) {
     return wb && (wb->persistent || wb->depth);
 }
 
+static int wb_take_slot(ext2_t *fs, ext2_wb_t *wb) {
+    if (wb->nslots < WB_MAX) {
+        uint8_t *b = kmalloc(fs->block_size);
+        if (b) {
+            int i = (int)wb->nslots++;
+            wb->buf[i] = b;
+            wb->valid[i] = 0;
+            wb->dirty[i] = 0;
+            wb->hnext[i] = -1;
+            wb->lprev[i] = wb->lnext[i] = -1;
+            wb_lru_back(wb, i);
+            return i;
+        }
+    }
+    int i = wb->ltail;
+    if (i < 0) return -ENOMEM;
+    if (wb->valid[i] && wb->dirty[i]) {
+        int r = wb->persistent ? wb_flush_all(fs) : wb_flush_slot(fs, wb, i);
+        if (r < 0) return r;
+    }
+    wb_invalidate(wb, i);
+    return i;
+}
+
 static int wb_slot(ext2_t *fs, uint32_t block, int load) {
     ext2_wb_t *wb = fs->wb;
+    if (wb->persistent && wb->ndirty >= WB_DIRTY_MAX) {
+        int r = wb_flush_all(fs);
+        if (r < 0) return r;
+    }
     int i = wb_find(wb, block);
     if (i < 0) {
-        int victim = 0;
-        for (int k = 0; k < WB_SLOTS; k++) {
-            if (!wb->valid[k]) { victim = k; break; }
-            if (wb->used[k] < wb->used[victim]) victim = k;
-        }
-        if (wb->valid[victim] && wb->dirty[victim]) {
-            int r = wb->persistent ? wb_flush_all(fs) : wb_flush_slot(fs, wb, victim);
-            if (r < 0) return r;
-        }
-        wb->valid[victim] = 0;
+        i = wb_take_slot(fs, wb);
+        if (i < 0) return i;
         if (load) {
-            int r = raw_block_read(fs, block, wb->buf[victim]);
+            int r = raw_block_read(fs, block, wb->buf[i]);
             if (r < 0) return r;
         }
-        wb->valid[victim] = 1;
-        wb->dirty[victim] = 0;
-        wb->blk[victim] = block;
-        i = victim;
+        wb->valid[i] = 1;
+        wb->dirty[i] = 0;
+        wb->blk[i] = block;
+        wb_hash_insert(wb, i);
     }
-    wb->used[i] = ++wb->tick;
+    wb_lru_unlink(wb, i);
+    wb_lru_front(wb, i);
+    wb->tick++;
     return i;
 }
 
