@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/cervus.h>
 #include <cervus_util.h>
 
@@ -37,6 +38,12 @@ static void fmt_mem(uint64_t b, char *out, size_t n)
         snprintf(out, n, "%lluB", (unsigned long long)b);
 }
 
+static int cmp_pid(const void *a, const void *b)
+{
+    pid_t x = *(const pid_t *)a, y = *(const pid_t *)b;
+    return (x > y) - (x < y);
+}
+
 int main(int argc, char **argv)
 {
     if (cervus_check_help_version(argc, argv, USAGE, "ps")) return 0;
@@ -60,15 +67,29 @@ int main(int argc, char **argv)
         fputs("  ---  -------  ----------------\n", stdout);
     }
 
-    uint32_t seen[512];
-    int nseen = 0;
-    for (pid_t pid = 0; pid < 512; pid++) {
+    size_t n = 0, cap = 256;
+    pid_t *pids = malloc(cap * sizeof *pids);
+    DIR *d = opendir("/proc");
+    if (!pids || !d) { perror("ps: /proc"); return 1; }
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        char *end;
+        long v = strtol(e->d_name, &end, 10);
+        if (*end || v <= 0) continue;
+        if (n == cap) {
+            pid_t *np = realloc(pids, cap * 2 * sizeof *pids);
+            if (!np) break;
+            pids = np;
+            cap *= 2;
+        }
+        pids[n++] = (pid_t)v;
+    }
+    closedir(d);
+    qsort(pids, n, sizeof *pids, cmp_pid);
+
+    for (size_t i = 0; i < n; i++) {
         cervus_task_info_t info;
-        if (cervus_task_info(pid, &info) < 0) continue;
-        int dup = 0;
-        for (int s = 0; s < nseen; s++) if (seen[s] == info.pid) { dup = 1; break; }
-        if (dup) continue;
-        if (nseen < 512) seen[nseen++] = info.pid;
+        if (cervus_task_info(pids[i], &info) < 0) continue;
         if (full) {
             char mem[16];
             fmt_mem(info.rss_bytes, mem, sizeof(mem));
@@ -81,5 +102,6 @@ int main(int argc, char **argv)
                    (unsigned)info.pid, state_str(info.state), info.name);
         }
     }
+    free(pids);
     return 0;
 }

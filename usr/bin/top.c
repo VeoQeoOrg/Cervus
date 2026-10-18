@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <signal.h>
+#include <dirent.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <cervus_util.h>
@@ -168,7 +169,12 @@ static void sample(uint64_t now) {
     int nr = g_nrows;
 
     cervus_task_info_t ti;
-    for (uint32_t pid = 1; pid < 1024; pid++) {
+    DIR *pd = opendir("/proc");
+    struct dirent *pe;
+    while (pd && (pe = readdir(pd))) {
+        char *end;
+        long pid = strtol(pe->d_name, &end, 10);
+        if (*end || pid <= 0) continue;
         if (cervus_task_info((pid_t)pid, &ti) < 0) continue;
         int idx = -1;
         for (int i = 0; i < nr; i++) if (g_rows[i].pid == ti.pid) { idx = i; break; }
@@ -201,6 +207,7 @@ static void sample(uint64_t now) {
         r->name[sizeof(r->name) - 1] = '\0';
         r->seen = 1;
     }
+    if (pd) closedir(pd);
 
     int w = 0;
     for (int i = 0; i < nr; i++) {
