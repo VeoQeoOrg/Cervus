@@ -1,6 +1,8 @@
 #ifndef _KERNEL_SYSCALL_INTERNAL_H
 #define _KERNEL_SYSCALL_INTERNAL_H
 
+#define SYSCALL_RW_MAX 0x7ffff000ULL
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>

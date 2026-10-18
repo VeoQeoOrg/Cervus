@@ -71,7 +71,7 @@ static int64_t do_vec(uint64_t fd, uint64_t iov_ptr, uint64_t cnt, int64_t off, 
     if (r < 0) return r;
     vfs_file_t *file = t->fd_table ? fd_get(t->fd_table, (int)fd) : NULL;
     if (!file) { kfree(v); return -EBADF; }
-    if (total > (16u << 20)) total = 16u << 20;
+    if (total > SYSCALL_RW_MAX) total = SYSCALL_RW_MAX;
 
     char kbuf[4096];
     size_t cap = 0;

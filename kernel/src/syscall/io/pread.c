@@ -5,7 +5,7 @@
 int64_t sys_pread(uint64_t fd, uint64_t buf_ptr, uint64_t count, uint64_t offset)
 {
     if (count == 0) return 0;
-    if (count > (16u << 20)) count = 16u << 20;
+    if (count > SYSCALL_RW_MAX) count = SYSCALL_RW_MAX;
 
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;
@@ -38,7 +38,7 @@ int64_t sys_pread(uint64_t fd, uint64_t buf_ptr, uint64_t count, uint64_t offset
 int64_t sys_pwrite(uint64_t fd, uint64_t buf_ptr, uint64_t count, uint64_t offset)
 {
     if (count == 0) return 0;
-    if (count > (16u << 20)) count = 16u << 20;
+    if (count > SYSCALL_RW_MAX) count = SYSCALL_RW_MAX;
 
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;

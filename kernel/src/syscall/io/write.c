@@ -6,7 +6,7 @@
 int64_t sys_write(uint64_t fd, uint64_t buf_ptr, uint64_t count)
 {
     if (count == 0) return 0;
-    if (count > (16u << 20)) count = 16u << 20;
+    if (count > SYSCALL_RW_MAX) count = SYSCALL_RW_MAX;
 
     task_t *t = syscall_cur_task();
     vfs_file_t *file = NULL;
