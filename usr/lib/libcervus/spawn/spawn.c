@@ -236,8 +236,12 @@ static void run_child(const char *file, const posix_spawn_file_actions_t *fa, co
             if (fchdir(a->fd) < 0) child_fail(pipefd, errno);
             break;
         case SA_CLOSEFROM:
-            for (int fd = a->fd; fd < 1024; fd++)
-                if (fd != pipefd) close(fd);
+            if (pipefd >= a->fd) {
+                if (pipefd > a->fd) close_range((unsigned int)a->fd, (unsigned int)pipefd - 1, 0);
+                close_range((unsigned int)pipefd + 1, ~0u, 0);
+            } else {
+                close_range((unsigned int)a->fd, ~0u, 0);
+            }
             break;
         }
     }

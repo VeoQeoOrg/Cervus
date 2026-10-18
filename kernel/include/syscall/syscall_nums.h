@@ -264,6 +264,7 @@
 #define SYS_ARCH_PRCTL        688
 #define SYS_PRCTL             689
 #define SYS_FUTEX             690
+#define SYS_CLOSE_RANGE       691
 #define SYS_LINUX_ARCH_PRCTL  158
 
 #define SYSCALL_TABLE_SIZE    768

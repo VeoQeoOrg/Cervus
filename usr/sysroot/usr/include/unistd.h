@@ -30,6 +30,10 @@ int     pipe(int fds[2]);
 int     pipe2(int fds[2], int flags);
 void    sync(void);
 int     dup3(int oldfd, int newfd, int flags);
+int     close_range(unsigned int first, unsigned int last, int flags);
+void    closefrom(int lowfd);
+#define CLOSE_RANGE_UNSHARE (1U << 1)
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
 int     unlink(const char *path);
 int     rmdir(const char *path);
 int     access(const char *path, int mode);

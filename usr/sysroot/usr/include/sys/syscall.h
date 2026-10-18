@@ -254,6 +254,9 @@ extern "C" {
 #define SYS_ARCH_PRCTL      688
 #define SYS_PRCTL           689
 #define SYS_FUTEX           690
+#define SYS_CLOSE_RANGE     691
+#define SYS_close_range     SYS_CLOSE_RANGE
+#define __NR_close_range    SYS_CLOSE_RANGE
 #define SYS_prctl           SYS_PRCTL
 #define __NR_prctl          SYS_PRCTL
 #define SYS_futex           SYS_FUTEX

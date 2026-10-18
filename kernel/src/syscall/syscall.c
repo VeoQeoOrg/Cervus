@@ -53,6 +53,7 @@ extern int64_t sys_read       (uint64_t fd, uint64_t buf_ptr, uint64_t count);
 extern int64_t sys_write      (uint64_t fd, uint64_t buf_ptr, uint64_t count);
 extern int64_t sys_open       (uint64_t path_ptr, uint64_t flags, uint64_t mode);
 extern int64_t sys_close      (uint64_t fd);
+extern int64_t sys_close_range(uint64_t first, uint64_t last, uint64_t flags);
 extern int64_t sys_seek       (uint64_t fd, uint64_t offset, uint64_t whence);
 extern int64_t sys_stat       (uint64_t path_ptr, uint64_t stat_ptr);
 extern int64_t sys_fstat      (uint64_t fd, uint64_t stat_ptr);
@@ -365,7 +366,7 @@ W3(sys_timer_create) W4(sys_timer_settime) W2(sys_timer_gettime) W1(sys_timer_ge
 W5(sys_mremap) W3(sys_mincore)
 W2(sys_msgget) W4(sys_msgsnd) W5(sys_msgrcv) W3(sys_msgctl) W4(sys_semtimedop)
 W1(sys_chroot) W4(sys_ptrace) W1(sys_personality) W2(sys_tkill)
-W5(sys_prctl) W6(sys_futex)
+W5(sys_prctl) W6(sys_futex) W3(sys_close_range)
 W2(sys_sendfd)      W1(sys_recvfd)
 W3(sys_shmget)      W3(sys_shmat)      W1(sys_shmdt)      W3(sys_shmctl)
 W3(sys_semget)      W3(sys_semop)      W4(sys_semctl)
@@ -554,6 +555,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_LINUX_ARCH_PRCTL] = sys_arch_prctl,
     [SYS_PRCTL]           = _sys_prctl,
     [SYS_FUTEX]           = _sys_futex,
+    [SYS_CLOSE_RANGE]     = _sys_close_range,
     [SYS_MADVISE]           = _sys_madvise,
     [SYS_MSYNC]             = _sys_msync,
     [SYS_READLINK]          = _sys_readlink,
