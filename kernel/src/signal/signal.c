@@ -230,6 +230,7 @@ void signal_fill_siginfo(uint8_t *info, int sig, const ksiginfo_t *si) {
 
 void signal_kill_exit(task_t *t) {
     t->pending_kill = false;
+    serial_printf("[signal] %s pid=%u killed (signal %d)\n", t->name, t->pid, t->kill_sig);
     signal_terminate(t, t->kill_sig > 0 && t->kill_sig < NSIG ? t->kill_sig : SIGKILL);
 }
 
@@ -418,6 +419,9 @@ static __attribute__((noreturn)) void terminate_with_report(task_t *t, int sig, 
     if (sig_is_core(sig)) {
         serial_printf("[signal] %s pid=%u killed by signal %d at rip=0x%llx addr=0x%llx\n",
                       t->name, t->pid, sig, r ? r->rip : 0ULL, (unsigned long long)t->sig_si[sig].addr);
+    } else {
+        serial_printf("[signal] %s pid=%u terminated by signal %d from pid %u\n",
+                      t->name, t->pid, sig, t->sig_si[sig].pid);
     }
     signal_terminate(t, sig);
 }

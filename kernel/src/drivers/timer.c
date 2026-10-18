@@ -63,7 +63,7 @@ DEFINE_IRQ(0x20, timer_handler)
         int vt = vt_active();
         if (tty_echo_enabled(vt)) vt_write(vt, "^C\n", 3);
         task_t *fg = task_find_foreground();
-        LOG_D("[tty] interrupt on vt%d: foreground=%u\n", vt, fg ? fg->pid : 0);
+        LOG_I("[tty] interrupt on vt%d: foreground=%u\n", vt, fg ? fg->pid : 0);
         if (fg) signal_send_subtree(fg, 2);
         else    tty_vt_inject_intr(vt);
     }
