@@ -398,8 +398,8 @@ void task_rlimits_default(task_t *t)
     }
     t->rlim[RLIMIT_STACK_K].cur = 8ULL << 20;
     t->rlim[RLIMIT_CORE_K].cur = 0;
-    t->rlim[RLIMIT_NOFILE_K].cur = TASK_MAX_FDS;
-    t->rlim[RLIMIT_NOFILE_K].max = TASK_MAX_FDS;
+    t->rlim[RLIMIT_NOFILE_K].cur = FD_SOFT_DEFAULT;
+    t->rlim[RLIMIT_NOFILE_K].max = FD_HARD_DEFAULT;
     t->rlim[RLIMIT_MEMLOCK_K].cur = 8ULL << 20;
     t->rlim[RLIMIT_MEMLOCK_K].max = 8ULL << 20;
     t->rlim[RLIMIT_SIGPENDING_K].cur = SIGQUEUE_MAX;

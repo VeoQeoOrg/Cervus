@@ -30,7 +30,9 @@
 #define SEEK_END 2
 
 #define FD_CLOEXEC  (1 << 0)
-#define TASK_MAX_FDS 1024
+#define TASK_MAX_FDS     1048576
+#define FD_SOFT_DEFAULT  1024
+#define FD_HARD_DEFAULT  524288
 
 typedef enum {
     VFS_NODE_FILE    = 0,
@@ -185,7 +187,8 @@ typedef struct fd_table fd_table_t;
 
 #include "../sched/spinlock.h"
 struct fd_table {
-    fd_entry_t entries[TASK_MAX_FDS];
+    fd_entry_t *entries;
+    int         cap;
     spinlock_t lock;
     volatile int refs;
 };
@@ -245,6 +248,7 @@ void        fd_table_destroy(fd_table_t *table);
 void        fd_table_ref    (fd_table_t *table);
 
 int         fd_alloc    (fd_table_t *table, vfs_file_t *file, int min_fd);
+int         fd_table_capacity(const fd_table_t *table);
 vfs_file_t *fd_get      (const fd_table_t *table, int fd);
 void        fd_put      (vfs_file_t *file);
 int         fd_close    (fd_table_t *table, int fd);

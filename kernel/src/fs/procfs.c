@@ -281,7 +281,7 @@ static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
         t->name, t->umask & 0777, linux_state(t), task_tgid(t), t->pid, task_leader(t)->ppid,
         tr ? task_tgid(tr) : 0,
         t->uid, t->uid, t->uid, t->uid, t->gid, t->gid, t->gid, t->gid,
-        TASK_MAX_FDS, t->pgid, t->sid, t->priority,
+        fd_table_capacity(t->fd_table), t->pgid, t->sid, t->priority,
         (unsigned long long)(vsz / 1024),
         (unsigned long long)(rss / 1024),
         (unsigned long long)t->total_runtime,
@@ -412,7 +412,8 @@ static int gen_pid_fd(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t || !t->fd_table) return -1;
     size_t off = 0;
-    for (int fd = 0; fd < TASK_MAX_FDS && off < max; fd++) {
+    int fdcap = fd_table_capacity(t->fd_table);
+    for (int fd = 0; fd < fdcap && off < max; fd++) {
         int type = -1, oflags = 0;
         if (vfs_fd_info(t->fd_table, fd, &type, &oflags) < 0) continue;
         const char *acc = ((oflags & 3) == 0) ? "r" : ((oflags & 3) == 1) ? "w" : "rw";
@@ -639,7 +640,8 @@ static int fddir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
     uint32_t pid = (uint32_t)(uintptr_t)dir->fs_data;
     task_t *t = task_find_by_pid(pid);
     if (!t || !t->fd_table) return -ENOENT;
-    for (uint64_t fd = *pos; fd < TASK_MAX_FDS; fd++) {
+    uint64_t fdcap = (uint64_t)fd_table_capacity(t->fd_table);
+    for (uint64_t fd = *pos; fd < fdcap; fd++) {
         int type, oflags;
         if (vfs_fd_info(t->fd_table, (int)fd, &type, &oflags) < 0) continue;
         out->d_ino  = fd + 1;
@@ -648,7 +650,7 @@ static int fddir_readdir(vnode_t *dir, uint64_t *pos, vfs_dirent_t *out) {
         *pos = fd + 1;
         return 0;
     }
-    *pos = TASK_MAX_FDS;
+    *pos = fdcap;
     return -ENOENT;
 }
 
