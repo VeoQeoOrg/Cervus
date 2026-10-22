@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "../../sched/kmutex.h"
+#include "../../sched/waitq.h"
 
 #define AHCI_MAX_PORTS    32
 #define AHCI_MAX_DEVICES  AHCI_MAX_PORTS
@@ -29,6 +31,11 @@ typedef struct {
     uintptr_t     clb_phys;
     uintptr_t     fb_phys;
     uintptr_t     ctba_phys;
+
+    kmutex_t      lock;
+    spinlock_t    wlock;
+    waitq_t       wq;
+    volatile uint32_t irq_is;
 } ahci_device_t;
 
 struct ahci_hba {
@@ -41,6 +48,10 @@ struct ahci_hba {
     bool              s64a;
     ahci_device_t     ports[AHCI_MAX_PORTS];
     int               port_count;
+    int               irq_vector;
+    volatile int      irq_on;
+    volatile uint64_t irq_count;
+    volatile uint32_t irq_cmds;
 };
 
 void ahci_init(void);

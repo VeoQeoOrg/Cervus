@@ -5,6 +5,11 @@
 #include "../../../include/memory/vmm.h"
 #include "../../../include/memory/paging.h"
 #include "../../../include/sched/spinlock.h"
+#include "../../../include/sched/sched.h"
+#include "../../../include/apic/apic.h"
+#include "../../../include/interrupts/irq.h"
+#include "../../../include/drivers/timer.h"
+#include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/syscall/errno.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -49,6 +54,12 @@
 #define PRT_CI         0x38
 #define PRT_SNTF       0x3C
 #define PRT_FBS        0x40
+
+#define PxIS_TFES      (1u << 30)
+#define PxIE_MASK      ((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 5) | \
+                        (1u << 24) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29) | (1u << 30))
+#define AHCI_RECHECK_NS   2000000ULL
+#define AHCI_IRQ_PROBE    32
 
 #define PXCMD_ST       (1u << 0)
 #define PXCMD_SUD      (1u << 1)
@@ -131,7 +142,6 @@ static ahci_hba_t g_hba;
 static int       g_hba_present = 0;
 static ahci_device_t *g_devs[AHCI_MAX_DEVICES];
 static int       g_dev_count = 0;
-static spinlock_t g_ahci_lock = SPINLOCK_INIT;
 
 static inline uint32_t hba_r32(volatile uint8_t *base, uint32_t off) {
     return *(volatile uint32_t *)(base + off);
@@ -240,6 +250,60 @@ static void ahci_port_recover(volatile uint8_t *base, int port) {
     ahci_port_start(base, port);
 }
 
+static int ahci_may_sleep(void) {
+    uint64_t rf;
+    asm volatile("pushfq; popq %0" : "=r"(rf));
+    return (rf & (1u << 9)) && spin_depth() == 0 && syscall_cur_task() != NULL;
+}
+
+static void ahci_lock(ahci_device_t *d) {
+    if (ahci_may_sleep()) {
+        kmutex_lock(&d->lock);
+        return;
+    }
+    while (!kmutex_trylock(&d->lock)) io_pause();
+}
+
+static void ahci_unlock(ahci_device_t *d) {
+    kmutex_unlock(&d->lock);
+}
+
+static int ahci_cmd_result(volatile uint8_t *base, int port, uint32_t is) {
+    uint32_t tfd = prt_r32(base, port, PRT_TFD);
+    if ((tfd & ATA_ERR) || (is & PxIS_TFES)) {
+        prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+        prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
+        if (is & PxIS_TFES) ahci_port_recover(base, port);
+        return -EIO;
+    }
+    return 0;
+}
+
+static int ahci_wait_irq(ahci_hba_t *hba, ahci_device_t *d, int slot, uint64_t deadline) {
+    volatile uint8_t *base = hba->abar;
+    int port = d->port_idx;
+    for (;;) {
+        uint64_t f = spinlock_acquire_irqsave(&d->wlock);
+        uint32_t ci = prt_r32(base, port, PRT_CI);
+        uint32_t is = d->irq_is | prt_r32(base, port, PRT_IS);
+        if (!(ci & (1u << slot)) || (is & PxIS_TFES)) {
+            d->irq_is = 0;
+            spinlock_release_irqrestore(&d->wlock, f);
+            return ahci_cmd_result(base, port, is);
+        }
+        uint64_t now = sched_now_ns();
+        if (now >= deadline) {
+            spinlock_release_irqrestore(&d->wlock, f);
+            prt_w32(base, port, PRT_IS,   0xFFFFFFFFu);
+            prt_w32(base, port, PRT_SERR, 0xFFFFFFFFu);
+            return -ETIMEDOUT;
+        }
+        uint64_t wake = now + AHCI_RECHECK_NS;
+        if (wake > deadline) wake = deadline;
+        waitq_block(&d->wq, &d->wlock, f, wake);
+    }
+}
+
 static int ahci_issue_cmd(ahci_hba_t *hba, ahci_device_t *d, int slot,
                           uint32_t timeout_loops) {
     volatile uint8_t *base = hba->abar;
@@ -249,6 +313,21 @@ static int ahci_issue_cmd(ahci_hba_t *hba, ahci_device_t *d, int slot,
         uint32_t tfd = prt_r32(base, port, PRT_TFD);
         if (!(tfd & (ATA_BSY | ATA_DRQ))) break;
         io_pause();
+    }
+
+    if (hba->irq_on && ahci_may_sleep()) {
+        uint64_t f = spinlock_acquire_irqsave(&d->wlock);
+        d->irq_is = 0;
+        spinlock_release_irqrestore(&d->wlock, f);
+        uint64_t seen = hba->irq_count;
+        prt_w32(base, port, PRT_CI, 1u << slot);
+        int r = ahci_wait_irq(hba, d, slot, sched_now_ns() + (uint64_t)timeout_loops * 1000ULL);
+        if (!hba->irq_count && seen == 0 &&
+            __atomic_add_fetch(&hba->irq_cmds, 1, __ATOMIC_RELAXED) >= AHCI_IRQ_PROBE && hba->irq_on) {
+            hba->irq_on = 0;
+            serial_printf("[ahci] no interrupts after %u commands, back to polling\n", AHCI_IRQ_PROBE);
+        }
+        return r;
     }
 
     prt_w32(base, port, PRT_CI, 1u << slot);
@@ -396,9 +475,9 @@ static uint32_t ahci_atapi_track_end(ahci_device_t *d, uint32_t track,
     cdb[5] = (uint8_t)( track        & 0xFF);
     cdb[8] = 36;
     memset(buf, 0, 36);
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
     int r = ahci_atapi_packet(d, cdb, buf_phys, 36, 1000000);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     if (r != 0) {
         serial_printf("[ahci] atapi: READ TRACK INFO trk %u failed (%d)\n", track, r);
         return 0;
@@ -425,9 +504,9 @@ static uint32_t ahci_atapi_capacity_from_disc(ahci_device_t *d, uint8_t *buf, ui
         cdb[0] = ATAPI_OP_GET_CONFIG;
         cdb[8] = 32;
         memset(buf, 0, 32);
-        spinlock_acquire(&g_ahci_lock);
+        ahci_lock(d);
         int r = ahci_atapi_packet(d, cdb, buf_phys, 32, 1000000);
-        spinlock_release(&g_ahci_lock);
+        ahci_unlock(d);
         if (r == 0)
             serial_printf("[ahci] atapi: current profile 0x%04x\n",
                           ((uint16_t)buf[6] << 8) | buf[7]);
@@ -439,9 +518,9 @@ static uint32_t ahci_atapi_capacity_from_disc(ahci_device_t *d, uint8_t *buf, ui
         cdb[0] = ATAPI_OP_READ_DISC_INFO;
         cdb[8] = 32;
         memset(buf, 0, 32);
-        spinlock_acquire(&g_ahci_lock);
+        ahci_lock(d);
         int r = ahci_atapi_packet(d, cdb, buf_phys, 32, 1000000);
-        spinlock_release(&g_ahci_lock);
+        ahci_unlock(d);
         if (r == 0) {
             last_track = ((uint32_t)buf[11] << 8) | buf[6];
             if (last_track == 0 || last_track > 99) last_track = 1;
@@ -473,9 +552,9 @@ int ahci_atapi_read_capacity(ahci_device_t *d) {
 
     for (int attempt = 0; attempt < 12; attempt++) {
         memset(buf, 0, 16);
-        spinlock_acquire(&g_ahci_lock);
+        ahci_lock(d);
         int r = ahci_atapi_packet(d, cdb, buf_phys, 8, 1000000);
-        spinlock_release(&g_ahci_lock);
+        ahci_unlock(d);
 
         if (r == 0) {
             max_lba    = ((uint32_t)buf[0] << 24) | ((uint32_t)buf[1] << 16)
@@ -490,9 +569,9 @@ int ahci_atapi_read_capacity(ahci_device_t *d) {
         sense_cdb[0] = 0x03;
         sense_cdb[4] = 18;
         memset(buf, 0, 18);
-        spinlock_acquire(&g_ahci_lock);
+        ahci_lock(d);
         (void)ahci_atapi_packet(d, sense_cdb, buf_phys, 18, 1000000);
-        spinlock_release(&g_ahci_lock);
+        ahci_unlock(d);
 
         for (int dly = 0; dly < 3000000; dly++) io_pause();
     }
@@ -503,9 +582,9 @@ int ahci_atapi_read_capacity(ahci_device_t *d) {
             fcdb[0] = 0x23;
             fcdb[8] = 252;
             memset(buf, 0, 252);
-            spinlock_acquire(&g_ahci_lock);
+            ahci_lock(d);
             int r = ahci_atapi_packet(d, fcdb, buf_phys, 252, 1000000);
-            spinlock_release(&g_ahci_lock);
+            ahci_unlock(d);
 
             if (r == 0) {
                 uint32_t cur_nblocks = ((uint32_t)buf[4] << 24) | ((uint32_t)buf[5] << 16)
@@ -568,9 +647,9 @@ int ahci_atapi_test_unit_ready(ahci_device_t *d, uint8_t *out_key,
 
     uint8_t cdb[16] = {0};
     cdb[0] = 0x00;
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
     int r = ahci_atapi_packet(d, cdb, 0, 0, 200000);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     if (r == 0) return 0;
 
     uint8_t *sbuf = (uint8_t *)pmm_alloc_zero(1);
@@ -580,9 +659,9 @@ int ahci_atapi_test_unit_ready(ahci_device_t *d, uint8_t *out_key,
     uint8_t scdb[16] = {0};
     scdb[0] = 0x03;
     scdb[4] = 18;
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
     int sr = ahci_atapi_packet(d, scdb, sphys, 18, 500000);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
 
     uint8_t key = sbuf[2] & 0x0F;
     uint8_t asc = sbuf[12];
@@ -614,12 +693,12 @@ static int ahci_atapi_read(ahci_device_t *d, uint64_t lba, uint32_t count, void 
         return 0;
     }
 
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
 
     uint32_t bytes = count * ATAPI_SECTOR_SIZE;
     uint32_t pages = (bytes + 4095) / 4096;
     void *bounce = pmm_alloc(pages);
-    if (!bounce) { spinlock_release(&g_ahci_lock); return -ENOMEM; }
+    if (!bounce) { ahci_unlock(d); return -ENOMEM; }
     uintptr_t bounce_phys = pmm_virt_to_phys(bounce);
 
     uint8_t cdb[16] = {0};
@@ -662,7 +741,7 @@ static int ahci_atapi_read(ahci_device_t *d, uint64_t lba, uint32_t count, void 
     }
 
     pmm_free(bounce, pages);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     return r;
 }
 
@@ -683,19 +762,19 @@ static int ahci_rw(ahci_device_t *d, uint64_t lba, uint32_t count,
         return 0;
     }
 
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
 
     ahci_hba_t *hba = d->hba;
     volatile uint8_t *base = hba->abar;
     int port = d->port_idx;
 
     int slot = find_cmd_slot(base, port, hba->ncs);
-    if (slot < 0) { spinlock_release(&g_ahci_lock); return -EBUSY; }
+    if (slot < 0) { ahci_unlock(d); return -EBUSY; }
 
     uint32_t bytes = count * AHCI_SECTOR_SIZE;
     uint32_t pages = (bytes + 4095) / 4096;
     void *bounce = pmm_alloc(pages);
-    if (!bounce) { spinlock_release(&g_ahci_lock); return -ENOMEM; }
+    if (!bounce) { ahci_unlock(d); return -ENOMEM; }
     uintptr_t bounce_phys = pmm_virt_to_phys(bounce);
 
     if (write) memcpy(bounce, buf, bytes);
@@ -730,7 +809,7 @@ static int ahci_rw(ahci_device_t *d, uint64_t lba, uint32_t count,
     if (r == 0 && !write) memcpy(buf, bounce, bytes);
 
     pmm_free(bounce, pages);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     return r;
 }
 
@@ -747,7 +826,7 @@ int ahci_eject(ahci_device_t *d) {
     if (!d || !d->present) return -EINVAL;
     if (!d->atapi) return -EOPNOTSUPP;
 
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
 
     uint8_t cdb_unlock[16] = {0};
     cdb_unlock[0] = ATAPI_OP_PREVENT_ALLOW;
@@ -759,20 +838,20 @@ int ahci_eject(ahci_device_t *d) {
     cdb[4] = 0x02;
     int r = ahci_atapi_packet(d, cdb, 0, 0, 5000000);
 
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     return r;
 }
 
 int ahci_flush(ahci_device_t *d) {
     if (!d || !d->present) return -EINVAL;
     if (d->atapi) return 0;
-    spinlock_acquire(&g_ahci_lock);
+    ahci_lock(d);
     ahci_hba_t *hba = d->hba;
     volatile uint8_t *base = hba->abar;
     int port = d->port_idx;
 
     int slot = find_cmd_slot(base, port, hba->ncs);
-    if (slot < 0) { spinlock_release(&g_ahci_lock); return -EBUSY; }
+    if (slot < 0) { ahci_unlock(d); return -EBUSY; }
 
     ahci_cmd_header_t *hdr = &((ahci_cmd_header_t *)d->clb_virt)[slot];
     hdr->flags = (uint16_t)(sizeof(ahci_fis_reg_h2d_t) / 4);
@@ -787,8 +866,57 @@ int ahci_flush(ahci_device_t *d) {
     fis->command  = ATA_CMD_FLUSH_CACHE_EX;
 
     int r = ahci_issue_cmd(hba, d, slot, 5000000);
-    spinlock_release(&g_ahci_lock);
+    ahci_unlock(d);
     return r;
+}
+
+static void ahci_irq_handler(void *ctx) {
+    ahci_hba_t *hba = (ahci_hba_t *)ctx;
+    volatile uint8_t *base = hba->abar;
+    uint32_t is = hba_r32(base, HBA_IS);
+    if (!is) return;
+    hba->irq_count++;
+    for (int i = 0; i < AHCI_MAX_PORTS; i++) {
+        if (!(is & (1u << i))) continue;
+        uint32_t pis = prt_r32(base, i, PRT_IS);
+        prt_w32(base, i, PRT_IS, pis);
+        ahci_device_t *d = &hba->ports[i];
+        spinlock_acquire(&d->wlock);
+        d->irq_is |= pis;
+        waitq_wake_all(&d->wq);
+        spinlock_release(&d->wlock);
+    }
+    hba_w32(base, HBA_IS, is);
+}
+
+static void ahci_enable_irq(pci_device_t *pd, ahci_hba_t *hba) {
+    if (!pd->cap_msi_off) {
+        serial_writestring("[ahci] no MSI capability, completions are polled\n");
+        return;
+    }
+    int vec = irq_alloc_vector();
+    if (vec < 0) return;
+    if (irq_request(vec, ahci_irq_handler, hba, "ahci") != 0) {
+        irq_free_vector(vec);
+        return;
+    }
+    if (pci_enable_msi(pd, (uint8_t)vec, lapic_get_id()) != 0) {
+        irq_free(vec);
+        irq_free_vector(vec);
+        serial_writestring("[ahci] pci_enable_msi failed, completions are polled\n");
+        return;
+    }
+    volatile uint8_t *base = hba->abar;
+    for (int i = 0; i < AHCI_MAX_PORTS; i++) {
+        if (!(hba->pi & (1u << i))) continue;
+        prt_w32(base, i, PRT_IS, 0xFFFFFFFFu);
+        prt_w32(base, i, PRT_IE, PxIE_MASK);
+    }
+    hba_w32(base, HBA_IS, 0xFFFFFFFFu);
+    hba->irq_vector = vec;
+    hba->irq_on = 1;
+    hba_w32(base, HBA_GHC, hba_r32(base, HBA_GHC) | GHC_IE);
+    serial_printf("[ahci] MSI enabled on vector 0x%02x\n", vec);
 }
 
 static int ahci_probe(pci_device_t *pd) {
@@ -958,6 +1086,7 @@ static int ahci_probe(pci_device_t *pd) {
         if (g_dev_count < AHCI_MAX_DEVICES) g_devs[g_dev_count++] = d;
         g_hba.port_count++;
     }
+    ahci_enable_irq(pd, &g_hba);
     serial_printf("[ahci] probe done, %d device(s) registered\n", g_dev_count);
     return 0;
 }
