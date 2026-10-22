@@ -230,7 +230,7 @@ static int64_t ev_read_file(vfs_file_t *file, void *buf, size_t len)
         int vt = me ? me->ctty : -1;
         while (got < want && pos < d->seq) {
             uint32_t k = (uint32_t)(pos % EV_RING);
-            if (uid == UID_ROOT || (d->owner[k] == uid && d->owner_vt[k] == vt))
+            if ((uid == UID_ROOT || d->owner[k] == uid) && d->owner_vt[k] == vt)
                 dst[got++] = d->ring[k];
             pos++;
         }
