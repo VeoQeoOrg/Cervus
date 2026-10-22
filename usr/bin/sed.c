@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <regex.h>
+#include <sys/stat.h>
 #include <cervus_util.h>
 
 static const char USAGE[] =
@@ -763,8 +764,14 @@ int main(int argc, char **argv)
         }
         run_stream();
 
+        struct stat st;
+        int have_st = !is_stdin && fstat(fileno(f), &st) == 0;
         if (!is_stdin) fclose(f);
         if (inplace && !is_stdin) {
+            if (have_st) {
+                fchmod(fileno(outf), st.st_mode & 07777);
+                (void)fchown(fileno(outf), st.st_uid, st.st_gid);
+            }
             fclose(outf);
             if (suffix && *suffix) {
                 char bak[512];
