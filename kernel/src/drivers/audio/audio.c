@@ -2,6 +2,7 @@
 #include "../../../include/sched/sched.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/waitq.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/io/serial.h"
 #include <string.h>
@@ -720,6 +721,10 @@ int pcm_writable(pcm_stream_t *s) {
     pcm_space_t sp;
     pcm_space(s, &sp);
     return sp.bytes >= sp.fragsize;
+}
+
+void pcm_poll_wait(pcm_stream_t *s) {
+    poll_wait(&s->wq);
 }
 
 int audio_open(uint32_t rate) {

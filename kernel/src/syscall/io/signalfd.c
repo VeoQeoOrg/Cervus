@@ -1,5 +1,6 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/fs/pollwait.h"
+#include "../../../include/sched/waitq.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
@@ -25,6 +26,7 @@ typedef struct {
     uint32_t   owner_pid;
     spinlock_t lock;
     task_t    *waiter;
+    waitq_t    pq;
 } signalfd_t;
 
 typedef struct {
@@ -90,7 +92,7 @@ int signalfd_deliver(uint32_t pid, int sig, const ksiginfo_t *si)
         s->waiter = NULL;
         spinlock_release_irqrestore(&s->lock, f);
         if (w) task_unblock(w);
-        poll_notify();
+        waitq_wake_all(&s->pq);
         taken = 1;
     }
     spinlock_release_irqrestore(&g_sfds_lock, gf);
@@ -159,6 +161,7 @@ static int sfd_poll(vnode_t *n, int events)
 {
     signalfd_t *s = (signalfd_t *)n->fs_data;
     int out = 0;
+    poll_wait(&s->pq);
     uint64_t f = spinlock_acquire_irqsave(&s->lock);
     if ((events & POLLIN) && s->count) out |= POLLIN;
     spinlock_release_irqrestore(&s->lock, f);

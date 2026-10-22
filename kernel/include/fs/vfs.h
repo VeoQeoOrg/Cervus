@@ -159,6 +159,7 @@ typedef struct vfs_file {
     int              flags;
     volatile int     refcount;
     char            *path;
+    void            *ep_items;
 } vfs_file_t;
 
 typedef struct {

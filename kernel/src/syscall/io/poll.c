@@ -31,38 +31,40 @@ static int vnode_poll(vnode_t *vn, int events) {
     return POLLIN | POLLOUT;
 }
 
-#define POLL_FALLBACK_NS 20000000ULL
-
-static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ms) {
+static int do_poll(struct k_pollfd *pf, int n, int64_t timeout_ns) {
     task_t *me = syscall_cur_task();
-    uint64_t start = sched_now_ns();
+    uint64_t end = timeout_ns > 0 ? sched_now_ns() + (uint64_t)timeout_ns : 0;
+    poll_table_t pt;
+    poll_table_init(&pt);
+    int r = 0;
     for (;;) {
-        uint64_t seq = poll_seq();
+        uint64_t gseq = poll_seq();
+        uint64_t wseq = poll_table_begin(&pt);
         int ready = 0;
         for (int i = 0; i < n; i++) {
             pf[i].revents = 0;
             if (pf[i].fd < 0) continue;
             vfs_file_t *file = (me && me->fd_table) ? fd_get(me->fd_table, pf[i].fd) : NULL;
             if (!file) { pf[i].revents = POLLNVAL; ready++; continue; }
+            vfs_file_t *prev = poll_table_file(file);
             int rev = (file->vnode && file->vnode->ops && file->vnode->ops->poll_file)
                     ? file->vnode->ops->poll_file(file, pf[i].events)
                     : vnode_poll(file->vnode, pf[i].events);
+            poll_table_note(prev);
             fd_put(file);
             rev = poll_expand(rev) & (pf[i].events | POLLERR | POLLHUP | POLLNVAL);
             if (rev) { pf[i].revents = (short)rev; ready++; }
         }
-        if (ready > 0) return ready;
-        if (timeout_ms == 0) return 0;
-        if (timeout_ms > 0 && (sched_now_ns() - start) >= (uint64_t)timeout_ms * 1000000ULL) return 0;
-        if (me && (me->pending_kill || signal_pending_deliverable(me))) return -EINTR;
-        uint64_t now = sched_now_ns();
-        uint64_t deadline = now + POLL_FALLBACK_NS;
-        if (timeout_ms > 0) {
-            uint64_t end = start + (uint64_t)timeout_ms * 1000000ULL;
-            if (end < deadline) deadline = end;
-        }
-        poll_wait_since(seq, deadline);
+        poll_table_end(&pt);
+        if (ready > 0) { r = ready; break; }
+        if (timeout_ns == 0) break;
+        if (end && sched_now_ns() >= end) break;
+        if (me && (me->pending_kill || signal_pending_deliverable(me))) { r = -EINTR; break; }
+        poll_table_block(&pt, gseq, wseq, end);
+        poll_table_release(&pt);
     }
+    poll_table_release(&pt);
+    return r;
 }
 
 int64_t sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout) {
@@ -74,13 +76,14 @@ int64_t sys_poll(uint64_t fds_ptr, uint64_t nfds, uint64_t timeout) {
         if (!syscall_uptr_validate((void *)fds_ptr, sz)) return -EFAULT;
         if (syscall_copy_from_user(pf, (void *)fds_ptr, sz) < 0) return -EFAULT;
     }
-    int r = do_poll(pf, n, (int64_t)(int)timeout);
+    int ms = (int)timeout;
+    int r = do_poll(pf, n, ms < 0 ? -1 : (int64_t)ms * 1000000LL);
     if (r < 0) return r;
     if (n > 0 && syscall_copy_to_user((void *)fds_ptr, pf, sz) < 0) return -EFAULT;
     return r;
 }
 
-static int64_t do_select(int nfds, uint64_t rfds_, uint64_t wfds_, uint64_t efds_, int64_t timeout_ms) {
+static int64_t do_select(int nfds, uint64_t rfds_, uint64_t wfds_, uint64_t efds_, int64_t timeout_ns) {
     if (nfds < 0 || nfds > POLL_MAX) return -EINVAL;
     int nb = (nfds + 7) / 8;
     unsigned char rd[FDS_BYTES], wr[FDS_BYTES], ex[FDS_BYTES];
@@ -100,7 +103,7 @@ static int64_t do_select(int nfds, uint64_t rfds_, uint64_t wfds_, uint64_t efds
         pf[n].fd = fd; pf[n].events = (short)ev; pf[n].revents = 0; n++;
     }
 
-    int r = do_poll(pf, n, timeout_ms);
+    int r = do_poll(pf, n, timeout_ns);
     if (r < 0) return r;
 
     memset(rd, 0, nb); memset(wr, 0, nb); memset(ex, 0, nb);
@@ -118,23 +121,23 @@ static int64_t do_select(int nfds, uint64_t rfds_, uint64_t wfds_, uint64_t efds
 }
 
 int64_t sys_select(uint64_t nfds_, uint64_t rfds_, uint64_t wfds_, uint64_t efds_, uint64_t tv_) {
-    int64_t timeout_ms = -1;
+    int64_t timeout_ns = -1;
     if (tv_) {
         struct k_timeval tv;
         if (syscall_copy_from_user(&tv, (void *)tv_, sizeof tv) < 0) return -EFAULT;
         if (tv.tv_sec < 0 || tv.tv_usec < 0) return -EINVAL;
-        timeout_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        timeout_ns = (int64_t)tv.tv_sec * 1000000000LL + (int64_t)tv.tv_usec * 1000LL;
     }
-    return do_select((int)nfds_, rfds_, wfds_, efds_, timeout_ms);
+    return do_select((int)nfds_, rfds_, wfds_, efds_, timeout_ns);
 }
 
-static int read_timespec_ms(uint64_t ts_, int64_t *out) {
+static int read_timespec_ns(uint64_t ts_, int64_t *out) {
     *out = -1;
     if (!ts_) return 0;
     struct k_timespec ts;
     if (syscall_copy_from_user(&ts, (void *)ts_, sizeof ts) < 0) return -EFAULT;
     if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L) return -EINVAL;
-    *out = (int64_t)ts.tv_sec * 1000 + (ts.tv_nsec + 999999) / 1000000;
+    *out = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
     return 0;
 }
 
@@ -159,8 +162,8 @@ int64_t sys_ppoll(uint64_t fds_ptr, uint64_t nfds, uint64_t ts_, uint64_t mask_,
     (void)sigsetsize;
     int n = (int)nfds;
     if (n < 0 || n > POLL_MAX) return -EINVAL;
-    int64_t timeout_ms;
-    int e = read_timespec_ms(ts_, &timeout_ms);
+    int64_t timeout_ns;
+    int e = read_timespec_ns(ts_, &timeout_ns);
     if (e < 0) return e;
     struct k_pollfd pf[POLL_MAX];
     size_t sz = (size_t)n * sizeof(struct k_pollfd);
@@ -171,7 +174,7 @@ int64_t sys_ppoll(uint64_t fds_ptr, uint64_t nfds, uint64_t ts_, uint64_t mask_,
     task_t *t = syscall_cur_task();
     e = enter_sigmask(t, mask_);
     if (e < 0) return e;
-    int64_t r = do_poll(pf, n, timeout_ms);
+    int64_t r = do_poll(pf, n, timeout_ns);
     leave_sigmask(t, r);
     if (r < 0) return r;
     if (n > 0 && syscall_copy_to_user((void *)fds_ptr, pf, sz) < 0) return -EFAULT;
@@ -179,13 +182,13 @@ int64_t sys_ppoll(uint64_t fds_ptr, uint64_t nfds, uint64_t ts_, uint64_t mask_,
 }
 
 int64_t sys_pselect(uint64_t nfds_, uint64_t rfds_, uint64_t wfds_, uint64_t efds_, uint64_t ts_, uint64_t mask_) {
-    int64_t timeout_ms;
-    int e = read_timespec_ms(ts_, &timeout_ms);
+    int64_t timeout_ns;
+    int e = read_timespec_ns(ts_, &timeout_ns);
     if (e < 0) return e;
     task_t *t = syscall_cur_task();
     e = enter_sigmask(t, mask_);
     if (e < 0) return e;
-    int64_t r = do_select((int)nfds_, rfds_, wfds_, efds_, timeout_ms);
+    int64_t r = do_select((int)nfds_, rfds_, wfds_, efds_, timeout_ns);
     leave_sigmask(t, r);
     return r;
 }

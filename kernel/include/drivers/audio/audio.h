@@ -94,6 +94,7 @@ int      pcm_get_channels(pcm_stream_t *s);
 uint32_t pcm_get_rate(pcm_stream_t *s);
 uint32_t pcm_xruns(pcm_stream_t *s);
 int      pcm_writable(pcm_stream_t *s);
+void     pcm_poll_wait(pcm_stream_t *s);
 int      pcm_status(char *buf, size_t max);
 
 int  audio_open(uint32_t rate);

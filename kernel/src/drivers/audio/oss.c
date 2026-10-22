@@ -333,6 +333,7 @@ static int64_t dsp_read(vnode_t *node, void *buf, size_t len, uint64_t off) {
 static int dsp_poll_file(vfs_file_t *file, int events) {
     pcm_stream_t *s = pcm_find(file);
     int r = 0;
+    if (s) pcm_poll_wait(s);
     if (s && (events & POLLOUT) && pcm_writable(s)) r |= POLLOUT;
     return r;
 }

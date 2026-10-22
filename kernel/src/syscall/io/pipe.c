@@ -2,6 +2,7 @@
 #include "../../../include/fs/pollwait.h"
 #include "../../../include/sched/spinlock.h"
 #include "../../../include/sched/sched.h"
+#include "../../../include/sched/waitq.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/poll.h"
 #include <string.h>
@@ -22,6 +23,7 @@ typedef struct pipe_shared {
     task_t  *rwait[PIPE_WAITERS];
     task_t  *wwait[PIPE_WAITERS];
     task_t  *owait[PIPE_WAITERS];
+    waitq_t  pq;
     uint64_t rgen, wgen;
     int      is_fifo;
     uintptr_t key_fs;
@@ -37,14 +39,14 @@ typedef struct {
     int            end;
 } pipe_vdata_t;
 
-static void wake_all(task_t **list) {
+static void wake_all(pipe_shared_t *ps, task_t **list) {
     for (int i = 0; i < PIPE_WAITERS; i++) {
         task_t *w = list[i];
         if (!w) continue;
         list[i] = NULL;
         task_unblock(w);
     }
-    poll_notify();
+    waitq_wake_all(&ps->pq);
 }
 
 static int add_waiter(task_t **list, task_t *me) {
@@ -105,7 +107,7 @@ static int64_t pipe_read_op(vnode_t *n, void *buf, size_t len, uint64_t off)
                 ps->head = (ps->head + chunk) % PIPE_BUFSZ;
                 ps->used -= chunk;
             }
-            wake_all(ps->wwait);
+            wake_all(ps, ps->wwait);
             spinlock_release_irqrestore(&ps->lock, f);
             return (int64_t)got;
         }
@@ -154,7 +156,7 @@ static int64_t pipe_write_op(vnode_t *n, const void *buf, size_t len, uint64_t o
                 done += chunk;
                 ps->used += chunk;
             }
-            wake_all(ps->rwait);
+            wake_all(ps, ps->rwait);
             spinlock_release_irqrestore(&ps->lock, f);
             continue;
         }
@@ -196,8 +198,8 @@ static void pipe_unref_op(vnode_t *n)
     if (vd->end != 0) ps->writers--;
     int r = ps->readers;
     int w = ps->writers;
-    if (r == 0) wake_all(ps->wwait);
-    if (w == 0) wake_all(ps->rwait);
+    if (r == 0) wake_all(ps, ps->wwait);
+    if (w == 0) wake_all(ps, ps->rwait);
     spinlock_release_irqrestore(&ps->lock, f);
     bool last = r <= 0 && w <= 0;
     if (ps->is_fifo) {
@@ -222,6 +224,7 @@ static int pipe_poll_op(vnode_t *n, int events) {
     pipe_vdata_t  *vd = (pipe_vdata_t *)n->fs_data;
     pipe_shared_t *ps = vd->shared;
     int r = 0;
+    poll_wait(&ps->pq);
     uint64_t f = spinlock_acquire_irqsave(&ps->lock);
     if (vd->end != 1) {
         if (ps->used > 0) r |= POLLIN;
@@ -320,9 +323,9 @@ int fifo_open(vnode_t *node, int flags, vnode_t **out)
     int end = acc == O_RDONLY ? 0 : acc == O_WRONLY ? 1 : 2;
     if (end != 1) { ps->readers++; ps->rgen++; }
     if (end != 0) { ps->writers++; ps->wgen++; }
-    wake_all(ps->owait);
-    wake_all(ps->rwait);
-    wake_all(ps->wwait);
+    wake_all(ps, ps->owait);
+    wake_all(ps, ps->rwait);
+    wake_all(ps, ps->wwait);
     spinlock_release_irqrestore(&g_fifo_lock, gf);
 
     if (end != 2 && !nonblock) {

@@ -19,6 +19,59 @@ static void waitq_del(waitq_t *q, task_t *me)
         if (q->slot[i] == me) q->slot[i] = NULL;
 }
 
+int waitq_poll_add(waitq_t *q, task_t *t)
+{
+    int ok = 0;
+    uint64_t f = spinlock_acquire_irqsave(&q->plock);
+    for (int i = 0; i < WAITQ_POLLERS; i++)
+        if (q->poller[i] == t) { ok = 1; break; }
+    for (int i = 0; !ok && i < WAITQ_POLLERS; i++)
+        if (!q->poller[i]) { q->poller[i] = t; ok = 1; }
+    spinlock_release_irqrestore(&q->plock, f);
+    return ok;
+}
+
+void waitq_poll_del(waitq_t *q, task_t *t)
+{
+    uint64_t f = spinlock_acquire_irqsave(&q->plock);
+    for (int i = 0; i < WAITQ_POLLERS; i++)
+        if (q->poller[i] == t) q->poller[i] = NULL;
+    spinlock_release_irqrestore(&q->plock, f);
+}
+
+int waitq_cb_add(waitq_t *q, waitq_cb_t *cb)
+{
+    int ok = 0;
+    uint64_t f = spinlock_acquire_irqsave(&q->plock);
+    for (int i = 0; i < WAITQ_CBS; i++)
+        if (!q->cb[i]) { q->cb[i] = cb; ok = 1; break; }
+    spinlock_release_irqrestore(&q->plock, f);
+    return ok;
+}
+
+void waitq_cb_del(waitq_t *q, waitq_cb_t *cb)
+{
+    uint64_t f = spinlock_acquire_irqsave(&q->plock);
+    for (int i = 0; i < WAITQ_CBS; i++)
+        if (q->cb[i] == cb) q->cb[i] = NULL;
+    spinlock_release_irqrestore(&q->plock, f);
+}
+
+void waitq_wake_pollers(waitq_t *q)
+{
+    uint64_t f = spinlock_acquire_irqsave(&q->plock);
+    for (int i = 0; i < WAITQ_POLLERS; i++) {
+        task_t *t = q->poller[i];
+        if (!t) continue;
+        q->poller[i] = NULL;
+        __atomic_add_fetch(&t->poll_wake_seq, 1, __ATOMIC_SEQ_CST);
+        task_unblock(t);
+    }
+    for (int i = 0; i < WAITQ_CBS; i++)
+        if (q->cb[i]) q->cb[i]->fn(q->cb[i]);
+    spinlock_release_irqrestore(&q->plock, f);
+}
+
 void waitq_wake_all(waitq_t *q)
 {
     for (int i = 0; i < WAITQ_SLOTS; i++) {
@@ -27,6 +80,7 @@ void waitq_wake_all(waitq_t *q)
         q->slot[i] = NULL;
         task_unblock(w);
     }
+    waitq_wake_pollers(q);
     poll_notify();
 }
 

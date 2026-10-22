@@ -63,6 +63,7 @@ typedef struct {
     uint64_t      seq;
     spinlock_t    lock;
     task_t       *waiters[EV_WAITERS];
+    waitq_t       pq;
     const char   *name;
     uint16_t      bustype;
     uint16_t      product;
@@ -101,7 +102,7 @@ static void ev_push_ex(evdev_t *d, uint16_t type, uint16_t code, int32_t value, 
     for (int i = 0; i < EV_WAITERS; i++) { wake[i] = d->waiters[i]; d->waiters[i] = NULL; }
     spinlock_release_irqrestore(&d->lock, f);
     for (int i = 0; i < EV_WAITERS; i++) if (wake[i]) task_unblock(wake[i]);
-    poll_notify();
+    waitq_wake_all(&d->pq);
 }
 
 static void ev_push(evdev_t *d, uint16_t type, uint16_t code, int32_t value)
@@ -265,6 +266,7 @@ static int ev_poll_file(vfs_file_t *file, int events)
 {
     evdev_t *d = (evdev_t *)file->vnode->fs_data;
     int out = 0;
+    poll_wait(&d->pq);
     uint64_t f = spinlock_acquire_irqsave(&d->lock);
     if ((events & POLLIN) && file->offset < d->seq) out |= POLLIN;
     spinlock_release_irqrestore(&d->lock, f);

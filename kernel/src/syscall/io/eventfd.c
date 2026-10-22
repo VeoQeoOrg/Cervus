@@ -5,6 +5,7 @@
 #include "../../../include/sched/waitq.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/fs/poll.h"
+#include "../../../include/fs/pollwait.h"
 #include "../../../include/drivers/timer.h"
 #include "../../../include/signal/signal.h"
 #include <string.h>
@@ -102,6 +103,7 @@ static int efd_poll(vnode_t *n, int events)
 {
     eventfd_t *e = (eventfd_t *)n->fs_data;
     int out = 0;
+    poll_wait(&e->readers);
     uint64_t f = spinlock_acquire_irqsave(&e->lock);
     if ((events & POLLIN) && e->count) out |= POLLIN;
     if ((events & POLLOUT) && e->count != (uint64_t)-2) out |= POLLOUT;
@@ -230,10 +232,13 @@ static int tfd_poll(vnode_t *n, int events)
 {
     timerfd_t *tm = (timerfd_t *)n->fs_data;
     int out = 0;
+    poll_wait(&tm->readers);
     uint64_t f = spinlock_acquire_irqsave(&tm->lock);
     if ((events & POLLIN) && tm->expires_ns && sched_now_ns() >= tm->expires_ns)
         out |= POLLIN;
+    uint64_t expires = tm->expires_ns;
     spinlock_release_irqrestore(&tm->lock, f);
+    if (!out) poll_deadline(expires);
     return out;
 }
 

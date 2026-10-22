@@ -319,10 +319,13 @@ vfs_file_t *vfs_file_alloc(void) {
     return file;
 }
 
+extern void epoll_file_release(vfs_file_t *file);
+
 void vfs_file_free(vfs_file_t *file) {
     if (!file) return;
     int old = __atomic_fetch_sub(&file->refcount, 1, __ATOMIC_ACQ_REL);
     if (old == 1) {
+        if (__atomic_load_n(&file->ep_items, __ATOMIC_ACQUIRE)) epoll_file_release(file);
         if (file->vnode && file->vnode->ops && file->vnode->ops->release_file)
             file->vnode->ops->release_file(file);
         int acc = file->flags & O_ACCMODE;

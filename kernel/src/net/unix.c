@@ -2,6 +2,7 @@
 #include "../../include/net/socket.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/fs/poll.h"
+#include "../../include/fs/pollwait.h"
 #include "../../include/io/serial.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
@@ -806,6 +807,15 @@ int64_t unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
         waitq_block(&s->wq, &s->lock, q, deadline);
     }
 
+    if (r > 0 && s->type == SOCK_STREAM) {
+        unix_sock_t *p = get_peer(s);
+        if (p) {
+            uint64_t pq = spinlock_acquire_irqsave(&p->lock);
+            waitq_wake_all(&p->wq);
+            spinlock_release_irqrestore(&p->lock, pq);
+            us_put(p);
+        }
+    }
     seg_list_free(freed);
     if (drop) {
         for (int i = 0; i < ndrop; i++) if (drop[i]) fd_put(drop[i]);
@@ -907,6 +917,7 @@ static int unix_poll_op(vnode_t *vn, int events) {
     (void)events;
     unix_sock_t *s = vn->fs_data;
     int r = 0;
+    poll_wait(&s->wq);
     uint64_t q = spinlock_acquire_irqsave(&s->lock);
     if (s->state == U_LISTEN) {
         if (s->aq_head) r |= POLLIN;

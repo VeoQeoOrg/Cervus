@@ -280,6 +280,8 @@ typedef struct task {
     uint16_t   fs_sel;
     uint16_t   ds_sel;
     uint16_t   es_sel;
+    void      *poll_tbl;
+    volatile uint64_t poll_wake_seq;
 } task_t;
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }

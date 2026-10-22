@@ -91,6 +91,7 @@ typedef struct {
 } vt_tty_t;
 
 static vt_tty_t g_vtty[VT_COUNT];
+static waitq_t  g_tty_pq;
 
 static void vtty_reset(vt_tty_t *t) {
     t->r_head = t->r_tail = 0;
@@ -130,7 +131,7 @@ static void tty_queue_char(vt_tty_t *t, char c) {
         t->reader = NULL;
         task_unblock(r);
     }
-    poll_notify();
+    waitq_wake_all(&g_tty_pq);
 }
 
 void tty_vt_input(int vt, char c) {
@@ -454,6 +455,7 @@ static int devfs_stat(vnode_t *node, vfs_stat_t *out) {
 
 static int tty_poll(vnode_t *node, int events) {
     (void)node; (void)events;
+    poll_wait(&g_tty_pq);
     vt_tty_t *t = &g_vtty[cur_vt()];
     int r = POLLOUT;
     if (!ring_empty(t)) r |= POLLIN;

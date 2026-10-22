@@ -3,6 +3,7 @@
 #include "../../include/fs/poll.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
+#include "../../include/sched/waitq.h"
 #include "../../include/syscall/syscall_internal.h"
 #include "../../include/syscall/errno.h"
 #include "../../include/signal/signal.h"
@@ -51,6 +52,7 @@ typedef struct {
     uint32_t slave_pid;
     uint32_t fg_pgid;
     spinlock_t lock;
+    waitq_t  pq;
 } pty_t;
 
 static const vnode_ops_t pty_master_ops;
@@ -92,7 +94,7 @@ static int64_t pty_do_read(pty_t *p, pty_ring *in, int *other_open, int nonblock
             task_t *w = in->writer; in->writer = NULL;
             spinlock_release_irqrestore(&p->lock, f);
             if (w) task_unblock(w);
-            poll_notify();
+            waitq_wake_all(&p->pq);
             return n;
         }
         if (!*other_open) { spinlock_release_irqrestore(&p->lock, f); return 0; }
@@ -117,7 +119,7 @@ static int64_t pty_do_write(pty_t *p, pty_ring *out, int *other_open, int nonblo
             task_t *r = out->reader; out->reader = NULL;
             spinlock_release_irqrestore(&p->lock, f);
             if (r) task_unblock(r);
-            poll_notify();
+            waitq_wake_all(&p->pq);
             done += n;
             if (done >= len) return (int64_t)done;
             continue;
@@ -284,8 +286,9 @@ static int pty_poll_end(vnode_t *n, int is_master) {
     pty_t *p = n->fs_data;
     pty_ring *in  = is_master ? &p->s2m : &p->m2s;
     pty_ring *out = is_master ? &p->m2s : &p->s2m;
-    int other_open = is_master ? p->s_open : p->m_open;
     int r = 0;
+    poll_wait(&p->pq);
+    int other_open = is_master ? p->s_open : p->m_open;
     uint64_t f = spinlock_acquire_irqsave(&p->lock);
     if (ring_count(in) > 0) r |= POLLIN;
     if (!other_open) r |= POLLIN | POLLHUP;
@@ -310,7 +313,7 @@ static void pty_close_end(vnode_t *n, int is_master) {
     if (ww) task_unblock(ww);
     if (mr) task_unblock(mr);
     if (mw) task_unblock(mw);
-    poll_notify();
+    waitq_wake_all(&p->pq);
     free(n);
     if (both) free(p);
 }

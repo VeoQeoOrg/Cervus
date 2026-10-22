@@ -109,6 +109,7 @@ static uint32_t   g_next_blob_id = 1;
 static struct drm_event_vblank g_events[DRM_EVENT_QUEUE];
 static int g_ev_head, g_ev_tail, g_ev_count;
 static task_t *g_ev_waiter;
+static waitq_t g_drm_pq;
 
 static uint32_t fb_width(void)  { return global_framebuffer ? global_framebuffer->width  : 0; }
 static uint32_t fb_height(void) { return global_framebuffer ? global_framebuffer->height : 0; }
@@ -299,7 +300,7 @@ static void queue_flip_event(uint32_t crtc_id, uint64_t user_data)
     g_ev_waiter = NULL;
     spinlock_release_irqrestore(&g_drm_lock, f);
     if (w) task_unblock(w);
-    poll_notify();
+    waitq_wake_all(&g_drm_pq);
 }
 
 static int64_t drm_read(vnode_t *n, void *buf, size_t len, uint64_t off)
@@ -321,6 +322,7 @@ static int drm_poll(vnode_t *n, int events)
 {
     (void)n; (void)events;
     int r = POLLOUT;
+    poll_wait(&g_drm_pq);
     uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
     if (g_ev_count > 0) r |= POLLIN;
     spinlock_release_irqrestore(&g_drm_lock, f);
