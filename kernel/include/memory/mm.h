@@ -66,6 +66,11 @@ typedef struct mm {
     uintptr_t      arg_start, arg_end, env_start, env_end;
     uint32_t       nauxv;
     uint64_t       auxv[48];
+    vm_area_t    **vidx;
+    int            vn;
+    int            vcap;
+    int            vbad;
+    vm_area_t     *vcache;
 } mm_t;
 
 int  mm_access_remote(mm_t *mm, uintptr_t addr, void *buf, size_t len, int write);
@@ -91,7 +96,7 @@ uint64_t   mm_locked_bytes(mm_t *mm);
 int        mm_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
 int        mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock);
 int        mm_mlockall(mm_t *mm, int flags, bool lock);
-bool       mm_access_ok(mm_t *mm, uintptr_t addr, size_t len, int write);
+int        mm_check_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
 int        mm_user_phys(mm_t *mm, uintptr_t addr, int write, uintptr_t *phys_out);
 
 int64_t    mm_map_anon(mm_t *mm, uintptr_t addr, size_t len, uint32_t flags, bool fixed);

@@ -88,27 +88,78 @@ static void vma_release(vm_area_t *v) {
     kfree(v);
 }
 
-vm_area_t *mm_find_vma(mm_t *mm, uintptr_t addr) {
-    for (vm_area_t *v = mm->vmas; v; v = v->next) {
-        if (addr < v->start) return NULL;
-        if (addr < v->end) return v;
+static int vidx_upper(mm_t *mm, uintptr_t addr) {
+    int lo = 0, hi = mm->vn;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (mm->vidx[mid]->start <= addr) lo = mid + 1;
+        else hi = mid;
     }
-    return NULL;
+    return lo;
+}
+
+static vm_area_t *vma_first_ending_after(mm_t *mm, uintptr_t addr) {
+    if (mm->vbad) {
+        vm_area_t *v = mm->vmas;
+        while (v && v->end <= addr) v = v->next;
+        return v;
+    }
+    int i = vidx_upper(mm, addr);
+    if (i > 0 && mm->vidx[i - 1]->end > addr) return mm->vidx[i - 1];
+    return i < mm->vn ? mm->vidx[i] : NULL;
+}
+
+vm_area_t *mm_find_vma(mm_t *mm, uintptr_t addr) {
+    vm_area_t *c = mm->vcache;
+    if (c && addr >= c->start && addr < c->end) return c;
+    vm_area_t *v = vma_first_ending_after(mm, addr);
+    if (!v || addr < v->start) return NULL;
+    mm->vcache = v;
+    return v;
 }
 
 static void vma_link(mm_t *mm, vm_area_t *n) {
     vm_area_t *prev = NULL, *cur = mm->vmas;
-    while (cur && cur->start < n->start) { prev = cur; cur = cur->next; }
+    int i = 0;
+    if (!mm->vbad) {
+        i = vidx_upper(mm, n->start);
+        prev = i ? mm->vidx[i - 1] : NULL;
+        cur = prev ? prev->next : mm->vmas;
+    } else {
+        while (cur && cur->start < n->start) { prev = cur; cur = cur->next; }
+    }
     n->prev = prev;
     n->next = cur;
     if (prev) prev->next = n; else mm->vmas = n;
     if (cur) cur->prev = n;
+    if (mm->vbad) return;
+    if (mm->vn == mm->vcap) {
+        int ncap = mm->vcap ? mm->vcap * 2 : 64;
+        vm_area_t **nv = krealloc(mm->vidx, (size_t)ncap * sizeof *nv);
+        if (!nv) {
+            mm->vbad = 1;
+            return;
+        }
+        mm->vidx = nv;
+        mm->vcap = ncap;
+    }
+    memmove(&mm->vidx[i + 1], &mm->vidx[i], (size_t)(mm->vn - i) * sizeof *mm->vidx);
+    mm->vidx[i] = n;
+    mm->vn++;
 }
 
 static void vma_unlink(mm_t *mm, vm_area_t *v) {
     if (v->prev) v->prev->next = v->next; else mm->vmas = v->next;
     if (v->next) v->next->prev = v->prev;
     v->next = v->prev = NULL;
+    if (mm->vcache == v) mm->vcache = NULL;
+    if (!mm->vbad) {
+        int i = vidx_upper(mm, v->start) - 1;
+        if (i >= 0 && mm->vidx[i] == v) {
+            memmove(&mm->vidx[i], &mm->vidx[i + 1], (size_t)(mm->vn - i - 1) * sizeof *mm->vidx);
+            mm->vn--;
+        }
+    }
 }
 
 static vm_area_t *vma_split(mm_t *mm, vm_area_t *v, uintptr_t at) {
@@ -126,11 +177,8 @@ static vm_area_t *vma_split(mm_t *mm, vm_area_t *v, uintptr_t at) {
 }
 
 static bool range_free(mm_t *mm, uintptr_t start, uintptr_t end) {
-    for (vm_area_t *v = mm->vmas; v; v = v->next) {
-        if (v->start >= end) break;
-        if (v->end > start) return false;
-    }
-    return true;
+    vm_area_t *v = vma_first_ending_after(mm, start);
+    return !v || v->start >= end;
 }
 
 bool mm_range_free(mm_t *mm, uintptr_t start, uintptr_t end) {
@@ -243,8 +291,7 @@ static void zap_range(mm_t *mm, vm_area_t *v, uintptr_t start, uintptr_t end) {
 }
 
 static int unmap_locked(mm_t *mm, uintptr_t start, uintptr_t end) {
-    vm_area_t *v = mm->vmas;
-    while (v && v->end <= start) v = v->next;
+    vm_area_t *v = vma_first_ending_after(mm, start);
     while (v && v->start < end) {
         if (v->start < start) {
             vm_area_t *n = vma_split(mm, v, start);
@@ -306,6 +353,8 @@ void mm_put(mm_t *mm) {
         v = next;
     }
     mm->vmas = NULL;
+    mm->vn = 0;
+    mm->vcache = NULL;
     kmutex_unlock(&mm->lock);
     if (mm->exe) {
         __atomic_fetch_sub(&mm->exe->deny_write, 1, __ATOMIC_ACQ_REL);
@@ -313,6 +362,7 @@ void mm_put(mm_t *mm) {
         mm->exe = NULL;
     }
     vmm_free_pagemap(mm->pagemap);
+    kfree(mm->vidx);
     kfree(mm);
 }
 
@@ -501,21 +551,24 @@ int mm_fault(mm_t *mm, uintptr_t addr, int how) {
     return r;
 }
 
-bool mm_access_ok(mm_t *mm, uintptr_t addr, size_t len, int write) {
-    if (!mm) return true;
-    if (len == 0) return true;
+int mm_check_populate(mm_t *mm, uintptr_t addr, size_t len, int write) {
+    if (!mm || len == 0) return 0;
     uintptr_t end = addr + len;
-    if (end < addr || end > MM_USER_TOP) return false;
+    if (end < addr || end > MM_USER_TOP) return -EFAULT;
     kmutex_lock(&mm->lock);
-    uintptr_t cur = addr;
-    bool ok = true;
-    while (cur < end) {
+    int r = 0;
+    for (uintptr_t cur = addr; cur < end; ) {
         vm_area_t *v = mm_find_vma(mm, cur);
-        if (!v || !(v->flags & VM_READ) || (write && !(v->flags & VM_WRITE))) { ok = false; break; }
+        if (!v || !(v->flags & VM_READ) || (write && !(v->flags & VM_WRITE))) { r = -EFAULT; break; }
         cur = v->end;
     }
+    for (uintptr_t p = pdown(addr); !r && p < end; p += PG) {
+        vmm_pte_t *pte = vmm_pte_lookup(mm->pagemap, p);
+        if (pte && (*pte & VMM_PRESENT) && (!write || (*pte & VMM_WRITE))) continue;
+        r = fault_locked(mm, p, write ? MM_FAULT_WRITE : 0);
+    }
     kmutex_unlock(&mm->lock);
-    return ok;
+    return r;
 }
 
 int mm_populate(mm_t *mm, uintptr_t addr, size_t len, int write) {
@@ -707,8 +760,7 @@ int mm_protect(mm_t *mm, uintptr_t addr, size_t len, uint32_t prot) {
         cur = v->end;
     }
     flushbuf_t fb = { .mm = mm };
-    vm_area_t *v = mm->vmas;
-    while (v && v->end <= addr) v = v->next;
+    vm_area_t *v = vma_first_ending_after(mm, addr);
     while (v && v->start < end) {
         if (v->start < addr) { v = vma_split(mm, v, addr); if (!v) break; continue; }
         if (v->end > end && !vma_split(mm, v, end)) break;
@@ -752,8 +804,7 @@ int mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock) {
         if (!v) { kmutex_unlock(&mm->lock); return -ENOMEM; }
         cur = v->end;
     }
-    vm_area_t *v = mm->vmas;
-    while (v && v->end <= start) v = v->next;
+    vm_area_t *v = vma_first_ending_after(mm, start);
     while (v && v->start < end) {
         if (v->start < start) { v = vma_split(mm, v, start); if (!v) break; continue; }
         if (v->end > end && !vma_split(mm, v, end)) break;
@@ -916,7 +967,7 @@ int mm_sync(mm_t *mm, uintptr_t addr, size_t len) {
     if (!mm || (addr & (PG - 1))) return -EINVAL;
     uintptr_t end = addr + pup(len);
     kmutex_lock(&mm->lock);
-    for (vm_area_t *v = mm->vmas; v && v->start < end; v = v->next) {
+    for (vm_area_t *v = vma_first_ending_after(mm, addr); v && v->start < end; v = v->next) {
         if (v->end <= addr) continue;
         uintptr_t s = v->start > addr ? v->start : addr;
         uintptr_t e = v->end < end ? v->end : end;
@@ -930,7 +981,7 @@ int mm_discard(mm_t *mm, uintptr_t addr, size_t len) {
     if (!mm || (addr & (PG - 1))) return -EINVAL;
     uintptr_t end = addr + pup(len);
     kmutex_lock(&mm->lock);
-    for (vm_area_t *v = mm->vmas; v && v->start < end; v = v->next) {
+    for (vm_area_t *v = vma_first_ending_after(mm, addr); v && v->start < end; v = v->next) {
         if (v->end <= addr) continue;
         if (v->flags & (VM_SHARED | VM_PFNMAP)) continue;
         uintptr_t s = v->start > addr ? v->start : addr;

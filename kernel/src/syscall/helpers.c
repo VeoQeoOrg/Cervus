@@ -45,10 +45,7 @@ static bool uptr_range_ok(const void *ptr, size_t len, int need_write)
     if (len == 0) return true;
     task_t *t = syscall_cur_task();
     if (!t || !t->is_userspace) return true;
-    if (t->mm) {
-        if (!mm_access_ok(t->mm, addr, len, need_write)) return false;
-        return mm_populate(t->mm, addr, len, need_write) == 0;
-    }
+    if (t->mm) return mm_check_populate(t->mm, addr, len, need_write) == 0;
     if (!t->pagemap) return true;
 
     uintptr_t page_start = addr & ~0xFFFULL;
