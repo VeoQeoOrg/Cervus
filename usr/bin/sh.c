@@ -510,6 +510,7 @@ static void scan_dollar(lexer_t *lx, sbuf *b)
         scan_balanced(lx, b, '{', '}');
         return;
     }
+    if (!is_name_char(c) && !strchr("@*#?-$!", c)) return;
     sb_putc(b, c, 0);
     lx->p++;
     if (is_name_char(c) && !isdigit((unsigned char)c))
