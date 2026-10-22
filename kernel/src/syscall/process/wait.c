@@ -2,6 +2,7 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/signal/signal.h"
 #include "../../../include/memory/vmm.h"
+#include "../../../include/memory/mm.h"
 #include "../../../include/io/serial.h"
 #include <string.h>
 
@@ -57,7 +58,7 @@ _Static_assert(sizeof(k_waitinfo_t) == 128, "siginfo_t is 128 bytes");
 void task_sample_rss(task_t *t)
 {
     if (!t || !t->is_userspace || !t->pagemap) return;
-    uint64_t rss = vmm_count_user_pages(t->pagemap) * 4096ULL;
+    uint64_t rss = (t->mm ? mm_rss_pages(t->mm) : vmm_count_user_pages(t->pagemap)) * 4096ULL;
     if (rss > t->maxrss_bytes) t->maxrss_bytes = rss;
 }
 

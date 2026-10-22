@@ -71,6 +71,8 @@ typedef struct mm {
     int            vcap;
     int            vbad;
     vm_area_t     *vcache;
+    uint64_t       rss_pages;
+    uint64_t       rss_stamp;
 } mm_t;
 
 int  mm_access_remote(mm_t *mm, uintptr_t addr, void *buf, size_t len, int write);
@@ -97,6 +99,7 @@ int        mm_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
 int        mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock);
 int        mm_mlockall(mm_t *mm, int flags, bool lock);
 int        mm_check_populate(mm_t *mm, uintptr_t addr, size_t len, int write);
+uint64_t   mm_rss_pages(mm_t *mm);
 int        mm_user_phys(mm_t *mm, uintptr_t addr, int write, uintptr_t *phys_out);
 
 int64_t    mm_map_anon(mm_t *mm, uintptr_t addr, size_t len, uint32_t flags, bool fixed);

@@ -248,11 +248,20 @@ static const char *linux_state(task_t *t) {
     }
 }
 
+static uint64_t task_rss_pages(task_t *t) {
+    if (!t->is_userspace || !t->pagemap) return 0;
+    struct mm *m = t->mm;
+    if (!m || !mm_tryget(m)) return vmm_count_user_pages(t->pagemap);
+    uint64_t n = mm_rss_pages(m);
+    mm_put(m);
+    return n;
+}
+
 static int gen_pid_status(uint32_t pid, char *buf, size_t max) {
     task_t *t = task_find_by_pid(pid);
     if (!t) return -1;
     uint64_t rss = (t->is_userspace && t->pagemap)
-                 ? vmm_count_user_pages(t->pagemap) * 4096 : 0;
+                 ? task_rss_pages(t) * 4096 : 0;
     uint64_t vsz = 0;
     struct mm *m = t->mm;
     if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
@@ -378,7 +387,7 @@ static int gen_pid_stat(uint32_t pid, char *buf, size_t max) {
     struct mm *m = t->mm;
     uint64_t vsz = 0, rss = 0;
     if (m && mm_tryget(m)) { vsz = mm_vm_bytes(m); mm_put(m); }
-    if (t->is_userspace && t->pagemap) rss = vmm_count_user_pages(t->pagemap);
+    rss = task_rss_pages(t);
     uint64_t ticks = t->total_runtime / 10000000ULL;
     uint64_t start = t->create_time_ns / 10000000ULL;
     int threads = task_leader(t)->group_live > 0 ? (int)task_leader(t)->group_live : 1;

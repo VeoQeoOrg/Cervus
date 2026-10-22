@@ -4,6 +4,7 @@
 #include "../../include/memory/pageref.h"
 #include "../../include/memory/pagecache.h"
 #include "../../include/memory/tlb.h"
+#include "../../include/drivers/timer.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/io/serial.h"
 #include "../../include/syscall/errno.h"
@@ -549,6 +550,15 @@ int mm_fault(mm_t *mm, uintptr_t addr, int how) {
     int r = fault_locked(mm, addr, how);
     kmutex_unlock(&mm->lock);
     return r;
+}
+
+uint64_t mm_rss_pages(mm_t *mm) {
+    uint64_t now = sched_now_ns();
+    if (mm->rss_stamp && now - mm->rss_stamp < 250000000ULL) return mm->rss_pages;
+    uint64_t n = vmm_count_user_pages(mm->pagemap);
+    mm->rss_pages = n;
+    mm->rss_stamp = now;
+    return n;
 }
 
 int mm_check_populate(mm_t *mm, uintptr_t addr, size_t len, int write) {
