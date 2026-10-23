@@ -1,6 +1,7 @@
 #include "../../../include/syscall/syscall_internal.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/fs/vfs.h"
+#include "../../../include/fs/poll.h"
 #include "../../../include/sched/sched.h"
 #include "../../../include/sched/ptrace.h"
 #include "../../../include/signal/signal.h"
@@ -11,6 +12,7 @@
 #include "../../../include/smp/smp.h"
 #include "../../../include/smp/percpu.h"
 #include "../../../include/io/serial.h"
+#include "../../../include/net/netdev.h"
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -109,7 +111,6 @@ extern int64_t sys_symlinkat(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_readlinkat(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fchmodat(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fchownat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-extern int64_t sys_utimensat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fchdir(uint64_t);
 extern int64_t sys_chroot(uint64_t);
 extern int64_t sys_kill(uint64_t, uint64_t);
@@ -138,6 +139,8 @@ extern int64_t sys_accept4(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_sendto_flags(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_recvfrom_flags(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_sock_shutdown(uint64_t, uint64_t);
+extern int64_t sys_sendmsg(uint64_t, uint64_t, uint64_t);
+extern int64_t sys_recvmsg(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getsockname(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getpeername(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_socketpair(uint64_t, uint64_t, uint64_t);
@@ -552,11 +555,45 @@ typedef struct {
 
 _Static_assert(sizeof(fb_statfs_t) == 2344, "FreeBSD struct statfs is 2344 bytes");
 
-static void fb_statfs_fill(fb_statfs_t *o, const vfs_statvfs_t *sv, const char *on)
+static const char *const g_fb_vfs[] = {
+    "ufs", "tmpfs", "devfs", "procfs", "cd9660", "msdosfs", "ext2fs", "udf", "nfs", "nullfs", "fdescfs",
+};
+
+static int fb_vfs_typenum(const char *name)
+{
+    for (size_t i = 0; i < sizeof g_fb_vfs / sizeof g_fb_vfs[0]; i++)
+        if (strcmp(g_fb_vfs[i], name) == 0) return (int)i + 1;
+    return 0;
+}
+
+static const char *fb_fstype_name(const char *cervus)
+{
+    if (!strcmp(cervus, "ext2") || !strcmp(cervus, "ext3") || !strcmp(cervus, "ext4")) return "ext2fs";
+    if (!strcmp(cervus, "ramfs") || !strcmp(cervus, "tmpfs") || !strcmp(cervus, "initramfs")) return "tmpfs";
+    if (!strcmp(cervus, "iso9660")) return "cd9660";
+    if (!strcmp(cervus, "fat") || !strcmp(cervus, "fat32") || !strcmp(cervus, "vfat") || !strcmp(cervus, "msdos")) return "msdosfs";
+    if (!strcmp(cervus, "devfs") || !strcmp(cervus, "procfs") || !strcmp(cervus, "udf")) return cervus;
+    return "ufs";
+}
+
+#define FB_MAX_MOUNTS 32
+
+static int fb_mounts(vfs_mount_info_t **out)
+{
+    vfs_mount_info_t *m = malloc(FB_MAX_MOUNTS * sizeof *m);
+    if (!m) return -ENOMEM;
+    int n = vfs_list_mounts(m, FB_MAX_MOUNTS);
+    if (n < 0) n = 0;
+    *out = m;
+    return n;
+}
+
+static void fb_statfs_fill(fb_statfs_t *o, const vfs_statvfs_t *sv, const vfs_mount_info_t *mi)
 {
     memset(o, 0, sizeof *o);
+    const char *ty = fb_fstype_name(mi ? mi->fstype : "");
     o->f_version = 0x20140518;
-    o->f_type    = 0x35;
+    o->f_type    = (uint32_t)fb_vfs_typenum(ty);
     o->f_flags   = 0x1000;
     o->f_bsize   = sv->f_bsize ? sv->f_bsize : 4096;
     o->f_iosize  = 65536;
@@ -566,9 +603,10 @@ static void fb_statfs_fill(fb_statfs_t *o, const vfs_statvfs_t *sv, const char *
     o->f_files   = sv->f_files;
     o->f_ffree   = (int64_t)sv->f_ffree;
     o->f_namemax = sv->f_namemax ? sv->f_namemax : 255;
-    strcpy(o->f_fstypename, "cervusfs");
-    strcpy(o->f_mntfromname, "/dev/root");
-    strncpy(o->f_mntonname, on, sizeof o->f_mntonname - 1);
+    o->f_fsid    = (uint64_t)o->f_type << 32;
+    strncpy(o->f_fstypename, ty, sizeof o->f_fstypename - 1);
+    strncpy(o->f_mntfromname, mi && mi->device[0] ? mi->device : ty, sizeof o->f_mntfromname - 1);
+    strncpy(o->f_mntonname, mi ? mi->path : "/", sizeof o->f_mntonname - 1);
 }
 
 static int64_t fb_statfs_out(const char *kp, uint64_t uptr)
@@ -576,11 +614,23 @@ static int64_t fb_statfs_out(const char *kp, uint64_t uptr)
     vfs_statvfs_t sv;
     int r = vfs_statvfs(kp, &sv);
     if (r < 0) return r;
+    vfs_mount_info_t *m;
+    int n = fb_mounts(&m);
+    if (n < 0) return n;
+    const vfs_mount_info_t *best = NULL;
+    size_t bl = 0;
+    for (int i = 0; i < n; i++) {
+        size_t l = strlen(m[i].path);
+        bool match = (l == 1 && m[i].path[0] == '/') ||
+                     (strncmp(kp, m[i].path, l) == 0 && (kp[l] == '/' || kp[l] == 0));
+        if (match && l >= bl) { best = &m[i]; bl = l; }
+    }
     fb_statfs_t *o = malloc(sizeof *o);
-    if (!o) return -ENOMEM;
-    fb_statfs_fill(o, &sv, "/");
+    if (!o) { free(m); return -ENOMEM; }
+    fb_statfs_fill(o, &sv, best);
     int64_t rc = syscall_copy_to_user((void *)uptr, o, sizeof *o);
     free(o);
+    free(m);
     return rc;
 }
 
@@ -612,10 +662,23 @@ static int64_t fb_fstatfs(A6)
 static int64_t fb_getfsstat(A6)
 {
     UNUSED6;
-    if (!a1) return 1;
-    if (a2 < sizeof(fb_statfs_t)) return 0;
-    int64_t r = fb_statfs_out("/", a1);
-    return r < 0 ? r : 1;
+    vfs_mount_info_t *m;
+    int n = fb_mounts(&m);
+    if (n < 0) return n;
+    if (!a1) { free(m); return n; }
+    int cap = (int)(a2 / sizeof(fb_statfs_t)), done = 0;
+    fb_statfs_t *o = malloc(sizeof *o);
+    if (!o) { free(m); return -ENOMEM; }
+    for (int i = 0; i < n && done < cap; i++) {
+        vfs_statvfs_t sv;
+        if (vfs_statvfs(m[i].path, &sv) < 0) memset(&sv, 0, sizeof sv);
+        fb_statfs_fill(o, &sv, &m[i]);
+        if (syscall_copy_to_user((void *)(a1 + (uint64_t)done * sizeof *o), o, sizeof *o) < 0) { done = -EFAULT; break; }
+        done++;
+    }
+    free(o);
+    free(m);
+    return done;
 }
 
 static int64_t fb_unlinkat(A6)
@@ -631,44 +694,46 @@ FB0(fb_mknodat,   sys_mknodat(I(a1), a2, a3, a4))
 FB0(fb_mkfifo,    sys_mknodat((uint64_t)(int64_t)FB_AT_FDCWD, a1, (a2 & 07777) | 0010000, 0))
 FB0(fb_mkfifoat,  sys_mknodat(I(a1), a2, (a3 & 07777) | 0010000, 0))
 
-static int64_t fb_utimensat_impl(uint64_t dirfd, uint64_t path, uint64_t times, uint64_t flags)
+extern int64_t kern_utimens(int64_t dirfd, uint64_t upath, int64_t at, int64_t mt);
+
+static int64_t fb_utime_pick(const int64_t ts[2])
 {
-    task_t *t = syscall_cur_task();
-    uint64_t lt = 0;
+    if (ts[1] == -1) return -1;
+    if (ts[1] == -2) return -2;
+    return ts[0] < 0 ? 0 : ts[0];
+}
+
+static int64_t fb_utimensat_impl(uint64_t dirfd, uint64_t path, uint64_t times)
+{
+    int64_t at = -1, mt = -1;
     if (times) {
         int64_t ts[4];
         if (syscall_copy_from_user(ts, (const void *)times, sizeof ts) < 0) return -EFAULT;
-        for (int i = 1; i < 4; i += 2) {
-            if (ts[i] == -1) ts[i] = (1L << 30) - 1;
-            else if (ts[i] == -2) ts[i] = (1L << 30) - 2;
-        }
-        lt = fb_scratch(t, sizeof ts);
-        if (syscall_copy_to_user((void *)lt, ts, sizeof ts) < 0) return -EFAULT;
+        at = fb_utime_pick(ts);
+        mt = fb_utime_pick(ts + 2);
     }
-    return sys_utimensat(dirfd, path, lt, (uint64_t)fb_atflags(flags), 0);
+    return kern_utimens((int64_t)dirfd, path, at, mt);
 }
 
-FB0(fb_utimensat, fb_utimensat_impl(I(a1), a2, a3, a4))
-FB0(fb_futimens,  fb_utimensat_impl(a1, 0, a2, 0))
+FB0(fb_utimensat, fb_utimensat_impl(I(a1), a2, a3))
+FB0(fb_futimens,  fb_utimensat_impl(I(a1), 0, a2))
 
-static int64_t fb_utimes_impl(uint64_t dirfd, uint64_t path, uint64_t tv, uint64_t flags)
+static int64_t fb_utimes_impl(uint64_t dirfd, uint64_t path, uint64_t tv)
 {
-    task_t *t = syscall_cur_task();
-    uint64_t lt = 0;
+    int64_t at = -1, mt = -1;
     if (tv) {
         int64_t v[4];
         if (syscall_copy_from_user(v, (const void *)tv, sizeof v) < 0) return -EFAULT;
-        int64_t ts[4] = { v[0], v[1] * 1000, v[2], v[3] * 1000 };
-        lt = fb_scratch(t, sizeof ts);
-        if (syscall_copy_to_user((void *)lt, ts, sizeof ts) < 0) return -EFAULT;
+        at = v[0] < 0 ? 0 : v[0];
+        mt = v[2] < 0 ? 0 : v[2];
     }
-    return sys_utimensat(dirfd, path, lt, flags, 0);
+    return kern_utimens((int64_t)dirfd, path, at, mt);
 }
 
-FB0(fb_utimes,   fb_utimes_impl((uint64_t)(int64_t)FB_AT_FDCWD, a1, a2, 0))
-FB0(fb_lutimes,  fb_utimes_impl((uint64_t)(int64_t)FB_AT_FDCWD, a1, a2, LX_AT_SYMLINK_NOFOLLOW))
-FB0(fb_futimes,  fb_utimes_impl(a1, 0, a2, 0))
-FB0(fb_futimesat, fb_utimes_impl(I(a1), a2, a3, 0))
+FB0(fb_utimes,   fb_utimes_impl((uint64_t)(int64_t)FB_AT_FDCWD, a1, a2))
+FB0(fb_lutimes,  fb_utimes_impl((uint64_t)(int64_t)FB_AT_FDCWD, a1, a2))
+FB0(fb_futimes,  fb_utimes_impl(I(a1), 0, a2))
+FB0(fb_futimesat, fb_utimes_impl(I(a1), a2, a3))
 
 static int64_t fb_chflags(A6)
 {
@@ -1346,29 +1411,153 @@ static int64_t fb_wait4(A6)
     return r;
 }
 
-static int64_t fb_vfork(A6)
+static int64_t fb_spawn(int share_vm, int wait_vfork)
 {
-    UNUSED6;
     task_t *me = syscall_cur_task();
     if (!me || !me->is_userspace) return -EPERM;
     int64_t err = 0;
-    task_t *child = fork_process(me, 1, 0, &err);
+    task_t *child = fork_process(me, share_vm, 0, &err);
     if (!child) return err;
+    child->user_saved_r11 &= ~1ULL;
     int32_t pid = (int32_t)child->pid;
     struct vfork_wait *w = NULL;
-    if (task_vfork_attach(child) == 0) w = child->vfork_wait;
-    ptrace_note_child(me, child, PTRACE_EVENT_VFORK);
+    if (wait_vfork && task_vfork_attach(child) == 0) w = child->vfork_wait;
+    ptrace_note_child(me, child, wait_vfork ? PTRACE_EVENT_VFORK : PTRACE_EVENT_FORK);
     task_start_clone(child);
     if (w) task_vfork_wait(me, w);
     return pid;
 }
+
+FB0(fb_fork,  fb_spawn(0, 0))
+FB0(fb_vfork, fb_spawn(1, 1))
 
 static int64_t fb_rfork(A6)
 {
     UNUSED6;
     if (!(a1 & 0x10)) return -EINVAL;
     if (a1 & 0x20) return -EINVAL;
-    return sys_fork();
+    return fb_spawn(0, 0);
+}
+
+typedef struct {
+    uint32_t pid;
+    int      daemon;
+} fb_procdesc_t;
+
+static int pd_poll(vnode_t *n, int events)
+{
+    (void)events;
+    fb_procdesc_t *pd = n->fs_data;
+    task_t *t = task_find_by_pid(pd->pid);
+    if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) return POLLHUP;
+    return 0;
+}
+
+static void pd_unref(vnode_t *n)
+{
+    if (--n->refcount > 0) return;
+    fb_procdesc_t *pd = n->fs_data;
+    if (!pd->daemon) {
+        task_t *t = task_find_by_pid(pd->pid);
+        if (t && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) signal_send(t, SIGKILL);
+    }
+    free(pd);
+    free(n);
+}
+
+static const vnode_ops_t PD_OPS = {
+    .poll  = pd_poll,
+    .unref = pd_unref,
+};
+
+static fb_procdesc_t *pd_get(uint64_t fd, vfs_file_t **fout)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return NULL;
+    vfs_file_t *f = fd_get(t->fd_table, (int)fd);
+    if (!f) return NULL;
+    if (!f->vnode || f->vnode->ops != &PD_OPS) { fd_put(f); return NULL; }
+    *fout = f;
+    return f->vnode->fs_data;
+}
+
+static int64_t fb_pdfork(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    fb_procdesc_t *pd = calloc(1, sizeof *pd);
+    vnode_t *vn = calloc(1, sizeof *vn);
+    vfs_file_t *file = vfs_file_alloc();
+    if (!pd || !vn || !file) {
+        free(pd); free(vn);
+        if (file) vfs_file_free(file);
+        return -ENOMEM;
+    }
+    int64_t pid = fb_spawn(0, 0);
+    if (pid < 0) { free(pd); free(vn); vfs_file_free(file); return pid; }
+    pd->pid = (uint32_t)pid;
+    pd->daemon = (a2 & 1) != 0;
+    vn->type = VFS_NODE_CHARDEV;
+    vn->ops = &PD_OPS;
+    vn->fs_data = pd;
+    vn->refcount = 1;
+    file->vnode = vn;
+    file->flags = 2;
+    int fd = fd_alloc(t->fd_table, file, 0);
+    if (fd < 0) { vfs_file_free(file); return pid; }
+    if (a2 & 2) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
+    int32_t ufd = fd;
+    syscall_copy_to_user((void *)a1, &ufd, sizeof ufd);
+    return pid;
+}
+
+static int64_t fb_pdgetpid(A6)
+{
+    UNUSED6;
+    vfs_file_t *f;
+    fb_procdesc_t *pd = pd_get(a1, &f);
+    if (!pd) return -EBADF;
+    int32_t pid = (int32_t)pd->pid;
+    fd_put(f);
+    return syscall_copy_to_user((void *)a2, &pid, sizeof pid);
+}
+
+static int64_t fb_pdkill(A6)
+{
+    UNUSED6;
+    vfs_file_t *f;
+    fb_procdesc_t *pd = pd_get(a1, &f);
+    if (!pd) return -EBADF;
+    uint32_t pid = pd->pid;
+    fd_put(f);
+    int s = fb_sig_to_linux((int)a2);
+    if (s < 0) return -EINVAL;
+    return sys_kill(pid, (uint64_t)s);
+}
+
+static int64_t fb_posix_fadvise(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return 9;
+    vfs_file_t *f = fd_get(t->fd_table, (int)a1);
+    if (!f) return 9;
+    fd_put(f);
+    return 0;
+}
+
+static int64_t fb_posix_fallocate(A6)
+{
+    UNUSED6;
+    vfs_stat_t st;
+    int r = fb_fd_stat(a1, &st);
+    if (r < 0) return fbsd_errno_from_linux(-r);
+    if ((int64_t)a2 < 0 || (int64_t)a3 <= 0) return 22;
+    uint64_t end = a2 + a3;
+    if (end <= st.st_size) return 0;
+    int64_t rc = sys_ftruncate(a1, end);
+    return rc < 0 ? fbsd_errno_from_linux(-rc) : 0;
 }
 
 static int64_t fb_fexecve(A6)
@@ -1433,11 +1622,9 @@ static int64_t fb_socketpair(A6)
     return sys_socketpair(d, fb_socktype(a2), a4);
 }
 
-static int64_t fb_sockaddr_in(uint64_t uaddr, uint64_t len, uint64_t *out, uint64_t *outlen)
+static int64_t fb_sockaddr_conv(uint64_t uaddr, uint64_t len, uint8_t b[128], uint64_t *outlen)
 {
-    if (!uaddr) { *out = 0; *outlen = 0; return 0; }
     if (len < 2 || len > 128) return -EINVAL;
-    uint8_t b[128];
     if (syscall_copy_from_user(b, (const void *)uaddr, len) < 0) return -EFAULT;
     uint64_t fam = fb_domain(b[1]);
     if (fam >> 32) return -EAFNOSUPPORT;
@@ -1449,6 +1636,17 @@ static int64_t fb_sockaddr_in(uint64_t uaddr, uint64_t len, uint64_t *out, uint6
         while (n < len && b[n]) n++;
         l = n < len ? n + 1 : len;
     }
+    *outlen = l;
+    return 0;
+}
+
+static int64_t fb_sockaddr_in(uint64_t uaddr, uint64_t len, uint64_t *out, uint64_t *outlen)
+{
+    if (!uaddr) { *out = 0; *outlen = 0; return 0; }
+    uint8_t b[128];
+    uint64_t l;
+    int64_t r = fb_sockaddr_conv(uaddr, len, b, &l);
+    if (r < 0) return r;
     task_t *t = syscall_cur_task();
     uint64_t s = fb_scratch(t, 128);
     if (syscall_copy_to_user((void *)s, b, l) < 0) return -EFAULT;
@@ -1559,6 +1757,179 @@ FB0(fb_getsockname, fb_sockname(a1, a2, a3, 0, 0, 0))
 FB0(fb_getpeername, fb_sockname(a1, a2, a3, 1, 0, 0))
 FB0(fb_accept,      fb_sockname(a1, a2, a3, 0, 0, 1))
 FB0(fb_accept4,     fb_sockname(a1, a2, a3, 0, fb_socktype(a4 & 0x30000000) & (O_CLOEXEC | O_NONBLOCK), 1))
+
+typedef struct {
+    uint64_t name;
+    uint32_t namelen;
+    uint32_t pad0;
+    uint64_t iov;
+    int32_t  iovlen;
+    int32_t  pad1;
+    uint64_t control;
+    uint32_t controllen;
+    int32_t  flags;
+} fb_msghdr_t;
+
+typedef struct {
+    uint64_t name;
+    uint32_t namelen;
+    uint32_t pad0;
+    uint64_t iov;
+    uint64_t iovlen;
+    uint64_t control;
+    uint64_t controllen;
+    int32_t  flags;
+    int32_t  pad1;
+} lx_msghdr_t;
+
+_Static_assert(sizeof(fb_msghdr_t) == 48, "FreeBSD msghdr is 48 bytes");
+_Static_assert(sizeof(lx_msghdr_t) == 56, "Linux msghdr is 56 bytes");
+
+#define FB_CTL_MAX 4096
+
+static int64_t fb_cmsg_to_linux(const uint8_t *in, size_t inlen, uint8_t *out, size_t *outlen)
+{
+    size_t o = 0, i = 0;
+    while (i + 16 <= inlen) {
+        uint32_t len;
+        int32_t level, type;
+        memcpy(&len, in + i, 4);
+        memcpy(&level, in + i + 4, 4);
+        memcpy(&type, in + i + 8, 4);
+        if (len < 16 || i + len > inlen) return -EINVAL;
+        size_t dlen = len - 16;
+        uint64_t llen = 16 + dlen;
+        int32_t llevel = level == 0xffff ? 1 : level;
+        int32_t ltype = type;
+        if (level == 0xffff && type == 2) ltype = 29;
+        memcpy(out + o, &llen, 8);
+        memcpy(out + o + 8, &llevel, 4);
+        memcpy(out + o + 12, &ltype, 4);
+        memcpy(out + o + 16, in + i + 16, dlen);
+        o += (llen + 7) & ~(size_t)7;
+        i += ((size_t)len + 7) & ~(size_t)7;
+    }
+    *outlen = o;
+    return 0;
+}
+
+static size_t fb_cmsg_from_linux(const uint8_t *in, size_t inlen, uint8_t *out, size_t cap)
+{
+    size_t o = 0, i = 0;
+    while (i + 16 <= inlen) {
+        uint64_t llen;
+        int32_t level, type;
+        memcpy(&llen, in + i, 8);
+        memcpy(&level, in + i + 8, 4);
+        memcpy(&type, in + i + 12, 4);
+        if (llen < 16 || i + llen > inlen) break;
+        size_t dlen = llen - 16;
+        uint32_t len = (uint32_t)(16 + dlen);
+        if (o + len > cap) break;
+        int32_t blevel = level == 1 ? 0xffff : level;
+        int32_t btype = (level == 1 && type == 29) ? 2 : type;
+        memset(out + o, 0, 16);
+        memcpy(out + o, &len, 4);
+        memcpy(out + o + 4, &blevel, 4);
+        memcpy(out + o + 8, &btype, 4);
+        memcpy(out + o + 16, in + i + 16, dlen);
+        o += ((size_t)len + 7) & ~(size_t)7;
+        i += ((size_t)llen + 7) & ~(size_t)7;
+    }
+    return o > cap ? cap : o;
+}
+
+static int64_t fb_sendmsg(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    fb_msghdr_t bm;
+    if (syscall_copy_from_user(&bm, (const void *)a2, sizeof bm) < 0) return -EFAULT;
+    if (bm.iovlen < 0 || bm.controllen > FB_CTL_MAX) return -EINVAL;
+    uint64_t base = fb_scratch(t, 192 + FB_CTL_MAX);
+    lx_msghdr_t lm;
+    memset(&lm, 0, sizeof lm);
+    lm.iov = bm.iov;
+    lm.iovlen = (uint64_t)bm.iovlen;
+    if (bm.name && bm.namelen) {
+        uint8_t nb[128];
+        uint64_t nl;
+        int64_t r = fb_sockaddr_conv(bm.name, bm.namelen, nb, &nl);
+        if (r < 0) return r;
+        if (syscall_copy_to_user((void *)(base + 64), nb, nl) < 0) return -EFAULT;
+        lm.name = base + 64;
+        lm.namelen = (uint32_t)nl;
+    }
+    if (bm.control && bm.controllen) {
+        uint8_t *in = malloc(bm.controllen), *out = malloc(FB_CTL_MAX);
+        if (!in || !out) { free(in); free(out); return -ENOMEM; }
+        size_t ol = 0;
+        int64_t r = syscall_copy_from_user(in, (const void *)bm.control, bm.controllen) < 0 ? -EFAULT
+                  : fb_cmsg_to_linux(in, bm.controllen, out, &ol);
+        if (r == 0 && ol && syscall_copy_to_user((void *)(base + 192), out, ol) < 0) r = -EFAULT;
+        free(in);
+        free(out);
+        if (r < 0) return r;
+        lm.control = ol ? base + 192 : 0;
+        lm.controllen = ol;
+    }
+    if (syscall_copy_to_user((void *)base, &lm, sizeof lm) < 0) return -EFAULT;
+    return sys_sendmsg(a1, base, fb_msgflags(a3));
+}
+
+static int64_t fb_recvmsg(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    fb_msghdr_t bm;
+    if (syscall_copy_from_user(&bm, (const void *)a2, sizeof bm) < 0) return -EFAULT;
+    if (bm.iovlen < 0) return -EINVAL;
+    uint32_t ctlcap = bm.controllen > FB_CTL_MAX ? FB_CTL_MAX : bm.controllen;
+    uint64_t base = fb_scratch(t, 192 + FB_CTL_MAX);
+    lx_msghdr_t lm;
+    memset(&lm, 0, sizeof lm);
+    lm.iov = bm.iov;
+    lm.iovlen = (uint64_t)bm.iovlen;
+    if (bm.name && bm.namelen) {
+        lm.name = base + 64;
+        lm.namelen = 128;
+    }
+    if (bm.control && ctlcap) {
+        lm.control = base + 192;
+        lm.controllen = ctlcap;
+    }
+    if (syscall_copy_to_user((void *)base, &lm, sizeof lm) < 0) return -EFAULT;
+    int64_t r = sys_recvmsg(a1, base, fb_msgflags(a3));
+    if (r < 0) return r;
+    if (syscall_copy_from_user(&lm, (const void *)base, sizeof lm) < 0) return -EFAULT;
+    if (bm.name && bm.namelen) {
+        int64_t e = fb_sockaddr_out(base + 64, lm.namelen, bm.name, a2 + 8);
+        if (e < 0) return e;
+    }
+    uint32_t bctl = 0;
+    if (bm.control && ctlcap && lm.controllen) {
+        size_t ll = lm.controllen > FB_CTL_MAX ? FB_CTL_MAX : lm.controllen;
+        uint8_t *in = malloc(ll), *out = malloc(ctlcap);
+        if (!in || !out) { free(in); free(out); return -ENOMEM; }
+        int64_t e = 0;
+        if (syscall_copy_from_user(in, (const void *)(base + 192), ll) < 0) e = -EFAULT;
+        else {
+            bctl = (uint32_t)fb_cmsg_from_linux(in, ll, out, ctlcap);
+            if (bctl && syscall_copy_to_user((void *)bm.control, out, bctl) < 0) e = -EFAULT;
+        }
+        free(in);
+        free(out);
+        if (e < 0) return e;
+    }
+    int32_t bf = 0;
+    if (lm.flags & 0x1)  bf |= 0x1;
+    if (lm.flags & 0x80) bf |= 0x8;
+    if (lm.flags & 0x20) bf |= 0x10;
+    if (lm.flags & 0x8)  bf |= 0x20;
+    if (syscall_copy_to_user((void *)(a2 + 40), &bctl, 4) < 0 ||
+        syscall_copy_to_user((void *)(a2 + 44), &bf, 4) < 0) return -EFAULT;
+    return r;
+}
 
 static int fb_sockopt(uint64_t level, uint64_t name, uint64_t *llevel, uint64_t *lname)
 {
@@ -1866,7 +2237,14 @@ struct fb_sysctl {
     const char  *s;
     int64_t      v;
     fb_sysctl_fn fn;
+    uint32_t     ctltype;
+    const char  *fmt;
 };
+
+static void sc_put(uint8_t *buf, size_t *len, size_t at, const void *src, size_t n)
+{
+    if (at + n <= *len) memcpy(buf + at, src, n);
+}
 
 static int64_t sc_hostname(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
 {
@@ -1874,7 +2252,7 @@ static int64_t sc_hostname(const fb_sysctl_t *e, const int32_t *rest, uint32_t n
     char h[256];
     fb_hostname(h, sizeof h);
     size_t n = strlen(h) + 1;
-    memcpy(buf, h, n);
+    sc_put(buf, len, 0, h, n);
     *len = n;
     return 0;
 }
@@ -1883,7 +2261,7 @@ static int64_t sc_ncpu(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest
 {
     (void)e; (void)rest; (void)nrest;
     int32_t v = (int32_t)smp_get_cpu_count();
-    memcpy(buf, &v, 4);
+    sc_put(buf, len, 0, &v, 4);
     *len = 4;
     return 0;
 }
@@ -1894,7 +2272,7 @@ static int64_t sc_physmem(const fb_sysctl_t *e, const int32_t *rest, uint32_t nr
     uint64_t total = (uint64_t)pmm_get_usable_pages() * PAGE_SIZE;
     uint64_t used = (uint64_t)pmm_get_used_pages() * PAGE_SIZE;
     uint64_t v = e->v == 1 ? (total > used ? total - used : 0) : e->v == 2 ? total / PAGE_SIZE : total;
-    memcpy(buf, &v, 8);
+    sc_put(buf, len, 0, &v, 8);
     *len = 8;
     return 0;
 }
@@ -1904,7 +2282,7 @@ static int64_t sc_boottime(const fb_sysctl_t *e, const int32_t *rest, uint32_t n
     (void)e; (void)rest; (void)nrest;
     int64_t bt = clock_realtime_offset_ns();
     int64_t tv[2] = { bt / 1000000000LL, (bt % 1000000000LL) / 1000 };
-    memcpy(buf, tv, sizeof tv);
+    sc_put(buf, len, 0, tv, sizeof tv);
     *len = sizeof tv;
     return 0;
 }
@@ -1922,7 +2300,7 @@ static int64_t sc_pagesizes(const fb_sysctl_t *e, const int32_t *rest, uint32_t 
 {
     (void)e; (void)rest; (void)nrest;
     uint64_t ps[3] = { 4096, 2ULL << 20, 1ULL << 30 };
-    memcpy(buf, ps, sizeof ps);
+    sc_put(buf, len, 0, ps, sizeof ps);
     *len = sizeof ps;
     return 0;
 }
@@ -1934,111 +2312,367 @@ static int64_t sc_model(const fb_sysctl_t *e, const int32_t *rest, uint32_t nres
     for (uint32_t i = 0; i < 3; i++)
         __asm__ volatile("cpuid" : "=a"(r[i * 4]), "=b"(r[i * 4 + 1]), "=c"(r[i * 4 + 2]), "=d"(r[i * 4 + 3])
                          : "a"(0x80000002u + i), "c"(0));
-    char s[49];
-    memcpy(s, r, 48);
-    s[48] = 0;
-    char *p = s;
+    char str[49];
+    memcpy(str, r, 48);
+    str[48] = 0;
+    char *p = str;
     while (*p == ' ') p++;
     size_t n = strlen(p) + 1;
-    memcpy(buf, p, n);
+    sc_put(buf, len, 0, p, n);
     *len = n;
     return 0;
+}
+
+static int64_t sc_vfsconf(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)e; (void)rest; (void)nrest;
+    size_t n = sizeof g_fb_vfs / sizeof g_fb_vfs[0];
+    for (size_t i = 0; i < n; i++) {
+        uint8_t x[48];
+        memset(x, 0, sizeof x);
+        strncpy((char *)x + 8, g_fb_vfs[i], 15);
+        int32_t num = (int32_t)i + 1;
+        memcpy(x + 24, &num, 4);
+        sc_put(buf, len, i * 48, x, 48);
+    }
+    *len = n * 48;
+    return 0;
+}
+
+#define KP_SIZE 1088
+
+static void kp_fill(uint8_t *k, task_t *t)
+{
+    memset(k, 0, KP_SIZE);
+    int32_t i32;
+    i32 = KP_SIZE; memcpy(k + 0, &i32, 4);
+    i32 = 1; memcpy(k + 4, &i32, 4);
+    i32 = (int32_t)task_tgid(t); memcpy(k + 72, &i32, 4);
+    i32 = (int32_t)t->ppid; memcpy(k + 76, &i32, 4);
+    i32 = (int32_t)t->pgid; memcpy(k + 80, &i32, 4);
+    i32 = (int32_t)t->pgid; memcpy(k + 84, &i32, 4);
+    i32 = (int32_t)t->sid; memcpy(k + 88, &i32, 4);
+    i32 = (int32_t)t->sid; memcpy(k + 92, &i32, 4);
+    uint32_t u32 = 0xffffffffu; memcpy(k + 100, &u32, 4);
+    u32 = t->uid; memcpy(k + 168, &u32, 4); memcpy(k + 172, &u32, 4); memcpy(k + 176, &u32, 4);
+    u32 = t->gid; memcpy(k + 180, &u32, 4); memcpy(k + 184, &u32, 4); memcpy(k + 192, &u32, 4);
+    int16_t ng = 1; memcpy(k + 188, &ng, 2);
+    uint64_t vsz = t->mm ? mm_vm_bytes(t->mm) : 0;
+    memcpy(k + 256, &vsz, 8);
+    int64_t rss = t->mm ? (int64_t)mm_rss_pages(t->mm) : 0;
+    memcpy(k + 264, &rss, 8);
+    uint64_t rt_us = t->total_runtime / 1000ULL;
+    memcpy(k + 328, &rt_us, 8);
+    int64_t start_ns = clock_realtime_offset_ns() + (int64_t)t->create_time_ns;
+    int64_t st[2] = { start_ns / 1000000000LL, (start_ns % 1000000000LL) / 1000 };
+    memcpy(k + 336, st, sizeof st);
+    int64_t flag = 0x4000 | (t->ctty >= 0 ? 0x2 : 0);
+    memcpy(k + 368, &flag, 8);
+    char stat = t->state == TASK_ZOMBIE || t->state == TASK_DEAD ? 5 :
+                t->state == TASK_BLOCKED ? 3 : 2;
+    k[388] = (uint8_t)stat;
+    k[389] = (uint8_t)(int8_t)t->nice;
+    strncpy((char *)k + 394, t->name, 16);
+    if (t->state == TASK_BLOCKED) memcpy(k + 411, "wait", 5);
+    memcpy(k + 420, t->uid == 0 ? "root" : "user", 5);
+    strncpy((char *)k + 447, t->name, 19);
+    memcpy(k + 467, t->abi == TASK_ABI_FREEBSD ? "FreeBSD ELF64" : t->abi == TASK_ABI_LINUX ? "Linux ELF64" : "Cervus ELF64", 14);
+    uint64_t nodev = ~0ULL; memcpy(k + 560, &nodev, 8);
+    i32 = (int32_t)t->cpu_id; memcpy(k + 568, &i32, 4); memcpy(k + 572, &i32, 4);
+    int32_t nth = 1;
+    memcpy(k + 596, &nth, 4);
+    i32 = (int32_t)t->pid; memcpy(k + 600, &i32, 4);
+    k[604] = 2; k[605] = 120; k[606] = 120; k[607] = 120;
+    int64_t sflag = 1; memcpy(k + 1072, &sflag, 8);
 }
 
 static int64_t sc_proc(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
 {
     (void)e;
-    if (nrest < 2) return -ENOENT;
+    if (nrest < 1) return -ENOENT;
+    int32_t what = rest[0] & ~0x10;
+    int32_t arg = nrest > 1 ? rest[1] : 0;
     task_t *me = syscall_cur_task();
-    task_t *t = rest[1] == -1 || (me && rest[1] == (int32_t)task_tgid(me)) ? me : task_find_by_pid((uint32_t)rest[1]);
-    if (!t) return -ESRCH;
-    if (rest[0] == 12) {
-        size_t n = strnlen(t->exe, sizeof t->exe);
-        memcpy(buf, t->exe, n);
-        buf[n] = 0;
-        *len = n + 1;
-        return 0;
-    }
-    if (rest[0] == 7 && t->mm) {
+    if (what == 12 || what == 7 || what == 40 || what == 39) {
+        task_t *t = arg == -1 || (me && arg == (int32_t)task_tgid(me)) ? me : task_find_by_pid((uint32_t)arg);
+        if (!t) return -ESRCH;
+        if (what == 12) {
+            size_t n = strnlen(t->exe, sizeof t->exe);
+            sc_put(buf, len, 0, t->exe, n);
+            sc_put(buf, len, n, "", 1);
+            *len = n + 1;
+            return 0;
+        }
+        if (what == 40) {
+            int32_t v = FB_OSRELDATE;
+            sc_put(buf, len, 0, &v, 4);
+            *len = 4;
+            return 0;
+        }
+        if (what == 39) {
+            uint16_t v = (uint16_t)t->umask;
+            sc_put(buf, len, 0, &v, 2);
+            *len = 2;
+            return 0;
+        }
+        if (!t->mm) { *len = 0; return 0; }
         size_t n = t->mm->arg_end - t->mm->arg_start;
-        if (n > 4096) n = 4096;
-        if (mm_access_remote(t->mm, t->mm->arg_start, buf, n, 0) < 0) return -EFAULT;
+        if (n > 65536) n = 65536;
+        if (n <= *len && mm_access_remote(t->mm, t->mm->arg_start, buf, n, 0) < 0) return -EFAULT;
         *len = n;
         return 0;
     }
-    return -ENOENT;
+    if (what != 0 && what != 1 && what != 2 && what != 3 && what != 5 && what != 6 && what != 8 && what != 10 && what != 11)
+        return -EINVAL;
+    uint32_t *pids = malloc(1024 * sizeof *pids);
+    if (!pids) return -ENOMEM;
+    int np = task_collect_pids(pids, 1024);
+    uint8_t *k = malloc(KP_SIZE);
+    if (!k) { free(pids); return -ENOMEM; }
+    size_t at = 0;
+    for (int i = 0; i < np; i++) {
+        task_t *t = task_find_by_pid(pids[i]);
+        if (!t || task_leader(t) != t || !t->is_userspace) continue;
+        if (what == 1 && (int32_t)task_tgid(t) != arg) continue;
+        if (what == 2 && (int32_t)t->pgid != arg) continue;
+        if (what == 3 && (int32_t)t->sid != arg) continue;
+        if ((what == 5 || what == 6) && (int32_t)t->uid != arg) continue;
+        if ((what == 10 || what == 11) && (int32_t)t->gid != arg) continue;
+        kp_fill(k, t);
+        sc_put(buf, len, at, k, KP_SIZE);
+        at += KP_SIZE;
+    }
+    free(k);
+    free(pids);
+    if (what == 1 && at == 0) return -ESRCH;
+    *len = at;
+    return 0;
 }
 
+static int64_t sysctl_reply(const void *data, size_t len, uint64_t oldp, uint64_t oldlenp);
+
+static size_t rt_sin(uint8_t *o, uint32_t host_ip)
+{
+    memset(o, 0, 16);
+    o[0] = 16;
+    o[1] = 2;
+    uint32_t be = __builtin_bswap32(host_ip);
+    memcpy(o + 4, &be, 4);
+    return 16;
+}
+
+static void rt_ifdata(uint8_t *d, const netdev_t *nd)
+{
+    memset(d, 0, 152);
+    d[0] = nd->is_loopback ? 0x18 : 6;
+    d[2] = nd->is_loopback ? 0 : 6;
+    d[3] = nd->is_loopback ? 0 : 14;
+    d[4] = nd->link_up || nd->is_loopback ? 2 : 1;
+    uint16_t dl = 152;
+    memcpy(d + 6, &dl, 2);
+    uint32_t mtu = nd->mtu;
+    memcpy(d + 8, &mtu, 4);
+    uint64_t c[4] = { nd->rx_packets, 0, nd->tx_packets, 0 };
+    memcpy(d + 24, &c[0], 8);
+    memcpy(d + 40, &c[2], 8);
+    memcpy(d + 64, &nd->rx_bytes, 8);
+    memcpy(d + 72, &nd->tx_bytes, 8);
+}
+
+static int64_t fb_rt_iflist(int af, int want, int lform, uint8_t *buf, size_t *len)
+{
+    netdev_t *list[16];
+    int nl = 0;
+    netdev_t *lo = netdev_loopback();
+    if (lo) list[nl++] = lo;
+    for (netdev_t *d = netdev_first(); d && nl < 16; d = d->next)
+        if (d != lo) list[nl++] = d;
+    size_t at = 0;
+    for (int i = 0; i < nl; i++) {
+        netdev_t *nd = list[i];
+        int idx = i + 1;
+        if (want && want != idx) continue;
+        int32_t flags = 0x1 | 0x40 | 0x8000 | (nd->is_loopback ? 0x8 : 0x2 | 0x800);
+        uint8_t m[256];
+        memset(m, 0, sizeof m);
+        size_t hl = lform ? 176 : 168;
+        size_t doff = lform ? 24 : 16;
+        uint8_t *sdl = m + hl;
+        size_t nlen = strnlen(nd->name, NETDEV_NAME_MAX);
+        sdl[0] = 54;
+        sdl[1] = 18;
+        uint16_t ix = (uint16_t)idx;
+        memcpy(sdl + 2, &ix, 2);
+        sdl[4] = nd->is_loopback ? 0x18 : 6;
+        sdl[5] = (uint8_t)nlen;
+        sdl[6] = nd->is_loopback ? 0 : 6;
+        memcpy(sdl + 8, nd->name, nlen);
+        if (!nd->is_loopback) memcpy(sdl + 8 + nlen, nd->mac, 6);
+        uint16_t ml = (uint16_t)(hl + 56);
+        memcpy(m, &ml, 2);
+        m[2] = 5;
+        m[3] = 14;
+        int32_t addrs = 0x10;
+        memcpy(m + 4, &addrs, 4);
+        memcpy(m + 8, &flags, 4);
+        memcpy(m + 12, &ix, 2);
+        if (lform) {
+            uint16_t l16 = (uint16_t)hl, o16 = (uint16_t)doff;
+            memcpy(m + 16, &l16, 2);
+            memcpy(m + 18, &o16, 2);
+        }
+        rt_ifdata(m + doff, nd);
+        sc_put(buf, len, at, m, ml);
+        at += ml;
+        if ((af == 0 || af == 2) && (nd->ip || nd->is_loopback)) {
+            uint32_t ip = nd->is_loopback && !nd->ip ? 0x7F000001u : nd->ip;
+            uint32_t mask = nd->is_loopback && !nd->netmask ? 0xFF000000u : nd->netmask;
+            memset(m, 0, sizeof m);
+            size_t ahl = lform ? 176 : 20;
+            size_t p = ahl;
+            int32_t aa = 0x4 | 0x20;
+            p += rt_sin(m + p, mask);
+            p += rt_sin(m + p, ip);
+            if (!nd->is_loopback) {
+                aa |= 0x80;
+                p += rt_sin(m + p, (ip & mask) | ~mask);
+            }
+            uint16_t al = (uint16_t)p;
+            memcpy(m, &al, 2);
+            m[2] = 5;
+            m[3] = 12;
+            memcpy(m + 4, &aa, 4);
+            memcpy(m + 8, &flags, 4);
+            memcpy(m + 12, &ix, 2);
+            if (lform) {
+                uint16_t l16 = (uint16_t)ahl, o16 = 24;
+                memcpy(m + 16, &l16, 2);
+                memcpy(m + 18, &o16, 2);
+                rt_ifdata(m + 24, nd);
+            }
+            sc_put(buf, len, at, m, al);
+            at += al;
+        }
+    }
+    *len = at;
+    return 0;
+}
+
+static int64_t fb_sysctl_net(const int32_t *mib, uint32_t n, uint64_t oldp, uint64_t oldlenp, uint64_t newp)
+{
+    if (newp) return -EPERM;
+    if (n < 6 || mib[1] != 17 || (mib[4] != 3 && mib[4] != 5)) return -ENOENT;
+    size_t bufcap = 65536;
+    uint8_t *buf = calloc(1, bufcap);
+    if (!buf) return -ENOMEM;
+    size_t len = bufcap;
+    int64_t r = fb_rt_iflist(mib[3], mib[5], mib[4] == 5, buf, &len);
+    if (r == 0) r = sysctl_reply(buf, len > bufcap ? bufcap : len, oldp, oldlenp);
+    free(buf);
+    return r;
+}
+
+#define CT_NODE   1
+#define CT_INT    2
+#define CT_STRING 3
+#define CT_OPAQUE 5
+#define CT_LONG   7
+#define CT_ULONG  8
+
 static const fb_sysctl_t g_sysctl[] = {
-    { "kern.ostype",       { 1, 1 },  2, SC_STR,  "FreeBSD", 0, 0 },
-    { "kern.osrelease",    { 1, 2 },  2, SC_STR,  "15.1-RELEASE", 0, 0 },
-    { "kern.osrevision",   { 1, 3 },  2, SC_INT,  0, 199506, 0 },
-    { "kern.version",      { 1, 4 },  2, SC_STR,  "FreeBSD 15.1-RELEASE Cervus 0.0.2\n", 0, 0 },
-    { "kern.maxproc",      { 1, 6 },  2, SC_INT,  0, 32768, 0 },
-    { "kern.maxfiles",     { 1, 7 },  2, SC_INT,  0, 65536, 0 },
-    { "kern.argmax",       { 1, 8 },  2, SC_INT,  0, 2097152, 0 },
-    { "kern.securelevel",  { 1, 9 },  2, SC_INT,  0, -1, 0 },
-    { "kern.hostname",     { 1, 10 }, 2, SC_FN,   0, 0, sc_hostname },
-    { "kern.hostid",       { 1, 11 }, 2, SC_INT,  0, 0, 0 },
-    { "kern.proc",         { 1, 14 }, 2, SC_FN,   0, 0, sc_proc },
-    { "kern.ngroups",      { 1, 18 }, 2, SC_INT,  0, 1023, 0 },
-    { "kern.boottime",     { 1, 21 }, 2, SC_FN,   0, 0, sc_boottime },
-    { "kern.domainname",   { 1, 22 }, 2, SC_STR,  "", 0, 0 },
-    { "kern.osreldate",    { 1, 24 }, 2, SC_INT,  0, FB_OSRELDATE, 0 },
-    { "kern.usrstack",     { 1, 33 }, 2, SC_LONG, 0, (int64_t)MM_STACK_TOP, 0 },
-    { "kern.iov_max",      { 1, 35 }, 2, SC_INT,  0, 1024, 0 },
-    { "kern.arandom",      { 1, 37 }, 2, SC_FN,   0, 0, sc_arandom },
-    { "vm.overcommit",     { 2, 12 }, 2, SC_INT,  0, 0, 0 },
-    { "hw.machine",        { 6, 1 },  2, SC_STR,  "amd64", 0, 0 },
-    { "hw.model",          { 6, 2 },  2, SC_FN,   0, 0, sc_model },
-    { "hw.ncpu",           { 6, 3 },  2, SC_FN,   0, 0, sc_ncpu },
-    { "hw.byteorder",      { 6, 4 },  2, SC_INT,  0, 1234, 0 },
-    { "hw.physmem",        { 6, 5 },  2, SC_FN,   0, 0, sc_physmem },
-    { "hw.usermem",        { 6, 6 },  2, SC_FN,   0, 1, sc_physmem },
-    { "hw.pagesize",       { 6, 7 },  2, SC_INT,  0, 4096, 0 },
-    { "hw.floatingpoint",  { 6, 10 }, 2, SC_INT,  0, 1, 0 },
-    { "hw.machine_arch",   { 6, 11 }, 2, SC_STR,  "amd64", 0, 0 },
-    { "hw.realmem",        { 6, 12 }, 2, SC_FN,   0, 0, sc_physmem },
-    { "user.cs_path",      { 8, 1 },  2, SC_STR,  "/usr/bin:/bin:/usr/sbin:/sbin", 0, 0 },
-    { "user.localbase",    { 8, 21 }, 2, SC_STR,  "/usr/local", 0, 0 },
-    { "kern.smp.cpus",     { 0x7fff, 1 }, 2, SC_FN, 0, 0, sc_ncpu },
-    { "kern.smp.maxcpus",  { 0x7fff, 2 }, 2, SC_FN, 0, 0, sc_ncpu },
-    { "hw.pagesizes",      { 0x7fff, 3 }, 2, SC_FN, 0, 0, sc_pagesizes },
-    { "vm.pmap.pg_ps_enabled", { 0x7fff, 4 }, 2, SC_INT, 0, 0, 0 },
-    { "hw.availpages",     { 0x7fff, 5 }, 2, SC_FN, 0, 2, sc_physmem },
-    { "kern.ipc.somaxconn", { 0x7fff, 6 }, 2, SC_INT, 0, 128, 0 },
-    { "kern.ps_strings",   { 0x7fff, 7 }, 2, SC_LONG, 0, 0, 0 },
-    { "security.bsd.unprivileged_proc_debug", { 0x7fff, 8 }, 2, SC_INT, 0, 1, 0 },
-    { "kern.features.inet6", { 0x7fff, 9 }, 2, SC_INT, 0, 1, 0 },
-    { "kern.features.inet", { 0x7fff, 10 }, 2, SC_INT, 0, 1, 0 },
-    { "kern.module_path",  { 0x7fff, 11 }, 2, SC_STR, "/boot/kernel", 0, 0 },
-    { "kern.hostuuid",     { 0x7fff, 12 }, 2, SC_STR, "00000000-0000-0000-0000-000000000000", 0, 0 },
-    { "kern.coredump",     { 0x7fff, 13 }, 2, SC_INT, 0, 0, 0 },
-    { "vfs.usermount",     { 0x7fff, 14 }, 2, SC_INT, 0, 0, 0 },
-    { "kern.vm_guest",     { 0x7fff, 15 }, 2, SC_STR, "none", 0, 0 },
+    { "kern.ostype",       { 1, 1 },  2, SC_STR,  "FreeBSD", 0, 0, CT_STRING, "A" },
+    { "kern.osrelease",    { 1, 2 },  2, SC_STR,  "15.1-RELEASE", 0, 0, CT_STRING, "A" },
+    { "kern.osrevision",   { 1, 3 },  2, SC_INT,  0, 199506, 0, CT_INT, "I" },
+    { "kern.version",      { 1, 4 },  2, SC_STR,  "FreeBSD 15.1-RELEASE Cervus 0.0.2\n", 0, 0, CT_STRING, "A" },
+    { "kern.maxproc",      { 1, 6 },  2, SC_INT,  0, 32768, 0, CT_INT, "I" },
+    { "kern.maxfiles",     { 1, 7 },  2, SC_INT,  0, 65536, 0, CT_INT, "I" },
+    { "kern.argmax",       { 1, 8 },  2, SC_INT,  0, 2097152, 0, CT_INT, "I" },
+    { "kern.securelevel",  { 1, 9 },  2, SC_INT,  0, -1, 0, CT_INT, "I" },
+    { "kern.hostname",     { 1, 10 }, 2, SC_FN,   0, 0, sc_hostname, CT_STRING, "A" },
+    { "kern.hostid",       { 1, 11 }, 2, SC_INT,  0, 0, 0, CT_INT, "IU" },
+    { "kern.proc",         { 1, 14 }, 2, SC_FN,   0, 0, sc_proc, CT_NODE, "N" },
+    { "kern.ngroups",      { 1, 18 }, 2, SC_INT,  0, 1023, 0, CT_INT, "I" },
+    { "kern.boottime",     { 1, 21 }, 2, SC_FN,   0, 0, sc_boottime, CT_OPAQUE, "S,timeval" },
+    { "kern.domainname",   { 1, 22 }, 2, SC_STR,  "", 0, 0, CT_STRING, "A" },
+    { "kern.osreldate",    { 1, 24 }, 2, SC_INT,  0, FB_OSRELDATE, 0, CT_INT, "I" },
+    { "kern.usrstack",     { 1, 33 }, 2, SC_LONG, 0, (int64_t)MM_STACK_TOP, 0, CT_ULONG, "LU" },
+    { "kern.iov_max",      { 1, 35 }, 2, SC_INT,  0, 1024, 0, CT_INT, "I" },
+    { "kern.arandom",      { 1, 37 }, 2, SC_FN,   0, 0, sc_arandom, CT_OPAQUE, "" },
+    { "vm.overcommit",     { 2, 12 }, 2, SC_INT,  0, 0, 0, CT_INT, "I" },
+    { "hw.machine",        { 6, 1 },  2, SC_STR,  "amd64", 0, 0, CT_STRING, "A" },
+    { "hw.model",          { 6, 2 },  2, SC_FN,   0, 0, sc_model, CT_STRING, "A" },
+    { "hw.ncpu",           { 6, 3 },  2, SC_FN,   0, 0, sc_ncpu, CT_INT, "I" },
+    { "hw.byteorder",      { 6, 4 },  2, SC_INT,  0, 1234, 0, CT_INT, "I" },
+    { "hw.physmem",        { 6, 5 },  2, SC_FN,   0, 0, sc_physmem, CT_ULONG, "LU" },
+    { "hw.usermem",        { 6, 6 },  2, SC_FN,   0, 1, sc_physmem, CT_ULONG, "LU" },
+    { "hw.pagesize",       { 6, 7 },  2, SC_INT,  0, 4096, 0, CT_INT, "I" },
+    { "hw.floatingpoint",  { 6, 10 }, 2, SC_INT,  0, 1, 0, CT_INT, "I" },
+    { "hw.machine_arch",   { 6, 11 }, 2, SC_STR,  "amd64", 0, 0, CT_STRING, "A" },
+    { "hw.realmem",        { 6, 12 }, 2, SC_FN,   0, 0, sc_physmem, CT_ULONG, "LU" },
+    { "user.cs_path",      { 8, 1 },  2, SC_STR,  "/usr/bin:/bin:/usr/sbin:/sbin", 0, 0, CT_STRING, "A" },
+    { "user.localbase",    { 8, 21 }, 2, SC_STR,  "/usr/local", 0, 0, CT_STRING, "A" },
+    { "kern.smp.cpus",     { 0x7fff, 1 }, 2, SC_FN, 0, 0, sc_ncpu, CT_INT, "I" },
+    { "kern.smp.maxcpus",  { 0x7fff, 2 }, 2, SC_FN, 0, 0, sc_ncpu, CT_INT, "I" },
+    { "hw.pagesizes",      { 0x7fff, 3 }, 2, SC_FN, 0, 0, sc_pagesizes, CT_ULONG, "LU" },
+    { "vm.pmap.pg_ps_enabled", { 0x7fff, 4 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "hw.availpages",     { 0x7fff, 5 }, 2, SC_FN, 0, 2, sc_physmem, CT_ULONG, "LU" },
+    { "kern.ipc.somaxconn", { 0x7fff, 6 }, 2, SC_INT, 0, 128, 0, CT_INT, "I" },
+    { "kern.ps_strings",   { 0x7fff, 7 }, 2, SC_LONG, 0, 0, 0, CT_ULONG, "LU" },
+    { "security.bsd.unprivileged_proc_debug", { 0x7fff, 8 }, 2, SC_INT, 0, 1, 0, CT_INT, "I" },
+    { "kern.features.inet6", { 0x7fff, 9 }, 2, SC_INT, 0, 1, 0, CT_INT, "I" },
+    { "kern.features.inet", { 0x7fff, 10 }, 2, SC_INT, 0, 1, 0, CT_INT, "I" },
+    { "kern.module_path",  { 0x7fff, 11 }, 2, SC_STR, "/boot/kernel", 0, 0, CT_STRING, "A" },
+    { "kern.hostuuid",     { 0x7fff, 12 }, 2, SC_STR, "00000000-0000-0000-0000-000000000000", 0, 0, CT_STRING, "A" },
+    { "kern.coredump",     { 0x7fff, 13 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "vfs.usermount",     { 0x7fff, 14 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "kern.vm_guest",     { 0x7fff, 15 }, 2, SC_STR, "none", 0, 0, CT_STRING, "A" },
+    { "vfs.conflist",      { 0x7fff, 16 }, 2, SC_FN, 0, 0, sc_vfsconf, CT_OPAQUE, "S,xvfsconf" },
+    { "kern.pid_max",      { 0x7fff, 17 }, 2, SC_INT, 0, 99999, 0, CT_INT, "I" },
+    { "kern.fscale",       { 0x7fff, 18 }, 2, SC_INT, 0, 2048, 0, CT_INT, "I" },
+    { "kern.ccpu",         { 0x7fff, 19 }, 2, SC_INT, 0, 1948, 0, CT_INT, "I" },
+    { "kern.lastpid",      { 0x7fff, 20 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "vm.stats.vm.v_page_size", { 0x7fff, 21 }, 2, SC_INT, 0, 4096, 0, CT_INT, "IU" },
+    { "vm.stats.vm.v_page_count", { 0x7fff, 22 }, 2, SC_FN, 0, 2, sc_physmem, CT_INT, "IU" },
 };
+
+#define SYSCTL_N (sizeof g_sysctl / sizeof g_sysctl[0])
 
 static int64_t sysctl_value(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
 {
     switch (e->kind) {
     case SC_STR: {
         size_t n = strlen(e->s) + 1;
-        memcpy(buf, e->s, n);
+        sc_put(buf, len, 0, e->s, n);
         *len = n;
         return 0;
     }
     case SC_INT: {
         int32_t v = (int32_t)e->v;
-        memcpy(buf, &v, 4);
+        sc_put(buf, len, 0, &v, 4);
         *len = 4;
         return 0;
     }
     case SC_LONG:
-        memcpy(buf, &e->v, 8);
+        sc_put(buf, len, 0, &e->v, 8);
         *len = 8;
         return 0;
     }
     return e->fn(e, rest, nrest, buf, len);
+}
+
+static int64_t sysctl_reply(const void *data, size_t len, uint64_t oldp, uint64_t oldlenp)
+{
+    size_t cap = 0;
+    if (oldlenp && syscall_copy_from_user(&cap, (const void *)oldlenp, sizeof cap) < 0) return -EFAULT;
+    int64_t r = 0;
+    if (oldp) {
+        size_t n = len < cap ? len : cap;
+        if (n && syscall_copy_to_user((void *)oldp, data, n) < 0) return -EFAULT;
+        if (len > cap) r = -ENOMEM;
+    }
+    size_t out = oldp && len > cap ? cap : len;
+    if (oldlenp && syscall_copy_to_user((void *)oldlenp, &out, sizeof out) < 0) return -EFAULT;
+    return r;
 }
 
 static int64_t sysctl_io(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest,
@@ -2047,19 +2681,21 @@ static int64_t sysctl_io(const fb_sysctl_t *e, const int32_t *rest, uint32_t nre
     if (newp) return -EPERM;
     size_t cap = 0;
     if (oldlenp && syscall_copy_from_user(&cap, (const void *)oldlenp, sizeof cap) < 0) return -EFAULT;
-    uint8_t *buf = malloc(4352);
+    size_t bufcap = e->kind == SC_FN ? 1048576 : 4096;
+    if (oldp && cap < bufcap) bufcap = cap < 4096 ? 4096 : cap;
+    uint8_t *buf = calloc(1, bufcap);
     if (!buf) return -ENOMEM;
-    size_t len = oldp ? (cap < 4096 ? cap : 4096) : 4096;
+    size_t len = bufcap;
     int64_t r = sysctl_value(e, rest, nrest, buf, &len);
     if (r == 0) {
-        if (oldp) {
-            size_t n = len < cap ? len : cap;
+        if (len <= bufcap) {
+            r = sysctl_reply(buf, len, oldp, oldlenp);
+        } else if (!oldp) {
+            if (oldlenp && syscall_copy_to_user((void *)oldlenp, &len, sizeof len) < 0) r = -EFAULT;
+        } else {
+            size_t n = cap < bufcap ? cap : bufcap;
             if (n && syscall_copy_to_user((void *)oldp, buf, n) < 0) r = -EFAULT;
-            else if (len > cap) r = -ENOMEM;
-        }
-        if (oldlenp && r != -EFAULT) {
-            size_t out = oldp && len > cap ? cap : len;
-            if (syscall_copy_to_user((void *)oldlenp, &out, sizeof out) < 0) r = -EFAULT;
+            else r = -ENOMEM;
         }
     }
     free(buf);
@@ -2068,8 +2704,20 @@ static int64_t sysctl_io(const fb_sysctl_t *e, const int32_t *rest, uint32_t nre
 
 static const fb_sysctl_t *sysctl_find_name(const char *name)
 {
-    for (size_t i = 0; i < sizeof g_sysctl / sizeof g_sysctl[0]; i++)
+    for (size_t i = 0; i < SYSCTL_N; i++)
         if (strcmp(g_sysctl[i].name, name) == 0) return &g_sysctl[i];
+    return NULL;
+}
+
+static const fb_sysctl_t *sysctl_find_mib(const int32_t *mib, uint32_t n, uint32_t *used)
+{
+    for (size_t i = 0; i < SYSCTL_N; i++) {
+        const fb_sysctl_t *e = &g_sysctl[i];
+        if (n < e->nmib || memcmp(mib, e->mib, e->nmib * 4) != 0) continue;
+        if (n > e->nmib && e->kind != SC_FN) continue;
+        *used = e->nmib;
+        return e;
+    }
     return NULL;
 }
 
@@ -2079,7 +2727,6 @@ static int64_t fb_sysctl_name2oid(uint64_t oldp, uint64_t oldlenp, uint64_t newp
     char name[256];
     if (syscall_copy_from_user(name, (const void *)newp, newlen) < 0) return -EFAULT;
     name[newlen] = 0;
-    if (newlen && name[newlen - 1] == 0) newlen--;
     const fb_sysctl_t *e = sysctl_find_name(name);
     int32_t oid[6];
     uint32_t n = 0;
@@ -2087,31 +2734,59 @@ static int64_t fb_sysctl_name2oid(uint64_t oldp, uint64_t oldlenp, uint64_t newp
         memcpy(oid, e->mib, e->nmib * 4);
         n = e->nmib;
     } else {
-        size_t best = 0;
-        for (size_t i = 0; i < sizeof g_sysctl / sizeof g_sysctl[0]; i++) {
-            size_t l = strlen(g_sysctl[i].name);
-            if (g_sysctl[i].kind == SC_FN && l > best && strncmp(name, g_sysctl[i].name, l) == 0 && name[l] == '.') {
-                e = &g_sysctl[i];
-                best = l;
+        static const struct { const char *sub; int32_t v; } procsub[] = {
+            { "all", 0 }, { "pid", 1 }, { "pgrp", 2 }, { "session", 3 }, { "uid", 5 }, { "ruid", 6 },
+            { "args", 7 }, { "proc", 8 }, { "rgid", 10 }, { "gid", 11 }, { "pathname", 12 },
+            { "umask", 39 }, { "osrel", 40 },
+        };
+        if (strncmp(name, "kern.proc.", 10) != 0) return -ENOENT;
+        const char *sub = name + 10;
+        bool found = false;
+        for (size_t i = 0; i < sizeof procsub / sizeof procsub[0]; i++) {
+            if (strcmp(sub, procsub[i].sub) == 0) {
+                oid[0] = 1; oid[1] = 14; oid[2] = procsub[i].v;
+                n = 3;
+                found = true;
+                break;
             }
         }
-        if (!e || e->fn != sc_proc) return -ENOENT;
-        memcpy(oid, e->mib, e->nmib * 4);
-        n = e->nmib;
-        const char *sub = name + best + 1;
-        if (strcmp(sub, "pathname") == 0) oid[n++] = 12;
-        else if (strcmp(sub, "args") == 0) oid[n++] = 7;
-        else return -ENOENT;
+        if (!found) return -ENOENT;
     }
-    size_t cap = 0;
-    if (oldlenp && syscall_copy_from_user(&cap, (const void *)oldlenp, sizeof cap) < 0) return -EFAULT;
-    size_t bytes = n * 4;
-    if (oldp) {
-        if (cap < bytes) return -ENOMEM;
-        if (syscall_copy_to_user((void *)oldp, oid, bytes) < 0) return -EFAULT;
+    return sysctl_reply(oid, n * 4, oldp, oldlenp);
+}
+
+static int64_t fb_sysctl_meta(const int32_t *mib, uint32_t n, uint64_t oldp, uint64_t oldlenp)
+{
+    uint32_t used = 0;
+    const fb_sysctl_t *e = n > 2 ? sysctl_find_mib(mib + 2, n - 2, &used) : NULL;
+    if (mib[1] == 1) {
+        if (!e) return -ENOENT;
+        return sysctl_reply(e->name, strlen(e->name) + 1, oldp, oldlenp);
     }
-    if (oldlenp && syscall_copy_to_user((void *)oldlenp, &bytes, sizeof bytes) < 0) return -EFAULT;
-    return 0;
+    if (mib[1] == 4) {
+        if (!e) return -ENOENT;
+        uint8_t out[64];
+        uint32_t kind = e->ctltype | 0x80000000u;
+        memcpy(out, &kind, 4);
+        size_t fl = strlen(e->fmt) + 1;
+        memcpy(out + 4, e->fmt, fl);
+        return sysctl_reply(out, 4 + fl, oldp, oldlenp);
+    }
+    if (mib[1] == 2 || mib[1] == 7) {
+        size_t idx = 0;
+        if (n > 2) {
+            if (!e) {
+                for (idx = 0; idx < SYSCTL_N; idx++)
+                    if (memcmp(g_sysctl[idx].mib, mib + 2, 4) > 0) break;
+            } else {
+                idx = (size_t)(e - g_sysctl) + 1;
+            }
+        }
+        while (idx < SYSCTL_N && g_sysctl[idx].ctltype == CT_NODE) idx++;
+        if (idx >= SYSCTL_N) return -ENOENT;
+        return sysctl_reply(g_sysctl[idx].mib, g_sysctl[idx].nmib * 4, oldp, oldlenp);
+    }
+    return -ENOENT;
 }
 
 static int64_t fb_sysctl(A6)
@@ -2122,13 +2797,12 @@ static int64_t fb_sysctl(A6)
     int32_t mib[24];
     if (syscall_copy_from_user(mib, (const void *)a1, n * 4) < 0) return -EFAULT;
     if (mib[0] == 0 && mib[1] == 3) return fb_sysctl_name2oid(a3, a4, a5, a6);
-    for (size_t i = 0; i < sizeof g_sysctl / sizeof g_sysctl[0]; i++) {
-        const fb_sysctl_t *e = &g_sysctl[i];
-        if (n < e->nmib || memcmp(mib, e->mib, e->nmib * 4) != 0) continue;
-        if (n > e->nmib && e->kind != SC_FN) continue;
-        return sysctl_io(e, mib + e->nmib, n - e->nmib, a3, a4, a5);
-    }
-    return -ENOENT;
+    if (mib[0] == 0) return fb_sysctl_meta(mib, n, a3, a4);
+    if (mib[0] == 4) return fb_sysctl_net(mib, n, a3, a4, a5);
+    uint32_t used = 0;
+    const fb_sysctl_t *e = sysctl_find_mib(mib, n, &used);
+    if (!e) return -ENOENT;
+    return sysctl_io(e, mib + used, n - used, a3, a4, a5);
 }
 
 static int64_t fb_sysctlbyname(A6)
@@ -2139,8 +2813,19 @@ static int64_t fb_sysctlbyname(A6)
     if (syscall_copy_from_user(name, (const void *)a1, a2) < 0) return -EFAULT;
     name[a2] = 0;
     const fb_sysctl_t *e = sysctl_find_name(name);
+    if (e) return sysctl_io(e, NULL, 0, a3, a4, a5);
+    int32_t oid[6];
+    uint64_t sc = fb_scratch(syscall_cur_task(), 64);
+    size_t olen = sizeof oid;
+    if (syscall_copy_to_user((void *)(sc + 32), &olen, sizeof olen) < 0) return -EFAULT;
+    int64_t r = fb_sysctl_name2oid(sc, sc + 32, a1, a2);
+    if (r < 0) return r;
+    if (syscall_copy_from_user(oid, (const void *)sc, 12) < 0) return -EFAULT;
+    uint32_t used = 0;
+    e = sysctl_find_mib(oid, 3, &used);
     if (!e) return -ENOENT;
-    return sysctl_io(e, NULL, 0, a3, a4, a5);
+    int32_t rest[2] = { oid[2], -1 };
+    return sysctl_io(e, rest, 2, a3, a4, a5);
 }
 
 FB0(fb_read,      sys_read(a1, a2, a3))
@@ -2207,7 +2892,6 @@ FB0(fb_renameat,  sys_renameat(I(a1), a2, I(a3), a4))
 FB0(fb_symlinkat, sys_symlinkat(a1, I(a2), a3))
 FB0(fb_fdatasync, sys_fdatasync(a1))
 FB0(fb_close_range, sys_close_range(a1, a2, a3))
-FB0(fb_fork,      sys_fork())
 FB0(fb_sigreturn, freebsd_sigreturn(a1))
 FB0(fb_getcontext, freebsd_getcontext(a1))
 static int64_t fb_flock(A6)
@@ -2625,6 +3309,7 @@ static int64_t fb_thr_new(A6)
     uint64_t sp = ((p.stack_base + p.stack_size) & ~15ULL) - 8;
     task_t *th = task_spawn_clone(me, sp, p.tls_base);
     if (!th) return -ENOMEM;
+    th->user_saved_r11 &= ~1ULL;
     th->user_saved_rip = p.start_func;
     th->user_saved_rdi = p.arg;
     th->user_rsp = sp;
@@ -2659,7 +3344,8 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [5]   = fb_open,        [6]   = fb_close,       [7]   = fb_wait4,       [9]   = fb_link,
     [10]  = fb_unlink,      [12]  = fb_chdir,       [13]  = fb_fchdir,      [15]  = fb_chmod,
     [16]  = fb_chown,       [17]  = fb_break,       [20]  = fb_getpid,      [23]  = fb_setuid,
-    [24]  = fb_getuid,      [25]  = fb_getuid,      [29]  = fb_recvfrom,    [30]  = fb_accept,
+    [24]  = fb_getuid,      [25]  = fb_getuid,      [27]  = fb_recvmsg,     [28]  = fb_sendmsg,
+    [29]  = fb_recvfrom,    [30]  = fb_accept,
     [31]  = fb_getpeername, [32]  = fb_getsockname, [33]  = fb_access,      [34]  = fb_chflags,
     [35]  = fb_chflags,     [36]  = fb_sync,        [37]  = fb_kill,        [39]  = fb_getppid,
     [41]  = fb_dup,         [43]  = fb_getgid,      [47]  = fb_getgid,      [49]  = fb_getlogin,
@@ -2697,7 +3383,8 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [492] = fb_fexecve,     [494] = fb_futimesat,   [495] = fb_linkat,      [496] = fb_mkdirat,
     [497] = fb_mkfifoat,    [499] = fb_openat,      [500] = fb_readlinkat,  [501] = fb_renameat,
     [502] = fb_symlinkat,   [503] = fb_unlinkat,    [504] = fb_posix_openpt, [513] = fb_pathconf,
-    [516] = fb_zero,        [517] = fb_cap_getmode, [533] = fb_zero,        [534] = fb_zero,
+    [516] = fb_zero,        [517] = fb_cap_getmode, [518] = fb_pdfork,      [519] = fb_pdkill,
+    [520] = fb_pdgetpid,    [530] = fb_posix_fallocate, [531] = fb_posix_fadvise, [533] = fb_zero,        [534] = fb_zero,
     [535] = fb_zero,        [536] = fb_zero,        [537] = fb_zero,        [569] = fb_copy_file_range,        [522] = fb_pselect,     [540] = fb_chflagsat,
     [541] = fb_accept4,     [542] = fb_pipe2,       [544] = fb_einval,      [545] = fb_ppoll,
     [546] = fb_futimens,    [547] = fb_utimensat,   [550] = fb_fdatasync,   [551] = fb_fstat,
