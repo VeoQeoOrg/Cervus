@@ -250,10 +250,12 @@ static void ahci_port_recover(volatile uint8_t *base, int port) {
     ahci_port_start(base, port);
 }
 
+extern volatile uint32_t sched_ready_flag;
+
 static int ahci_may_sleep(void) {
     uint64_t rf;
     asm volatile("pushfq; popq %0" : "=r"(rf));
-    return (rf & (1u << 9)) && spin_depth() == 0 && syscall_cur_task() != NULL;
+    return sched_ready_flag && (rf & (1u << 9)) && spin_depth() == 0 && syscall_cur_task() != NULL;
 }
 
 static void ahci_lock(ahci_device_t *d) {
