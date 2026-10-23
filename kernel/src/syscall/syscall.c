@@ -661,22 +661,30 @@ extern bool linux_syscall_known(uint64_t nr);
 
 #define LINUX_SYS_RT_SIGRETURN 15
 
+extern int64_t fbsd_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
+                            uint64_t a4, uint64_t a5, uint64_t a6);
+extern bool fbsd_syscall_is_sigreturn(uint64_t nr);
+extern int64_t fbsd_syscall_return(task_t *t, int64_t ret);
+
 static int64_t syscall_dispatch(task_t *t, uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
                                 uint64_t a4, uint64_t a5, uint64_t a6)
 {
     if (t && t->abi == TASK_ABI_LINUX) return linux_syscall(nr, a1, a2, a3, a4, a5, a6);
+    if (t && t->abi == TASK_ABI_FREEBSD) return fbsd_syscall(nr, a1, a2, a3, a4, a5, a6);
     return syscall_table[nr](a1, a2, a3, a4, a5, a6);
 }
 
 static bool syscall_valid(task_t *t, uint64_t nr)
 {
     if (t && t->abi == TASK_ABI_LINUX) return linux_syscall_known(nr);
+    if (t && t->abi == TASK_ABI_FREEBSD) return true;
     return nr < SYSCALL_TABLE_SIZE && syscall_table[nr];
 }
 
 static bool syscall_is_sigreturn(task_t *t, uint64_t nr)
 {
     if (t && t->abi == TASK_ABI_LINUX) return nr == LINUX_SYS_RT_SIGRETURN;
+    if (t && t->abi == TASK_ABI_FREEBSD) return fbsd_syscall_is_sigreturn(nr);
     return nr == SYS_RT_SIGRETURN;
 }
 
@@ -731,6 +739,8 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     }
     if (me && !sigret)
         ret = signal_deliver_pending(me, ret, nr);
+    if (me && me->abi == TASK_ABI_FREEBSD && !sigret)
+        ret = fbsd_syscall_return(me, ret);
     return ret;
 }
 

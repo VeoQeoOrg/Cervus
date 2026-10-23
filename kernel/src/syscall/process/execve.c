@@ -12,6 +12,7 @@
 #include "../../../include/puzzle/puzzle.h"
 #include "../../../include/drivers/random.h"
 #include "../../../include/time/ptimer.h"
+#include "../../../include/smp/smp.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -177,6 +178,100 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
     return r < 0 ? 0 : sp;
 }
 
+static uintptr_t build_stack_freebsd(mm_t *mm, uintptr_t stack_top, const strvec_t *argv,
+                                     const strvec_t *envp, const elf_load_result_t *elf,
+                                     const char *execfn) {
+    uintptr_t sp = stack_top & ~(uintptr_t)0xF;
+
+    size_t efl = strlen(execfn) + 1;
+    sp -= efl;
+    uintptr_t u_execpath = sp;
+    if (mm_copy_to(mm, u_execpath, execfn, efl) < 0) return 0;
+
+    sp &= ~(uintptr_t)0xF;
+    sp -= 64;
+    uintptr_t u_canary = sp;
+    uint8_t canary[64];
+    random_bytes(canary, sizeof canary);
+    if (mm_copy_to(mm, u_canary, canary, sizeof canary) < 0) return 0;
+
+    static const uint64_t pagesizes[3] = { 4096, 2ULL << 20, 1ULL << 30 };
+    sp -= sizeof pagesizes;
+    uintptr_t u_pagesizes = sp;
+    if (mm_copy_to(mm, u_pagesizes, pagesizes, sizeof pagesizes) < 0) return 0;
+
+    sp -= 32;
+    uintptr_t u_ps = sp;
+
+    sp -= envp->used;
+    uintptr_t u_env = sp;
+    if (envp->used && mm_copy_to(mm, u_env, envp->buf, envp->used) < 0) return 0;
+    sp -= argv->used;
+    uintptr_t u_arg = sp;
+    if (argv->used && mm_copy_to(mm, u_arg, argv->buf, argv->used) < 0) return 0;
+
+    enum { FB_NAUXV = 50 };
+    size_t nptr = 1 + (size_t)argv->count + 1 + (size_t)envp->count + 1 + FB_NAUXV;
+    sp -= nptr * 8;
+    sp &= ~(uintptr_t)0xF;
+    uintptr_t u_argv = sp + 8;
+    uintptr_t u_envv = u_argv + ((size_t)argv->count + 1) * 8;
+
+    uint64_t auxv[] = {
+        3,  elf->phdr_vaddr ? elf->phdr_vaddr : elf->load_base + 0x40,
+        4,  elf->phentsize ? elf->phentsize : 56,
+        5,  elf->phnum,
+        6,  4096,
+        8,  0,
+        9,  elf->entry,
+        7,  elf->has_interp ? elf->interp_base : 0,
+        24, 0,
+        15, u_execpath,
+        18, 1501000,
+        16, u_canary,
+        17, sizeof canary,
+        19, smp_get_cpu_count(),
+        20, u_pagesizes,
+        21, sizeof pagesizes,
+        23, 3,
+        27, 0,
+        28, (uint64_t)argv->count,
+        29, u_argv,
+        30, (uint64_t)envp->count,
+        31, u_envv,
+        32, u_ps,
+        35, MM_STACK_TOP,
+        36, MM_STACK_SIZE,
+        0,  0,
+    };
+    _Static_assert(sizeof auxv / sizeof auxv[0] == FB_NAUXV, "auxv slots");
+    size_t nauxv = FB_NAUXV;
+    struct { uint64_t argv; uint32_t nargv; uint32_t pad0; uint64_t envv; uint32_t nenv; uint32_t pad1; } ps = {
+        u_argv, (uint32_t)argv->count, 0, u_envv, (uint32_t)envp->count, 0,
+    };
+    if (mm_copy_to(mm, u_ps, &ps, sizeof ps) < 0) return 0;
+
+    mm->arg_start = u_arg;
+    mm->arg_end = u_arg + argv->used;
+    mm->env_start = u_env;
+    mm->env_end = u_env + envp->used;
+    mm->nauxv = (uint32_t)(nauxv < 48 ? nauxv : 48);
+    memcpy(mm->auxv, auxv, mm->nauxv * sizeof(uint64_t));
+
+    uint64_t *frame = calloc(nptr, 8);
+    if (!frame) return 0;
+    size_t fi = 0;
+    frame[fi++] = (uint64_t)argv->count;
+    for (int i = 0; i < argv->count; i++) frame[fi++] = u_arg + argv->offs[i];
+    frame[fi++] = 0;
+    for (int i = 0; i < envp->count; i++) frame[fi++] = u_env + envp->offs[i];
+    frame[fi++] = 0;
+    for (size_t i = 0; i < nauxv; i++) frame[fi++] = auxv[i];
+    int r = mm_copy_to(mm, sp, frame, nptr * 8);
+    free(frame);
+    return r < 0 ? 0 : sp;
+}
+
 uintptr_t exec_build_init_stack(const elf_load_result_t *elf, const char *path) {
     strvec_t argv = { 0 }, envp = { 0 };
     size_t total = 0;
@@ -221,6 +316,7 @@ static int parse_shebang(const uint8_t *hdr, size_t n, char *interp, char *arg) 
 }
 
 int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr);
+extern int fbsd_map_sigcode(mm_t *mm);
 
 int64_t sys_execve(uint64_t path_ptr, uint64_t argv_ptr, uint64_t envp_ptr)
 {
@@ -318,7 +414,10 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
         return -ETXTBSY;
     }
 
-    uintptr_t new_rsp = build_stack(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn, t->uid, t->gid);
+    uintptr_t new_rsp = elf.freebsd_abi
+        ? build_stack_freebsd(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn)
+        : build_stack(elf.mm, elf.stack_top, &argv, &envp, &elf, execfn, t->uid, t->gid);
+    if (new_rsp && elf.freebsd_abi && fbsd_map_sigcode(elf.mm) < 0) new_rsp = 0;
     sv_free(&argv);
     if (!new_rsp) {
         mm_put(elf.mm);
@@ -373,7 +472,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     asm volatile("mov %0, %%fs" :: "r"(0u));
     asm volatile("wrmsr" :: "c"(0xC0000100u), "a"(0), "d"(0));
     asm volatile("wrmsr" :: "c"(0xC0000102u), "a"(0), "d"(0));
-    t->abi        = elf.linux_abi ? TASK_ABI_LINUX : TASK_ABI_CERVUS;
+    t->abi        = elf.freebsd_abi ? TASK_ABI_FREEBSD : elf.linux_abi ? TASK_ABI_LINUX : TASK_ABI_CERVUS;
     t->tls_vaddr  = elf.tls_vaddr;
     t->tls_filesz = elf.tls_filesz;
     t->tls_memsz  = elf.tls_memsz;
@@ -386,6 +485,10 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     t->user_saved_r15 = t->user_saved_r11 = 0;
     t->user_saved_rdi = t->user_saved_rsi = t->user_saved_rdx = 0;
     t->user_saved_r8 = t->user_saved_r9 = t->user_saved_r10 = 0;
+    if (elf.freebsd_abi) {
+        t->user_saved_rdi = new_rsp;
+        t->user_rsp       = new_rsp - 8;
+    }
 
     const char *bn = kpath;
     for (const char *p = kpath; *p; p++) if (*p == '/') bn = p + 1;

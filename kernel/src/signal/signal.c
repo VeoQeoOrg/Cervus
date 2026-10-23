@@ -559,6 +559,209 @@ static int build_frame_linux(task_t *t, int sig, const ksiginfo_t *si, sig_regs_
 }
 
 
+typedef struct {
+    uint64_t onstack, rdi, rsi, rdx, rcx, r8, r9, rax, rbx, rbp, r10, r11, r12, r13, r14, r15;
+    uint32_t trapno;
+    uint16_t fs, gs;
+    uint64_t addr;
+    uint32_t flags;
+    uint16_t es, ds;
+    uint64_t err, rip, cs, rflags, rsp, ss;
+    int64_t  len, fpformat, ownedfp;
+    uint8_t  fpstate[512] __attribute__((aligned(16)));
+    uint64_t fsbase, gsbase, xfpustate, xfpustate_len, tlsbase, spare[3];
+} fb_mcontext_t;
+
+typedef struct {
+    uint32_t      sigmask[4];
+    fb_mcontext_t mc;
+    uint64_t      link;
+    uint64_t      ss_sp;
+    uint64_t      ss_size;
+    int32_t       ss_flags;
+    int32_t       ss_pad;
+    int32_t       flags;
+    int32_t       spare[4];
+} fb_ucontext_t;
+
+typedef struct {
+    uint64_t      handler;
+    uint64_t      pad;
+    fb_ucontext_t uc;
+    uint8_t       si[80];
+} fb_sigframe_t;
+
+_Static_assert(sizeof(fb_mcontext_t) == 800, "FreeBSD mcontext_t is 800 bytes");
+_Static_assert(__builtin_offsetof(fb_mcontext_t, fpstate) == 224, "mc_fpstate at 224");
+_Static_assert(sizeof(fb_ucontext_t) == 880, "FreeBSD ucontext_t is 880 bytes");
+_Static_assert(__builtin_offsetof(fb_ucontext_t, flags) == 848, "uc_flags at 848");
+_Static_assert(sizeof(fb_sigframe_t) == 976, "FreeBSD sigframe is 976 bytes");
+
+#define FB_MC_FPFMT_XMM   0x10002
+#define FB_MC_FPOWNED_FPU 0x20001
+#define FB_MC_HASSEGS     0x1
+#define FB_SIGCODE_VA     0x00007FFFFFFFE000ULL
+
+extern int fbsd_sig_from_linux(int sig);
+extern void fbsd_sigset_from_linux(uint64_t mask, uint32_t out[4]);
+extern uint64_t fbsd_sigset_to_linux(const uint32_t in[4]);
+extern int64_t fbsd_errno_from_linux(int64_t e);
+extern void fbsd_fill_siginfo(uint8_t out[80], int bsdsig, const ksiginfo_t *si);
+extern bool fbsd_syscall_restartable(uint64_t nr);
+
+static int build_frame_freebsd(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, bool from_syscall,
+                               uint16_t cs, uint16_t ss, uint64_t *new_sp, uint64_t args[4]) {
+    uint64_t top = r->rsp;
+    bool onstack = on_altstack(t, r->rsp);
+    bool use_alt = (t->sig_flags[sig] & SA_ONSTACK) && t->ss_size &&
+                   !(t->ss_flags & SS_DISABLE_F) && !onstack;
+    if (use_alt) top = t->ss_sp + t->ss_size;
+    else top -= 128;
+    uint64_t sp = (top - sizeof(fb_sigframe_t)) & ~15ULL;
+    if (sp < 0x1000 || top > USER_TOP) return -1;
+    if (!syscall_uptr_validate_write((void *)sp, top - sp)) return -1;
+
+    uint64_t mask = t->sig_saved_valid ? t->sig_saved_mask : t->sig_blocked;
+    t->sig_saved_valid = 0;
+    int bsig = fbsd_sig_from_linux(sig);
+
+    fb_sigframe_t *f = (fb_sigframe_t *)sp;
+    memset(f, 0, sizeof *f);
+    f->handler = t->sig_handler[sig];
+    fb_ucontext_t *uc = &f->uc;
+    fbsd_sigset_from_linux(mask, uc->sigmask);
+    uc->ss_sp    = t->ss_sp;
+    uc->ss_size  = t->ss_size;
+    uc->ss_flags = t->ss_size ? (onstack ? SS_ONSTACK_F : 0) : 4;
+    fb_mcontext_t *mc = &uc->mc;
+    mc->onstack = onstack ? 1 : 0;
+    mc->rdi = r->rdi; mc->rsi = r->rsi; mc->rdx = r->rdx; mc->rcx = r->rcx;
+    mc->r8 = r->r8; mc->r9 = r->r9; mc->rax = r->rax; mc->rbx = r->rbx; mc->rbp = r->rbp;
+    mc->r10 = r->r10; mc->r11 = r->r11; mc->r12 = r->r12; mc->r13 = r->r13;
+    mc->r14 = r->r14; mc->r15 = r->r15;
+    mc->rflags = r->rflags;
+    if (from_syscall && (int64_t)r->rax < 0 && (int64_t)r->rax >= -4095) {
+        mc->rax = (uint64_t)fbsd_errno_from_linux(-(int64_t)r->rax);
+        mc->rflags |= 1;
+    } else if (from_syscall) {
+        mc->rflags &= ~1ULL;
+    }
+    mc->trapno = (uint32_t)si->trapno;
+    mc->addr   = si->addr;
+    mc->flags  = FB_MC_HASSEGS;
+    mc->err    = (uint64_t)(int64_t)si->err;
+    mc->rip    = r->rip;
+    mc->cs     = cs;
+    mc->rsp    = r->rsp;
+    mc->ss     = ss;
+    mc->len    = sizeof(fb_mcontext_t);
+    mc->fpformat = FB_MC_FPFMT_XMM;
+    mc->ownedfp  = FB_MC_FPOWNED_FPU;
+    uint32_t fslo, fshi;
+    __asm__ volatile("rdmsr" : "=a"(fslo), "=d"(fshi) : "c"(0xC0000100u));
+    mc->fsbase = ((uint64_t)fshi << 32) | fslo;
+    mc->gsbase = t->gs_base;
+    uint32_t fsz = fpu_frame_bytes();
+    uint8_t *fx = malloc(fsz + 64);
+    if (!fx) return -1;
+    save_user_fpu(t, fx);
+    memcpy(mc->fpstate, fx, 464);
+    free(fx);
+    fbsd_fill_siginfo(f->si, bsig, si);
+
+    t->sig_blocked |= t->sig_mask[sig];
+    if (!(t->sig_flags[sig] & SA_NODEFER)) t->sig_blocked |= (1ULL << sig);
+    if (t->sig_flags[sig] & SA_RESETHAND)  t->sig_handler[sig] = SIG_DFL_ADDR;
+
+    *new_sp = sp;
+    args[0] = (uint64_t)bsig;
+    args[1] = (t->sig_flags[sig] & SA_SIGINFO) ? sp + __builtin_offsetof(fb_sigframe_t, si) : (uint64_t)(int64_t)si->code;
+    args[2] = sp + __builtin_offsetof(fb_sigframe_t, uc);
+    args[3] = si->addr;
+    return 0;
+}
+
+static void enter_freebsd_handler(task_t *t, uint64_t sp, const uint64_t args[4]) {
+    t->ret_iret = 1;
+    t->user_rsp = sp;
+    t->user_saved_rip = FB_SIGCODE_VA;
+    t->user_saved_rdi = args[0];
+    t->user_saved_rsi = args[1];
+    t->user_saved_rdx = args[2];
+    t->user_saved_rcx = args[3];
+    t->user_saved_r11 &= ~0x500ULL;
+    t->user_iret_r11  = t->user_saved_r11;
+}
+
+int64_t freebsd_sigreturn(uint64_t ucp) {
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (!syscall_uptr_validate((void *)ucp, sizeof(fb_ucontext_t))) signal_terminate(t, SIGSEGV);
+    fb_ucontext_t uc;
+    memcpy(&uc, (void *)ucp, sizeof uc);
+    const fb_mcontext_t *mc = &uc.mc;
+    if (mc->rip >= USER_TOP || mc->rsp >= USER_TOP) signal_terminate(t, SIGSEGV);
+    if (mc->fpformat == FB_MC_FPFMT_XMM && mc->ownedfp != 0x20000)
+        restore_user_fpu(t, ucp + __builtin_offsetof(fb_ucontext_t, mc) + __builtin_offsetof(fb_mcontext_t, fpstate));
+    t->user_saved_r8  = mc->r8;
+    t->user_saved_r9  = mc->r9;
+    t->user_saved_r10 = mc->r10;
+    t->user_iret_r11  = mc->r11;
+    t->user_saved_r11 = (t->user_saved_r11 & ~0x3C0FFFULL) | (mc->rflags & 0x3C0FFFULL);
+    t->user_saved_r12 = mc->r12;
+    t->user_saved_r13 = mc->r13;
+    t->user_saved_r14 = mc->r14;
+    t->user_saved_r15 = mc->r15;
+    t->user_saved_rdi = mc->rdi;
+    t->user_saved_rsi = mc->rsi;
+    t->user_saved_rbp = mc->rbp;
+    t->user_saved_rbx = mc->rbx;
+    t->user_saved_rdx = mc->rdx;
+    t->user_saved_rcx = mc->rcx;
+    t->user_rsp       = mc->rsp;
+    t->user_saved_rip = mc->rip;
+    t->sig_blocked    = fbsd_sigset_to_linux(uc.sigmask) & ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    t->ret_iret       = 1;
+    return (int64_t)mc->rax;
+}
+
+int64_t freebsd_getcontext(uint64_t ucp) {
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    if (!syscall_uptr_validate_write((void *)ucp, sizeof(fb_ucontext_t))) return -EFAULT;
+    fb_ucontext_t *uc = malloc(sizeof *uc);
+    if (!uc) return -ENOMEM;
+    memset(uc, 0, sizeof *uc);
+    fbsd_sigset_from_linux(t->sig_blocked, uc->sigmask);
+    uc->ss_sp    = t->ss_sp;
+    uc->ss_size  = t->ss_size;
+    uc->ss_flags = t->ss_size ? (on_altstack(t, t->user_rsp) ? SS_ONSTACK_F : 0) : 4;
+    fb_mcontext_t *mc = &uc->mc;
+    mc->rdi = t->user_saved_rdi; mc->rsi = t->user_saved_rsi; mc->rdx = t->user_saved_rdx;
+    mc->rcx = t->user_saved_rip; mc->r8 = t->user_saved_r8; mc->r9 = t->user_saved_r9;
+    mc->rax = 0; mc->rbx = t->user_saved_rbx; mc->rbp = t->user_saved_rbp;
+    mc->r10 = t->user_saved_r10; mc->r11 = t->user_saved_r11; mc->r12 = t->user_saved_r12;
+    mc->r13 = t->user_saved_r13; mc->r14 = t->user_saved_r14; mc->r15 = t->user_saved_r15;
+    mc->rip = t->user_saved_rip;
+    mc->rsp = t->user_rsp;
+    mc->rflags = t->user_saved_r11 & ~1ULL;
+    mc->cs = GDT_USER_CODE_RPL3;
+    mc->ss = GDT_USER_DATA_RPL3;
+    mc->flags = FB_MC_HASSEGS;
+    mc->len = sizeof(fb_mcontext_t);
+    mc->fpformat = FB_MC_FPFMT_XMM;
+    mc->ownedfp = FB_MC_FPOWNED_FPU;
+    uint8_t *fx = malloc(fpu_frame_bytes() + 64);
+    if (fx) {
+        save_user_fpu(t, fx);
+        memcpy(mc->fpstate, fx, 464);
+        free(fx);
+    }
+    int64_t r = syscall_copy_to_user((void *)ucp, uc, sizeof *uc);
+    free(uc);
+    return r;
+}
+
 static int pick_signal(task_t *t) {
     for (;;) {
         uint64_t deliverable = t->sig_pending & ~t->sig_blocked;
@@ -580,6 +783,7 @@ extern bool linux_syscall_restartable(uint64_t nr);
 
 static bool syscall_restartable(task_t *t, uint64_t nr) {
     if (t->abi == TASK_ABI_LINUX) return linux_syscall_restartable(nr);
+    if (t->abi == TASK_ABI_FREEBSD) return fbsd_syscall_restartable(nr);
     switch (nr) {
     case SYS_READ: case SYS_WRITE: case SYS_PREAD: case SYS_PWRITE:
     case SYS_READV: case SYS_WRITEV: case SYS_PREADV: case SYS_PWRITEV:
@@ -663,6 +867,13 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
 
         uint64_t sp, rip;
         uint16_t cs = t->ret_iret == 2 ? GDT_USER_CODE32_RPL3 : GDT_USER_CODE_RPL3;
+        if (t->abi == TASK_ABI_FREEBSD) {
+            uint64_t args[4];
+            if (build_frame_freebsd(t, sig, &si, &r, !t->ret_iret, cs, GDT_USER_DATA_RPL3, &sp, args) < 0)
+                terminate_with_report(t, SIGSEGV, &r);
+            enter_freebsd_handler(t, sp, args);
+            return 0;
+        }
         if (t->abi == TASK_ABI_LINUX) {
             uint64_t args[3];
             if (build_frame_linux(t, sig, &si, &r, cs, GDT_USER_DATA_RPL3, &sp, &rip, args) < 0)
@@ -721,6 +932,22 @@ void signal_irq_return(struct int_frame_t *f) {
 
         regs_from_frame(f, &r);
         uint64_t sp, rip;
+        if (t->abi == TASK_ABI_FREEBSD) {
+            uint64_t args[4];
+            if (build_frame_freebsd(t, sig, &si, &r, false, (uint16_t)f->cs, (uint16_t)f->ss, &sp, args) < 0)
+                terminate_with_report(t, SIGSEGV, &r);
+            __asm__ volatile("cli" ::: "memory");
+            f->rdi = args[0];
+            f->rsi = args[1];
+            f->rdx = args[2];
+            f->rcx = args[3];
+            f->rsp = sp;
+            f->rip = FB_SIGCODE_VA;
+            f->cs  = GDT_USER_CODE_RPL3;
+            f->ss  = GDT_USER_DATA_RPL3;
+            f->rflags &= ~0x500ULL;
+            return;
+        }
         if (t->abi == TASK_ABI_LINUX) {
             uint64_t args[3];
             if (build_frame_linux(t, sig, &si, &r, (uint16_t)f->cs, (uint16_t)f->ss, &sp, &rip, args) < 0)

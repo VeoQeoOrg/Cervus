@@ -289,6 +289,7 @@ typedef struct task {
 
 #define TASK_ABI_CERVUS 0
 #define TASK_ABI_LINUX  1
+#define TASK_ABI_FREEBSD 2
 
 static inline task_t *task_leader(task_t *t) { return t->group_leader ? t->group_leader : t; }
 static inline uint32_t task_tgid(const task_t *t) { return t->tgid ? t->tgid : t->pid; }

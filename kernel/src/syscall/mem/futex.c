@@ -414,3 +414,34 @@ int64_t sys_futex(uint64_t uaddr, uint64_t op, uint64_t val, uint64_t utime,
         return -ENOSYS;
     }
 }
+
+int64_t futex_wait_deadline(uint64_t uaddr, uint32_t expected, uint64_t deadline)
+{
+    return futex_wait_until(uaddr, expected, deadline, UINT32_MAX);
+}
+
+static volatile uint32_t *futex_user_word(uint64_t uaddr, bool write)
+{
+    task_t *me = syscall_cur_task();
+    if (!me || !me->pagemap || (uaddr & 3)) return NULL;
+    volatile uint32_t *w = futex_word(me, uaddr, write, NULL);
+    if (w) return w;
+    bool ok = write ? syscall_uptr_validate_write((const void *)(uintptr_t)uaddr, 4)
+                    : syscall_uptr_validate((const void *)(uintptr_t)uaddr, 4);
+    return ok ? futex_word(me, uaddr, write, NULL) : NULL;
+}
+
+int futex_user_load(uint64_t uaddr, uint32_t *out)
+{
+    volatile uint32_t *w = futex_user_word(uaddr, false);
+    if (!w) return -EFAULT;
+    *out = __atomic_load_n(w, __ATOMIC_ACQUIRE);
+    return 0;
+}
+
+int futex_user_cas(uint64_t uaddr, uint32_t *expected, uint32_t desired)
+{
+    volatile uint32_t *w = futex_user_word(uaddr, true);
+    if (!w) return -EFAULT;
+    return __atomic_compare_exchange_n(w, expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST) ? 1 : 0;
+}

@@ -258,10 +258,10 @@ static uintptr_t cover_orphan_sections(mm_t *mm, const elf64_ehdr_t *ehdr,
     return new_end;
 }
 
-static bool note_has_gnu_abi_tag(const elf_source_t *src, const elf64_phdr_t *ph) {
+static int note_abi_tag(const elf_source_t *src, const elf64_phdr_t *ph) {
     uint8_t buf[512];
     size_t n = ph->p_filesz < sizeof buf ? ph->p_filesz : sizeof buf;
-    if (src_read(src, buf, ph->p_offset, n) < 0) return false;
+    if (src_read(src, buf, ph->p_offset, n) < 0) return 0;
     size_t off = 0;
     while (off + 12 <= n) {
         uint32_t namesz, descsz, type;
@@ -270,10 +270,16 @@ static bool note_has_gnu_abi_tag(const elf_source_t *src, const elf64_phdr_t *ph
         memcpy(&type, buf + off + 8, 4);
         size_t name_at = off + 12;
         if (namesz == 4 && type == 1 && name_at + 4 <= n && memcmp(buf + name_at, "GNU", 4) == 0)
-            return true;
+            return 1;
+        if (namesz == 8 && type == 1 && name_at + 8 <= n && memcmp(buf + name_at, "FreeBSD", 8) == 0)
+            return 2;
         off = name_at + ((namesz + 3) & ~3u) + ((descsz + 3) & ~3u);
     }
-    return false;
+    return 0;
+}
+
+static bool interp_is_freebsd(const char *p) {
+    return strcmp(p, "/libexec/ld-elf.so.1") == 0;
 }
 
 static bool interp_is_linux(const char *p) {
@@ -286,12 +292,13 @@ static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *re
     char full[VFS_MAX_PATH];
     const char *root = path[0] == '/' ? task_fs_root() : NULL;
     size_t rl = root ? strlen(root) : 0, pl = strlen(path);
-    if (result->linux_abi && path[0] == '/') {
-        static const char compat[] = "/compat/linux";
-        if (rl + sizeof compat - 1 + pl + 1 <= sizeof(full)) {
+    if ((result->linux_abi || result->freebsd_abi) && path[0] == '/') {
+        const char *compat = result->freebsd_abi ? "/compat/freebsd" : "/compat/linux";
+        size_t cl = strlen(compat);
+        if (rl + cl + pl + 1 <= sizeof(full)) {
             if (rl) memcpy(full, root, rl);
-            memcpy(full + rl, compat, sizeof compat - 1);
-            memcpy(full + rl + sizeof compat - 1, path, pl + 1);
+            memcpy(full + rl, compat, cl);
+            memcpy(full + rl + cl, path, pl + 1);
             if (vfs_open(full, 0, 0, &f) < 0) f = NULL;
         }
     }
@@ -425,8 +432,11 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
             result.tls_memsz  = ph.p_memsz;
             result.tls_align  = ph.p_align ? ph.p_align : 1;
         }
-        if (ph.p_type == PT_NOTE && !result.linux_abi && note_has_gnu_abi_tag(src, &ph))
-            result.linux_abi = 1;
+        if (ph.p_type == PT_NOTE && !result.linux_abi && !result.freebsd_abi) {
+            int tag = note_abi_tag(src, &ph);
+            if (tag == 1) result.linux_abi = 1;
+            else if (tag == 2) result.freebsd_abi = 1;
+        }
         if (ph.p_type == PT_INTERP && !result.interp_path[0]) {
             size_t n = ph.p_filesz;
             if (n && n < sizeof result.interp_path &&
@@ -447,7 +457,11 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
         }
     }
 
-    if (ehdr->e_ident[EI_OSABI] == 3 || (result.interp_path[0] && interp_is_linux(result.interp_path)))
+    if (ehdr->e_ident[EI_OSABI] == 9 || (result.interp_path[0] && interp_is_freebsd(result.interp_path)))
+        result.freebsd_abi = 1;
+    if (result.freebsd_abi)
+        result.linux_abi = 0;
+    else if (ehdr->e_ident[EI_OSABI] == 3 || (result.interp_path[0] && interp_is_linux(result.interp_path)))
         result.linux_abi = 1;
 
     uintptr_t load_end = page_align_up(max_vaddr);

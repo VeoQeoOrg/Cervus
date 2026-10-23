@@ -183,32 +183,40 @@ size_t syscall_root_prefix(const char *path, const char *root)
     return rl;
 }
 
-#define LINUX_COMPAT_ROOT "/compat/linux"
-
-static void linux_compat_redirect(char *dst, size_t rl, size_t max)
+static void compat_redirect(char *dst, size_t rl, size_t max, const char *croot_path,
+                            const char *const *libdirs, size_t nlib)
 {
     const char *p = dst + rl;
-    size_t cl = sizeof(LINUX_COMPAT_ROOT) - 1;
+    size_t cl = strlen(croot_path);
     if (p[0] != '/' || p[1] == '\0') return;
-    if (strncmp(p, LINUX_COMPAT_ROOT, cl) == 0 && (p[cl] == '/' || p[cl] == '\0')) return;
+    if (strncmp(p, croot_path, cl) == 0 && (p[cl] == '/' || p[cl] == '\0')) return;
     size_t pl = strlen(p);
     if (rl + cl + pl + 1 > max || cl + pl + 1 > VFS_MAX_PATH) return;
     char cand[VFS_MAX_PATH];
     memcpy(cand, dst, rl);
-    memcpy(cand + rl, LINUX_COMPAT_ROOT, cl);
+    memcpy(cand + rl, croot_path, cl);
     memcpy(cand + rl + cl, p, pl + 1);
     vfs_stat_t st;
     if (vfs_lstat(cand, &st) < 0) {
-        static const char *const libdirs[] = { "/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/", "/usr/local/lib/" };
         bool lib = false;
-        for (size_t i = 0; i < sizeof libdirs / sizeof libdirs[0] && !lib; i++)
+        for (size_t i = 0; i < nlib && !lib; i++)
             lib = strncmp(p, libdirs[i], strlen(libdirs[i])) == 0;
         char croot[VFS_MAX_PATH];
         memcpy(croot, dst, rl);
-        memcpy(croot + rl, LINUX_COMPAT_ROOT, cl + 1);
+        memcpy(croot + rl, croot_path, cl + 1);
         if (!lib || vfs_lstat(croot, &st) < 0) return;
     }
     memcpy(dst, cand, rl + cl + pl + 1);
+}
+
+static void abi_compat_redirect(const task_t *t, char *dst, size_t rl, size_t max)
+{
+    static const char *const lx_libdirs[] = { "/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/", "/usr/local/lib/" };
+    static const char *const fb_libdirs[] = { "/lib/", "/usr/lib/", "/libexec/", "/usr/local/lib/" };
+    if (t->abi == TASK_ABI_LINUX)
+        compat_redirect(dst, rl, max, "/compat/linux", lx_libdirs, sizeof lx_libdirs / sizeof lx_libdirs[0]);
+    else if (t->abi == TASK_ABI_FREEBSD)
+        compat_redirect(dst, rl, max, "/compat/freebsd", fb_libdirs, sizeof fb_libdirs / sizeof fb_libdirs[0]);
 }
 
 int syscall_resolve_path(char *dst, const char *path, size_t max)
@@ -246,7 +254,7 @@ int syscall_resolve_path(char *dst, const char *path, size_t max)
     int r = path_require_dirs(dst);
     if (r < 0) return r;
     syscall_path_normalize(dst + rl);
-    if (path[0] == '/' && t && t->abi == TASK_ABI_LINUX) linux_compat_redirect(dst, rl, max);
+    if (path[0] == '/' && t && t->abi != TASK_ABI_CERVUS) abi_compat_redirect(t, dst, rl, max);
     if (rl && dst[rl] == '/' && dst[rl + 1] == '\0') dst[rl] = '\0';
     return 0;
 }
