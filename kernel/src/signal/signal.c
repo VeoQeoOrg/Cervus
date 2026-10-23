@@ -498,6 +498,67 @@ static int build_frame(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r, 
     return 0;
 }
 
+typedef struct {
+    uint64_t     pretcode;
+    k_ucontext_t uc;
+    uint8_t      info[128];
+} lx_sigframe_t;
+
+static int build_frame_linux(task_t *t, int sig, const ksiginfo_t *si, sig_regs_t *r,
+                             uint16_t cs, uint16_t ss, uint64_t *new_sp, uint64_t *new_rip,
+                             uint64_t args[3]) {
+    uint64_t restorer = t->sig_restorer[sig];
+    if (!restorer) return -1;
+
+    uint64_t top = r->rsp;
+    bool use_alt = (t->sig_flags[sig] & SA_ONSTACK) && t->ss_size &&
+                   !(t->ss_flags & SS_DISABLE_F) && !on_altstack(t, r->rsp);
+    if (use_alt) top = t->ss_sp + t->ss_size;
+    else top -= 128;
+    uint64_t fp = (top - fpu_frame_bytes()) & ~63ULL;
+    uint64_t sp = ((fp - sizeof(lx_sigframe_t)) & ~15ULL) - 8;
+    if (sp < 0x1000 || top > USER_TOP) return -1;
+    if (!syscall_uptr_validate_write((void *)sp, top - sp)) return -1;
+
+    uint64_t mask = t->sig_saved_valid ? t->sig_saved_mask : t->sig_blocked;
+    t->sig_saved_valid = 0;
+
+    lx_sigframe_t *f = (lx_sigframe_t *)sp;
+    memset(f, 0, sizeof *f);
+    f->pretcode = restorer;
+
+    k_ucontext_t *kc = &f->uc;
+    kc->uc_flags = fpu_xcr0 ? 1 : 0;
+    kc->ss_sp    = t->ss_sp;
+    kc->ss_size  = t->ss_size;
+    kc->ss_flags = t->ss_size ? (on_altstack(t, r->rsp) ? SS_ONSTACK_F : 0) : SS_DISABLE_F;
+    memcpy(kc->gregs, r, sizeof(*r));
+    uint16_t fsel;
+    __asm__ volatile("mov %%fs, %0" : "=r"(fsel));
+    kc->gregs[18] = (uint64_t)cs | ((uint64_t)fsel << 32) | ((uint64_t)ss << 48);
+    kc->gregs[19] = (uint64_t)(int64_t)si->err;
+    kc->gregs[20] = (uint64_t)(int64_t)si->trapno;
+    kc->gregs[21] = mask;
+    kc->gregs[22] = si->addr;
+    kc->fpregs = fp;
+    kc->sigmask[0] = mask;
+
+    signal_fill_siginfo(f->info, sig, si);
+    save_user_fpu(t, (uint8_t *)fp);
+
+    t->sig_blocked |= t->sig_mask[sig];
+    if (!(t->sig_flags[sig] & SA_NODEFER)) t->sig_blocked |= (1ULL << sig);
+    if (t->sig_flags[sig] & SA_RESETHAND)  t->sig_handler[sig] = SIG_DFL_ADDR;
+
+    *new_sp  = sp;
+    *new_rip = t->sig_handler[sig];
+    args[0] = (uint64_t)sig;
+    args[1] = sp + __builtin_offsetof(lx_sigframe_t, info);
+    args[2] = sp + __builtin_offsetof(lx_sigframe_t, uc);
+    return 0;
+}
+
+
 static int pick_signal(task_t *t) {
     for (;;) {
         uint64_t deliverable = t->sig_pending & ~t->sig_blocked;
@@ -602,6 +663,19 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
 
         uint64_t sp, rip;
         uint16_t cs = t->ret_iret == 2 ? GDT_USER_CODE32_RPL3 : GDT_USER_CODE_RPL3;
+        if (t->abi == TASK_ABI_LINUX) {
+            uint64_t args[3];
+            if (build_frame_linux(t, sig, &si, &r, cs, GDT_USER_DATA_RPL3, &sp, &rip, args) < 0)
+                terminate_with_report(t, SIGSEGV, &r);
+            t->ret_iret = 0;
+            t->user_rsp = sp;
+            t->user_saved_rip = rip;
+            t->user_saved_rdi = args[0];
+            t->user_saved_rsi = args[1];
+            t->user_saved_rdx = args[2];
+            t->user_saved_r11 &= ~0x500ULL;
+            return 0;
+        }
         if (build_frame(t, sig, &si, &r, t->ret_iret != 0, cs, GDT_USER_DATA_RPL3, &sp, &rip) < 0)
             terminate_with_report(t, SIGSEGV, &r);
         t->ret_iret = 0;
@@ -647,6 +721,22 @@ void signal_irq_return(struct int_frame_t *f) {
 
         regs_from_frame(f, &r);
         uint64_t sp, rip;
+        if (t->abi == TASK_ABI_LINUX) {
+            uint64_t args[3];
+            if (build_frame_linux(t, sig, &si, &r, (uint16_t)f->cs, (uint16_t)f->ss, &sp, &rip, args) < 0)
+                terminate_with_report(t, SIGSEGV, &r);
+            __asm__ volatile("cli" ::: "memory");
+            f->rdi = args[0];
+            f->rsi = args[1];
+            f->rdx = args[2];
+            f->rax = 0;
+            f->rsp = sp;
+            f->rip = rip;
+            f->cs  = GDT_USER_CODE_RPL3;
+            f->ss  = GDT_USER_DATA_RPL3;
+            f->rflags &= ~0x500ULL;
+            return;
+        }
         if (build_frame(t, sig, &si, &r, true, (uint16_t)f->cs, (uint16_t)f->ss, &sp, &rip) < 0)
             terminate_with_report(t, SIGSEGV, &r);
         __asm__ volatile("cli" ::: "memory");
@@ -877,6 +967,40 @@ int64_t sys_sigtimedwait(uint64_t set_ptr, uint64_t info_ptr, uint64_t ts_ptr) {
         t->sig_waitset = 0;
         t->wakeup_time_ns = 0;
     }
+}
+
+int64_t linux_rt_sigreturn(void) {
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    uint64_t up = t->user_rsp;
+    if (!syscall_uptr_validate((void *)up, sizeof(k_ucontext_t))) signal_terminate(t, SIGSEGV);
+    k_ucontext_t kc;
+    memcpy(&kc, (void *)up, sizeof(kc));
+    uint64_t *g = kc.gregs;
+    if (g[16] >= USER_TOP || g[15] >= USER_TOP) signal_terminate(t, SIGSEGV);
+
+    if (kc.fpregs) restore_user_fpu(t, kc.fpregs);
+
+    t->user_saved_r8  = g[0];
+    t->user_saved_r9  = g[1];
+    t->user_saved_r10 = g[2];
+    t->user_saved_r11 = g[17];
+    t->user_iret_r11  = g[3];
+    t->user_saved_r12 = g[4];
+    t->user_saved_r13 = g[5];
+    t->user_saved_r14 = g[6];
+    t->user_saved_r15 = g[7];
+    t->user_saved_rdi = g[8];
+    t->user_saved_rsi = g[9];
+    t->user_saved_rbp = g[10];
+    t->user_saved_rbx = g[11];
+    t->user_saved_rdx = g[12];
+    t->user_saved_rcx = g[14];
+    t->user_rsp       = g[15];
+    t->user_saved_rip = g[16];
+    t->sig_blocked    = kc.sigmask[0] & ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
+    t->ret_iret       = (uint16_t)g[18] == GDT_USER_CODE32_RPL3 ? 2 : 1;
+    return (int64_t)g[13];
 }
 
 int64_t sys_rt_sigreturn(void) {

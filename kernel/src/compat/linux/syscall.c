@@ -342,6 +342,9 @@ LX0(lx_geteuid,    sys_getuid())
 LX0(lx_getegid,    sys_getgid())
 LX0(lx_enosys,     -ENOSYS)
 
+extern int64_t linux_rt_sigreturn(void);
+LX0(lx_rt_sigreturn, linux_rt_sigreturn())
+
 static int64_t lx_dup3(A6)
 {
     UNUSED6;
@@ -685,11 +688,38 @@ typedef struct {
 _Static_assert(sizeof(cervus_termios_t) == 48, "Cervus termios is 48 bytes");
 _Static_assert(sizeof(lx_termios_t) == 36, "Linux kernel termios is 36 bytes");
 
+#define LX_TCGETS2  0x802c542a
+#define LX_TCSETS2  0x402c542b
+#define LX_TCSETSW2 0x402c542c
+#define LX_TCSETSF2 0x402c542d
+
+typedef struct {
+    uint32_t c_iflag, c_oflag, c_cflag, c_lflag;
+    uint8_t  c_line;
+    uint8_t  c_cc[19];
+    uint32_t c_ispeed, c_ospeed;
+} lx_termios2_t;
+
+_Static_assert(sizeof(lx_termios2_t) == 44, "Linux termios2 is 44 bytes");
+
+static uint64_t lx_termios_native_req(uint64_t req)
+{
+    switch (req) {
+    case LX_TCGETS: case LX_TCGETS2: return LX_TCGETS;
+    case LX_TCSETS: case LX_TCSETS2: return LX_TCSETS;
+    case LX_TCSETSW: case LX_TCSETSW2: return LX_TCSETSW;
+    case LX_TCSETSF: case LX_TCSETSF2: return LX_TCSETSF;
+    }
+    return 0;
+}
+
 static int64_t lx_ioctl(A6)
 {
     UNUSED6;
-    if (a2 != LX_TCGETS && a2 != LX_TCSETS && a2 != LX_TCSETSW && a2 != LX_TCSETSF)
-        return sys_ioctl(a1, a2, a3);
+    uint64_t native = lx_termios_native_req(a2);
+    if (!native) return sys_ioctl(a1, a2, a3);
+    bool v2 = a2 == LX_TCGETS2 || a2 == LX_TCSETS2 || a2 == LX_TCSETSW2 || a2 == LX_TCSETSF2;
+    size_t usz = v2 ? sizeof(lx_termios2_t) : sizeof(lx_termios_t);
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EBADF;
     vfs_file_t *f = fd_get(t->fd_table, (int)a1);
@@ -698,20 +728,21 @@ static int64_t lx_ioctl(A6)
     memset(&ct, 0, sizeof ct);
     int64_t r = vfs_ioctl(f, LX_TCGETS, &ct);
     if (r >= 0) {
-        lx_termios_t lt;
-        if (a2 == LX_TCGETS) {
-            memset(&lt, 0, sizeof lt);
+        lx_termios2_t lt;
+        memset(&lt, 0, sizeof lt);
+        if (native == LX_TCGETS) {
             lt.c_iflag = ct.c_iflag; lt.c_oflag = ct.c_oflag;
             lt.c_cflag = ct.c_cflag; lt.c_lflag = ct.c_lflag;
             memcpy(lt.c_cc, ct.c_cc, sizeof lt.c_cc);
-            r = syscall_copy_to_user((void *)a3, &lt, sizeof lt);
-        } else if (syscall_copy_from_user(&lt, (const void *)a3, sizeof lt) < 0) {
+            lt.c_ispeed = lt.c_ospeed = 38400;
+            r = syscall_copy_to_user((void *)a3, &lt, usz);
+        } else if (syscall_copy_from_user(&lt, (const void *)a3, usz) < 0) {
             r = -EFAULT;
         } else {
             ct.c_iflag = lt.c_iflag; ct.c_oflag = lt.c_oflag;
             ct.c_cflag = lt.c_cflag; ct.c_lflag = lt.c_lflag;
             memcpy(ct.c_cc, lt.c_cc, sizeof lt.c_cc);
-            r = vfs_ioctl(f, a2, &ct);
+            r = vfs_ioctl(f, native, &ct);
         }
     }
     fd_put(f);
@@ -1036,7 +1067,7 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [0]   = lx_read,        [1]   = lx_write,       [2]   = lx_open,        [3]   = lx_close,
     [4]   = lx_stat,        [5]   = lx_fstat,       [6]   = lx_lstat,       [7]   = lx_poll,
     [8]   = lx_lseek,       [9]   = lx_mmap,        [10]  = lx_mprotect,    [11]  = lx_munmap,
-    [12]  = lx_brk,         [13]  = lx_rt_sigaction, [14] = lx_rt_sigprocmask,
+    [12]  = lx_brk,         [13]  = lx_rt_sigaction, [14] = lx_rt_sigprocmask, [15] = lx_rt_sigreturn,
     [16]  = lx_ioctl,       [17]  = lx_pread64,     [18]  = lx_pwrite64,    [19]  = lx_readv,
     [20]  = lx_writev,      [21]  = lx_access,      [22]  = lx_pipe,        [23]  = lx_select,
     [24]  = lx_sched_yield, [25]  = lx_mremap,      [26]  = lx_msync,       [27]  = lx_mincore,
