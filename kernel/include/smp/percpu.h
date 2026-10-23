@@ -45,6 +45,8 @@ typedef struct {
     uint64_t user_saved_r8;
     uint64_t user_saved_r9;
     int32_t  spin_depth;
+    volatile int32_t idle_poll;
+    volatile int32_t idle_missed;
 } __attribute__((aligned(64))) percpu_t;
 
 _Static_assert(__builtin_offsetof(percpu_t, syscall_kernel_rsp) == 0, "percpu: kernel_rsp");

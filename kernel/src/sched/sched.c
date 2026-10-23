@@ -170,8 +170,17 @@ static void preempt_for(const task_t* t) {
         }
     }
     if (best < 0) return;
-    if (pc->cpu_index == (uint32_t)best) pc->need_resched = true;
-    else ipi_reschedule_cpu(smp_get_lapic_id_for_cpu((uint32_t)best));
+    if (pc->cpu_index == (uint32_t)best) {
+        pc->need_resched = true;
+        return;
+    }
+    percpu_t *tp = percpu_regions[best];
+    if (tp) {
+        __atomic_store_n(&tp->need_resched, true, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&tp->idle_poll, __ATOMIC_SEQ_CST)) return;
+        if (best_prio < 0) __atomic_store_n(&tp->idle_missed, 1, __ATOMIC_RELAXED);
+    }
+    ipi_reschedule_cpu(smp_get_lapic_id_for_cpu((uint32_t)best));
 }
 
 static void enqueue_global(task_t* t) {
@@ -1592,12 +1601,38 @@ void sched_wakeup_sleepers(uint64_t now_ns) {
     }
 }
 
+#define IDLE_POLL_MAX_NS  200000ULL
+#define IDLE_POLL_MIN_NS  10000ULL
+
+static uint64_t idle_poll_grow(uint64_t w) {
+    if (!w) return IDLE_POLL_MIN_NS;
+    return w * 2 > IDLE_POLL_MAX_NS ? IDLE_POLL_MAX_NS : w * 2;
+}
+
 static void idle_loop(void* arg) {
     (void)arg;
     uint32_t cpu = smp_cpu_index();
     serial_printf("[IDLE] CPU %u entering idle loop\n", cpu);
+    uint64_t window = 0;
     while (1) {
         process_deferred_free();
+        percpu_t *pc = get_percpu();
+        if (window) {
+            uint64_t end = sched_now_ns() + window;
+            __atomic_store_n(&pc->idle_poll, 1, __ATOMIC_SEQ_CST);
+            while (!__atomic_load_n(&pc->need_resched, __ATOMIC_SEQ_CST) && sched_now_ns() < end)
+                asm volatile("pause");
+        }
+        asm volatile("cli");
+        __atomic_store_n(&pc->idle_poll, 0, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&pc->need_resched, __ATOMIC_SEQ_CST)) {
+            pc->need_resched = false;
+            if (window) window = idle_poll_grow(window);
+            sched_reschedule();
+            continue;
+        }
         asm volatile("sti; hlt");
+        if (__atomic_exchange_n(&pc->idle_missed, 0, __ATOMIC_RELAXED)) window = idle_poll_grow(window);
+        else window = window / 2 < IDLE_POLL_MIN_NS ? 0 : window / 2;
     }
 }
