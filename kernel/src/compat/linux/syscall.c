@@ -102,7 +102,7 @@ extern int64_t sys_symlinkat(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_readlinkat(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fchmodat(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_fchownat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-extern int64_t sys_utimensat(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t kern_utimens(int64_t dirfd, uint64_t upath, int64_t at, int64_t mt);
 extern int64_t sys_fchdir(uint64_t);
 extern int64_t sys_kill(uint64_t, uint64_t);
 extern int64_t sys_tkill(uint64_t, uint64_t);
@@ -333,7 +333,6 @@ LX0(lx_symlinkat,  sys_symlinkat(a1, a2, a3))
 LX0(lx_readlinkat, sys_readlinkat(a1, a2, a3, a4))
 LX0(lx_fchmodat,   sys_fchmodat(a1, a2, a3, a4))
 LX0(lx_ppoll,      sys_ppoll(a1, a2, a3, a4, a5))
-LX0(lx_utimensat,  sys_utimensat(a1, a2, a3, a4, a5))
 LX0(lx_signalfd4,  sys_signalfd(a1, a2, a4))
 LX0(lx_timerfd_create, sys_timerfd_create(a1, a2, 0))
 LX0(lx_eventfd2,   sys_eventfd(a1, a2, 0))
@@ -767,6 +766,54 @@ static int64_t lx_epoll_wait(A6)
     UNUSED6;
     return epoll_wait_args(a1, a2, (int)a3, (int)a4);
 }
+
+static int64_t lx_utime_pick(const int64_t ts[2])
+{
+    if (ts[1] == (1L << 30) - 1) return -1;
+    if (ts[1] == (1L << 30) - 2) return -2;
+    return ts[0] < 0 ? 0 : ts[0];
+}
+
+static int64_t lx_utimensat(A6)
+{
+    UNUSED6;
+    int64_t at = -1, mt = -1;
+    if (a3) {
+        int64_t ts[4];
+        if (syscall_copy_from_user(ts, (const void *)a3, sizeof ts) < 0) return -EFAULT;
+        at = lx_utime_pick(ts);
+        mt = lx_utime_pick(ts + 2);
+    }
+    return kern_utimens((int64_t)(int32_t)a1, a2, at, mt);
+}
+
+static int64_t lx_utimes_tv(int64_t dirfd, uint64_t path, uint64_t tv)
+{
+    int64_t at = -1, mt = -1;
+    if (tv) {
+        int64_t v[4];
+        if (syscall_copy_from_user(v, (const void *)tv, sizeof v) < 0) return -EFAULT;
+        at = v[0] < 0 ? 0 : v[0];
+        mt = v[2] < 0 ? 0 : v[2];
+    }
+    return kern_utimens(dirfd, path, at, mt);
+}
+
+static int64_t lx_utime(A6)
+{
+    UNUSED6;
+    int64_t at = -1, mt = -1;
+    if (a2) {
+        int64_t b[2];
+        if (syscall_copy_from_user(b, (const void *)a2, sizeof b) < 0) return -EFAULT;
+        at = b[0] < 0 ? 0 : b[0];
+        mt = b[1] < 0 ? 0 : b[1];
+    }
+    return kern_utimens(LX_AT_FDCWD, a1, at, mt);
+}
+
+static int64_t lx_utimes(A6)     { UNUSED6; return lx_utimes_tv(LX_AT_FDCWD, a1, a2); }
+static int64_t lx_futimesat(A6)  { UNUSED6; return lx_utimes_tv((int64_t)(int32_t)a1, a2, a3); }
 
 static int64_t lx_rt_sigqueueinfo(A6)
 {
@@ -1302,6 +1349,7 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [262] = lx_newfstatat,  [263] = lx_unlinkat,    [264] = lx_renameat,    [265] = lx_linkat,
     [266] = lx_symlinkat,   [267] = lx_readlinkat,  [268] = lx_fchmodat,    [269] = lx_faccessat,
     [270] = lx_pselect6,    [271] = lx_ppoll,       [273] = lx_set_robust_list,
+    [132] = lx_utime,       [235] = lx_utimes,      [261] = lx_futimesat,
     [280] = lx_utimensat,   [281] = lx_epoll_pwait, [283] = lx_timerfd_create, [284] = lx_eventfd,
     [286] = lx_timerfd_settime, [287] = lx_timerfd_gettime, [288] = lx_accept4,
     [289] = lx_signalfd4,   [290] = lx_eventfd2,    [291] = lx_epoll_create1, [292] = lx_dup3,
