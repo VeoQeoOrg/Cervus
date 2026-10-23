@@ -9,6 +9,7 @@
 #include "../../include/net/socket.h"
 #include "../../include/net/tcp.h"
 #include "../../include/net/arp.h"
+#include "../../include/net/netdev.h"
 #include "../../include/fs/procfs.h"
 #include "../../include/memory/pmm.h"
 #include "../../include/smp/smp.h"
@@ -44,14 +45,111 @@ static int gen_meminfo(char *buf, size_t max) {
         (unsigned long long)(used / 1024));
 }
 
+static void cpuid_regs(uint32_t leaf, uint32_t sub, uint32_t r[4]) {
+    asm volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(sub));
+}
+
+typedef struct { uint8_t reg, bit; const char *name; } cpu_flag_t;
+
+static const cpu_flag_t g_flags1[] = {
+    {3,0,"fpu"},{3,1,"vme"},{3,2,"de"},{3,3,"pse"},{3,4,"tsc"},{3,5,"msr"},{3,6,"pae"},{3,7,"mce"},
+    {3,8,"cx8"},{3,9,"apic"},{3,11,"sep"},{3,12,"mtrr"},{3,13,"pge"},{3,14,"mca"},{3,15,"cmov"},
+    {3,16,"pat"},{3,17,"pse36"},{3,19,"clflush"},{3,23,"mmx"},{3,24,"fxsr"},{3,25,"sse"},{3,26,"sse2"},
+    {3,28,"ht"},{2,0,"pni"},{2,1,"pclmulqdq"},{2,9,"ssse3"},{2,12,"fma"},{2,13,"cx16"},{2,19,"sse4_1"},
+    {2,20,"sse4_2"},{2,22,"movbe"},{2,23,"popcnt"},{2,25,"aes"},{2,26,"xsave"},{2,28,"avx"},
+    {2,29,"f16c"},{2,30,"rdrand"},{2,31,"hypervisor"},
+};
+static const cpu_flag_t g_flags7[] = {
+    {1,0,"fsgsbase"},{1,3,"bmi1"},{1,5,"avx2"},{1,8,"bmi2"},{1,9,"erms"},{1,18,"rdseed"},{1,19,"adx"},
+    {1,29,"sha_ni"},{1,16,"avx512f"},
+};
+static const cpu_flag_t g_flagsx[] = {
+    {3,11,"syscall"},{3,20,"nx"},{3,27,"rdtscp"},{3,29,"lm"},{2,0,"lahf_lm"},{2,5,"abm"},
+};
+
 static int gen_cpuinfo(char *buf, size_t max) {
     uint32_t total  = smp_get_cpu_count();
     uint32_t online = smp_get_online_count();
-    return snprintf(buf, max,
+    int off = snprintf(buf, max,
         "cpus:       %u\n"
         "online:     %u\n"
-        "arch:       x86_64\n",
+        "arch:       x86_64\n\n",
         total, online);
+    uint32_t r[4], r7[4] = {0}, rx[4] = {0}, l0[4];
+    char vendor[13], brand[49];
+    cpuid_regs(0, 0, l0);
+    memcpy(vendor, &l0[1], 4); memcpy(vendor + 4, &l0[3], 4); memcpy(vendor + 8, &l0[2], 4);
+    vendor[12] = 0;
+    cpuid_regs(1, 0, r);
+    if (l0[0] >= 7) cpuid_regs(7, 0, r7);
+    uint32_t ext[4];
+    cpuid_regs(0x80000000u, 0, ext);
+    if (ext[0] >= 0x80000001u) cpuid_regs(0x80000001u, 0, rx);
+    memset(brand, 0, sizeof brand);
+    if (ext[0] >= 0x80000004u)
+        for (uint32_t i = 0; i < 3; i++) cpuid_regs(0x80000002u + i, 0, (uint32_t *)(brand + 16 * i));
+    const char *b = brand;
+    while (*b == ' ') b++;
+    uint32_t family = (r[0] >> 8) & 0xF, model = (r[0] >> 4) & 0xF, stepping = r[0] & 0xF;
+    if (family == 0xF) family += (r[0] >> 20) & 0xFF;
+    if (family >= 6) model |= ((r[0] >> 16) & 0xF) << 4;
+    char flags[640];
+    size_t fl = 0;
+    flags[0] = 0;
+    for (size_t i = 0; i < sizeof g_flags1 / sizeof g_flags1[0]; i++)
+        if (r[g_flags1[i].reg] & (1u << g_flags1[i].bit))
+            fl += (size_t)snprintf(flags + fl, sizeof flags - fl, "%s ", g_flags1[i].name);
+    for (size_t i = 0; i < sizeof g_flagsx / sizeof g_flagsx[0]; i++)
+        if (rx[g_flagsx[i].reg] & (1u << g_flagsx[i].bit))
+            fl += (size_t)snprintf(flags + fl, sizeof flags - fl, "%s ", g_flagsx[i].name);
+    for (size_t i = 0; i < sizeof g_flags7 / sizeof g_flags7[0]; i++)
+        if (r7[g_flags7[i].reg] & (1u << g_flags7[i].bit))
+            fl += (size_t)snprintf(flags + fl, sizeof flags - fl, "%s ", g_flags7[i].name);
+    if (fl) flags[fl - 1] = 0;
+    uint64_t mhz = g_tsc_khz / 1000;
+    for (uint32_t c = 0; c < online && off >= 0 && (size_t)off < max; c++) {
+        off += snprintf(buf + off, max - (size_t)off,
+            "processor\t: %u\nvendor_id\t: %s\ncpu family\t: %u\nmodel\t\t: %u\n"
+            "model name\t: %s\nstepping\t: %u\ncpu MHz\t\t: %llu.000\ncache size\t: 512 KB\n"
+            "physical id\t: 0\nsiblings\t: %u\ncore id\t\t: %u\ncpu cores\t: %u\napicid\t\t: %u\n"
+            "fpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: %u\nwp\t\t: yes\nflags\t\t: %s\n"
+            "bogomips\t: %llu.00\nclflush size\t: 64\ncache_alignment\t: 64\n"
+            "address sizes\t: 48 bits physical, 48 bits virtual\npower management:\n\n",
+            c, vendor, family, model, *b ? b : "x86_64 CPU", stepping, (unsigned long long)mhz,
+            online, c, online, c, l0[0], flags, (unsigned long long)(mhz * 2));
+    }
+    return off;
+}
+
+extern int64_t clock_realtime_offset_ns(void);
+
+static int gen_stat(char *buf, size_t max) {
+    uint32_t ncpu = smp_get_online_count();
+    if (!ncpu) ncpu = 1;
+    uint64_t up_t = sched_now_ns() / 10000000ULL;
+    uint32_t pids[256];
+    int n = task_collect_pids(pids, 256);
+    uint64_t busy = 0;
+    int running = 0;
+    for (int i = 0; i < n; i++) {
+        task_t *t = task_find_by_pid(pids[i]);
+        if (!t) continue;
+        busy += t->total_runtime / 10000000ULL;
+        if (t->state == TASK_RUNNING || t->state == TASK_READY) running++;
+    }
+    uint64_t all = up_t * ncpu;
+    uint64_t idle = all > busy ? all - busy : 0;
+    int off = snprintf(buf, max, "cpu  %llu 0 0 %llu 0 0 0 0 0 0\n",
+                       (unsigned long long)busy, (unsigned long long)idle);
+    for (uint32_t c = 0; c < ncpu && off >= 0 && (size_t)off < max; c++)
+        off += snprintf(buf + off, max - (size_t)off, "cpu%u %llu 0 0 %llu 0 0 0 0 0 0\n", c,
+                        (unsigned long long)(busy / ncpu), (unsigned long long)(idle / ncpu));
+    int64_t boot = clock_realtime_offset_ns() / 1000000000LL;
+    if (off >= 0 && (size_t)off < max)
+        off += snprintf(buf + off, max - (size_t)off,
+                        "intr 0\nctxt 0\nbtime %lld\nprocesses %d\nprocs_running %d\nprocs_blocked 0\n",
+                        (long long)boot, n, running ? running : 1);
+    return off;
 }
 
 static int gen_uptime(char *buf, size_t max) {
@@ -153,6 +251,7 @@ static proc_file_t g_proc_files[] = {
     { "mounts",      gen_mounts,      {0} },
     { "timedrift",   gen_timedrift,   {0} },
     { "clocksource", gen_clocksource, {0} },
+    { "stat",        gen_stat,        {0} },
 };
 #define PROC_NFILES (sizeof(g_proc_files) / sizeof(g_proc_files[0]))
 
@@ -175,6 +274,20 @@ static int gen_net_dev(char *buf, size_t max)   { return netdev_proc_dev(buf, ma
 static int gen_net_route(char *buf, size_t max) { return netdev_proc_route(buf, max); }
 static int gen_net_arp(char *buf, size_t max)   { return arp_proc_list(buf, max); }
 
+static int gen_net_resolv(char *buf, size_t max) {
+    int off = 0;
+    for (int i = 0; ; i++) {
+        netdev_t *d = netdev_at(i);
+        if (!d) break;
+        if (!d->dns) continue;
+        uint32_t a = d->dns;
+        off += snprintf(buf + off, max - (size_t)off, "nameserver %u.%u.%u.%u\n",
+                        (a >> 24) & 255, (a >> 16) & 255, (a >> 8) & 255, a & 255);
+        if ((size_t)off >= max) break;
+    }
+    return off;
+}
+
 static proc_file_t g_proc_net_files[] = {
     { "tcp",  gen_net_tcp,  {0} },
     { "tcp6", gen_net_tcp6, {0} },
@@ -185,6 +298,7 @@ static proc_file_t g_proc_net_files[] = {
     { "dev",     gen_net_dev,     {0} },
     { "route",   gen_net_route,   {0} },
     { "arp",     gen_net_arp,     {0} },
+    { "resolv.conf", gen_net_resolv, {0} },
 };
 #define PROC_NET_NFILES (sizeof(g_proc_net_files) / sizeof(g_proc_net_files[0]))
 
@@ -306,6 +420,51 @@ static int read_user_range(task_t *t, uintptr_t start, uintptr_t end, char *buf,
     int n = mm_access_remote(m, start, buf, len, 0);
     mm_put(m);
     return n < 0 ? 0 : n;
+}
+
+static int gen_pid_mountinfo(uint32_t pid, char *buf, size_t max) {
+    (void)pid;
+    vfs_mount_info_t mi[VFS_MAX_MOUNTS];
+    int n = vfs_list_mounts(mi, VFS_MAX_MOUNTS);
+    int off = 0;
+    for (int i = 0; i < n && (size_t)off < max; i++) {
+        const char *dev = mi[i].device[0] ? mi[i].device : "none";
+        int id = 20 + i;
+        int parent = strcmp(mi[i].path, "/") == 0 ? id : 20;
+        off += snprintf(buf + off, max - (size_t)off, "%d %d 0:%d / %s rw,relatime - %s %s rw\n",
+                        id, parent, i + 1, mi[i].path, mi[i].fstype, dev);
+    }
+    return off;
+}
+
+static int gen_pid_cgroup(uint32_t pid, char *buf, size_t max) {
+    (void)pid;
+    return snprintf(buf, max, "0::/\n");
+}
+
+static int gen_pid_limits(uint32_t pid, char *buf, size_t max) {
+    static const char *const names[RLIMIT_COUNT] = {
+        "Max cpu time", "Max file size", "Max data size", "Max stack size", "Max core file size",
+        "Max resident set", "Max processes", "Max open files", "Max locked memory", "Max address space",
+        "Max file locks", "Max pending signals", "Max msgqueue size", "Max nice priority",
+        "Max realtime priority", "Max realtime timeout",
+    };
+    static const char *const units[RLIMIT_COUNT] = {
+        "seconds", "bytes", "bytes", "bytes", "bytes", "bytes", "processes", "files", "bytes", "bytes",
+        "locks", "signals", "bytes", "", "", "us",
+    };
+    task_t *t = task_find_by_pid(pid);
+    if (!t) return -1;
+    int off = snprintf(buf, max, "%-25s %-20s %-20s %-10s\n", "Limit", "Soft Limit", "Hard Limit", "Units");
+    for (int i = 0; i < RLIMIT_COUNT && (size_t)off < max; i++) {
+        char sv[24], hv[24];
+        if (t->rlim[i].cur == RLIM_INF_K) strcpy(sv, "unlimited");
+        else snprintf(sv, sizeof sv, "%llu", (unsigned long long)t->rlim[i].cur);
+        if (t->rlim[i].max == RLIM_INF_K) strcpy(hv, "unlimited");
+        else snprintf(hv, sizeof hv, "%llu", (unsigned long long)t->rlim[i].max);
+        off += snprintf(buf + off, max - (size_t)off, "%-25s %-20s %-20s %-10s\n", names[i], sv, hv, units[i]);
+    }
+    return off;
 }
 
 static int gen_pid_comm(uint32_t pid, char *buf, size_t max) {
@@ -480,6 +639,9 @@ static const proc_pid_file_t g_pid_files[] = {
     { "environ", gen_pid_environ },
     { "auxv",    gen_pid_auxv    },
     { "comm",    gen_pid_comm    },
+    { "mountinfo", gen_pid_mountinfo },
+    { "cgroup",  gen_pid_cgroup  },
+    { "limits",  gen_pid_limits  },
 };
 #define PROC_PID_NFILES (sizeof(g_pid_files) / sizeof(g_pid_files[0]))
 

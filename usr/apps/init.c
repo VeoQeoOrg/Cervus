@@ -393,6 +393,8 @@ static void make_runtime_dirs(void) {
         mkdir(shared[i], 01777);
         chmod(shared[i], 01777);
     }
+    struct stat rs;
+    if (lstat("/etc/resolv.conf", &rs) != 0) symlink("/proc/net/resolv.conf", "/etc/resolv.conf");
     umask(old);
 }
 
