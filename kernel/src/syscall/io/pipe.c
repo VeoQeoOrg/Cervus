@@ -238,12 +238,24 @@ static int pipe_poll_op(vnode_t *n, int events) {
     return r;
 }
 
+static int64_t pipe_ioctl_op(vnode_t *n, uint64_t req, void *arg)
+{
+    if (req != 0x541B) return -ENOTTY;
+    if (!arg) return -EFAULT;
+    pipe_shared_t *ps = ((pipe_vdata_t *)n->fs_data)->shared;
+    uint64_t f = spinlock_acquire_irqsave(&ps->lock);
+    *(int *)arg = (int)ps->used;
+    spinlock_release_irqrestore(&ps->lock, f);
+    return 0;
+}
+
 static const vnode_ops_t pipe_read_ops = {
     .read   = pipe_read_op,
     .stat   = pipe_stat_op,
     .ref    = pipe_ref_op,
     .unref  = pipe_unref_op,
     .poll   = pipe_poll_op,
+    .ioctl  = pipe_ioctl_op,
 };
 static const vnode_ops_t pipe_write_ops = {
     .write  = pipe_write_op,
@@ -251,6 +263,7 @@ static const vnode_ops_t pipe_write_ops = {
     .ref    = pipe_ref_op,
     .unref  = pipe_unref_op,
     .poll   = pipe_poll_op,
+    .ioctl  = pipe_ioctl_op,
 };
 static const vnode_ops_t pipe_rdwr_ops = {
     .read   = pipe_read_op,
@@ -259,6 +272,7 @@ static const vnode_ops_t pipe_rdwr_ops = {
     .ref    = pipe_ref_op,
     .unref  = pipe_unref_op,
     .poll   = pipe_poll_op,
+    .ioctl  = pipe_ioctl_op,
 };
 
 static pipe_shared_t *fifo_get(uintptr_t fs, uint64_t id)
