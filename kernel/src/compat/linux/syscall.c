@@ -146,7 +146,7 @@ extern int64_t sys_select(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_ppoll(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_pselect(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_epoll_create(uint64_t, uint64_t, uint64_t);
-extern int64_t sys_epoll_ctl(uint64_t, uint64_t, uint64_t);
+extern int64_t epoll_ctl_args(uint64_t, uint64_t, int, uint64_t);
 extern int64_t sys_epoll_wait(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_eventfd(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_timerfd_create(uint64_t, uint64_t, uint64_t);
@@ -229,7 +229,7 @@ LX0(lx_bind,       sys_bind(a1, a2, a3))
 LX0(lx_listen,     sys_listen(a1, a2))
 LX0(lx_getsockname, sys_getsockname(a1, a2, a3))
 LX0(lx_getpeername, sys_getpeername(a1, a2, a3))
-LX0(lx_socketpair, sys_socketpair(a1, a2, a3))
+LX0(lx_socketpair, sys_socketpair(a1, a2, a4))
 static int64_t lx_setsockopt(A6)
 {
     UNUSED6;
@@ -293,7 +293,6 @@ LX0(lx_getpgid,    sys_getpgid(a1))
 LX0(lx_getsid,     sys_getsid(a1))
 LX0(lx_rt_sigpending, sys_rt_sigpending(a1, a2))
 LX0(lx_rt_sigtimedwait, sys_sigtimedwait(a1, a2, a3))
-LX0(lx_rt_sigqueueinfo, sys_sigqueue(a1, a2, a3))
 LX0(lx_rt_sigsuspend, sys_rt_sigsuspend(a1, a2))
 LX0(lx_sigaltstack, sys_sigaltstack(a1, a2))
 LX0(lx_personality, sys_personality(a1))
@@ -319,7 +318,7 @@ LX0(lx_timer_getoverrun, sys_timer_getoverrun(a1))
 LX0(lx_timer_delete, sys_timer_delete(a1))
 LX0(lx_clock_gettime, sys_clock_get(a1, a2))
 LX0(lx_exit_group, sys_exit_group(a1))
-LX0(lx_epoll_ctl,  sys_epoll_ctl(a1, a2, a3))
+LX0(lx_epoll_ctl,  epoll_ctl_args(a1, a2, (int)a3, a4))
 LX0(lx_tgkill,     sys_tgkill(a1, a2, a3))
 LX0(lx_waitid,     sys_waitid(a1, a2, a3, a4))
 LX0(lx_openat,     sys_openat(a1, a2, a3, a4))
@@ -332,7 +331,6 @@ LX0(lx_linkat,     sys_linkat(a1, a2, a3, a4, a5))
 LX0(lx_symlinkat,  sys_symlinkat(a1, a2, a3))
 LX0(lx_readlinkat, sys_readlinkat(a1, a2, a3, a4))
 LX0(lx_fchmodat,   sys_fchmodat(a1, a2, a3, a4))
-LX0(lx_pselect6,   sys_pselect(a1, a2, a3, a4, a5, a6))
 LX0(lx_ppoll,      sys_ppoll(a1, a2, a3, a4, a5))
 LX0(lx_utimensat,  sys_utimensat(a1, a2, a3, a4, a5))
 LX0(lx_signalfd4,  sys_signalfd(a1, a2, a4))
@@ -767,6 +765,28 @@ static int64_t lx_epoll_wait(A6)
 {
     UNUSED6;
     return epoll_wait_args(a1, a2, (int)a3, (int)a4);
+}
+
+static int64_t lx_rt_sigqueueinfo(A6)
+{
+    UNUSED6;
+    uint8_t info[32];
+    if (syscall_copy_from_user(info, (const void *)a3, sizeof info) < 0) return -EFAULT;
+    uint64_t value;
+    memcpy(&value, info + 24, sizeof value);
+    return sys_sigqueue(a1, a2, value);
+}
+
+static int64_t lx_pselect6(A6)
+{
+    UNUSED6;
+    uint64_t mask = 0;
+    if (a6) {
+        struct { uint64_t ss; uint64_t len; } d;
+        if (syscall_copy_from_user(&d, (const void *)a6, sizeof d) < 0) return -EFAULT;
+        mask = d.ss;
+    }
+    return sys_pselect(a1, a2, a3, a4, a5, mask);
 }
 
 static int64_t lx_epoll_pwait(A6)

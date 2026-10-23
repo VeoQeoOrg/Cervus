@@ -359,14 +359,12 @@ static int ep_grow(epoll_set_t *ep)
     return 0;
 }
 
-int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
+int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
 {
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
-    struct { int fd; uint64_t evptr; } args;
-    if (syscall_copy_from_user(&args, (void *)fd_and_event, sizeof args) < 0)
-        return -EFAULT;
+    struct { int fd; uint64_t evptr; } args = { fd, evptr };
 
     epoll_event_t ev = { 0, 0 };
     if (op != EPOLL_CTL_DEL) {
@@ -436,6 +434,14 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
     fd_put(epf);
     fd_put(target);
     return rc;
+}
+
+int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
+{
+    struct { int fd; uint64_t evptr; } args;
+    if (syscall_copy_from_user(&args, (void *)fd_and_event, sizeof args) < 0)
+        return -EFAULT;
+    return epoll_ctl_args(epfd, op, args.fd, args.evptr);
 }
 
 static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, int maxevents, int timeout_ms)
