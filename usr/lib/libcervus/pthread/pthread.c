@@ -414,6 +414,11 @@ int __cervus_tid(void)
     return pthread_self()->tid;
 }
 
+void __cervus_thread_forked(void)
+{
+    pthread_self()->tid = (int)gettid();
+}
+
 struct __cervus_FILE **__cervus_stdio_locks(void)
 {
     return &pthread_self()->stdio_locks;
@@ -731,6 +736,12 @@ static void cond_clock_set(pthread_cond_t *c, int clock)
         g_cond_clock[free_slot].clock = clock;
     }
     futex_unlock(&g_cond_clock_lock);
+}
+
+void __cervus_pthread_atfork(int phase)
+{
+    if (phase < 0) futex_lock(&g_cond_clock_lock);
+    else futex_unlock(&g_cond_clock_lock);
 }
 
 static int cond_clock_get(pthread_cond_t *c)

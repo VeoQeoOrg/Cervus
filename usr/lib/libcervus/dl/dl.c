@@ -33,6 +33,12 @@ void __cervus_dl_unlock(void)
     __cervus_unlock(&g_dl_lock);
 }
 
+void __cervus_dl_atfork(int phase)
+{
+    if (phase < 0) __cervus_dl_lock();
+    else __cervus_dl_unlock();
+}
+
 void *dlopen(const char *file, int mode)
 {
     if (!__cervus_dl_ops) {

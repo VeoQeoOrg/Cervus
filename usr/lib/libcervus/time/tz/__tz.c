@@ -385,6 +385,12 @@ dst:
 	UNLOCK(lock);
 }
 
+void __cervus_tz_atfork(int phase)
+{
+	if (phase < 0) LOCK(lock);
+	else UNLOCK(lock);
+}
+
 static void __tzset()
 {
 	LOCK(lock);

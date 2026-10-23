@@ -126,6 +126,12 @@ static struct {
 } g_sems[SEM_REG_MAX];
 static pthread_mutex_t g_sem_lock = PTHREAD_MUTEX_INITIALIZER;
 
+void __cervus_sem_atfork(int phase)
+{
+    if (phase < 0) pthread_mutex_lock(&g_sem_lock);
+    else pthread_mutex_unlock(&g_sem_lock);
+}
+
 static int sem_path(const char *name, char *out, size_t cap)
 {
     while (*name == '/') name++;

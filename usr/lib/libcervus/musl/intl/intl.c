@@ -41,6 +41,12 @@ static struct msgcat *volatile cats;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static char *current_domain;
 
+void __cervus_intl_atfork(int phase)
+{
+	if (phase < 0) pthread_mutex_lock(&lock);
+	else pthread_mutex_unlock(&lock);
+}
+
 static const char *const catnames[] = {
 	[LC_CTYPE] = "LC_CTYPE",
 	[LC_NUMERIC] = "LC_NUMERIC",

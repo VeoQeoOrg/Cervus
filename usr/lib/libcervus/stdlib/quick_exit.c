@@ -20,6 +20,12 @@ int at_quick_exit(void (*fn)(void))
     return r;
 }
 
+void __cervus_quick_exit_atfork(int phase)
+{
+    if (phase < 0) __cervus_lock(&g_lock);
+    else __cervus_unlock(&g_lock);
+}
+
 void quick_exit(int status)
 {
     __cervus_lock(&g_lock);

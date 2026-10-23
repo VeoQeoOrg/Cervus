@@ -36,6 +36,12 @@ static __cervus_tls_mod_t    g_exec_mod[2];
 static __cervus_tls_layout_t g_exec_layout = { 0, 0, 16, 0, 1, g_exec_mod };
 static const __cervus_tls_layout_t *g_layout;
 static __cervus_lock_t g_tls_lock = CERVUS_LOCK_INIT;
+
+void __cervus_tls_atfork(int phase)
+{
+    if (phase < 0) __cervus_lock(&g_tls_lock);
+    else __cervus_unlock(&g_tls_lock);
+}
 static void          **g_threads;
 static uintptr_t       g_guard, g_pguard;
 

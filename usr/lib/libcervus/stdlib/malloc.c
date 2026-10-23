@@ -5,6 +5,12 @@
 
 __cervus_lock_t __cervus_heap_lock = CERVUS_LOCK_INIT;
 
+void __cervus_heap_atfork(int phase)
+{
+    if (phase < 0) __cervus_lock(&__cervus_heap_lock);
+    else __cervus_unlock(&__cervus_heap_lock);
+}
+
 void *malloc(size_t n)
 {
     if (n == 0) n = 1;

@@ -12,6 +12,12 @@ typedef struct {
 static key_slot_t g_keys[PTHREAD_KEYS_MAX];
 static pthread_mutex_t g_key_lock = PTHREAD_MUTEX_INITIALIZER;
 
+void __cervus_key_atfork(int phase)
+{
+    if (phase < 0) pthread_mutex_lock(&g_key_lock);
+    else pthread_mutex_unlock(&g_key_lock);
+}
+
 static void **key_values(int create)
 {
     void **tcb = __cervus_tcb();

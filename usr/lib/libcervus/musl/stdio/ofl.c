@@ -20,6 +20,31 @@ void __ofl_unlock()
 	__cervus_unlock(&ofl_lock);
 }
 
+static int fork_tid;
+
+static void fork_reset_lock(FILE *f, int tid)
+{
+	if (!f || f->lock <= 0) return;
+	f->lock = (f->lock & ~MAYBE_WAITERS) == fork_tid ? tid : 0;
+}
+
+void __cervus_stdio_atfork(int phase)
+{
+	if (phase < 0) {
+		fork_tid = __cervus_tid();
+		__cervus_lock(&ofl_lock);
+		return;
+	}
+	if (phase > 0) {
+		int tid = __cervus_tid();
+		fork_reset_lock(__stdin_used, tid);
+		fork_reset_lock(__stdout_used, tid);
+		fork_reset_lock(__stderr_used, tid);
+		for (FILE *f = ofl_head; f; f = f->next) fork_reset_lock(f, tid);
+	}
+	__cervus_unlock(&ofl_lock);
+}
+
 static void init_file_lock(FILE *f)
 {
 	if (f && f->lock<0) f->lock = 0;
