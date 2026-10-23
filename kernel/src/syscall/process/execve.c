@@ -373,6 +373,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     asm volatile("mov %0, %%fs" :: "r"(0u));
     asm volatile("wrmsr" :: "c"(0xC0000100u), "a"(0), "d"(0));
     asm volatile("wrmsr" :: "c"(0xC0000102u), "a"(0), "d"(0));
+    t->abi        = elf.linux_abi ? TASK_ABI_LINUX : TASK_ABI_CERVUS;
     t->tls_vaddr  = elf.tls_vaddr;
     t->tls_filesz = elf.tls_filesz;
     t->tls_memsz  = elf.tls_memsz;

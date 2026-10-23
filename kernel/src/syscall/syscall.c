@@ -655,6 +655,31 @@ __attribute__((noreturn)) void sysret_bad_rsp_panic(uint64_t bad_rsp, uint64_t u
     kernel_panic("SYSRET: non-canonical user RSP — would have caused triple fault");
 }
 
+extern int64_t linux_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
+                             uint64_t a4, uint64_t a5, uint64_t a6);
+extern bool linux_syscall_known(uint64_t nr);
+
+#define LINUX_SYS_RT_SIGRETURN 15
+
+static int64_t syscall_dispatch(task_t *t, uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
+                                uint64_t a4, uint64_t a5, uint64_t a6)
+{
+    if (t && t->abi == TASK_ABI_LINUX) return linux_syscall(nr, a1, a2, a3, a4, a5, a6);
+    return syscall_table[nr](a1, a2, a3, a4, a5, a6);
+}
+
+static bool syscall_valid(task_t *t, uint64_t nr)
+{
+    if (t && t->abi == TASK_ABI_LINUX) return linux_syscall_known(nr);
+    return nr < SYSCALL_TABLE_SIZE && syscall_table[nr];
+}
+
+static bool syscall_is_sigreturn(task_t *t, uint64_t nr)
+{
+    if (t && t->abi == TASK_ABI_LINUX) return nr == LINUX_SYS_RT_SIGRETURN;
+    return nr == SYS_RT_SIGRETURN;
+}
+
 int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
                           uint64_t a4, uint64_t a5, uint64_t a6)
 {
@@ -664,7 +689,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         asm volatile("sti" ::: "memory");
         puzzle_on_syscall(t);
     }
-    if (nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
+    if (!syscall_valid(t, nr)) {
         serial_printf("[SYSCALL] unknown nr=%llu\n", nr);
         return -ENOSYS;
     }
@@ -676,7 +701,7 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         ptrace_syscall_enter(t, &nr, args, &ret, &skip);
         if (t->pending_kill) signal_kill_exit(t);
         a1 = args[0]; a2 = args[1]; a3 = args[2]; a4 = args[3]; a5 = args[4]; a6 = args[5];
-        if (skip || nr >= SYSCALL_TABLE_SIZE || !syscall_table[nr]) {
+        if (skip || !syscall_valid(t, nr)) {
             if (!skip) ret = -ENOSYS;
             ptrace_syscall_exit(t, nr, &ret);
             return signal_deliver_pending(t, ret, nr);
@@ -694,16 +719,17 @@ int64_t syscall_handler_c(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
         t->in_syscall = true;
     }
 
-    ret = syscall_table[nr](a1, a2, a3, a4, a5, a6);
+    ret = syscall_dispatch(t, nr, a1, a2, a3, a4, a5, a6);
 
     task_t *me = syscall_cur_task();
     if (me) me->in_syscall = false;
     if (me && me->pending_kill) signal_kill_exit(me);
-    if (me && me->ptracer && nr != SYS_RT_SIGRETURN) {
+    bool sigret = syscall_is_sigreturn(me, nr);
+    if (me && me->ptracer && !sigret) {
         ptrace_syscall_exit(me, nr, &ret);
         if (me->pending_kill) signal_kill_exit(me);
     }
-    if (me && nr != SYS_RT_SIGRETURN)
+    if (me && !sigret)
         ret = signal_deliver_pending(me, ret, nr);
     return ret;
 }

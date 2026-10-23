@@ -56,6 +56,10 @@ static int resolve_at(task_t *t, int64_t dirfd, uint64_t upath, char *out, size_
     return r;
 }
 
+int syscall_resolve_at(task_t *t, int64_t dirfd, uint64_t upath, char *out, size_t cap) {
+    return resolve_at(t, dirfd, upath, out, cap);
+}
+
 #define AT_CALL(expr) do { \
     task_t *t_ = syscall_cur_task(); \
     if (!t_) return -ESRCH; \

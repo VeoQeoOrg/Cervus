@@ -484,22 +484,26 @@ static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, in
     return r;
 }
 
-int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_timeout)
+int64_t epoll_wait_args(uint64_t epfd, uint64_t events_ptr, int maxevents, int timeout_ms)
 {
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
-
-    struct { int maxevents; int timeout_ms; } args;
-    if (syscall_copy_from_user(&args, (void *)max_and_timeout, sizeof args) < 0)
-        return -EFAULT;
-    if (args.maxevents <= 0) return -EINVAL;
-    if (args.maxevents > EPOLL_MAX_EVENTS) args.maxevents = EPOLL_MAX_EVENTS;
-    if (!syscall_uptr_validate_write((void *)events_ptr, (size_t)args.maxevents * sizeof(epoll_event_t)))
+    if (maxevents <= 0) return -EINVAL;
+    if (maxevents > EPOLL_MAX_EVENTS) maxevents = EPOLL_MAX_EVENTS;
+    if (!syscall_uptr_validate_write((void *)events_ptr, (size_t)maxevents * sizeof(epoll_event_t)))
         return -EFAULT;
 
     vfs_file_t *epf = epoll_file(t, (int)epfd);
     if (!epf) return -EBADF;
-    int64_t r = epoll_wait_on(t, (epoll_set_t *)epf->vnode->fs_data, events_ptr, args.maxevents, args.timeout_ms);
+    int64_t r = epoll_wait_on(t, (epoll_set_t *)epf->vnode->fs_data, events_ptr, maxevents, timeout_ms);
     fd_put(epf);
     return r;
+}
+
+int64_t sys_epoll_wait(uint64_t epfd, uint64_t events_ptr, uint64_t max_and_timeout)
+{
+    struct { int maxevents; int timeout_ms; } args;
+    if (syscall_copy_from_user(&args, (void *)max_and_timeout, sizeof args) < 0)
+        return -EFAULT;
+    return epoll_wait_args(epfd, events_ptr, args.maxevents, args.timeout_ms);
 }

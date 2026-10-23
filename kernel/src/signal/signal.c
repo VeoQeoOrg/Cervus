@@ -515,7 +515,10 @@ static int pick_signal(task_t *t) {
     }
 }
 
-static bool syscall_restartable(uint64_t nr) {
+extern bool linux_syscall_restartable(uint64_t nr);
+
+static bool syscall_restartable(task_t *t, uint64_t nr) {
+    if (t->abi == TASK_ABI_LINUX) return linux_syscall_restartable(nr);
     switch (nr) {
     case SYS_READ: case SYS_WRITE: case SYS_PREAD: case SYS_PWRITE:
     case SYS_READV: case SYS_WRITEV: case SYS_PREADV: case SYS_PWRITEV:
@@ -572,7 +575,7 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
             sig = ptrace_signal_stop(t, sig, &si, &ctx);
             if (t->pending_kill) signal_kill_exit(t);
             if (!sig || signal_ignored(t, sig)) {
-                if (retval == -EINTR && !t->ret_iret && syscall_restartable(nr)) {
+                if (retval == -EINTR && !t->ret_iret && syscall_restartable(t, nr)) {
                     t->user_saved_rip -= 2;
                     retval = (int64_t)nr;
                 }
@@ -592,7 +595,7 @@ int64_t signal_deliver_pending(task_t *t, int64_t retval, uint64_t nr) {
         }
 
         regs_from_task(t, retval, &r);
-        if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(nr)) {
+        if (retval == -EINTR && !t->ret_iret && (t->sig_flags[sig] & SA_RESTART) && syscall_restartable(t, nr)) {
             r.rax = nr;
             r.rip -= 2;
         }

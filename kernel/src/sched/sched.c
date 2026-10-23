@@ -313,6 +313,7 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->gid             = parent->gid;
     t->umask           = parent->umask;
     t->ctty            = parent->ctty;
+    t->abi             = parent->abi;
     t->capabilities    = parent->capabilities;
     t->priority        = parent->priority;
     t->is_userspace    = parent->is_userspace;
@@ -605,6 +606,7 @@ task_t* task_fork(task_t* parent) {
     child->umask           = parent->umask;
     child->ctty            = parent->ctty;
     child->persona         = parent->persona;
+    child->abi             = parent->abi;
     child->pr_flags        = parent->pr_flags & ~PR_FLAG_SUBREAPER;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     memcpy(child->root, parent->root, sizeof(child->root));

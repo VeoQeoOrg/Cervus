@@ -133,6 +133,7 @@ typedef struct {
     struct vnode   *vnode;
     uint64_t        file_size;
     char            interp_path[128];
+    int             linux_abi;
 } elf_load_result_t;
 
 struct mm;
