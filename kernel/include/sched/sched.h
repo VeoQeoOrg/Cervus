@@ -284,6 +284,7 @@ typedef struct task {
     volatile uint64_t poll_wake_seq;
     uint32_t   abi;
     uint32_t   lx_trace;
+    struct vfork_wait *vfork_wait;
 } task_t;
 
 #define TASK_ABI_CERVUS 0
@@ -377,6 +378,10 @@ void    task_kill(task_t* task);
 void    task_kill_subtree(task_t* root);
 void    task_destroy(task_t* task);
 task_t* task_fork(task_t* parent);
+task_t* task_fork_prepare(task_t* parent, int share_vm, uintptr_t user_sp);
+int     task_vfork_attach(task_t* child);
+void    task_vfork_wait(task_t* parent, struct vfork_wait* w);
+void    task_vfork_release(task_t* t);
 task_t* task_find_by_pid(uint32_t pid);
 int task_collect_pids(uint32_t *out, int max);
 uint32_t task_alloc_pid(void);

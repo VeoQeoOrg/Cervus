@@ -4,6 +4,7 @@
 #include "../include/sched/capabilities.h"
 #include "../include/sched/sched.h"
 #include "../include/sched/spinlock.h"
+#include "../include/sched/waitq.h"
 #include "../include/memory/pmm.h"
 #include "../include/memory/vmm.h"
 #include "../include/io/serial.h"
@@ -627,6 +628,55 @@ void task_start(task_t* t) {
 }
 
 task_t* task_fork(task_t* parent) {
+    task_t* child = task_fork_prepare(parent, 0, 0);
+    if (child) enqueue_global(child);
+    return child;
+}
+
+typedef struct vfork_wait {
+    waitq_t    wq;
+    spinlock_t lock;
+    int        done;
+    int        refs;
+} vfork_wait_t;
+
+static void vfork_wait_put(vfork_wait_t* w) {
+    if (__atomic_sub_fetch(&w->refs, 1, __ATOMIC_ACQ_REL) == 0) free(w);
+}
+
+int task_vfork_attach(task_t* child) {
+    vfork_wait_t* w = calloc(1, sizeof(*w));
+    if (!w) return -1;
+    w->lock = (spinlock_t)SPINLOCK_INIT;
+    w->refs = 2;
+    child->vfork_wait = w;
+    return 0;
+}
+
+void task_vfork_release(task_t* t) {
+    vfork_wait_t* w = __atomic_exchange_n(&t->vfork_wait, NULL, __ATOMIC_ACQ_REL);
+    if (!w) return;
+    uint64_t f = spinlock_acquire_irqsave(&w->lock);
+    w->done = 1;
+    waitq_wake_all(&w->wq);
+    spinlock_release_irqrestore(&w->lock, f);
+    vfork_wait_put(w);
+}
+
+void task_vfork_wait(task_t* parent, vfork_wait_t* w) {
+    for (;;) {
+        uint64_t f = spinlock_acquire_irqsave(&w->lock);
+        if (w->done || parent->pending_kill || task_leader(parent)->group_exiting ||
+            (parent->sig_pending & (1ULL << SIGKILL))) {
+            spinlock_release_irqrestore(&w->lock, f);
+            break;
+        }
+        waitq_block(&w->wq, &w->lock, f, sched_now_ns() + 100000000ULL);
+    }
+    vfork_wait_put(w);
+}
+
+task_t* task_fork_prepare(task_t* parent, int share_vm, uintptr_t user_sp) {
     if (!parent) return NULL;
     task_t* child = calloc(1, sizeof(task_t));
     if (!child) return NULL;
@@ -654,7 +704,12 @@ task_t* task_fork(task_t* parent) {
     child->time_slice      = parent->time_slice_init;
     child->time_slice_init = parent->time_slice_init;
     task_inherit_limits(child, parent);
-    if (parent->mm) {
+    if (parent->mm && share_vm) {
+        child->mm = parent->mm;
+        mm_get(child->mm);
+        child->pagemap = child->mm->pagemap;
+        child->flags |= TASK_FLAG_VFORK;
+    } else if (parent->mm) {
         child->mm = mm_fork(parent->mm);
         if (!child->mm) { free(child); return NULL; }
         child->pagemap = child->mm->pagemap;
@@ -666,7 +721,7 @@ task_t* task_fork(task_t* parent) {
     child->brk_start   = parent->brk_start;
     child->brk_current = parent->brk_current;
     child->brk_max     = parent->brk_max;
-    child->user_rsp = parent->user_rsp;
+    child->user_rsp = user_sp ? user_sp : parent->user_rsp;
 
     child->user_saved_rip = parent->user_saved_rip;
     child->user_saved_rbp = parent->user_saved_rbp;
@@ -742,7 +797,6 @@ task_t* task_fork(task_t* parent) {
     LOG_D("[FORK-CHK] child=%p rsp=0x%llx stk=0x%llx rip=0x%llx\n",
                   (void*)child, child->rsp, child->stack_base, child->user_saved_rip);
 
-    enqueue_global(child);
     return child;
 }
 
@@ -757,6 +811,7 @@ void task_destroy(task_t* task) {
 
     pid_unregister(task);
     ptrace_unlink(task);
+    task_vfork_release(task);
 
     if (task->fpu_state) {
         pmm_free(task->fpu_state, 1);
@@ -1125,6 +1180,7 @@ __attribute__((noreturn)) void task_exit(void)
         me->puzzle = NULL;
     }
 
+    task_vfork_release(me);
     task_sample_rss(me);
     if (me->mm) {
         struct mm *m = me->mm;

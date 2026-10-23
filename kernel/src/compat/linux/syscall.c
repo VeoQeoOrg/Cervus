@@ -2,6 +2,7 @@
 #include "../../../include/syscall/errno.h"
 #include "../../../include/fs/vfs.h"
 #include "../../../include/sched/sched.h"
+#include "../../../include/sched/ptrace.h"
 #include "../../../include/drivers/random.h"
 #include "../../../include/drivers/timer.h"
 #include "../../../include/memory/pmm.h"
@@ -1114,25 +1115,45 @@ static int64_t lx_clone_thread(uint64_t flags, uint64_t newsp, uint64_t ptid, ui
     return tid;
 }
 
+extern task_t *fork_process(task_t *parent, int share_vm, uintptr_t user_sp, int64_t *err);
+
+static int64_t lx_clone_process(uint64_t flags, uint64_t newsp, uint64_t ptid, uint64_t ctid, uint64_t tls)
+{
+    task_t *me = syscall_cur_task();
+    if (!me || !me->is_userspace) return -EPERM;
+    if (flags & (LX_CLONE_THREAD | LX_CLONE_SIGHAND | LX_CLONE_FILES)) return -EINVAL;
+    if (flags & LX_CLONE_SETTLS && tls >= 0x0000800000000000ULL) return -EPERM;
+    int vm = (flags & LX_CLONE_VM) != 0;
+    int64_t err = 0;
+    task_t *child = fork_process(me, vm, newsp, &err);
+    if (!child) return err;
+    int32_t pid = (int32_t)child->pid;
+    if (flags & LX_CLONE_SETTLS) child->fs_base = tls;
+    if (flags & LX_CLONE_CHILD_SETTID) {
+        if (vm) syscall_copy_to_user((void *)ctid, &pid, sizeof pid);
+        else if (child->mm) mm_copy_to(child->mm, ctid, &pid, sizeof pid);
+    }
+    if (flags & LX_CLONE_CHILD_CLEARTID) child->clear_tid = ctid;
+    if (flags & LX_CLONE_PARENT_SETTID) syscall_copy_to_user((void *)ptid, &pid, sizeof pid);
+    struct vfork_wait *w = NULL;
+    if ((flags & LX_CLONE_VFORK) && task_vfork_attach(child) == 0) w = child->vfork_wait;
+    ptrace_note_child(me, child, (flags & LX_CLONE_VFORK) ? PTRACE_EVENT_VFORK : PTRACE_EVENT_FORK);
+    task_start_clone(child);
+    if (w) task_vfork_wait(me, w);
+    return pid;
+}
+
 static int64_t lx_clone(A6)
 {
     UNUSED6;
     if (a1 & LX_CLONE_VM && !(a1 & LX_CLONE_VFORK)) return lx_clone_thread(a1, a2, a3, a4, a5);
-    int64_t pid = sys_fork();
-    if (pid <= 0) return pid;
-    task_t *child = task_find_by_pid((uint32_t)pid);
-    if (child) {
-        if ((a1 & LX_CLONE_CHILD_SETTID) && child->mm) {
-            int32_t v = (int32_t)pid;
-            mm_copy_to(child->mm, a4, &v, sizeof v);
-        }
-        if (a1 & LX_CLONE_CHILD_CLEARTID) child->clear_tid = a4;
-    }
-    if (a1 & LX_CLONE_PARENT_SETTID) {
-        int32_t v = (int32_t)pid;
-        syscall_copy_to_user((void *)a3, &v, sizeof v);
-    }
-    return pid;
+    return lx_clone_process(a1, a2, a3, a4, a5);
+}
+
+static int64_t lx_vfork(A6)
+{
+    UNUSED6;
+    return lx_clone_process(LX_CLONE_VM | LX_CLONE_VFORK, 0, 0, 0, 0);
 }
 
 
@@ -1250,7 +1271,7 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [46]  = lx_sendmsg,     [47]  = lx_recvmsg,     [48]  = lx_shutdown,    [49]  = lx_bind,
     [50]  = lx_listen,      [51]  = lx_getsockname, [52]  = lx_getpeername, [53]  = lx_socketpair,
     [54]  = lx_setsockopt,  [55]  = lx_getsockopt,  [56]  = lx_clone,       [57]  = lx_fork,
-    [58]  = lx_fork,        [59]  = lx_execve,      [60]  = lx_exit,        [61]  = lx_wait4,
+    [58]  = lx_vfork,       [59]  = lx_execve,      [60]  = lx_exit,        [61]  = lx_wait4,
     [62]  = lx_kill,        [63]  = lx_uname,       [64]  = lx_semget,      [65]  = lx_semop,
     [66]  = lx_semctl,      [67]  = lx_shmdt,       [68]  = lx_msgget,      [69]  = lx_msgsnd,
     [70]  = lx_msgrcv,      [71]  = lx_msgctl,      [72]  = lx_fcntl,       [74]  = lx_fsync,

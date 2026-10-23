@@ -411,6 +411,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     if (old_mm) mm_put(old_mm);
     else if (old_pagemap && (old_flags & (TASK_FLAG_OWN_PAGEMAP | TASK_FLAG_FORK)))
         vmm_free_pagemap(old_pagemap);
+    task_vfork_release(t);
 
     asm volatile("lock addl $0, (%%rsp)" ::: "memory", "cc");
     vmm_switch_pagemap(t->pagemap);
