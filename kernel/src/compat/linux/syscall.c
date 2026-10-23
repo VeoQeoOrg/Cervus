@@ -234,7 +234,8 @@ LX0(lx_setsockopt, sys_setsockopt(a1, a2, a3, a4, a5))
 LX0(lx_getsockopt, sys_getsockopt(a1, a2, a3, a4, a5))
 LX0(lx_fork,       sys_fork())
 LX0(lx_execve,     sys_execve(a1, a2, a3))
-LX0(lx_exit,       sys_exit(a1))
+extern int64_t sys_thread_exit(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+LX0(lx_exit,       sys_thread_exit(a1, 0, 0, 0, 0, 0))
 LX0(lx_wait4,      sys_wait4(a1, a2, a3, a4))
 LX0(lx_kill,       sys_kill(a1, a2))
 LX0(lx_semget,     sys_semget(a1, a2, a3))
@@ -1042,26 +1043,67 @@ static int64_t lx_getcpu(A6)
     return 0;
 }
 
+#define LX_CLONE_VM             0x00000100
+#define LX_CLONE_FS             0x00000200
+#define LX_CLONE_FILES          0x00000400
+#define LX_CLONE_SIGHAND        0x00000800
+#define LX_CLONE_VFORK          0x00004000
+#define LX_CLONE_THREAD         0x00010000
+#define LX_CLONE_SETTLS         0x00080000
+#define LX_CLONE_PARENT_SETTID  0x00100000
+#define LX_CLONE_CHILD_CLEARTID 0x00200000
+#define LX_CLONE_CHILD_SETTID   0x01000000
+
+extern task_t *task_spawn_clone(task_t *parent, uintptr_t stack_top, uint64_t fs_base);
+extern void task_start_clone(task_t *t);
+extern void ptrace_note_child(task_t *parent, task_t *child, int event);
+
+static int64_t lx_clone_thread(uint64_t flags, uint64_t newsp, uint64_t ptid, uint64_t ctid, uint64_t tls)
+{
+    task_t *me = syscall_cur_task();
+    if (!me || !me->is_userspace) return -EPERM;
+    if ((flags & (LX_CLONE_THREAD | LX_CLONE_SIGHAND)) != (LX_CLONE_THREAD | LX_CLONE_SIGHAND) ||
+        !(flags & LX_CLONE_FILES))
+        return -EINVAL;
+    if (flags & LX_CLONE_SETTLS && tls >= 0x0000800000000000ULL) return -EPERM;
+    uint64_t fs = flags & LX_CLONE_SETTLS ? tls : me->fs_base;
+    if (!(flags & LX_CLONE_SETTLS)) {
+        uint32_t lo, hi;
+        asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0xC0000100u));
+        fs = ((uint64_t)hi << 32) | lo;
+    }
+    task_t *th = task_spawn_clone(me, newsp ? newsp : me->user_rsp, fs);
+    if (!th) return -ENOMEM;
+    int32_t tid = (int32_t)th->pid;
+    if (flags & LX_CLONE_PARENT_SETTID) syscall_copy_to_user((void *)ptid, &tid, sizeof tid);
+    if (flags & LX_CLONE_CHILD_SETTID) syscall_copy_to_user((void *)ctid, &tid, sizeof tid);
+    if (flags & LX_CLONE_CHILD_CLEARTID) th->clear_tid = ctid;
+    ptrace_note_child(me, th, 3);
+    task_start_clone(th);
+    return tid;
+}
+
 static int64_t lx_clone(A6)
 {
     UNUSED6;
-    if (a1 & 0x00000100) return -ENOSYS;
+    if (a1 & LX_CLONE_VM && !(a1 & LX_CLONE_VFORK)) return lx_clone_thread(a1, a2, a3, a4, a5);
     int64_t pid = sys_fork();
     if (pid <= 0) return pid;
     task_t *child = task_find_by_pid((uint32_t)pid);
     if (child) {
-        if ((a1 & 0x01000000) && child->mm) {
+        if ((a1 & LX_CLONE_CHILD_SETTID) && child->mm) {
             int32_t v = (int32_t)pid;
             mm_copy_to(child->mm, a4, &v, sizeof v);
         }
-        if (a1 & 0x00200000) child->clear_tid = a4;
+        if (a1 & LX_CLONE_CHILD_CLEARTID) child->clear_tid = a4;
     }
-    if (a1 & 0x00100000) {
+    if (a1 & LX_CLONE_PARENT_SETTID) {
         int32_t v = (int32_t)pid;
         syscall_copy_to_user((void *)a3, &v, sizeof v);
     }
     return pid;
 }
+
 
 LX0(lx_zero,       0)
 LX0(lx_enotsup,    -EOPNOTSUPP)

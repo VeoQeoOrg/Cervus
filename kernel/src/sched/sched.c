@@ -294,8 +294,8 @@ task_t* task_create_ex(const char* name, void (*entry)(void*), void* arg,
 
 static spinlock_t g_group_lock = SPINLOCK_INIT;
 
-task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
-                          uintptr_t stack_top, uint64_t arg, uint64_t clear_tid) {
+static task_t* thread_task_new(task_t* parent, bool resume_like_parent, uintptr_t entry,
+                               uintptr_t stack_top, uint64_t fs_base) {
     if (!parent || !parent->pagemap) return NULL;
 
     task_t* t = calloc(1, sizeof(task_t));
@@ -343,6 +343,27 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->entry    = (void (*)(void *))entry;
     t->rip      = (uint64_t)entry;
     t->user_rsp = (uint64_t)stack_top;
+    if (resume_like_parent) {
+        t->flags         |= TASK_FLAG_FORK;
+        t->fs_base        = fs_base;
+        t->user_saved_rip = parent->user_saved_rip;
+        t->user_saved_rbp = parent->user_saved_rbp;
+        t->user_saved_rbx = parent->user_saved_rbx;
+        t->user_saved_r12 = parent->user_saved_r12;
+        t->user_saved_r13 = parent->user_saved_r13;
+        t->user_saved_r14 = parent->user_saved_r14;
+        t->user_saved_r15 = parent->user_saved_r15;
+        t->user_saved_r11 = parent->user_saved_r11 | (1ULL << 9);
+        t->user_saved_rdi = parent->user_saved_rdi;
+        t->user_saved_rsi = parent->user_saved_rsi;
+        t->user_saved_rdx = parent->user_saved_rdx;
+        t->user_saved_r10 = parent->user_saved_r10;
+        t->user_saved_r8  = parent->user_saved_r8;
+        t->user_saved_r9  = parent->user_saved_r9;
+        t->ss_sp          = parent->ss_sp;
+        t->ss_size        = parent->ss_size;
+        t->ss_flags       = parent->ss_flags;
+    }
 
     if (parent->fd_table) {
         fd_table_ref(parent->fd_table);
@@ -362,12 +383,12 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     t->fpu_state = (fpu_state_t*)pmm_alloc_zero(1);
     fpu_state_init(t->fpu_state);
 
+    if (resume_like_parent && t->fpu_state && parent->fpu_state) fpu_save(t->fpu_state);
+
     t->state    = TASK_READY;
     t->runnable = true;
     t->parent   = NULL;
     t->create_time_ns = sched_now_ns();
-
-    (void)arg;
 
     {
         uint64_t _gf = spinlock_acquire_irqsave(&g_group_lock);
@@ -384,6 +405,14 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     }
 
     pid_register(t);
+    return t;
+}
+
+task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
+                          uintptr_t stack_top, uint64_t arg, uint64_t clear_tid) {
+    (void)arg;
+    task_t *t = thread_task_new(parent, false, entry, stack_top, 0);
+    if (!t) return NULL;
     t->clear_tid = clear_tid;
     if (clear_tid) {
         extern void thread_set_tid(task_t *parent, uint64_t uaddr, uint32_t tid);
@@ -391,6 +420,14 @@ task_t* task_spawn_thread(task_t* parent, uintptr_t entry,
     }
     enqueue_global(t);
     return t;
+}
+
+task_t* task_spawn_clone(task_t* parent, uintptr_t stack_top, uint64_t fs_base) {
+    return thread_task_new(parent, true, 0, stack_top, fs_base);
+}
+
+void task_start_clone(task_t* t) {
+    enqueue_global(t);
 }
 
 static const uint32_t g_nice_weight[40] = {
@@ -637,6 +674,12 @@ task_t* task_fork(task_t* parent) {
     child->user_saved_r14 = parent->user_saved_r14;
     child->user_saved_r15 = parent->user_saved_r15;
     child->user_saved_r11 = parent->user_saved_r11 | (1ULL << 9);
+    child->user_saved_rdi = parent->user_saved_rdi;
+    child->user_saved_rsi = parent->user_saved_rsi;
+    child->user_saved_rdx = parent->user_saved_rdx;
+    child->user_saved_r10 = parent->user_saved_r10;
+    child->user_saved_r8  = parent->user_saved_r8;
+    child->user_saved_r9  = parent->user_saved_r9;
 
     child->fs_base    = rdmsr_u64(0xC0000100u);
     child->gs_base    = rdmsr_u64(0xC0000102u);
