@@ -714,6 +714,7 @@ int64_t unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
     vfs_file_t **drop = NULL;
     int ndrop = 0;
     int64_t r;
+    uint64_t qb_before = 0, qb_after = 0;
 
     for (;;) {
         uint64_t q = spinlock_acquire_irqsave(&s->lock);
@@ -738,6 +739,7 @@ int64_t unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
                 break;
             }
             int stop = 0;
+            if (s->qbytes > qb_before) qb_before = s->qbytes;
             while (g && got < len && !stop) {
                 int first = got == 0;
                 uint32_t avail = g->len - g->off;
@@ -757,6 +759,7 @@ int64_t unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
                 }
                 g = s->qhead;
             }
+            qb_after = s->qbytes;
             waitq_wake_all(&s->wq);
             if (got >= target || stop) {
                 spinlock_release_irqrestore(&s->lock, q);
@@ -809,6 +812,10 @@ int64_t unix_op_recvmsg(vnode_t *vn, void *buf, size_t len, int flags,
 
     if (r > 0 && s->type == SOCK_STREAM) {
         unix_sock_t *p = get_peer(s);
+        if (p && (qb_before * 4 <= p->sndbuf || qb_after * 4 > p->sndbuf)) {
+            us_put(p);
+            p = NULL;
+        }
         if (p) {
             uint64_t pq = spinlock_acquire_irqsave(&p->lock);
             waitq_wake_all(&p->wq);
