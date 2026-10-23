@@ -26,6 +26,7 @@
 #define MAX_PIDS 4096
 
 task_t* ready_queues[MAX_PRIORITY + 1] = {0};
+static task_t* ready_tails[MAX_PRIORITY + 1];
 task_t* current_task[MAX_CPUS] = {0};
 
 static volatile uint32_t g_foreground_pid[VT_COUNT];
@@ -188,8 +189,10 @@ static void enqueue_global(task_t* t) {
     bool expected = false;
     bool queued = false;
     if (atomic_cas_bool(&t->on_rq, &expected, true)) {
-        t->next = ready_queues[t->priority];
-        ready_queues[t->priority] = t;
+        t->next = NULL;
+        if (ready_tails[t->priority]) ready_tails[t->priority]->next = t;
+        else ready_queues[t->priority] = t;
+        ready_tails[t->priority] = t;
         queued = true;
     }
     spinlock_release_irqrestore(&ready_queue_lock, f);
@@ -1233,33 +1236,31 @@ static task_t* sched_pick_next(uint32_t cpu) {
     task_t* found = NULL;
     for (int p = MAX_PRIORITY; p >= 0 && !found; p--) {
         task_t** head = &ready_queues[p];
+        task_t*  prev = NULL;
         task_t*  t    = *head;
         while (t) {
+            bool take = false;
             if (t->runnable && t->state != TASK_ZOMBIE && t->state != TASK_DEAD) {
-                if (t->cpu_affinity != 0 && !(t->cpu_affinity & (1ULL << cpu))) {
+                if (!t->cpu_affinity || (t->cpu_affinity & (1ULL << cpu))) {
+                    bool expected = false;
+                    take = atomic_cas_bool(&t->on_cpu, &expected, true);
+                }
+                if (!take) {
+                    prev = t;
                     head = &t->next;
                     t    = *head;
                     continue;
                 }
-                bool expected = false;
-                if (atomic_cas_bool(&t->on_cpu, &expected, true)) {
-                    *head   = t->next;
-                    t->next = NULL;
-                    atomic_store_bool_rel(&t->on_rq, false);
-                    found   = t;
-                    break;
-                }
-            } else {
-                if (t->state == TASK_ZOMBIE || t->state == TASK_DEAD || !t->runnable) {
-                    *head = t->next;
-                    t->next = NULL;
-                    atomic_store_bool_rel(&t->on_rq, false);
-                    t = *head;
-                    continue;
-                }
             }
-            head = &t->next;
-            t    = *head;
+            *head = t->next;
+            if (ready_tails[p] == t) ready_tails[p] = prev;
+            t->next = NULL;
+            atomic_store_bool_rel(&t->on_rq, false);
+            if (take) {
+                found = t;
+                break;
+            }
+            t = *head;
         }
     }
     spinlock_release_irqrestore(&ready_queue_lock, _irqf);
@@ -1293,6 +1294,13 @@ void sched_reschedule(void) {
     task_t*  next = sched_pick_next(cpu);
 
     if (!next) { asm volatile("sti"); return; }
+
+    if (next == &idle_tasks[cpu] && old && old != next && old->state == TASK_RUNNING &&
+        old->runnable && (!old->cpu_affinity || (old->cpu_affinity & (1ULL << cpu)))) {
+        old->time_slice = old->time_slice_init;
+        asm volatile("sti");
+        return;
+    }
 
     if (old == next) {
         if (old == &idle_tasks[cpu]) {
