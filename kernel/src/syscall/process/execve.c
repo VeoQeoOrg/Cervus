@@ -383,6 +383,8 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     t->user_saved_rbp = t->user_saved_rbx = 0;
     t->user_saved_r12 = t->user_saved_r13 = t->user_saved_r14 = 0;
     t->user_saved_r15 = t->user_saved_r11 = 0;
+    t->user_saved_rdi = t->user_saved_rsi = t->user_saved_rdx = 0;
+    t->user_saved_r8 = t->user_saved_r9 = t->user_saved_r10 = 0;
 
     const char *bn = kpath;
     for (const char *p = kpath; *p; p++) if (*p == '/') bn = p + 1;
