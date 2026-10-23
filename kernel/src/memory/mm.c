@@ -177,6 +177,27 @@ static vm_area_t *vma_split(mm_t *mm, vm_area_t *v, uintptr_t at) {
     return n;
 }
 
+static bool vma_mergeable(const vm_area_t *a, const vm_area_t *b) {
+    if (a->end != b->start || a->flags != b->flags || a->pte_extra != b->pte_extra) return false;
+    if (a->vnode != b->vnode || a->priv != b->priv || a->priv_id != b->priv_id) return false;
+    if (a->pfn || b->pfn || a->open || b->open || a->close || b->close) return false;
+    return !a->vnode || a->offset + (a->end - a->start) == b->offset;
+}
+
+static void vma_merge_range(mm_t *mm, uintptr_t start, uintptr_t end) {
+    vm_area_t *v = vma_first_ending_after(mm, start ? start - 1 : 0);
+    while (v && v->start <= end) {
+        vm_area_t *n = v->next;
+        if (n && vma_mergeable(v, n)) {
+            v->end = n->end;
+            vma_unlink(mm, n);
+            vma_release(n);
+            continue;
+        }
+        v = n;
+    }
+}
+
 static bool range_free(mm_t *mm, uintptr_t start, uintptr_t end) {
     vm_area_t *v = vma_first_ending_after(mm, start);
     return !v || v->start >= end;
@@ -694,6 +715,7 @@ static int64_t map_template(mm_t *mm, uintptr_t addr, size_t len, bool fixed, vm
     if (v->vnode) vnode_ref(v->vnode);
     if (v->open) v->open(v);
     vma_link(mm, v);
+    vma_merge_range(mm, at, at + len);
     kmutex_unlock(&mm->lock);
     return (int64_t)at;
 }
@@ -785,6 +807,7 @@ int mm_protect(mm_t *mm, uintptr_t addr, size_t len, uint32_t prot) {
         walk_ptes(mm->pagemap, v->start, v->end, prot_cb, &p);
         v = v->next;
     }
+    vma_merge_range(mm, addr, end);
     fb_done(&fb);
     kmutex_unlock(&mm->lock);
     return 0;
@@ -826,6 +849,7 @@ int mm_mlock(mm_t *mm, uintptr_t addr, size_t len, bool lock) {
         }
         v = v->next;
     }
+    vma_merge_range(mm, start, end);
     kmutex_unlock(&mm->lock);
     return 0;
 }
