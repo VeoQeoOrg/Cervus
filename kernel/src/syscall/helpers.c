@@ -197,7 +197,10 @@ static void compat_redirect(char *dst, size_t rl, size_t max, const char *croot_
     memcpy(cand + rl, croot_path, cl);
     memcpy(cand + rl + cl, p, pl + 1);
     vfs_stat_t st;
-    if (vfs_lstat(cand, &st) < 0) {
+    if (vfs_lstat(cand, &st) == 0) {
+        vfs_stat_t real;
+        if (st.st_type == VFS_NODE_DIR && vfs_stat(dst, &real) == 0 && real.st_type == VFS_NODE_DIR) return;
+    } else {
         bool lib = false;
         for (size_t i = 0; i < nlib && !lib; i++)
             lib = strncmp(p, libdirs[i], strlen(libdirs[i])) == 0;
