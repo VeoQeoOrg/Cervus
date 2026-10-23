@@ -294,10 +294,14 @@ int initramfs_mount(const void *data, size_t size) {
             break;
         }
 
-        case '2':
-            LOG_D("[initramfs] skip symlink %s\n", abspath);
-            skipped++;
+        case '2': {
+            char target[101];
+            memcpy(target, hdr->linkname, 100);
+            target[100] = '\0';
+            if (target[0] && vfs_symlink(target, abspath) == 0) files_ok++;
+            else errors++;
             break;
+        }
 
         default:
             LOG_D("[initramfs] skip type='%c' %s\n",

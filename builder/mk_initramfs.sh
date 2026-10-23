@@ -123,6 +123,7 @@ fi
 if [ -f "$SYSROOT/etc/ssl/certs/ca-certificates.crt" ]; then
     mkdir -p "$RFS/etc/ssl/certs"
     cp "$SYSROOT/etc/ssl/certs/ca-certificates.crt" "$RFS/etc/ssl/certs/ca-certificates.crt"
+    ln -sf certs/ca-certificates.crt "$RFS/etc/ssl/cert.pem"
     green "CA bundle installed into /etc/ssl/certs"
 fi
 
