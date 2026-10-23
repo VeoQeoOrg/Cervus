@@ -63,6 +63,7 @@ static int signal_ignored(task_t *t, int sig) {
 static spinlock_t g_sig_lock = SPINLOCK_INIT;
 
 static int post(task_t *t, int sig, const ksiginfo_t *si) {
+    if (t && sig > 0 && sig < NSIG) __atomic_fetch_or(&task_leader(t)->sig_posted, 1ULL << sig, __ATOMIC_RELAXED);
     if (!t || sig <= 0 || sig >= NSIG) return -EINVAL;
     if (sig != SIGKILL && signalfd_deliver(t->pid, sig, si)) return 0;
     uint64_t bit = 1ULL << sig;

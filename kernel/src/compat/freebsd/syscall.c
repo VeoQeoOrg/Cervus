@@ -3331,6 +3331,506 @@ static int64_t fb_thr_exit(A6)
     return sys_thread_exit(0, 0, 0, 0, 0, 0);
 }
 
+typedef struct epoll_set epoll_set_t;
+extern epoll_set_t *epk_create(void);
+extern void epk_destroy(epoll_set_t *ep);
+extern int64_t epk_ctl(epoll_set_t *ep, vfs_file_t *epf, int op, vfs_file_t *target, int fd, uint32_t events, uint64_t data);
+extern int64_t epk_wait(epoll_set_t *ep, void *kout, int maxevents, int64_t timeout_ns, uint64_t extra_deadline, volatile int *kick);
+extern int epk_poll(epoll_set_t *ep, int events);
+extern void epk_wake(epoll_set_t *ep);
+extern void poll_deadline(uint64_t ns);
+
+typedef struct {
+    uint32_t events;
+    uint64_t data;
+} __attribute__((packed)) kq_epev_t;
+
+typedef struct {
+    uint64_t ident;
+    int16_t  filter;
+    uint16_t flags;
+    uint32_t fflags;
+    int64_t  data;
+    uint64_t udata;
+    uint64_t ext[4];
+} fb_kevent_t;
+
+_Static_assert(sizeof(fb_kevent_t) == 64, "FreeBSD struct kevent is 64 bytes");
+
+#define EVF_READ   (-1)
+#define EVF_WRITE  (-2)
+#define EVF_VNODE  (-4)
+#define EVF_PROC   (-5)
+#define EVF_SIGNAL (-6)
+#define EVF_TIMER  (-7)
+#define EVF_USER   (-11)
+
+#define EV_ADD      0x0001
+#define EV_DELETE   0x0002
+#define EV_ENABLE   0x0004
+#define EV_DISABLE  0x0008
+#define EV_ONESHOT  0x0010
+#define EV_CLEAR    0x0020
+#define EV_RECEIPT  0x0040
+#define EV_DISPATCH 0x0080
+#define EV_ERROR    0x4000
+#define EV_EOF      0x8000
+
+#define KQ_POLL_NS  50000000ULL
+
+typedef struct {
+    uint64_t ident;
+    int16_t  filter;
+    uint16_t flags;
+    uint32_t sfflags;
+    int64_t  sdata;
+    uint64_t udata;
+    int      enabled;
+    int      active;
+    uint32_t ffl;
+    uint64_t period;
+    uint64_t next_ns;
+    uint64_t vsize;
+    int64_t  vmtime;
+    uint32_t vnlink;
+} kq_note_t;
+
+typedef struct {
+    epoll_set_t *ep;
+    kmutex_t     lock;
+    kq_note_t   *notes;
+    int          n, cap;
+    volatile int kick;
+} kq_t;
+
+static const vnode_ops_t KQ_OPS;
+
+static kq_note_t *kq_find(kq_t *kq, uint64_t ident, int16_t filter)
+{
+    for (int i = 0; i < kq->n; i++)
+        if (kq->notes[i].ident == ident && kq->notes[i].filter == filter) return &kq->notes[i];
+    return NULL;
+}
+
+static void kq_drop(kq_t *kq, kq_note_t *kn)
+{
+    *kn = kq->notes[--kq->n];
+}
+
+static uint64_t kq_timer_ns(uint32_t fflags, int64_t data)
+{
+    if (data < 0) data = 0;
+    uint64_t v = (uint64_t)data;
+    if (fflags & 0x1) return v * 1000000000ULL;
+    if (fflags & 0x4) return v * 1000ULL;
+    if (fflags & 0x8) return v;
+    return v * 1000000ULL;
+}
+
+static int kq_sync_fd(kq_t *kq, int fd)
+{
+    task_t *t = syscall_cur_task();
+    vfs_file_t *f = t && t->fd_table ? fd_get(t->fd_table, fd) : NULL;
+    if (!f) return -EBADF;
+    uint32_t ev = 0;
+    int all_clear = 1, any = 0;
+    for (int i = 0; i < kq->n; i++) {
+        kq_note_t *kn = &kq->notes[i];
+        if (kn->ident != (uint64_t)fd || !kn->enabled) continue;
+        if (kn->filter == EVF_READ) ev |= POLLIN | 0x2000;
+        else if (kn->filter == EVF_WRITE) ev |= POLLOUT;
+        else continue;
+        any = 1;
+        if (!(kn->flags & EV_CLEAR)) all_clear = 0;
+    }
+    int64_t r;
+    if (!any) {
+        r = epk_ctl(kq->ep, NULL, 2, f, fd, 0, 0);
+        if (r == -ENOENT) r = 0;
+    } else {
+        if (all_clear) ev |= 1u << 31;
+        r = epk_ctl(kq->ep, NULL, 3, f, fd, ev, (uint64_t)fd);
+        if (r == -ENOENT) r = epk_ctl(kq->ep, NULL, 1, f, fd, ev, (uint64_t)fd);
+    }
+    fd_put(f);
+    return (int)r;
+}
+
+static int kq_vnode_snap(kq_note_t *kn)
+{
+    vfs_stat_t st;
+    int r = fb_fd_stat(kn->ident, &st);
+    if (r < 0) return r;
+    kn->vsize = st.st_size;
+    kn->vmtime = st.st_mtime;
+    kn->vnlink = st.st_nlink;
+    return 0;
+}
+
+static int kq_apply(kq_t *kq, const fb_kevent_t *ch)
+{
+    kq_note_t *kn = kq_find(kq, ch->ident, ch->filter);
+    switch (ch->filter) {
+    case EVF_READ: case EVF_WRITE: case EVF_VNODE: case EVF_PROC: case EVF_TIMER: case EVF_USER: case EVF_SIGNAL:
+        break;
+    default:
+        return -EINVAL;
+    }
+    if (ch->flags & EV_DELETE) {
+        if (!kn) return -ENOENT;
+        int fdf = kn->filter == EVF_READ || kn->filter == EVF_WRITE;
+        kq_drop(kq, kn);
+        if (fdf) kq_sync_fd(kq, (int)ch->ident);
+        return 0;
+    }
+    if (!kn) {
+        if (!(ch->flags & EV_ADD)) return -ENOENT;
+        if (kq->n >= kq->cap) {
+            int nc = kq->cap ? kq->cap * 2 : 16;
+            kq_note_t *nn = realloc(kq->notes, (size_t)nc * sizeof *nn);
+            if (!nn) return -ENOMEM;
+            kq->notes = nn;
+            kq->cap = nc;
+        }
+        kn = &kq->notes[kq->n++];
+        memset(kn, 0, sizeof *kn);
+        kn->ident = ch->ident;
+        kn->filter = ch->filter;
+        kn->enabled = 1;
+        if (ch->filter == EVF_PROC && !task_find_by_pid((uint32_t)ch->ident)) {
+            kq->n--;
+            return -ESRCH;
+        }
+    }
+    if (ch->flags & EV_ADD) {
+        kn->udata = ch->udata;
+        kn->flags = ch->flags & (EV_ONESHOT | EV_CLEAR | EV_DISPATCH);
+    }
+    if (ch->flags & EV_ENABLE) kn->enabled = 1;
+    if (ch->flags & EV_DISABLE) kn->enabled = 0;
+    if (ch->filter == EVF_USER) {
+        uint32_t ctl = ch->fflags & 0xc0000000u, v = ch->fflags & 0x00ffffffu;
+        if (ctl == 0x40000000u) kn->ffl &= v;
+        else if (ctl == 0x80000000u) kn->ffl |= v;
+        else if (ctl == 0xc0000000u) kn->ffl = v;
+        if (ch->fflags & 0x01000000u) {
+            kn->active = 1;
+            __atomic_store_n(&kq->kick, 1, __ATOMIC_RELEASE);
+            epk_wake(kq->ep);
+        }
+        return 0;
+    }
+    if (ch->flags & EV_ADD) {
+        kn->sfflags = ch->fflags;
+        kn->sdata = ch->data;
+    }
+    if (ch->filter == EVF_TIMER && (ch->flags & EV_ADD)) {
+        uint64_t ns = kq_timer_ns(ch->fflags, ch->data);
+        uint64_t now = sched_now_ns();
+        if (ch->fflags & 0x10) {
+            uint64_t rt = fb_clock_ns(0);
+            kn->next_ns = ns > rt ? now + (ns - rt) : now;
+            kn->period = 0;
+            kn->flags |= EV_ONESHOT;
+        } else {
+            kn->period = ns ? ns : 1;
+            kn->next_ns = now + kn->period;
+        }
+        kn->active = 0;
+        __atomic_store_n(&kq->kick, 1, __ATOMIC_RELEASE);
+        epk_wake(kq->ep);
+        return 0;
+    }
+    if (ch->filter == EVF_VNODE) return kq_vnode_snap(kn);
+    if (ch->filter == EVF_SIGNAL && (ch->flags & EV_ADD)) {
+        int ls = fb_sig_to_linux((int)ch->ident);
+        task_t *me = syscall_cur_task();
+        if (ls <= 0) { kq_drop(kq, kn); return -EINVAL; }
+        if (me) __atomic_fetch_and(&task_leader(me)->sig_posted, ~(1ULL << ls), __ATOMIC_RELAXED);
+    }
+    if (ch->filter == EVF_READ || ch->filter == EVF_WRITE) {
+        int r = kq_sync_fd(kq, (int)ch->ident);
+        if (r < 0) { kq_drop(kq, kn); return r; }
+    }
+    return 0;
+}
+
+static int64_t kq_fd_read_avail(int fd)
+{
+    task_t *t = syscall_cur_task();
+    vfs_file_t *f = t && t->fd_table ? fd_get(t->fd_table, fd) : NULL;
+    if (!f) return 0;
+    int n = 0;
+    vfs_stat_t st;
+    int64_t v = 1;
+    if (vfs_ioctl(f, 0x541B, &n) >= 0) v = n;
+    else if (vfs_fstat(f, &st) == 0 && st.st_type == VFS_NODE_FILE) v = (int64_t)st.st_size - (int64_t)f->offset;
+    fd_put(f);
+    return v;
+}
+
+static int kq_emit(kq_t *kq, kq_note_t *kn, fb_kevent_t *out, uint16_t extra, uint32_t fflags, int64_t data)
+{
+    memset(out, 0, sizeof *out);
+    out->ident = kn->ident;
+    out->filter = kn->filter;
+    out->flags = (uint16_t)(kn->flags | extra);
+    out->fflags = fflags;
+    out->data = data;
+    out->udata = kn->udata;
+    int fdf = kn->filter == EVF_READ || kn->filter == EVF_WRITE;
+    uint64_t ident = kn->ident;
+    if (kn->flags & EV_ONESHOT) {
+        kq_drop(kq, kn);
+        if (fdf) kq_sync_fd(kq, (int)ident);
+        return 1;
+    }
+    if (kn->flags & EV_DISPATCH) {
+        kn->enabled = 0;
+        if (fdf) kq_sync_fd(kq, (int)ident);
+    }
+    return 0;
+}
+
+static int kq_collect_soft(kq_t *kq, fb_kevent_t *out, int max, uint64_t *next)
+{
+    int n = 0;
+    uint64_t now = sched_now_ns(), nx = 0;
+    for (int i = 0; i < kq->n && n < max; i++) {
+        kq_note_t *kn = &kq->notes[i];
+        if (!kn->enabled) continue;
+        if (kn->filter == EVF_TIMER) {
+            if (now >= kn->next_ns) {
+                uint64_t cnt = 1;
+                if (kn->period) {
+                    cnt += (now - kn->next_ns) / kn->period;
+                    kn->next_ns += cnt * kn->period;
+                }
+                if (kq_emit(kq, kn, &out[n++], 0, 0, (int64_t)cnt)) i--;
+                continue;
+            }
+            if (!nx || kn->next_ns < nx) nx = kn->next_ns;
+        } else if (kn->filter == EVF_USER) {
+            if (kn->active) {
+                uint32_t ffl = kn->ffl;
+                if (kn->flags & EV_CLEAR) { kn->active = 0; kn->ffl = 0; }
+                if (kq_emit(kq, kn, &out[n++], 0, ffl, 0)) i--;
+            }
+        } else if (kn->filter == EVF_PROC) {
+            task_t *t = task_find_by_pid((uint32_t)kn->ident);
+            if (!t || t->state == TASK_ZOMBIE || t->state == TASK_DEAD) {
+                int64_t st = t ? (int64_t)fb_wstatus((int32_t)((t->exit_code & 0xff) << 8)) : 0;
+                kn->flags |= EV_ONESHOT;
+                if (kq_emit(kq, kn, &out[n++], EV_EOF, 0x80000000u, st)) i--;
+                continue;
+            }
+            uint64_t d = now + KQ_POLL_NS;
+            if (!nx || d < nx) nx = d;
+        } else if (kn->filter == EVF_SIGNAL) {
+            int ls = fb_sig_to_linux((int)kn->ident);
+            task_t *me = syscall_cur_task();
+            if (ls > 0 && me) {
+                uint64_t bit = 1ULL << ls;
+                if (__atomic_fetch_and(&task_leader(me)->sig_posted, ~bit, __ATOMIC_RELAXED) & bit) {
+                    if (kq_emit(kq, kn, &out[n++], 0, 0, 1)) i--;
+                    continue;
+                }
+            }
+            uint64_t d = now + KQ_POLL_NS;
+            if (!nx || d < nx) nx = d;
+        } else if (kn->filter == EVF_VNODE) {
+            vfs_stat_t st;
+            uint32_t ff = 0;
+            if (fb_fd_stat(kn->ident, &st) < 0) ff |= 0x40;
+            else {
+                if (st.st_size > kn->vsize) ff |= 0x4 | 0x2;
+                else if (st.st_size != kn->vsize || st.st_mtime != kn->vmtime) ff |= 0x2;
+                if (st.st_nlink == 0 && kn->vnlink) ff |= 0x1;
+                else if (st.st_nlink != kn->vnlink) ff |= 0x10;
+                kn->vsize = st.st_size;
+                kn->vmtime = st.st_mtime;
+                kn->vnlink = st.st_nlink;
+            }
+            ff &= kn->sfflags;
+            if (ff) {
+                if (kq_emit(kq, kn, &out[n++], 0, ff, 0)) i--;
+                continue;
+            }
+            uint64_t d = now + KQ_POLL_NS;
+            if (!nx || d < nx) nx = d;
+        }
+    }
+    if (next) *next = nx;
+    return n;
+}
+
+static int kq_translate(kq_t *kq, const kq_epev_t *ev, int nev, fb_kevent_t *out, int max)
+{
+    int n = 0;
+    for (int e = 0; e < nev && n < max; e++) {
+        int fd = (int)ev[e].data;
+        uint32_t got = ev[e].events;
+        int eof = (got & (POLLHUP | 0x2000)) != 0;
+        int err = (got & POLLERR) != 0;
+        for (int i = 0; i < kq->n && n < max; i++) {
+            kq_note_t *kn = &kq->notes[i];
+            if (kn->ident != (uint64_t)fd || !kn->enabled) continue;
+            if (kn->filter == EVF_READ && (got & (POLLIN | POLLHUP | POLLERR | 0x2000))) {
+                if (kq_emit(kq, kn, &out[n++], eof || err ? EV_EOF : 0, 0, kq_fd_read_avail(fd))) i--;
+            } else if (kn->filter == EVF_WRITE && (got & (POLLOUT | POLLHUP | POLLERR))) {
+                if (kq_emit(kq, kn, &out[n++], eof || err ? EV_EOF : 0, 0, 65536)) i--;
+            }
+        }
+    }
+    return n;
+}
+
+static int kq_poll(vnode_t *vn, int events)
+{
+    kq_t *kq = vn->fs_data;
+    if (!(events & POLLIN)) return 0;
+    if (!kmutex_trylock(&kq->lock)) return 0;
+    uint64_t now = sched_now_ns(), nx = 0;
+    int ready = 0;
+    for (int i = 0; i < kq->n; i++) {
+        kq_note_t *kn = &kq->notes[i];
+        if (!kn->enabled) continue;
+        if (kn->filter == EVF_USER && kn->active) ready = 1;
+        else if (kn->filter == EVF_TIMER) {
+            if (now >= kn->next_ns) ready = 1;
+            else if (!nx || kn->next_ns < nx) nx = kn->next_ns;
+        } else if (kn->filter == EVF_PROC || kn->filter == EVF_VNODE || kn->filter == EVF_SIGNAL) {
+            uint64_t d = now + KQ_POLL_NS;
+            if (!nx || d < nx) nx = d;
+        }
+    }
+    kmutex_unlock(&kq->lock);
+    if (ready) return POLLIN;
+    int r = epk_poll(kq->ep, events);
+    if (!r && nx) poll_deadline(nx);
+    return r;
+}
+
+static void kq_unref(vnode_t *vn)
+{
+    if (--vn->refcount > 0) return;
+    kq_t *kq = vn->fs_data;
+    epk_destroy(kq->ep);
+    free(kq->notes);
+    free(kq);
+    free(vn);
+}
+
+static const vnode_ops_t KQ_OPS = {
+    .poll  = kq_poll,
+    .unref = kq_unref,
+};
+
+static int64_t fb_kqueue_new(int cloexec)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    kq_t *kq = calloc(1, sizeof *kq);
+    vnode_t *vn = calloc(1, sizeof *vn);
+    vfs_file_t *file = vfs_file_alloc();
+    epoll_set_t *ep = epk_create();
+    if (!kq || !vn || !file || !ep) {
+        free(kq); free(vn);
+        if (file) vfs_file_free(file);
+        if (ep) epk_destroy(ep);
+        return -ENOMEM;
+    }
+    kq->ep = ep;
+    kmutex_init(&kq->lock);
+    vn->type = VFS_NODE_CHARDEV;
+    vn->ops = &KQ_OPS;
+    vn->fs_data = kq;
+    vn->refcount = 1;
+    file->vnode = vn;
+    file->flags = 2;
+    int fd = fd_alloc(t->fd_table, file, 0);
+    if (fd < 0) { vfs_file_free(file); return -EMFILE; }
+    if (cloexec) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
+    return fd;
+}
+
+FB0(fb_kqueue,  fb_kqueue_new(0))
+FB0(fb_kqueuex, fb_kqueue_new((a1 & 1) != 0))
+
+static int64_t fb_kevent(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    int nch = (int)a3, nev = (int)a5;
+    if (nch < 0 || nev < 0) return -EINVAL;
+    if (nev > 4096) nev = 4096;
+    vfs_file_t *f = fd_get(t->fd_table, (int)a1);
+    if (!f) return -EBADF;
+    if (!f->vnode || f->vnode->ops != &KQ_OPS) { fd_put(f); return -EBADF; }
+    kq_t *kq = f->vnode->fs_data;
+    int64_t timeout_ns = -1;
+    if (a6) {
+        int64_t ts[2];
+        if (syscall_copy_from_user(ts, (const void *)a6, sizeof ts) < 0) { fd_put(f); return -EFAULT; }
+        if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) { fd_put(f); return -EINVAL; }
+        timeout_ns = ts[0] * 1000000000LL + ts[1];
+    }
+    fb_kevent_t *out = nev ? malloc((size_t)nev * sizeof *out) : NULL;
+    kq_epev_t *ev = nev ? malloc((size_t)nev * sizeof *ev) : NULL;
+    if (nev && (!out || !ev)) { free(out); free(ev); fd_put(f); return -ENOMEM; }
+    int n = 0;
+    int64_t rc = 0;
+    kmutex_lock(&kq->lock);
+    for (int i = 0; i < nch; i++) {
+        fb_kevent_t ch;
+        if (syscall_copy_from_user(&ch, (const void *)(a2 + (uint64_t)i * sizeof ch), sizeof ch) < 0) { rc = -EFAULT; break; }
+        int r = kq_apply(kq, &ch);
+        if (r < 0 || (ch.flags & EV_RECEIPT)) {
+            if (n < nev) {
+                out[n] = ch;
+                out[n].flags |= EV_ERROR;
+                out[n].data = r < 0 ? fbsd_errno_from_linux(-r) : 0;
+                n++;
+            } else if (r < 0) {
+                rc = r;
+                break;
+            }
+        }
+    }
+    kmutex_unlock(&kq->lock);
+    uint64_t start = sched_now_ns();
+    while (rc == 0 && n == 0 && nev > 0) {
+        uint64_t nx = 0;
+        kmutex_lock(&kq->lock);
+        __atomic_store_n(&kq->kick, 0, __ATOMIC_RELEASE);
+        n = kq_collect_soft(kq, out, nev, &nx);
+        kmutex_unlock(&kq->lock);
+        if (n) break;
+        int64_t left = timeout_ns;
+        if (timeout_ns > 0) {
+            uint64_t el = sched_now_ns() - start;
+            left = el >= (uint64_t)timeout_ns ? 0 : timeout_ns - (int64_t)el;
+        }
+        int64_t got = epk_wait(kq->ep, ev, nev, left, nx, &kq->kick);
+        if (got < 0) { rc = got; break; }
+        if (got > 0) {
+            kmutex_lock(&kq->lock);
+            n = kq_translate(kq, ev, (int)got, out, nev);
+            kmutex_unlock(&kq->lock);
+            if (n) break;
+            continue;
+        }
+        if (left == 0) break;
+        if (timeout_ns > 0 && sched_now_ns() - start >= (uint64_t)timeout_ns) break;
+    }
+    if (rc == 0 && n && syscall_copy_to_user((void *)a4, out, (size_t)n * sizeof *out) < 0) rc = -EFAULT;
+    free(out);
+    free(ev);
+    fd_put(f);
+    return rc < 0 ? rc : n;
+}
+
 static int64_t fb_swapcontext(A6)
 {
     UNUSED6;
@@ -3372,7 +3872,7 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [324] = fb_mlockall,    [325] = fb_munlockall,  [326] = fb_getcwd,      [331] = fb_yield,
     [335] = fb_zero,        [340] = fb_sigprocmask, [341] = fb_sigsuspend,  [343] = fb_sigpending,
     [345] = fb_sigtimedwait, [346] = fb_sigwaitinfo, [360] = fb_getresuid,  [361] = fb_getresgid,
-    [376] = fb_access,      [390] = fb_enosys,      [391] = fb_chflags,     [416] = fb_sigaction,
+    [362] = fb_kqueue,      [376] = fb_access,      [390] = fb_enosys,      [391] = fb_chflags,     [416] = fb_sigaction,
     [417] = fb_sigreturn,   [421] = fb_getcontext,  [422] = fb_sigreturn,   [423] = fb_swapcontext,
     [429] = fb_sigwait,     [431] = fb_thr_exit,    [432] = fb_thr_self,    [454] = fb_umtx_op,
     [455] = fb_thr_new,     [466] = fb_zero,        [166] = fb_zero,    [433] = fb_thr_kill,    [456] = fb_sigqueue,
@@ -3390,7 +3890,7 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [546] = fb_futimens,    [547] = fb_utimensat,   [550] = fb_fdatasync,   [551] = fb_fstat,
     [552] = fb_fstatat,     [554] = fb_getdirentries, [555] = fb_statfs,    [556] = fb_fstatfs,
     [557] = fb_getfsstat,   [559] = fb_mknodat,     [563] = fb_getrandom,   [570] = fb_sysctlbyname,
-    [573] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
+    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
     [581] = fb_sched_getcpu, [595] = fb_getgroups,  [596] = fb_zero,
 };
 

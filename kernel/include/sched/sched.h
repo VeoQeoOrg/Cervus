@@ -285,6 +285,7 @@ typedef struct task {
     uint32_t   abi;
     uint32_t   lx_trace;
     struct vfork_wait *vfork_wait;
+    uint64_t   sig_posted;
 } task_t;
 
 #define TASK_ABI_CERVUS 0
