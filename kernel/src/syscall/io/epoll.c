@@ -260,39 +260,19 @@ void epoll_file_release(vfs_file_t *file)
     kmutex_unlock(&g_ep_mutex);
 }
 
+void epk_destroy(epoll_set_t *ep);
+int epk_poll(epoll_set_t *ep, int events);
+
 static void epoll_unref(vnode_t *n)
 {
     if (--n->refcount > 0) return;
-    epoll_set_t *ep = (epoll_set_t *)n->fs_data;
-    if (ep) {
-        kmutex_lock(&g_ep_mutex);
-        kmutex_lock(&ep->lock);
-        while (ep->n) ep_remove(ep, ep->items[ep->n - 1]);
-        kmutex_unlock(&ep->lock);
-        kmutex_unlock(&g_ep_mutex);
-        free(ep->items);
-        free(ep->tmp);
-        free(ep->polled);
-    }
-    free(ep);
+    epk_destroy((epoll_set_t *)n->fs_data);
     free(n);
 }
 
 static int epoll_poll(vnode_t *vn, int events)
 {
-    epoll_set_t *ep = (epoll_set_t *)vn->fs_data;
-    if (!ep || !(events & POLLIN)) return 0;
-    poll_wait(&ep->wq);
-    if (!kmutex_trylock(&ep->lock)) return 0;
-    uint64_t dl = 0;
-    int legacy = 0;
-    int ready = ep_collect(ep, NULL, 1, 0, &dl, &legacy);
-    kmutex_unlock(&ep->lock);
-    if (!ready) {
-        if (dl) poll_deadline(dl);
-        if (legacy) poll_mark_legacy();
-    }
-    return ready ? POLLIN : 0;
+    return epk_poll((epoll_set_t *)vn->fs_data, events);
 }
 
 static const vnode_ops_t EPOLL_OPS = {
@@ -359,42 +339,22 @@ static int ep_grow(epoll_set_t *ep)
     return 0;
 }
 
-int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
+int64_t epk_ctl(epoll_set_t *ep, vfs_file_t *epf, int op, vfs_file_t *target, int fd, uint32_t events, uint64_t data)
 {
-    task_t *t = syscall_cur_task();
-    if (!t || !t->fd_table) return -EINVAL;
-
-    struct { int fd; uint64_t evptr; } args = { fd, evptr };
-
-    epoll_event_t ev = { 0, 0 };
-    if (op != EPOLL_CTL_DEL) {
-        if (!args.evptr) return -EFAULT;
-        if (syscall_copy_from_user(&ev, (void *)args.evptr, sizeof ev) < 0)
-            return -EFAULT;
-    }
-
-    if ((int)epfd == args.fd) return -EINVAL;
-    vfs_file_t *target = fd_get(t->fd_table, args.fd);
-    if (!target) return -EBADF;
-
-    vfs_file_t *epf = epoll_file(t, (int)epfd);
-    if (!epf) { fd_put(target); return -EBADF; }
-    epoll_set_t *ep = (epoll_set_t *)epf->vnode->fs_data;
     int nested = target->vnode && target->vnode->ops == &EPOLL_OPS;
-
     kmutex_lock(&g_ep_mutex);
     kmutex_lock(&ep->lock);
     int64_t rc = 0;
     epitem_t *it = NULL;
     for (int i = 0; i < ep->n; i++) {
-        if (ep->items[i]->fd == args.fd && ep->items[i]->file == target) { it = ep->items[i]; break; }
+        if (ep->items[i]->fd == fd && ep->items[i]->file == target) { it = ep->items[i]; break; }
     }
 
     switch (op) {
         case EPOLL_CTL_ADD:
             if (it) { rc = -EEXIST; break; }
             if (ep->n >= EPOLL_MAX_WATCHED) { rc = -ENOSPC; break; }
-            if (nested && (epf->ep_items || ep_has_nested((epoll_set_t *)target->vnode->fs_data))) {
+            if (nested && ((epf && epf->ep_items) || ep_has_nested((epoll_set_t *)target->vnode->fs_data))) {
                 rc = -ELOOP;
                 break;
             }
@@ -403,9 +363,9 @@ int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
             if (!it) { rc = -ENOMEM; break; }
             it->ep     = ep;
             it->file   = target;
-            it->fd     = args.fd;
-            it->events = ev.events;
-            it->data   = ev.data;
+            it->fd     = fd;
+            it->events = events;
+            it->data   = data;
             it->cb.fn  = ep_item_cb;
             ep->items[ep->n++] = it;
             it->f_next = (epitem_t *)target->ep_items;
@@ -415,8 +375,8 @@ int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
             break;
         case EPOLL_CTL_MOD:
             if (!it) { rc = -ENOENT; break; }
-            it->events   = ev.events;
-            it->data     = ev.data;
+            it->events   = events;
+            it->data     = data;
             it->disabled = 0;
             ep_queue(ep, it);
             break;
@@ -431,6 +391,28 @@ int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
     kmutex_unlock(&ep->lock);
     kmutex_unlock(&g_ep_mutex);
     if (rc == 0 && op != EPOLL_CTL_DEL) waitq_wake_pollers(&ep->wq);
+    return rc;
+}
+
+int64_t epoll_ctl_args(uint64_t epfd, uint64_t op, int fd, uint64_t evptr)
+{
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EINVAL;
+
+    epoll_event_t ev = { 0, 0 };
+    if (op != EPOLL_CTL_DEL) {
+        if (!evptr) return -EFAULT;
+        if (syscall_copy_from_user(&ev, (void *)evptr, sizeof ev) < 0)
+            return -EFAULT;
+    }
+
+    if ((int)epfd == fd) return -EINVAL;
+    vfs_file_t *target = fd_get(t->fd_table, fd);
+    if (!target) return -EBADF;
+
+    vfs_file_t *epf = epoll_file(t, (int)epfd);
+    if (!epf) { fd_put(target); return -EBADF; }
+    int64_t rc = epk_ctl((epoll_set_t *)epf->vnode->fs_data, epf, (int)op, target, fd, ev.events, ev.data);
     fd_put(epf);
     fd_put(target);
     return rc;
@@ -444,15 +426,15 @@ int64_t sys_epoll_ctl(uint64_t epfd, uint64_t op, uint64_t fd_and_event)
     return epoll_ctl_args(epfd, op, args.fd, args.evptr);
 }
 
-static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, int maxevents, int timeout_ms)
+int64_t epk_wait(epoll_set_t *ep, void *kout, int maxevents, int64_t timeout_ns,
+                 uint64_t extra_deadline, volatile int *kick)
 {
-    (void)t;
+    epoll_event_t *out = kout;
     uint64_t deadline = 0;
-    if (timeout_ms > 0)
-        deadline = sched_now_ns() + (uint64_t)timeout_ms * 1000000ULL;
-
-    epoll_event_t *out = malloc((size_t)maxevents * sizeof *out);
-    if (!out) return -ENOMEM;
+    if (timeout_ns > 0)
+        deadline = sched_now_ns() + (uint64_t)timeout_ns;
+    uint64_t wake = deadline;
+    if (extra_deadline && (!wake || extra_deadline < wake)) wake = extra_deadline;
 
     poll_table_t pt;
     poll_table_init(&pt);
@@ -469,25 +451,75 @@ static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, in
         int n = ep_collect(ep, out, maxevents, 1, &dl, &legacy);
         kmutex_unlock(&ep->lock);
 
-        if (n > 0) {
-            r = n;
-            if (syscall_copy_to_user((void *)events_ptr, out, (size_t)n * sizeof *out) < 0) r = -EFAULT;
-            break;
-        }
-
-        if (timeout_ms == 0) break;
-        if (deadline && sched_now_ns() >= deadline) break;
+        if (n > 0) { r = n; break; }
+        if (kick && __atomic_load_n(kick, __ATOMIC_ACQUIRE)) break;
+        if (timeout_ns == 0) break;
+        uint64_t now = sched_now_ns();
+        if (wake && now >= wake) break;
 
         task_t *me = syscall_cur_task();
         if (me && (me->pending_kill || signal_pending_deliverable(me))) { r = -EINTR; break; }
         pt.legacy = legacy;
         pt.deadline_ns = dl;
-        poll_table_block(&pt, gseq, wseq, deadline);
+        poll_table_block(&pt, gseq, wseq, wake);
         poll_table_release(&pt);
     }
     poll_table_release(&pt);
+    return r;
+}
+
+static int64_t epoll_wait_on(task_t *t, epoll_set_t *ep, uint64_t events_ptr, int maxevents, int timeout_ms)
+{
+    (void)t;
+    epoll_event_t *out = malloc((size_t)maxevents * sizeof *out);
+    if (!out) return -ENOMEM;
+    int64_t timeout_ns = timeout_ms < 0 ? -1 : (int64_t)timeout_ms * 1000000LL;
+    int64_t r = epk_wait(ep, out, maxevents, timeout_ns, 0, NULL);
+    if (r > 0 && syscall_copy_to_user((void *)events_ptr, out, (size_t)r * sizeof *out) < 0) r = -EFAULT;
     free(out);
     return r;
+}
+
+epoll_set_t *epk_create(void)
+{
+    epoll_set_t *ep = calloc(1, sizeof *ep);
+    if (ep) kmutex_init(&ep->lock);
+    return ep;
+}
+
+void epk_destroy(epoll_set_t *ep)
+{
+    if (!ep) return;
+    kmutex_lock(&g_ep_mutex);
+    kmutex_lock(&ep->lock);
+    while (ep->n) ep_remove(ep, ep->items[ep->n - 1]);
+    kmutex_unlock(&ep->lock);
+    kmutex_unlock(&g_ep_mutex);
+    free(ep->items);
+    free(ep->tmp);
+    free(ep->polled);
+    free(ep);
+}
+
+int epk_poll(epoll_set_t *ep, int events)
+{
+    if (!ep || !(events & POLLIN)) return 0;
+    poll_wait(&ep->wq);
+    if (!kmutex_trylock(&ep->lock)) return 0;
+    uint64_t dl = 0;
+    int legacy = 0;
+    int ready = ep_collect(ep, NULL, 1, 0, &dl, &legacy);
+    kmutex_unlock(&ep->lock);
+    if (!ready) {
+        if (dl) poll_deadline(dl);
+        if (legacy) poll_mark_legacy();
+    }
+    return ready ? POLLIN : 0;
+}
+
+void epk_wake(epoll_set_t *ep)
+{
+    waitq_wake_pollers(&ep->wq);
 }
 
 int64_t epoll_wait_args(uint64_t epfd, uint64_t events_ptr, int maxevents, int timeout_ms)
