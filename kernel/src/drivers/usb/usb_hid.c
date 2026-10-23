@@ -218,13 +218,15 @@ void usb_hid_kbd_process_report(usb_hid_kbd_state_t *s, const uint8_t *report) {
     memcpy(s->prev_report, report, USB_HID_REPORT_LEN);
 }
 
-void usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n) {
+bool usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n) {
     uint64_t now = clocksource_now_ns();
+    bool held = false;
     for (int i = 0; i < n; i++) {
         usb_hid_kbd_state_t *s = states[i];
         if (!s) continue;
         for (int k = 0; k < USB_HID_MAX_HELD; k++) {
             if (s->held[k].usage == 0) continue;
+            held = true;
             if (now < s->held[k].next_emit_ns) continue;
             emit_one(s->held[k].usage, s->cur_modifier);
             uint64_t target = s->held[k].next_emit_ns + USB_HID_REPEAT_INTERVAL_NS;
@@ -232,6 +234,7 @@ void usb_hid_kbd_tick_repeats(usb_hid_kbd_state_t **states, int n) {
             s->held[k].next_emit_ns = target;
         }
     }
+    return held;
 }
 
 void usb_hid_mouse_process_report(const uint8_t *report, int len) {

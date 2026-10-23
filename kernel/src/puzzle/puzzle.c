@@ -417,6 +417,7 @@ static int puzzle_guardian_scan(puzzle_process_t *pp) {
 }
 
 #define PUZZLE_GUARD_INTERVAL_MS 50
+#define PUZZLE_GUARD_IDLE_MS     1000
 
 static void puzzle_guardian_task(void *arg) {
     (void)arg;
@@ -430,7 +431,7 @@ static void puzzle_guardian_task(void *arg) {
             if (pp) puzzle_guardian_scan(pp);
         }
         spinlock_release_irqrestore(&g_proc_lock, f);
-        task_sleep_ms(PUZZLE_GUARD_INTERVAL_MS);
+        task_sleep_ms(g_proc_count > 0 ? PUZZLE_GUARD_INTERVAL_MS : PUZZLE_GUARD_IDLE_MS);
     }
 }
 

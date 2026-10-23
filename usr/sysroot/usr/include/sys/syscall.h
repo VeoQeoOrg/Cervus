@@ -255,6 +255,7 @@ extern "C" {
 #define SYS_PRCTL           689
 #define SYS_FUTEX           690
 #define SYS_CLOSE_RANGE     691
+#define SYS_VT_SPAWN_WAIT   692
 #define SYS_close_range     SYS_CLOSE_RANGE
 #define __NR_close_range    SYS_CLOSE_RANGE
 #define SYS_prctl           SYS_PRCTL

@@ -217,7 +217,7 @@ int  xhci_hid_kbd_register(xhci_controller_t *c, uint8_t slot_id,
                            xhci_trb_t *ep0_ring, uintptr_t ep0_phys,
                            uint16_t *enq, uint8_t *cyc,
                            const usb_kbd_match_t *m);
-void xhci_hid_kbd_tick(void);
+bool xhci_hid_kbd_tick(void);
 int  xhci_hid_kbd_active_count(void);
 void xhci_hid_kbd_disconnect_slot(uint8_t slot_id);
 bool xhci_hid_kbd_handle_xfer_event(uint8_t slot_id, uint8_t dci, uint8_t cc);

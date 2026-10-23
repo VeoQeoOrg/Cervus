@@ -4,6 +4,7 @@
 #include "../../../../include/memory/dma.h"
 #include "../../../../include/memory/pmm.h"
 #include "../../../../include/io/serial.h"
+#include "../../../../include/time/clocksource.h"
 #include "../../../../include/syscall/errno.h"
 #include <string.h>
 
@@ -270,10 +271,12 @@ static void hid_recover_endpoint(xhci_hid_kbd_t *k) {
                   k->slot_id, k->ep_dci, cc_was, k->total_errors);
 }
 
-void xhci_hid_kbd_tick(void) {
+bool xhci_hid_kbd_tick(void) {
+    bool busy = false;
     for (int i = 0; i < g_hid_count; i++) {
         xhci_hid_kbd_t *k = &g_hid_kbds[i];
         if (k->active && k->needs_recovery) hid_recover_endpoint(k);
+        if (k->active && k->needs_recovery) busy = true;
     }
 
     usb_hid_kbd_state_t *states[XHCI_MAX_HID];
@@ -281,11 +284,12 @@ void xhci_hid_kbd_tick(void) {
     for (int i = 0; i < g_hid_count; i++) {
         if (g_hid_kbds[i].active) states[n++] = &g_hid_kbds[i].state;
     }
-    if (n > 0) usb_hid_kbd_tick_repeats(states, n);
+    if (n > 0 && usb_hid_kbd_tick_repeats(states, n)) busy = true;
 
-    static uint32_t kick = 0;
-    if (++kick >= 100) {
-        kick = 0;
+    uint64_t now = clocksource_now_ns();
+    static uint64_t kick_at = 0;
+    if (now >= kick_at) {
+        kick_at = now + 400000000ULL;
         for (int i = 0; i < g_hid_count; i++) {
             xhci_hid_kbd_t *k = &g_hid_kbds[i];
             if (!k->active || k->needs_recovery) continue;
@@ -296,9 +300,9 @@ void xhci_hid_kbd_tick(void) {
         }
     }
 
-    static uint32_t mon = 0;
-    if (++mon >= 500) {
-        mon = 0;
+    static uint64_t mon_at = 0;
+    if (now >= mon_at) {
+        mon_at = now + 2000000000ULL;
         for (int i = 0; i < g_hid_count; i++) {
             xhci_hid_kbd_t *k = &g_hid_kbds[i];
             if (!k->active || k->is_mouse) continue;
@@ -310,6 +314,7 @@ void xhci_hid_kbd_tick(void) {
                           k->total_errors, ep[2], k->enq);
         }
     }
+    return busy;
 }
 
 void xhci_hid_kbd_disconnect_slot(uint8_t slot_id) {

@@ -7,6 +7,7 @@
 #include <termios.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <sys/cervus.h>
 #include <sys/syscall.h>
 #include <stddef.h>
@@ -378,6 +379,10 @@ static void spawn_shell(int vt) {
     if (vt == 0) vt0_spawn_ns = cervus_uptime_ns();
 }
 
+static void on_sigchld(int sig) {
+    (void)sig;
+}
+
 static void make_runtime_dirs(void) {
     mode_t old = umask(0);
     mkdir("/run", 0755);
@@ -407,6 +412,12 @@ int main(void) {
     restore_audio_settings();
 
     unlink("/var/lib/herd/reboot-required");
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigchld;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
 
     boot_stage("spawning shell on vt0");
     spawn_shell(0);
@@ -444,13 +455,12 @@ int main(void) {
             }
         }
 
-        int n = cervus_vt_spawn_poll();
+        int n = cervus_vt_spawn_wait(1000);
         if (n >= 0 && n < NVT && vt_pid[n] == 0) {
             spawn_shell(n);
             continue;
         }
-
-        usleep(16000);
+        if (n < 0 && errno == ENOSYS) usleep(16000);
     }
     return 0;
 }

@@ -218,6 +218,7 @@ long     cervus_usb_list(cervus_usb_dev_t *out, int max);
 int      cervus_sync(void);
 
 int      cervus_vt_spawn_poll(void);
+int      cervus_vt_spawn_wait(unsigned int timeout_ms);
 int      cervus_vt_set_ctty(int vt);
 int      cervus_vt_clear_shell(int vt);
 int      cervus_vt_switch(int vt);

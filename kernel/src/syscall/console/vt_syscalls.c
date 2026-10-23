@@ -5,6 +5,10 @@ int64_t sys_vt_spawn_poll(void) {
     return vt_take_spawn_request();
 }
 
+int64_t sys_vt_spawn_wait(uint64_t timeout_ms) {
+    return vt_wait_spawn_request(timeout_ms * 1000000ULL);
+}
+
 int64_t sys_vt_set_ctty(uint64_t n) {
     task_t *t = syscall_cur_task();
     if (!t) return -ESRCH;

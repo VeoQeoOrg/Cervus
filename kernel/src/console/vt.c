@@ -7,6 +7,10 @@
 #include "../../include/memory/vmm.h"
 #include "../../include/apic/apic.h"
 #include "../../include/smp/smp.h"
+#include "../../include/sched/waitq.h"
+#include "../../include/smp/percpu.h"
+#include "../../include/signal/signal.h"
+#include "../../include/drivers/timer.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -299,6 +303,8 @@ void vt_switch(int n) {
     }
     spinlock_release_irqrestore(&g_lock, f);
 
+    if (!g_vts[n].has_shell) vt_spawn_kick();
+
     extern void seat_vt_switched(int vt);
     extern void input_release_held(void);
     input_release_held();
@@ -363,13 +369,23 @@ void vt_write(int n, const char *buf, size_t len) {
 
 static volatile int g_switch_req = -1;
 static int g_switch_worker;
+static spinlock_t g_switch_lock = SPINLOCK_INIT;
+static waitq_t g_switch_wq;
 
 static void vt_switch_worker(void *arg) {
     (void)arg;
     for (;;) {
         int n = __atomic_exchange_n(&g_switch_req, -1, __ATOMIC_ACQ_REL);
-        if (n >= 0) vt_switch(n);
-        task_sleep_ms(5);
+        if (n >= 0) {
+            vt_switch(n);
+            continue;
+        }
+        uint64_t f = spinlock_acquire_irqsave(&g_switch_lock);
+        if (__atomic_load_n(&g_switch_req, __ATOMIC_ACQUIRE) >= 0) {
+            spinlock_release_irqrestore(&g_switch_lock, f);
+            continue;
+        }
+        waitq_block(&g_switch_wq, &g_switch_lock, f, 0);
     }
 }
 
@@ -380,6 +396,9 @@ void vt_start_worker(void) {
 void vt_request_switch(int n) {
     if (!g_switch_worker) { vt_switch(n); return; }
     __atomic_store_n(&g_switch_req, n, __ATOMIC_RELEASE);
+    uint64_t f = spinlock_acquire_irqsave(&g_switch_lock);
+    waitq_wake_all(&g_switch_wq);
+    spinlock_release_irqrestore(&g_switch_lock, f);
 }
 
 void vt_handle_chord(int fn) {
@@ -446,6 +465,39 @@ void console_input_char(char c) {
     }
     if (vt_kbd_muted()) return;
     tty_vt_input(g_active, c);
+}
+
+static spinlock_t g_spawn_lock = SPINLOCK_INIT;
+static waitq_t g_spawn_wq;
+
+static bool vt_spawn_pending(void) {
+    for (int i = 0; i < VT_COUNT; i++)
+        if (g_vts[i].needs_shell && !g_vts[i].has_shell) return true;
+    return false;
+}
+
+void vt_spawn_kick(void) {
+    uint64_t f = spinlock_acquire_irqsave(&g_spawn_lock);
+    waitq_wake_all(&g_spawn_wq);
+    spinlock_release_irqrestore(&g_spawn_lock, f);
+}
+
+int vt_wait_spawn_request(uint64_t timeout_ns) {
+    task_t *me = (task_t *)percpu_current_task();
+    uint64_t deadline = timeout_ns ? sched_now_ns() + timeout_ns : 0;
+    for (;;) {
+        int n = vt_take_spawn_request();
+        if (n >= 0) return n;
+        if (!me) return -EAGAIN;
+        if (me->pending_kill || signal_pending_deliverable(me)) return -EINTR;
+        if (deadline && sched_now_ns() >= deadline) return -EAGAIN;
+        uint64_t f = spinlock_acquire_irqsave(&g_spawn_lock);
+        if (vt_spawn_pending()) {
+            spinlock_release_irqrestore(&g_spawn_lock, f);
+            continue;
+        }
+        waitq_block(&g_spawn_wq, &g_spawn_lock, f, deadline);
+    }
 }
 
 int vt_take_spawn_request(void) {

@@ -6,6 +6,10 @@ int cervus_vt_spawn_poll(void) {
     return (int)__cervus_sys_ret(syscall0(SYS_VT_SPAWN_POLL));
 }
 
+int cervus_vt_spawn_wait(unsigned int timeout_ms) {
+    return (int)__cervus_sys_ret(syscall1(SYS_VT_SPAWN_WAIT, (uint64_t)timeout_ms));
+}
+
 int cervus_vt_set_ctty(int vt) {
     return (int)__cervus_sys_ret(syscall1(SYS_VT_SET_CTTY, (uint64_t)vt));
 }

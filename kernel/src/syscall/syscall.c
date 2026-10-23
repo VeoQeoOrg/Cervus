@@ -109,6 +109,7 @@ extern int64_t sys_sync              (uint64_t, uint64_t, uint64_t, uint64_t, ui
 extern int64_t sys_disk_eject        (uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_disk_partition_gpt(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_vt_spawn_poll(void);
+extern int64_t sys_vt_spawn_wait(uint64_t timeout_ms);
 extern int64_t sys_vt_set_ctty(uint64_t);
 extern int64_t sys_vt_clear_shell(uint64_t);
 extern int64_t sys_vt_switch(uint64_t);
@@ -314,7 +315,7 @@ W0(sys_shutdown)    W0(sys_reboot)
 W3(sys_execve)
 W3(sys_wait)
 
-W0(sys_vt_spawn_poll)
+W0(sys_vt_spawn_poll) W1(sys_vt_spawn_wait)
 W1(sys_vt_set_ctty)
 W1(sys_vt_clear_shell)
 W1(sys_vt_switch)
@@ -454,6 +455,7 @@ static const syscall_fn_t syscall_table[SYSCALL_TABLE_SIZE] = {
     [SYS_USB_LIST]          = sys_usb_list,
     [SYS_SYNC]              = sys_sync,
     [SYS_VT_SPAWN_POLL]     = _sys_vt_spawn_poll,
+    [SYS_VT_SPAWN_WAIT]     = _sys_vt_spawn_wait,
     [SYS_VT_SET_CTTY]       = _sys_vt_set_ctty,
     [SYS_VT_CLEAR_SHELL]    = _sys_vt_clear_shell,
     [SYS_VT_SWITCH]         = _sys_vt_switch,

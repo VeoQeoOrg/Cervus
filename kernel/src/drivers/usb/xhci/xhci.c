@@ -1309,18 +1309,22 @@ void xhci_worker(void *arg) {
     xhci_hub_post_init();
     xhci_msc_post_init();
     xhci_net_post_init();
-    uint32_t slow_tick = 0;
+    uint64_t next_ports = 0;
     while (1) {
         int n_ctl = xhci_controller_count();
+        bool polled = false;
         for (int i = 0; i < n_ctl; i++) {
             xhci_controller_t *c = xhci_get_controller(i);
             if (!c || !c->ready) continue;
+            if (!c->irq_enabled) polled = true;
             xhci_drain_events(c);
         }
 
-        xhci_hid_kbd_tick();
+        bool busy = xhci_hid_kbd_tick();
 
-        if ((slow_tick++ % 25) == 0) {
+        uint64_t now = sched_now_ns();
+        if (now >= next_ports) {
+            next_ports = now + 100000000ULL;
             for (int i = 0; i < n_ctl; i++) {
                 xhci_controller_t *c = xhci_get_controller(i);
                 if (!c || !c->ready) continue;
@@ -1330,7 +1334,7 @@ void xhci_worker(void *arg) {
             xhci_hub_tick();
         }
 
-        task_sleep_ms(4);
+        task_sleep_ms(polled || busy ? 4 : 20);
     }
 }
 

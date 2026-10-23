@@ -49,6 +49,8 @@ void vt_start_worker(void);
 void console_input_char(char c);
 
 int  vt_take_spawn_request(void);
+int  vt_wait_spawn_request(uint64_t timeout_ns);
+void vt_spawn_kick(void);
 void vt_mark_shell_running(int n, int running);
 void vt_write(int vt, const char *buf, size_t len);
 void vt_cursor(int vt, int on);
