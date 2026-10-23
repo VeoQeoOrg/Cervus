@@ -314,6 +314,7 @@ static task_t* thread_task_new(task_t* parent, bool resume_like_parent, uintptr_
     t->umask           = parent->umask;
     t->ctty            = parent->ctty;
     t->abi             = parent->abi;
+    t->lx_trace        = parent->lx_trace;
     t->capabilities    = parent->capabilities;
     t->priority        = parent->priority;
     t->is_userspace    = parent->is_userspace;
@@ -644,6 +645,7 @@ task_t* task_fork(task_t* parent) {
     child->ctty            = parent->ctty;
     child->persona         = parent->persona;
     child->abi             = parent->abi;
+    child->lx_trace        = parent->lx_trace;
     child->pr_flags        = parent->pr_flags & ~PR_FLAG_SUBREAPER;
     memcpy(child->cwd, parent->cwd, sizeof(child->cwd));
     memcpy(child->root, parent->root, sizeof(child->root));

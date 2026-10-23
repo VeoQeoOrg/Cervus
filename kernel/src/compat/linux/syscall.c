@@ -230,7 +230,18 @@ LX0(lx_listen,     sys_listen(a1, a2))
 LX0(lx_getsockname, sys_getsockname(a1, a2, a3))
 LX0(lx_getpeername, sys_getpeername(a1, a2, a3))
 LX0(lx_socketpair, sys_socketpair(a1, a2, a3))
-LX0(lx_setsockopt, sys_setsockopt(a1, a2, a3, a4, a5))
+static int64_t lx_setsockopt(A6)
+{
+    UNUSED6;
+    int64_t r = sys_setsockopt(a1, a2, a3, a4, a5);
+    if (r != -ENOPROTOOPT) return r;
+    if ((a2 == 0 && (a3 == 11 || a3 == 1 || a3 == 10 || a3 == 15)) ||
+        (a2 == 41 && (a3 == 25 || a3 == 67)) ||
+        (a2 == 1 && (a3 == 12 || a3 == 9 || a3 == 15)) ||
+        (a2 == 6 && (a3 == 4 || a3 == 5 || a3 == 6 || a3 == 12 || a3 == 18)))
+        return 0;
+    return r;
+}
 LX0(lx_getsockopt, sys_getsockopt(a1, a2, a3, a4, a5))
 LX0(lx_fork,       sys_fork())
 LX0(lx_execve,     sys_execve(a1, a2, a3))
@@ -1168,6 +1179,42 @@ static int64_t lx_flock(A6)
     return 0;
 }
 
+#define LX_MMSG_SIZE 64
+#define LX_MSG_DONTWAIT 0x40
+#define LX_MSG_WAITFORONE 0x10000
+
+static int64_t lx_sendmmsg(A6)
+{
+    UNUSED6;
+    uint32_t n = (uint32_t)(a3 > 1024 ? 1024 : a3);
+    uint32_t done = 0;
+    for (; done < n; done++) {
+        uint64_t m = a2 + (uint64_t)done * LX_MMSG_SIZE;
+        int64_t r = sys_sendmsg(a1, m, a4);
+        if (r < 0) return done ? (int64_t)done : r;
+        uint32_t len = (uint32_t)r;
+        if (syscall_copy_to_user((void *)(m + 56), &len, sizeof len) < 0) return done ? (int64_t)done : -EFAULT;
+    }
+    return done;
+}
+
+static int64_t lx_recvmmsg(A6)
+{
+    UNUSED6;
+    uint32_t n = (uint32_t)(a3 > 1024 ? 1024 : a3);
+    uint64_t flags = a4 & ~(uint64_t)LX_MSG_WAITFORONE;
+    uint32_t done = 0;
+    for (; done < n; done++) {
+        uint64_t m = a2 + (uint64_t)done * LX_MMSG_SIZE;
+        int64_t r = sys_recvmsg(a1, m, flags);
+        if (r < 0) return done ? (int64_t)done : r;
+        uint32_t len = (uint32_t)r;
+        if (syscall_copy_to_user((void *)(m + 56), &len, sizeof len) < 0) return done ? (int64_t)done : -EFAULT;
+        if (a4 & LX_MSG_WAITFORONE) flags |= LX_MSG_DONTWAIT;
+    }
+    return done;
+}
+
 static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [0]   = lx_read,        [1]   = lx_write,       [2]   = lx_open,        [3]   = lx_close,
     [4]   = lx_stat,        [5]   = lx_fstat,       [6]   = lx_lstat,       [7]   = lx_poll,
@@ -1229,6 +1276,7 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [196] = lx_xattr_list,  [197] = lx_enodata,     [198] = lx_enodata,     [199] = lx_enodata,
     [221] = lx_zero,        [277] = lx_zero,        [306] = lx_zero,        [324] = lx_enosys,
     [253] = lx_enosys,      [254] = lx_enosys,      [255] = lx_enosys,      [294] = lx_enosys,
+    [299] = lx_recvmmsg,    [307] = lx_sendmmsg,    [326] = lx_enosys,
 };
 
 static volatile uint64_t g_lx_reported[LX_NR_MAX / 64];
@@ -1236,6 +1284,14 @@ static volatile uint64_t g_lx_reported[LX_NR_MAX / 64];
 int64_t linux_syscall(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
                       uint64_t a4, uint64_t a5, uint64_t a6)
 {
+    task_t *me = syscall_cur_task();
+    if (me && me->lx_trace) {
+        int64_t r = nr < LX_NR_MAX && g_lx_table[nr] ? g_lx_table[nr](a1, a2, a3, a4, a5, a6) : -ENOSYS;
+        serial_printf("[lxtrace] %u %llu(%llx, %llx, %llx, %llx, %llx) = %lld\n", me->pid,
+                      (unsigned long long)nr, (unsigned long long)a1, (unsigned long long)a2,
+                      (unsigned long long)a3, (unsigned long long)a4, (unsigned long long)a5, (long long)r);
+        return r;
+    }
     if (nr < LX_NR_MAX && g_lx_table[nr]) return g_lx_table[nr](a1, a2, a3, a4, a5, a6);
     if (nr < LX_NR_MAX) {
         uint64_t bit = 1ULL << (nr & 63);

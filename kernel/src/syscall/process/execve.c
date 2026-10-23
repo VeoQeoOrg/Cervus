@@ -399,6 +399,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
         for (int i = 0; i < envp.count; i++) {
             if (strcmp(envp.buf + envp.offs[i], "PUZZLE=0") == 0) puzzle_on = 0;
             if (strcmp(envp.buf + envp.offs[i], "CERVUS_PROFILE=1") == 0) profile_start(t);
+            if (strcmp(envp.buf + envp.offs[i], "LXTRACE=1") == 0) t->lx_trace = 1;
         }
         if (puzzle_on && !ptrace_traced(t))
             puzzle_create(t, &elf, elf.mm->brk_start, elf.stack_top, elf.stack_size,

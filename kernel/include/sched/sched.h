@@ -283,6 +283,7 @@ typedef struct task {
     void      *poll_tbl;
     volatile uint64_t poll_wake_seq;
     uint32_t   abi;
+    uint32_t   lx_trace;
 } task_t;
 
 #define TASK_ABI_CERVUS 0
