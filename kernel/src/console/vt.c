@@ -387,6 +387,16 @@ void vt_handle_chord(int fn) {
     vt_request_switch(fn - 1);
 }
 
+bool vt_flush_pending(void) {
+    extern bool console_has_pending(void);
+    return g_inited && console_has_pending();
+}
+
+uint64_t vt_blink_next_ns(void) {
+    if (!g_inited || g_vts[g_active].is_monitor || !console_cursor_visible()) return UINT64_MAX;
+    return g_blink_next;
+}
+
 void vt_tick_flush(void) {
     if (!g_inited) return;
     if (!spinlock_try_acquire(&g_lock)) return;

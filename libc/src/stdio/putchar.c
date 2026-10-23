@@ -149,6 +149,11 @@ void console_flush_pending(void) {
     do_flush_now();
 }
 
+bool console_has_pending(void) {
+    if (g_offscreen || !global_framebuffer) return false;
+    return g_need_redraw || dirty_y_min < dirty_y_max;
+}
+
 void console_flush_now(void) {
     if (g_offscreen || !global_framebuffer) return;
     if (!g_need_redraw && dirty_y_min >= dirty_y_max) return;

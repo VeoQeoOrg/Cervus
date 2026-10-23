@@ -20,6 +20,82 @@ extern void    sched_wakeup_sleepers(uint64_t now_ns);
 
 DEFINE_PER_CPU(uint32_t, g_stall_ctr) = 0;
 DEFINE_PER_CPU(uint64_t, g_stall_seen) = 0;
+DEFINE_PER_CPU(uint32_t, g_rlim_ctr) = 0;
+
+#define NOHZ_MIN_NS 2000000ULL
+#define NOHZ_MAX_NS 1000000000ULL
+#define WATCHDOG_PERIOD_NS 2000000000ULL
+
+extern volatile uint32_t sched_ready_flag;
+extern uint64_t sched_next_wakeup_ns(void);
+extern uint64_t ktimer_next_ns(void);
+extern bool     vt_flush_pending(void);
+extern uint64_t vt_blink_next_ns(void);
+extern bool     monitor_wants_tick(void);
+extern uint32_t smp_get_lapic_id_for_cpu(uint32_t cpu_index);
+
+static volatile uint64_t g_nohz_until;
+static uint64_t g_nohz_t0;
+static uint64_t g_nohz_ticks0;
+static uint64_t g_wd_last_ns;
+
+static void nohz_catch_up(void)
+{
+    if (!g_nohz_t0) return;
+    uint64_t want = g_nohz_ticks0 + (sched_now_ns() - g_nohz_t0) / 1000000ULL;
+    if (want > ticks) ticks = want;
+    g_nohz_t0 = 0;
+}
+
+void tick_nohz_idle_enter(uint32_t cpu)
+{
+    percpu_t *pc = get_percpu();
+    if (!pc || !sched_ready_flag) return;
+    uint64_t now = sched_now_ns();
+    uint64_t next = (g_ctrlc_pending || vt_flush_pending() || clocksource_is_tick_based()) ? 0 : UINT64_MAX;
+    if (cpu == 0) {
+        nohz_catch_up();
+        if (monitor_wants_tick()) next = 0;
+        __atomic_store_n(&g_nohz_until, UINT64_MAX, __ATOMIC_SEQ_CST);
+        uint64_t t = sched_next_wakeup_ns();
+        if (t < next) next = t;
+        t = ktimer_next_ns();
+        if (t < next) next = t;
+        t = vt_blink_next_ns();
+        if (t < next) next = t;
+        if (next > now + NOHZ_MAX_NS) next = now + NOHZ_MAX_NS;
+    }
+    if (next < now + NOHZ_MIN_NS) {
+        if (cpu == 0) __atomic_store_n(&g_nohz_until, 0, __ATOMIC_SEQ_CST);
+        apic_tick_restart();
+        return;
+    }
+    if (cpu == 0) {
+        __atomic_store_n(&g_nohz_until, next, __ATOMIC_SEQ_CST);
+        g_nohz_t0 = now;
+        g_nohz_ticks0 = ticks;
+    }
+    apic_tick_stop(next == UINT64_MAX ? 0 : next - now);
+}
+
+void tick_nohz_restart(void)
+{
+    percpu_t *pc = get_percpu();
+    if (!pc || !pc->tick_stopped) return;
+    if (smp_cpu_index() == 0) {
+        nohz_catch_up();
+        __atomic_store_n(&g_nohz_until, 0, __ATOMIC_SEQ_CST);
+    }
+    apic_tick_restart();
+}
+
+void tick_nohz_kick(uint64_t deadline_ns)
+{
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (deadline_ns >= __atomic_load_n(&g_nohz_until, __ATOMIC_SEQ_CST)) return;
+    if (smp_cpu_index() == 0) return;
+    ipi_reschedule_cpu(smp_get_lapic_id_for_cpu(0));
+}
 
 static void tick_stall_check(uint32_t cpu)
 {
@@ -41,16 +117,17 @@ static void tick_stall_check(uint32_t cpu)
 
 DEFINE_IRQ(0x20, timer_handler)
 {
-    if (apic_deadline_active()) apic_deadline_rearm();
+    percpu_t* pc = get_percpu();
+    if (apic_deadline_active() && !(pc && pc->tick_stopped)) apic_deadline_rearm();
     lapic_eoi();
 
     uint32_t cpu = smp_cpu_index();
     task_t* current = current_task[cpu];
     if (current && current->prof_buf) profile_tick(current, frame->rip);
-    percpu_t* pc = get_percpu();
 
-    if (cpu == 0) ticks++;
-    else tick_stall_check(cpu);
+    if (cpu != 0) tick_stall_check(cpu);
+    else if (g_nohz_t0) nohz_catch_up();
+    else ticks++;
 
     extern int vt_kbd_muted(void);
     if (g_ctrlc_pending && __sync_bool_compare_and_swap(&g_ctrlc_pending, 1, 0) && !vt_kbd_muted()) {
@@ -82,12 +159,17 @@ DEFINE_IRQ(0x20, timer_handler)
     if (cpu == 0) {
         extern void monitor_tick(void);
         monitor_tick();
-        if ((ticks & 2047) == 0) clocksource_watchdog_tick();
+        uint64_t now = sched_now_ns();
+        if (now - g_wd_last_ns >= WATCHDOG_PERIOD_NS) {
+            g_wd_last_ns = now;
+            clocksource_watchdog_tick();
+        }
     }
 
     if (!current) return;
 
-    if (current->is_userspace && current->rlim[RLIMIT_CPU_K].cur != RLIM_INF_K && (ticks % 100) == 0)
+    if (current->is_userspace && current->rlim[RLIMIT_CPU_K].cur != RLIM_INF_K && pc &&
+        ++(*per_cpu_ptr(g_rlim_ctr, pc)) % 100 == 0)
         sched_check_cpu_limit(current, sched_now_ns());
 
     if (current->pending_kill && pc) {

@@ -191,6 +191,7 @@ void tsc_recalibrate(uint64_t new_khz) {
 static bool g_deadline_mode = false;
 
 DEFINE_PER_CPU(uint64_t, g_ddl_next) = 0;
+DEFINE_PER_CPU(uint32_t, g_lapic_per_ms) = 0;
 
 static inline void apic_wrmsr(uint32_t msr, uint64_t val) {
     asm volatile("wrmsr" :: "c"(msr), "a"((uint32_t)val),
@@ -238,6 +239,42 @@ void apic_deadline_rearm(void) {
         next = now + period;
     }
     apic_wrmsr(MSR_TSC_DEADLINE, next);
+}
+
+void apic_tick_stop(uint64_t delta_ns) {
+    percpu_t *pc = get_percpu();
+    if (!pc) return;
+    if (g_deadline_mode) {
+        apic_wrmsr(MSR_TSC_DEADLINE, delta_ns ? rdtsc() + delta_ns * g_tsc_khz / 1000000ULL : 0);
+    } else {
+        uint32_t *slot = per_cpu_ptr(g_lapic_per_ms, pc);
+        if (!pc->tick_stopped) *slot = lapic_read(LAPIC_TIMER_ICR);
+        uint32_t per_ms = *slot;
+        if (!per_ms) return;
+        lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0x20);
+        if (delta_ns) {
+            uint64_t count = delta_ns * per_ms / 1000000ULL;
+            if (count > 0xFFFFFFFFULL) count = 0xFFFFFFFFULL;
+            lapic_write(LAPIC_TIMER, 0x20);
+            lapic_write(LAPIC_TIMER_ICR, count ? (uint32_t)count : 1);
+        }
+    }
+    pc->tick_stopped = 1;
+}
+
+void apic_tick_restart(void) {
+    percpu_t *pc = get_percpu();
+    if (!pc || !pc->tick_stopped) return;
+    pc->tick_stopped = 0;
+    if (g_deadline_mode) {
+        uint64_t next = rdtsc() + g_tsc_khz;
+        *per_cpu_ptr(g_ddl_next, pc) = next;
+        apic_wrmsr(MSR_TSC_DEADLINE, next);
+    } else {
+        lapic_write(LAPIC_TIMER, LAPIC_TIMER_MASKED | 0x20);
+        lapic_write(LAPIC_TIMER_ICR, *per_cpu_ptr(g_lapic_per_ms, pc));
+        lapic_write(LAPIC_TIMER, 0x20 | LAPIC_TIMER_PERIODIC);
+    }
 }
 
 static void apic_deadline_start(uint32_t vector) {

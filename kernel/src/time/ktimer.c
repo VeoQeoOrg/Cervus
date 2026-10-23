@@ -34,7 +34,12 @@ static void insert_locked(ktimer_t *t)
 
 static void update_next_locked(void)
 {
-    __atomic_store_n(&g_kt_next, g_kt_head ? g_kt_head->expires : UINT64_MAX, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_kt_next, g_kt_head ? g_kt_head->expires : UINT64_MAX, __ATOMIC_SEQ_CST);
+}
+
+uint64_t ktimer_next_ns(void)
+{
+    return __atomic_load_n(&g_kt_next, __ATOMIC_SEQ_CST);
 }
 
 void ktimer_init(ktimer_t *t, void (*fn)(ktimer_t *))
@@ -58,6 +63,7 @@ static void arm(ktimer_t *t, uint64_t expires, int base, int64_t rt_expires)
     insert_locked(t);
     update_next_locked();
     spinlock_release_irqrestore(&g_kt_lock, f);
+    tick_nohz_kick(expires);
 }
 
 void ktimer_arm(ktimer_t *t, uint64_t expires_mono_ns)

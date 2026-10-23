@@ -864,9 +864,9 @@ int64_t sys_sigtimedwait(uint64_t set_ptr, uint64_t info_ptr, uint64_t ts_ptr) {
 
         t->sig_waitset = set;
         t->wakeup_time_ns = timed ? deadline : 0;
-        if (timed) sched_note_wakeup(deadline);
         t->runnable = false;
         t->state = TASK_BLOCKED;
+        if (timed) sched_note_wakeup(deadline);
         __atomic_thread_fence(__ATOMIC_SEQ_CST);
         if ((t->sig_pending & set) || (t->sig_pending & ~t->sig_blocked) || t->pending_kill)
             task_unblock(t);

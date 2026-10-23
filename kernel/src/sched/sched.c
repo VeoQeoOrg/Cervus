@@ -49,9 +49,17 @@ void sched_note_wakeup(uint64_t deadline_ns) {
     uint64_t cur = __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_RELAXED);
     while (deadline_ns < cur) {
         if (__atomic_compare_exchange_n(&g_earliest_wakeup_ns, &cur, deadline_ns,
-                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                        false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+            tick_nohz_kick(deadline_ns);
             break;
+        }
     }
+}
+
+uint64_t sched_next_wakeup_ns(void) {
+    uint64_t w = __atomic_load_n(&g_earliest_wakeup_ns, __ATOMIC_SEQ_CST);
+    uint64_t a = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_SEQ_CST);
+    return a < w ? a : w;
 }
 
 extern tss_t* tss[MAX_CPUS];
@@ -1316,6 +1324,8 @@ void sched_reschedule(void) {
         }
     }
 
+    if (next != &idle_tasks[cpu]) tick_nohz_restart();
+
     if (old && old->kvm_vcpu) kvm_arch->sched_out(old->kvm_vcpu);
 
     if (old && old->fpu_state && old->state != TASK_ZOMBIE && old->state != TASK_DEAD) {
@@ -1527,8 +1537,10 @@ static void note_alarm(uint64_t deadline_ns) {
     uint64_t cur = __atomic_load_n(&g_earliest_alarm_ns, __ATOMIC_RELAXED);
     while (deadline_ns < cur) {
         if (__atomic_compare_exchange_n(&g_earliest_alarm_ns, &cur, deadline_ns,
-                                        false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+                                        false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED)) {
+            tick_nohz_kick(deadline_ns);
             break;
+        }
     }
 }
 
@@ -1569,6 +1581,8 @@ void sched_wakeup_sleepers(uint64_t now_ns) {
     uint64_t next_alarm    = UINT64_MAX;
 
     uint64_t _irqf = spinlock_acquire_irqsave(&pid_lock);
+    __atomic_store_n(&g_earliest_wakeup_ns, UINT64_MAX, __ATOMIC_SEQ_CST);
+    __atomic_store_n(&g_earliest_alarm_ns,  UINT64_MAX, __ATOMIC_SEQ_CST);
     for (uint32_t i = 1; i < MAX_PIDS; i++) {
         task_t *t = pid_table[i];
         if (!t) continue;
@@ -1597,9 +1611,9 @@ void sched_wakeup_sleepers(uint64_t now_ns) {
             next_earliest = t->wakeup_time_ns;
         }
     }
-    __atomic_store_n(&g_earliest_wakeup_ns, next_earliest, __ATOMIC_RELAXED);
-    __atomic_store_n(&g_earliest_alarm_ns,  next_alarm,    __ATOMIC_RELAXED);
     spinlock_release_irqrestore(&pid_lock, _irqf);
+    sched_note_wakeup(next_earliest);
+    note_alarm(next_alarm);
 
     for (int i = 0; i < wake_count; i++) {
         enqueue_global(to_wake[i]);
@@ -1639,6 +1653,7 @@ static void idle_loop(void* arg) {
             sched_reschedule();
             continue;
         }
+        tick_nohz_idle_enter(cpu);
         asm volatile("sti; hlt");
         if (__atomic_exchange_n(&pc->idle_missed, 0, __ATOMIC_RELAXED)) window = idle_poll_grow(window);
         else window = window / 2 < IDLE_POLL_MIN_NS ? 0 : window / 2;

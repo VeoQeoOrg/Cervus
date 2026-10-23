@@ -105,6 +105,8 @@ bool tsc_deadline_supported(void);
 bool tsc_is_invariant(void);
 bool apic_deadline_active(void);
 void apic_deadline_rearm(void);
+void apic_tick_stop(uint64_t delta_ns);
+void apic_tick_restart(void);
 
 uint64_t hpet_read_counter(void);
 uint64_t hpet_get_frequency(void);

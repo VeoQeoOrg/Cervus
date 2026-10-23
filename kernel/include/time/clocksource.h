@@ -20,6 +20,7 @@ void          clocksource_select(void);
 clocksource_t *clocksource_current(void);
 clocksource_t *clocksource_watchdog(void);
 uint64_t      clocksource_now_ns(void);
+bool          clocksource_is_tick_based(void);
 void          clocksource_watchdog_tick(void);
 int           clocksource_list(char *buf, int max);
 void          kvmclock_init(void);

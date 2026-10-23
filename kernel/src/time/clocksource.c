@@ -83,6 +83,7 @@ void clocksource_select(void) {
 }
 
 clocksource_t *clocksource_current(void)  { return g_cs_current; }
+bool clocksource_is_tick_based(void)      { return !g_cs_current || g_cs_current == &cs_jiffies; }
 clocksource_t *clocksource_watchdog(void) { return g_cs_watchdog; }
 
 uint64_t clocksource_now_ns(void) {

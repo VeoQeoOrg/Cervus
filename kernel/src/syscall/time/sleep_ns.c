@@ -12,9 +12,9 @@ int64_t sys_sleep_ns(uint64_t ns)
     uint64_t deadline = sched_now_ns() + ns;
     for (;;) {
         me->wakeup_time_ns = deadline;
-        sched_note_wakeup(deadline);
         me->runnable = false;
         me->state    = TASK_BLOCKED;
+        sched_note_wakeup(deadline);
 
         sched_reschedule();
 

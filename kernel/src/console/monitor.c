@@ -287,6 +287,10 @@ void monitor_tick(void) {
     if (g_boot_echo) mon_boot_echo();
 }
 
+bool monitor_wants_tick(void) {
+    return g_dirty || vt_active() == VT_MONITOR_INDEX;
+}
+
 void monitor_init(void) {
     g_mode = MON_LIVE;
     klog_set_notify(mon_notify);
