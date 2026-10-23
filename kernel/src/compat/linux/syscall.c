@@ -1063,6 +1063,69 @@ static int64_t lx_clone(A6)
     return pid;
 }
 
+LX0(lx_zero,       0)
+LX0(lx_enotsup,    -EOPNOTSUPP)
+LX0(lx_enodata,    -ENODATA)
+
+static int64_t lx_xattr_list(A6)
+{
+    UNUSED6;
+    return 0;
+}
+
+static int64_t lx_times(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    uint64_t ticks = sched_now_ns() / 10000000ULL;
+    if (a1 && t) {
+        uint64_t ut = t->total_runtime / 10000000ULL;
+        int64_t tms[4] = { (int64_t)ut, 0, 0, 0 };
+        if (syscall_copy_to_user((void *)a1, tms, sizeof tms) < 0) return -EFAULT;
+    }
+    return (int64_t)ticks;
+}
+
+static int64_t lx_sched_getparam(A6)
+{
+    UNUSED6;
+    int32_t prio = 0;
+    return syscall_copy_to_user((void *)a2, &prio, sizeof prio);
+}
+
+static int64_t lx_sched_prio_max(A6) { UNUSED6; return (a1 == 1 || a1 == 2) ? 99 : 0; }
+static int64_t lx_sched_prio_min(A6) { UNUSED6; return (a1 == 1 || a1 == 2) ? 1 : 0; }
+
+static int64_t lx_sched_rr_get_interval(A6)
+{
+    UNUSED6;
+    lx_timespec_t ts = { 0, 10000000 };
+    return syscall_copy_to_user((void *)a2, &ts, sizeof ts);
+}
+
+static int64_t lx_capget(A6)
+{
+    UNUSED6;
+    uint32_t hdr[2];
+    if (syscall_copy_from_user(hdr, (const void *)a1, sizeof hdr) < 0) return -EFAULT;
+    if (!a2) return 0;
+    task_t *t = syscall_cur_task();
+    uint32_t full = (t && t->uid == 0) ? 0xFFFFFFFFu : 0;
+    uint32_t data[6] = { full, full, 0, full, full, 0 };
+    return syscall_copy_to_user((void *)a2, data, sizeof data);
+}
+
+static int64_t lx_flock(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f = fd_get(t->fd_table, (int)a1);
+    if (!f) return -EBADF;
+    fd_put(f);
+    return 0;
+}
+
 static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [0]   = lx_read,        [1]   = lx_write,       [2]   = lx_open,        [3]   = lx_close,
     [4]   = lx_stat,        [5]   = lx_fstat,       [6]   = lx_lstat,       [7]   = lx_poll,
@@ -1116,6 +1179,14 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [309] = lx_getcpu,      [316] = lx_renameat2,   [318] = lx_getrandom,   [319] = lx_memfd_create,
     [322] = lx_execveat,    [332] = lx_statx,       [334] = lx_enosys,      [435] = lx_enosys,
     [436] = lx_close_range, [439] = lx_faccessat2,  [220] = lx_semtimedop,
+    [73]  = lx_flock,       [100] = lx_times,       [125] = lx_capget,      [126] = lx_zero,
+    [142] = lx_zero,        [143] = lx_sched_getparam, [146] = lx_sched_prio_max,
+    [147] = lx_sched_prio_min, [148] = lx_sched_rr_get_interval, [187] = lx_zero,
+    [188] = lx_enotsup,     [189] = lx_enotsup,     [190] = lx_enotsup,     [191] = lx_enodata,
+    [192] = lx_enodata,     [193] = lx_enodata,     [194] = lx_xattr_list,  [195] = lx_xattr_list,
+    [196] = lx_xattr_list,  [197] = lx_enodata,     [198] = lx_enodata,     [199] = lx_enodata,
+    [221] = lx_zero,        [277] = lx_zero,        [306] = lx_zero,        [324] = lx_enosys,
+    [253] = lx_enosys,      [254] = lx_enosys,      [255] = lx_enosys,      [294] = lx_enosys,
 };
 
 static volatile uint64_t g_lx_reported[LX_NR_MAX / 64];

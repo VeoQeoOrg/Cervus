@@ -285,14 +285,23 @@ static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *re
     vfs_file_t *f = NULL;
     char full[VFS_MAX_PATH];
     const char *root = path[0] == '/' ? task_fs_root() : NULL;
-    if (root) {
-        size_t rl = strlen(root), pl = strlen(path);
+    size_t rl = root ? strlen(root) : 0, pl = strlen(path);
+    if (result->linux_abi && path[0] == '/') {
+        static const char compat[] = "/compat/linux";
+        if (rl + sizeof compat - 1 + pl + 1 <= sizeof(full)) {
+            if (rl) memcpy(full, root, rl);
+            memcpy(full + rl, compat, sizeof compat - 1);
+            memcpy(full + rl + sizeof compat - 1, path, pl + 1);
+            if (vfs_open(full, 0, 0, &f) < 0) f = NULL;
+        }
+    }
+    if (!f && root) {
         if (rl + pl + 1 > sizeof(full)) return ELF_ERR_NULL;
         memcpy(full, root, rl);
         memcpy(full + rl, path, pl + 1);
         path = full;
     }
-    if (vfs_open(path, 0, 0, &f) < 0 || !f) return ELF_ERR_NULL;
+    if (!f && (vfs_open(path, 0, 0, &f) < 0 || !f)) return ELF_ERR_NULL;
 
     vfs_stat_t st;
     if (vfs_fstat(f, &st) < 0) { vfs_close(f); return ELF_ERR_NULL; }

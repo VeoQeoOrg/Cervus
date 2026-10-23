@@ -183,6 +183,34 @@ size_t syscall_root_prefix(const char *path, const char *root)
     return rl;
 }
 
+#define LINUX_COMPAT_ROOT "/compat/linux"
+
+static void linux_compat_redirect(char *dst, size_t rl, size_t max)
+{
+    const char *p = dst + rl;
+    size_t cl = sizeof(LINUX_COMPAT_ROOT) - 1;
+    if (p[0] != '/' || p[1] == '\0') return;
+    if (strncmp(p, LINUX_COMPAT_ROOT, cl) == 0 && (p[cl] == '/' || p[cl] == '\0')) return;
+    size_t pl = strlen(p);
+    if (rl + cl + pl + 1 > max || cl + pl + 1 > VFS_MAX_PATH) return;
+    char cand[VFS_MAX_PATH];
+    memcpy(cand, dst, rl);
+    memcpy(cand + rl, LINUX_COMPAT_ROOT, cl);
+    memcpy(cand + rl + cl, p, pl + 1);
+    vfs_stat_t st;
+    if (vfs_lstat(cand, &st) < 0) {
+        static const char *const libdirs[] = { "/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/", "/usr/local/lib/" };
+        bool lib = false;
+        for (size_t i = 0; i < sizeof libdirs / sizeof libdirs[0] && !lib; i++)
+            lib = strncmp(p, libdirs[i], strlen(libdirs[i])) == 0;
+        char croot[VFS_MAX_PATH];
+        memcpy(croot, dst, rl);
+        memcpy(croot + rl, LINUX_COMPAT_ROOT, cl + 1);
+        if (!lib || vfs_lstat(croot, &st) < 0) return;
+    }
+    memcpy(dst, cand, rl + cl + pl + 1);
+}
+
 int syscall_resolve_path(char *dst, const char *path, size_t max)
 {
     if (!dst || max == 0) return -EINVAL;
@@ -218,6 +246,7 @@ int syscall_resolve_path(char *dst, const char *path, size_t max)
     int r = path_require_dirs(dst);
     if (r < 0) return r;
     syscall_path_normalize(dst + rl);
+    if (path[0] == '/' && t && t->abi == TASK_ABI_LINUX) linux_compat_redirect(dst, rl, max);
     if (rl && dst[rl] == '/' && dst[rl + 1] == '\0') dst[rl] = '\0';
     return 0;
 }
