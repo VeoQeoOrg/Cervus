@@ -968,8 +968,11 @@ int sock_get_name(const vnode_t *vn, int peer, sock_addr_t *out)
     }
     out->ip = s->local_ip;
     memcpy(out->ip6, s->local_ip6, 16);
-    if (s->family == AF_INET && !out->ip && s->connected && s->tcb)
-        tcp_local(s->tcb, &out->ip, NULL);
+    if (s->type == SOCK_STREAM && s->tcb && !s->listening) {
+        static const uint8_t any6[16];
+        if (s->family == AF_INET && !out->ip) tcp_local(s->tcb, &out->ip, NULL);
+        if (s->family == AF_INET6 && !memcmp(out->ip6, any6, 16)) tcp_local(s->tcb, NULL, out->ip6);
+    }
     if (s->family == AF_INET && !out->ip && s->connected && s->type != SOCK_STREAM) {
         netdev_t *d = (s->peer_ip >> 24) == 127 ? NULL : netdev_route(s->peer_ip, NULL);
         if (!d && (s->peer_ip >> 24) != 127) d = netdev_default();
