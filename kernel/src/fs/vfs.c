@@ -668,6 +668,8 @@ int vfs_fstat(vfs_file_t *file, vfs_stat_t *out) {
 
 int64_t vfs_ioctl(vfs_file_t *file, uint64_t req, void *arg) {
     if (!file || !file->vnode) return -EBADF;
+    if (file->vnode->ops && file->vnode->ops->ioctl_kfile)
+        return file->vnode->ops->ioctl_kfile(file, req, arg);
     if (!file->vnode->ops || !file->vnode->ops->ioctl) return -ENOTTY;
     return file->vnode->ops->ioctl(file->vnode, req, arg);
 }

@@ -121,6 +121,7 @@ typedef struct vnode_ops {
     void    (*release_file)(struct vfs_file *file);
     int64_t (*write_file)(struct vfs_file *file, const void *buf, size_t len);
     int64_t (*ioctl_file)(struct vfs_file *file, uint64_t req, uint64_t arg);
+    int64_t (*ioctl_kfile)(struct vfs_file *file, uint64_t req, void *arg);
 } vnode_ops_t;
 
 struct vnode {

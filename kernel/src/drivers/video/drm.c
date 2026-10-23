@@ -106,10 +106,22 @@ typedef struct {
 static drm_blob_t g_blobs[DRM_MAX_BLOBS];
 static uint32_t   g_next_blob_id = 1;
 
-static struct drm_event_vblank g_events[DRM_EVENT_QUEUE];
-static int g_ev_head, g_ev_tail, g_ev_count;
-static task_t *g_ev_waiter;
+typedef struct drm_client {
+    vfs_file_t              *file;
+    struct drm_event_vblank  ev[DRM_EVENT_QUEUE];
+    int                      head, tail, count;
+    struct drm_client       *next;
+} drm_client_t;
+
+static drm_client_t *g_clients;
 static waitq_t g_drm_pq;
+
+static drm_client_t *client_of(vfs_file_t *file)
+{
+    for (drm_client_t *c = g_clients; c; c = c->next)
+        if (c->file == file) return c;
+    return NULL;
+}
 
 static uint32_t fb_width(void)  { return global_framebuffer ? global_framebuffer->width  : 0; }
 static uint32_t fb_height(void) { return global_framebuffer ? global_framebuffer->height : 0; }
@@ -279,11 +291,12 @@ void drm_stop_scanout(void)
     vt_fb_unclaim(vt, task);
 }
 
-static void queue_flip_event(uint32_t crtc_id, uint64_t user_data)
+static void queue_flip_event(vfs_file_t *file, uint32_t crtc_id, uint64_t user_data)
 {
     uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
-    if (g_ev_count < DRM_EVENT_QUEUE) {
-        struct drm_event_vblank *e = &g_events[g_ev_head];
+    drm_client_t *c = client_of(file);
+    if (c && c->count < DRM_EVENT_QUEUE) {
+        struct drm_event_vblank *e = &c->ev[c->head];
         memset(e, 0, sizeof *e);
         e->base.type   = DRM_EVENT_FLIP_COMPLETE;
         e->base.length = sizeof *e;
@@ -293,40 +306,80 @@ static void queue_flip_event(uint32_t crtc_id, uint64_t user_data)
         e->tv_usec     = (uint32_t)((now % 1000000000ULL) / 1000ULL);
         e->sequence    = 0;
         e->crtc_id     = crtc_id;
-        g_ev_head = (g_ev_head + 1) % DRM_EVENT_QUEUE;
-        g_ev_count++;
+        c->head = (c->head + 1) % DRM_EVENT_QUEUE;
+        c->count++;
     }
-    task_t *w = g_ev_waiter;
-    g_ev_waiter = NULL;
     spinlock_release_irqrestore(&g_drm_lock, f);
-    if (w) task_unblock(w);
     waitq_wake_all(&g_drm_pq);
 }
 
 static int64_t drm_read(vnode_t *n, void *buf, size_t len, uint64_t off)
 {
-    (void)n; (void)off;
+    (void)n; (void)buf; (void)len; (void)off;
+    return -EAGAIN;
+}
+
+static int64_t drm_read_file(vfs_file_t *file, void *buf, size_t len)
+{
     if (len < sizeof(struct drm_event_vblank)) return -EINVAL;
 
+    size_t done = 0;
     uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
-    if (g_ev_count == 0) { spinlock_release_irqrestore(&g_drm_lock, f); return -EAGAIN; }
-    struct drm_event_vblank *e = &g_events[g_ev_tail];
-    memcpy(buf, e, sizeof *e);
-    g_ev_tail = (g_ev_tail + 1) % DRM_EVENT_QUEUE;
-    g_ev_count--;
+    drm_client_t *c = client_of(file);
+    while (c && c->count > 0 && len - done >= sizeof(struct drm_event_vblank)) {
+        memcpy((char *)buf + done, &c->ev[c->tail], sizeof(struct drm_event_vblank));
+        c->tail = (c->tail + 1) % DRM_EVENT_QUEUE;
+        c->count--;
+        done += sizeof(struct drm_event_vblank);
+    }
     spinlock_release_irqrestore(&g_drm_lock, f);
-    return (int64_t)sizeof(struct drm_event_vblank);
+    return done ? (int64_t)done : -EAGAIN;
+}
+
+static int drm_poll_file(vfs_file_t *file, int events)
+{
+    (void)events;
+    int r = POLLOUT;
+    poll_wait(&g_drm_pq);
+    uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
+    drm_client_t *c = client_of(file);
+    if (c && c->count > 0) r |= POLLIN;
+    spinlock_release_irqrestore(&g_drm_lock, f);
+    return r;
 }
 
 static int drm_poll(vnode_t *n, int events)
 {
     (void)n; (void)events;
-    int r = POLLOUT;
-    poll_wait(&g_drm_pq);
+    return POLLOUT;
+}
+
+static int drm_open_dev(vnode_t *n, vfs_file_t *file)
+{
+    (void)n;
+    drm_client_t *c = calloc(1, sizeof *c);
+    if (!c) return -ENOMEM;
+    c->file = file;
     uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
-    if (g_ev_count > 0) r |= POLLIN;
+    c->next = g_clients;
+    g_clients = c;
     spinlock_release_irqrestore(&g_drm_lock, f);
-    return r;
+    return 0;
+}
+
+static void drm_release_file(vfs_file_t *file)
+{
+    drm_client_t *c = NULL;
+    uint64_t f = spinlock_acquire_irqsave(&g_drm_lock);
+    for (drm_client_t **pp = &g_clients; *pp; pp = &(*pp)->next) {
+        if ((*pp)->file == file) {
+            c = *pp;
+            *pp = c->next;
+            break;
+        }
+    }
+    spinlock_release_irqrestore(&g_drm_lock, f);
+    free(c);
 }
 
 static int drm_mmap_page(vnode_t *n, uint64_t offset, uintptr_t *phys_out)
@@ -586,7 +639,7 @@ static int64_t ioctl_rmfb(uint32_t *id)
     return 0;
 }
 
-static int64_t ioctl_page_flip(struct drm_mode_crtc_page_flip *p)
+static int64_t ioctl_page_flip(vfs_file_t *file, struct drm_mode_crtc_page_flip *p)
 {
     if (p->crtc_id != ID_CRTC) return -ENOENT;
     if (!fb_by_id(p->fb_id)) return -ENOENT;
@@ -596,7 +649,7 @@ static int64_t ioctl_page_flip(struct drm_mode_crtc_page_flip *p)
     g_crtc.fb_id = p->fb_id;
 
     if (p->flags & DRM_MODE_PAGE_FLIP_EVENT)
-        queue_flip_event(p->crtc_id, p->user_data);
+        queue_flip_event(file, p->crtc_id, p->user_data);
     return 0;
 }
 
@@ -849,7 +902,7 @@ static int64_t ioctl_obj_getprops(struct drm_mode_obj_get_properties *o)
     return 0;
 }
 
-static int64_t ioctl_atomic(struct drm_mode_atomic *a)
+static int64_t ioctl_atomic(vfs_file_t *file, struct drm_mode_atomic *a)
 {
     if (a->flags & ~(DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_NONBLOCK |
                      DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT))
@@ -913,13 +966,12 @@ static int64_t ioctl_atomic(struct drm_mode_atomic *a)
     g_crtc.fb_id = want_fb;
 
     if (a->flags & DRM_MODE_PAGE_FLIP_EVENT)
-        queue_flip_event(ID_CRTC, a->user_data);
+        queue_flip_event(file, ID_CRTC, a->user_data);
     return 0;
 }
 
-static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
+static int64_t drm_ioctl_common(vfs_file_t *file, uint64_t req, void *arg)
 {
-    (void)n;
     if (!seat_may_use()) {
         task_t *t = syscall_cur_task();
         if (!g_scanout_on || !t || t->uid != g_scan_uid) return -EACCES;
@@ -951,7 +1003,7 @@ static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
         case DRM_IOCTL_MODE_ADDFB:        return ioctl_addfb(arg);
         case DRM_IOCTL_MODE_ADDFB2:       return ioctl_addfb2(arg);
         case DRM_IOCTL_MODE_RMFB:         return ioctl_rmfb(arg);
-        case DRM_IOCTL_MODE_PAGE_FLIP:    return ioctl_page_flip(arg);
+        case DRM_IOCTL_MODE_PAGE_FLIP:    return ioctl_page_flip(file, arg);
         case DRM_IOCTL_MODE_GETPLANERESOURCES: return ioctl_getplaneres(arg);
         case DRM_IOCTL_MODE_GETPLANE:     return ioctl_getplane(arg);
         case DRM_IOCTL_MODE_OBJ_GETPROPERTIES: return ioctl_obj_getprops(arg);
@@ -959,7 +1011,7 @@ static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
         case DRM_IOCTL_MODE_GETPROPBLOB:   return ioctl_getblob(arg);
         case DRM_IOCTL_MODE_CREATEPROPBLOB:  return ioctl_create_blob(arg);
         case DRM_IOCTL_MODE_DESTROYPROPBLOB: return ioctl_destroy_blob(arg);
-        case DRM_IOCTL_MODE_ATOMIC:        return ioctl_atomic(arg);
+        case DRM_IOCTL_MODE_ATOMIC:        return ioctl_atomic(file, arg);
         default:                          return -ENOTTY;
     }
 }
@@ -975,6 +1027,17 @@ static int drm_stat(vnode_t *n, vfs_stat_t *out)
     return 0;
 }
 
+static int64_t drm_ioctl(vnode_t *n, uint64_t req, void *arg)
+{
+    (void)n;
+    return drm_ioctl_common(NULL, req, arg);
+}
+
+static int64_t drm_ioctl_kfile(vfs_file_t *file, uint64_t req, void *arg)
+{
+    return drm_ioctl_common(file, req, arg);
+}
+
 static void drm_ref(vnode_t *n)   { (void)n; }
 static void drm_unref(vnode_t *n) { (void)n; }
 
@@ -986,6 +1049,11 @@ static const vnode_ops_t drm_ops = {
     .ioctl     = drm_ioctl,
     .poll      = drm_poll,
     .mmap_page = drm_mmap_page,
+    .open_dev     = drm_open_dev,
+    .release_file = drm_release_file,
+    .read_file    = drm_read_file,
+    .poll_file    = drm_poll_file,
+    .ioctl_kfile  = drm_ioctl_kfile,
 };
 
 void drm_init(void)
