@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "netdev.h"
+#include "../sched/waitq.h"
 
 typedef struct tcp_tcb tcp_tcb_t;
 
@@ -36,6 +37,7 @@ int         tcp_port_in_use(uint16_t port);
 int64_t     tcp_send(tcp_tcb_t *tcb, const void *buf, size_t len, int flags, uint64_t timeout_ms);
 int64_t     tcp_recv(tcp_tcb_t *tcb, void *buf, size_t len, int flags, uint64_t timeout_ms);
 int         tcp_poll(tcp_tcb_t *tcb);
+void        tcp_set_owner(tcp_tcb_t *tcb, waitq_t *q);
 int         tcp_readable(tcp_tcb_t *tcb);
 void        tcp_shutdown(tcp_tcb_t *tcb);
 void        tcp_close(tcp_tcb_t *tcb);

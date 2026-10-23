@@ -7,6 +7,7 @@
 #include "../../include/net/tcp.h"
 #include "../../include/fs/vfs.h"
 #include "../../include/fs/poll.h"
+#include "../../include/fs/pollwait.h"
 #include "../../include/sched/sched.h"
 #include "../../include/sched/spinlock.h"
 #include "../../include/sched/waitq.h"
@@ -314,6 +315,8 @@ int64_t sock_op_connect(vnode_t *vn, const sock_addr_t *a, int nonblock) {
               ? tcp_connect6_start(a->ip6, a->port, s->local_port, &o, &s->tcb)
               : tcp_connect_start(a->ip, a->port, s->local_port, &o, &s->tcb);
         if (r != 0) { s->tcb = NULL; return r; }
+        tcp_set_owner(s->tcb, &s->wq);
+        waitq_wake_pollers(&s->wq);
         s->peer_ip = a->ip;
         memcpy(s->peer_ip6, a->ip6, 16);
         s->peer_port = a->port;
@@ -495,6 +498,7 @@ static void sock_ref_op(vnode_t *n) { (void)n; }
 static void sock_unref_op(vnode_t *n) {
     sock_t *s = n->fs_data;
     if (s->type == SOCK_STREAM && s->tcb) {
+        tcp_set_owner(s->tcb, NULL);
         if (s->opt_linger_on && s->opt_linger_s == 0 && !s->listening) tcp_abort(s->tcb);
         else tcp_close(s->tcb);
     }
@@ -514,6 +518,7 @@ static void sock_unref_op(vnode_t *n) {
 static int sock_poll_op(vnode_t *vn, int events) {
     (void)events;
     sock_t *s = vn->fs_data;
+    poll_wait(&s->wq);
     if (s->type == SOCK_STREAM) {
         if (!s->tcb) return POLLOUT | POLLHUP;
         int r = tcp_poll(s->tcb);
@@ -892,6 +897,8 @@ int64_t sock_op_listen(vnode_t *vn, int backlog) {
     s->tcb = (s->family == AF_INET6) ? tcp_listen6(s->local_port, backlog, &o)
                                      : tcp_listen(s->local_port, backlog, &o);
     if (!s->tcb) return -EADDRINUSE;
+    tcp_set_owner(s->tcb, &s->wq);
+    waitq_wake_pollers(&s->wq);
     s->listening = 1;
     s->backlog = backlog;
     return 0;
@@ -912,6 +919,7 @@ int64_t sock_op_accept(vnode_t *vn, int nonblock, vnode_t **out, sock_addr_t *pe
     s->proto = IPPROTO_TCP;
     s->family = ls->family;
     s->tcb = child;
+    tcp_set_owner(child, &s->wq);
     s->connected = 1;
     s->bound = 1;
     s->ttl = ls->ttl;

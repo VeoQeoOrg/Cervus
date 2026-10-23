@@ -106,6 +106,7 @@ struct tcp_tcb {
 
     spinlock_t lock;
     waitq_t    wq;
+    waitq_t   *owner;
     int        refs;
     struct tcp_tcb *next;
 };
@@ -308,8 +309,20 @@ static void advance_max(tcp_tcb_t *t) {
     if ((int32_t)(t->snd_nxt - t->snd_max) > 0) t->snd_max = t->snd_nxt;
 }
 
+static spinlock_t g_owner_lock = SPINLOCK_INIT;
+
 static void tcb_wake(tcp_tcb_t *t) {
     waitq_wake_all(&t->wq);
+    uint64_t f = spinlock_acquire_irqsave(&g_owner_lock);
+    if (t->owner) waitq_wake_pollers(t->owner);
+    spinlock_release_irqrestore(&g_owner_lock, f);
+}
+
+void tcp_set_owner(tcp_tcb_t *t, waitq_t *q) {
+    if (!t) return;
+    uint64_t f = spinlock_acquire_irqsave(&g_owner_lock);
+    t->owner = q;
+    spinlock_release_irqrestore(&g_owner_lock, f);
 }
 
 static tcp_tcb_t *tcb_hold(tcp_tcb_t *t) {
@@ -936,7 +949,7 @@ static void listener_close(tcp_tcb_t *lst) {
     lst->qlen = 0;
     for (tcp_tcb_t *c = g_tcbs; c; c = c->next)
         if (c->listener == lst) c->listener = NULL;
-    waitq_wake_all(&lst->wq);
+    tcb_wake(lst);
     spinlock_release_irqrestore(&g_tcbs_lock, g);
 
     while (orphans) {
@@ -1180,7 +1193,7 @@ static void enqueue_accept(tcp_tcb_t *t) {
         *pp = t;
         t->accept_next = NULL;
         lst->qlen++;
-        waitq_wake_all(&lst->wq);
+        tcb_wake(lst);
     }
     spinlock_release_irqrestore(&g_tcbs_lock, g);
     if (orphan) tcp_abort(t);
