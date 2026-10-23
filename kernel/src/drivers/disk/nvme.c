@@ -10,6 +10,11 @@
 #include "../../../include/io/serial.h"
 #include "../../../include/syscall/errno.h"
 #include "../../../include/sched/spinlock.h"
+#include "../../../include/sched/kmutex.h"
+#include "../../../include/sched/waitq.h"
+#include "../../../include/sched/sched.h"
+#include "../../../include/drivers/timer.h"
+#include "../../../include/syscall/syscall_internal.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -119,8 +124,11 @@ struct nvme_controller {
     int      irq_vector;
     bool     irq_enabled;
 
-    spinlock_t adm_lock;
-    spinlock_t io_lock;
+    kmutex_t   io_lock;
+    spinlock_t wlock;
+    waitq_t    wq;
+    volatile uint64_t irq_count;
+    uint32_t   irq_cmds;
 };
 
 static nvme_controller_t g_controllers[NVME_MAX_CONTROLLERS];
@@ -149,6 +157,29 @@ static inline volatile uint32_t *sq_doorbell(nvme_controller_t *c, uint16_t qid)
 }
 static inline volatile uint32_t *cq_doorbell(nvme_controller_t *c, uint16_t qid) {
     return (volatile uint32_t *)(c->bar0 + 0x1000 + (uint32_t)(2 * qid + 1) * c->doorbell_stride);
+}
+
+#define NVME_RECHECK_NS 2000000ULL
+#define NVME_IRQ_PROBE  32
+
+extern volatile uint32_t sched_ready_flag;
+
+static int nvme_may_sleep(void) {
+    uint64_t rf;
+    asm volatile("pushfq; popq %0" : "=r"(rf));
+    return sched_ready_flag && (rf & (1u << 9)) && spin_depth() == 0 && syscall_cur_task() != NULL;
+}
+
+static void nvme_lock(nvme_controller_t *c) {
+    if (nvme_may_sleep()) {
+        kmutex_lock(&c->io_lock);
+        return;
+    }
+    while (!kmutex_trylock(&c->io_lock)) asm volatile("pause");
+}
+
+static void nvme_unlock(nvme_controller_t *c) {
+    kmutex_unlock(&c->io_lock);
 }
 
 static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd,
@@ -200,6 +231,8 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
                         : 10000000000ULL;
     extern uint64_t clocksource_now_ns(void);
     uint64_t start_ns = clocksource_now_ns();
+    int sleepy = c->irq_enabled && nvme_may_sleep();
+    uint64_t seen = c->irq_count;
 
     for (;;) {
         uint16_t st = e->status;
@@ -216,6 +249,12 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
             *head_p = new_head;
             *cq_doorbell(c, qid) = new_head;
 
+            if (sleepy && !c->irq_count && seen == 0 &&
+                ++c->irq_cmds >= NVME_IRQ_PROBE && c->irq_enabled) {
+                c->irq_enabled = false;
+                serial_printf("[nvme] no interrupts after %u commands, back to polling\n", NVME_IRQ_PROBE);
+            }
+
             uint16_t sc  = (snap.status >> 1) & 0xFF;
             uint16_t sct = (snap.status >> 9) & 0x7;
             if (sc != 0 || sct != 0) {
@@ -225,8 +264,19 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
             }
             return 0;
         }
-        if (clocksource_now_ns() - start_ns > timeout_ns) break;
-        asm volatile("pause");
+        uint64_t now_ns = clocksource_now_ns();
+        if (now_ns - start_ns > timeout_ns) break;
+        if (!sleepy) {
+            asm volatile("pause");
+            continue;
+        }
+        uint64_t f = spinlock_acquire_irqsave(&c->wlock);
+        if ((e->status & 1) == *phase_p) {
+            spinlock_release_irqrestore(&c->wlock, f);
+            continue;
+        }
+        uint64_t wake = sched_now_ns() + NVME_RECHECK_NS;
+        waitq_block(&c->wq, &c->wlock, f, wake);
     }
 
     uint64_t elapsed_ms = (clocksource_now_ns() - start_ns) / 1000000ULL;
@@ -237,7 +287,11 @@ static int nvme_submit_sync(nvme_controller_t *c, bool is_admin, nvme_cmd_t *cmd
 }
 
 static void nvme_irq_handler(void *ctx) {
-    (void)ctx;
+    nvme_controller_t *c = (nvme_controller_t *)ctx;
+    c->irq_count++;
+    spinlock_acquire(&c->wlock);
+    waitq_wake_all(&c->wq);
+    spinlock_release(&c->wlock);
 }
 
 static void trim_trailing(char *s, size_t n) {
@@ -382,7 +436,7 @@ static int nvme_rw(nvme_namespace_t *ns, uint64_t lba, uint32_t count, void *buf
     uint32_t max_blocks = max_xfer / lba_size;
     if (max_blocks == 0) return -EINVAL;
 
-    spinlock_acquire(&c->io_lock);
+    nvme_lock(c);
 
     uint8_t *bp = (uint8_t *)buf;
     uint64_t cur = lba;
@@ -395,7 +449,7 @@ static int nvme_rw(nvme_namespace_t *ns, uint64_t lba, uint32_t count, void *buf
 
         uintptr_t bphys;
         void *bounce = dma_alloc_coherent(alloc_bytes, &bphys);
-        if (!bounce) { spinlock_release(&c->io_lock); return -ENOMEM; }
+        if (!bounce) { nvme_unlock(c); return -ENOMEM; }
 
         if (write) memcpy(bounce, bp, chunk_bytes);
 
@@ -406,7 +460,7 @@ static int nvme_rw(nvme_namespace_t *ns, uint64_t lba, uint32_t count, void *buf
             } else {
                 dma_free_coherent(bounce, alloc_bytes);
             }
-            spinlock_release(&c->io_lock);
+            nvme_unlock(c);
             return r;
         }
         if (!write) memcpy(bp, bounce, chunk_bytes);
@@ -417,7 +471,7 @@ static int nvme_rw(nvme_namespace_t *ns, uint64_t lba, uint32_t count, void *buf
         left -= chunk;
     }
 
-    spinlock_release(&c->io_lock);
+    nvme_unlock(c);
     return 0;
 }
 
@@ -430,13 +484,13 @@ int nvme_write_sectors(nvme_namespace_t *ns, uint64_t lba, uint32_t count, const
 int nvme_flush(nvme_namespace_t *ns) {
     if (!ns || !ns->active) return -EINVAL;
     nvme_controller_t *c = ns->ctrl;
-    spinlock_acquire(&c->io_lock);
+    nvme_lock(c);
     nvme_cmd_t cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.opcode = NVME_NVM_FLUSH;
     cmd.nsid   = ns->nsid;
     int r = nvme_submit_sync(c, false, &cmd, NULL);
-    spinlock_release(&c->io_lock);
+    nvme_unlock(c);
     return r;
 }
 
