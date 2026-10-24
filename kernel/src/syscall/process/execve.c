@@ -150,6 +150,9 @@ static uintptr_t build_stack(mm_t *mm, uintptr_t stack_top, const strvec_t *argv
         AT_RANDOM,   u_random,
         AT_PLATFORM, u_platform,
         AT_EXECFN,   u_execfn,
+        elf->macho ? 0x10001 : 1, elf->macho_header,
+        elf->macho ? 0x10002 : 1, elf->macho_entry,
+        elf->macho ? 0x10003 : 1, elf->macho_stack,
         AT_NULL,     0,
     };
     size_t nauxv = sizeof auxv / sizeof auxv[0];
@@ -352,6 +355,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
 
     vfs_file_t *vfile = NULL;
     size_t fsize = 0;
+    int is_macho = 0;
     for (int depth = 0; ; depth++) {
         vfs_stat_t xst;
         if (vfs_stat(kpath, &xst) == 0 && !exec_allowed(&xst, t->uid, t->gid)) {
@@ -394,13 +398,15 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
             if (rp < 0) { sv_free(&argv); sv_free(&envp); return rp; }
             continue;
         }
+        if (macho_is_image(hdr, (size_t)rd)) { is_macho = 1; break; }
         if (hdr[0] != 0x7F || hdr[1] != 'E' || hdr[2] != 'L' || hdr[3] != 'F') {
             vfs_close(vfile); sv_free(&argv); sv_free(&envp); return -ENOEXEC;
         }
         break;
     }
 
-    elf_load_result_t elf = elf_load_vnode(vfile->vnode, fsize, 0);
+    elf_load_result_t elf = is_macho ? macho_load_vnode(vfile->vnode, fsize)
+                                     : elf_load_vnode(vfile->vnode, fsize, 0);
     if (elf.error != ELF_OK) {
         serial_printf("[EXECVE] %s: %s\n", kpath, elf_strerror(elf.error));
         if (elf.mm) mm_put(elf.mm);
@@ -499,7 +505,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
     t->exe[sizeof(t->exe) - 1] = '\0';
 
     {
-        int puzzle_on = 1;
+        int puzzle_on = !elf.macho;
         for (int i = 0; i < envp.count; i++) {
             if (strcmp(envp.buf + envp.offs[i], "PUZZLE=0") == 0) puzzle_on = 0;
             if (strcmp(envp.buf + envp.offs[i], "CERVUS_PROFILE=1") == 0) profile_start(t);

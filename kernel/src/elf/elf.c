@@ -287,7 +287,13 @@ static bool interp_is_linux(const char *p) {
            strncmp(p, "/lib/ld-musl", 12) == 0;
 }
 
+static elf_error_t load_interp_ex(mm_t *mm, const char *path, elf_load_result_t *result, int adopt);
+
 static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *result) {
+    return load_interp_ex(mm, path, result, 0);
+}
+
+static elf_error_t load_interp_ex(mm_t *mm, const char *path, elf_load_result_t *result, int adopt) {
     vfs_file_t *f = NULL;
     char full[VFS_MAX_PATH];
     const char *root = path[0] == '/' ? task_fs_root() : NULL;
@@ -338,6 +344,23 @@ static elf_error_t load_interp(mm_t *mm, const char *path, elf_load_result_t *re
     if (eager && any) {
         elf_error_t err = load_all_eager(mm, &isrc, &ehdr, bias);
         if (err != ELF_OK) { vfs_close(f); return err; }
+    }
+    if (adopt) {
+        for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+            elf64_phdr_t ph;
+            if (src_read(&isrc, &ph, ehdr.e_phoff + (uint64_t)ehdr.e_phentsize * i, sizeof ph) < 0) break;
+            if (ph.p_type == PT_TLS) {
+                result->tls_vaddr  = ph.p_vaddr + bias;
+                result->tls_filesz = ph.p_filesz;
+                result->tls_memsz  = ph.p_memsz;
+                result->tls_align  = ph.p_align ? ph.p_align : 1;
+            } else if (ph.p_type == PT_LOAD && ehdr.e_phoff >= ph.p_offset &&
+                       ehdr.e_phoff < ph.p_offset + ph.p_filesz) {
+                result->phdr_vaddr = ph.p_vaddr + bias + (ehdr.e_phoff - ph.p_offset);
+            }
+        }
+        result->phnum = ehdr.e_phnum;
+        result->phentsize = ehdr.e_phentsize;
     }
     vfs_close(f);
 
@@ -485,6 +508,118 @@ static elf_load_result_t elf_load_core(const elf_source_t* src, size_t stack_sz)
     if (stack_sz == 0) stack_sz = ELF_DEFAULT_STACK;
     result.stack_size = stack_sz;
     result.stack_top  = (MM_STACK_TOP - 8) & ~(uintptr_t)0xF;
+    return result;
+}
+
+#define MACHO_MAGIC_64     0xfeedfacfu
+#define MACHO_CPU_X86_64   0x01000007
+#define MACHO_EXECUTE      2
+#define MACHO_LC_SEGMENT64 0x19
+#define MACHO_LC_UNIXTHREAD 0x5
+#define MACHO_LC_DYLINKER  0xe
+#define MACHO_LC_MAIN      0x80000028u
+#define MACHO_RUNTIME      "/usr/lib/darwin/dyld"
+
+int macho_is_image(const uint8_t *hdr, size_t n) {
+    uint32_t magic, cpu, type;
+    if (n < 16) return 0;
+    memcpy(&magic, hdr, 4);
+    memcpy(&cpu, hdr + 4, 4);
+    memcpy(&type, hdr + 12, 4);
+    return magic == MACHO_MAGIC_64 && cpu == MACHO_CPU_X86_64 && type == MACHO_EXECUTE;
+}
+
+elf_load_result_t macho_load_vnode(vnode_t *vn, size_t size) {
+    elf_load_result_t result;
+    memset(&result, 0, sizeof result);
+    elf_source_t src = { .buf = NULL, .vn = vn, .size = size };
+    uint8_t mh[32];
+    if (!vn || src_read(&src, mh, 0, sizeof mh) < 0 || !macho_is_image(mh, sizeof mh)) {
+        result.error = ELF_ERR_BAD_MAGIC;
+        return result;
+    }
+    uint32_t ncmds, sizeofcmds;
+    memcpy(&ncmds, mh + 16, 4);
+    memcpy(&sizeofcmds, mh + 20, 4);
+    if (sizeofcmds == 0 || sizeofcmds > 65536 || 32 + (uint64_t)sizeofcmds > size) {
+        result.error = ELF_ERR_TOO_SMALL;
+        return result;
+    }
+    uint8_t *lc = kmalloc(sizeofcmds);
+    if (!lc) { result.error = ELF_ERR_NO_MEM; return result; }
+    if (src_read(&src, lc, 32, sizeofcmds) < 0) { kfree(lc); result.error = ELF_ERR_TOO_SMALL; return result; }
+
+    mm_t *mm = mm_create();
+    if (!mm) { kfree(lc); result.error = ELF_ERR_NO_MEM; return result; }
+    result.mm = mm;
+    result.pagemap = mm->pagemap;
+
+    uintptr_t text = 0, max_end = 0;
+    uint64_t entryoff = 0, thread_rip = 0;
+    int has_main = 0, has_thread = 0, has_dylinker = 0;
+    uint32_t off = 0;
+    for (uint32_t i = 0; i < ncmds && off + 8 <= sizeofcmds; i++) {
+        uint32_t cmd, cmdsize;
+        memcpy(&cmd, lc + off, 4);
+        memcpy(&cmdsize, lc + off + 4, 4);
+        if (cmdsize < 8 || off + cmdsize > sizeofcmds) break;
+        const uint8_t *c = lc + off;
+        if (cmd == MACHO_LC_SEGMENT64 && cmdsize >= 72) {
+            uint64_t vmaddr, vmsize, fileoff, filesize;
+            uint32_t initprot;
+            memcpy(&vmaddr, c + 24, 8);
+            memcpy(&vmsize, c + 32, 8);
+            memcpy(&fileoff, c + 40, 8);
+            memcpy(&filesize, c + 48, 8);
+            memcpy(&initprot, c + 60, 4);
+            if (vmsize && (initprot || filesize)) {
+                elf64_phdr_t ph;
+                memset(&ph, 0, sizeof ph);
+                ph.p_type = PT_LOAD;
+                ph.p_vaddr = vmaddr;
+                ph.p_memsz = vmsize;
+                ph.p_offset = fileoff;
+                ph.p_filesz = filesize;
+                ph.p_flags = ((initprot & 1) ? PF_R : 0) | ((initprot & 2) ? PF_W : 0) | ((initprot & 4) ? PF_X : 0);
+                elf_error_t err = load_segment(mm, &src, &ph, 0);
+                if (err != ELF_OK) { kfree(lc); result.error = err; return result; }
+                if (fileoff == 0 && filesize) text = vmaddr;
+                if (vmaddr + vmsize > max_end) max_end = vmaddr + vmsize;
+            }
+        } else if (cmd == MACHO_LC_MAIN && cmdsize >= 24) {
+            memcpy(&entryoff, c + 8, 8);
+            memcpy(&result.macho_stack, c + 16, 8);
+            has_main = 1;
+        } else if (cmd == MACHO_LC_UNIXTHREAD && cmdsize >= 16 + 21 * 8) {
+            memcpy(&thread_rip, c + 16 + 16 * 8, 8);
+            has_thread = 1;
+        } else if (cmd == MACHO_LC_DYLINKER) {
+            has_dylinker = 1;
+        }
+        off += cmdsize;
+    }
+    kfree(lc);
+    if (!text || (!has_main && !has_thread)) { result.error = ELF_ERR_NO_LOAD; return result; }
+
+    result.macho = 1;
+    result.macho_header = text;
+    result.macho_entry = has_main ? text + entryoff : thread_rip;
+    result.load_base = text;
+    result.load_end = page_align_up(max_end);
+    result.entry = result.macho_entry;
+    (void)has_dylinker;
+
+    elf_error_t ierr = load_interp_ex(mm, MACHO_RUNTIME, &result, 1);
+    if (ierr != ELF_OK) {
+        serial_printf("[MACHO] cannot load %s: %s\n", MACHO_RUNTIME, elf_strerror(ierr));
+        result.error = ierr;
+        return result;
+    }
+    if (mm_setup_stack(mm) < 0) { result.error = ELF_ERR_NO_MEM; return result; }
+    result.stack_size = ELF_DEFAULT_STACK;
+    result.stack_top  = (MM_STACK_TOP - 8) & ~(uintptr_t)0xF;
+    result.vnode = vn;
+    result.file_size = size;
     return result;
 }
 

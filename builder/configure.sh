@@ -323,7 +323,7 @@ done
 
 PROG_DEPS="$CRT0 $LIBCERVUS_A"
 ALL_ELFS=" usr/ldso/ld-cervus.elf"
-for dir in usr/apps usr/bin usr/installer; do
+for dir in usr/apps usr/bin usr/installer usr/darwin; do
     [ -d "$dir" ] || continue
     for src in "$dir"/*.c; do
         [ -e "$src" ] || continue

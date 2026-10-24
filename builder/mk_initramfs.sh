@@ -61,6 +61,12 @@ for elf in usr/bin/*.elf; do
 done
 [ -e "$RFS/bin/test" ] && cp "$RFS/bin/test" "$RFS/bin/["
 
+if [ -f usr/darwin/dyld.elf ]; then
+    mkdir -p "$RFS/usr/lib/darwin"
+    cp usr/darwin/dyld.elf "$RFS/usr/lib/darwin/dyld"
+    green "darwin runtime -> /usr/lib/darwin/dyld"
+fi
+
 if [ -f usr/ldso/ld-cervus.elf ]; then
     cp usr/ldso/ld-cervus.elf "$RFS/lib/ld-cervus.elf"
     green "dynamic loader installed"

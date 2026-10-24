@@ -135,12 +135,18 @@ typedef struct {
     char            interp_path[128];
     int             linux_abi;
     int             freebsd_abi;
+    int             macho;
+    uintptr_t       macho_header;
+    uintptr_t       macho_entry;
+    uint64_t        macho_stack;
 } elf_load_result_t;
 
 struct mm;
 struct vnode;
 elf_load_result_t elf_load(const void* data, size_t size, size_t stack_sz);
 elf_load_result_t elf_load_vnode(struct vnode* vn, size_t size, size_t stack_sz);
+elf_load_result_t macho_load_vnode(struct vnode* vn, size_t size);
+int macho_is_image(const uint8_t *hdr, size_t n);
 uintptr_t exec_build_init_stack(const elf_load_result_t* elf, const char* path);
 
 void elf_unload(elf_load_result_t* result);
