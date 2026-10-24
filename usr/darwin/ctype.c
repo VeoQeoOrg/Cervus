@@ -271,3 +271,65 @@ DPASS(wcsrtombs);
 DPASS(mbsinit);
 DPASS(btowc);
 DPASS(wctob);
+
+static int d____mb_cur_max(void) { return d_mb_cur_max; }
+static int d____mb_cur_max_l(void *l) { (void)l; return d_mb_cur_max; }
+DSYM("____mb_cur_max", d____mb_cur_max);
+DSYM("____mb_cur_max_l", d____mb_cur_max_l);
+
+#define DLC_GLOBAL ((void *)-1)
+
+struct dlocale {
+    int utf8;
+};
+
+static struct dlocale g_c_locale = { 0 }, g_utf8_locale = { 1 };
+static __thread void *g_thread_locale;
+
+static int name_utf8(const char *n)
+{
+    for (; n && *n; n++)
+        if ((n[0] | 32) == 'u' && (n[1] | 32) == 't' && (n[2] | 32) == 'f')
+            return 1;
+    return 0;
+}
+
+static void *d_uselocale(void *l)
+{
+    void *old = g_thread_locale ? g_thread_locale : DLC_GLOBAL;
+    if (l)
+        g_thread_locale = l == DLC_GLOBAL ? NULL : l;
+    return old;
+}
+
+static void *d_newlocale(int mask, const char *name, void *base)
+{
+    (void)mask;
+    if (name && !*name) {
+        const char *e = getenv("LC_ALL");
+        if (!e || !*e)
+            e = getenv("LC_CTYPE");
+        if (!e || !*e)
+            e = getenv("LANG");
+        name = e && *e ? e : "C.UTF-8";
+    }
+    if (name)
+        return name_utf8(name) ? &g_utf8_locale : &g_c_locale;
+    return base && base != DLC_GLOBAL ? base : &g_c_locale;
+}
+
+static void *d_duplocale(void *l) { return l == DLC_GLOBAL || !l ? (d_mb_cur_max > 1 ? &g_utf8_locale : &g_c_locale) : l; }
+static void d_freelocale(void *l) { (void)l; }
+
+static const char *d_querylocale(int mask, void *l)
+{
+    (void)mask;
+    struct dlocale *d = l == DLC_GLOBAL || !l ? (d_mb_cur_max > 1 ? &g_utf8_locale : &g_c_locale) : l;
+    return d->utf8 ? "C.UTF-8" : "C";
+}
+
+DSYM("_uselocale", d_uselocale);
+DSYM("_newlocale", d_newlocale);
+DSYM("_duplocale", d_duplocale);
+DSYM("_freelocale", d_freelocale);
+DSYM("_querylocale", d_querylocale);

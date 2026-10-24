@@ -18,6 +18,17 @@
 #include <sys/wait.h>
 #include <inttypes.h>
 #include <wchar.h>
+#include <fcntl.h>
+#include <setjmp.h>
+#include <fnmatch.h>
+#include <glob.h>
+#include <regex.h>
+#include <search.h>
+#include <ftw.h>
+#include <signal.h>
+#include <sys/resource.h>
+#include <sys/times.h>
+#include <sys/file.h>
 #include "darwin.h"
 
 extern char **environ;
@@ -844,3 +855,206 @@ DPASS(wmemcmp);
 DPASS(wmemcpy);
 DPASS(wmemmove);
 DPASS(wmemset);
+
+DPASS(setjmp);
+DPASS(longjmp);
+DPASS(_setjmp);
+DPASS(_longjmp);
+DPASS(sigsetjmp);
+DPASS(siglongjmp);
+
+static void d___assert_rtn(const char *fn, const char *file, int line, const char *expr)
+{
+    fflush(stdout);
+    if (fn)
+        fprintf(stderr, "Assertion failed: (%s), function %s, file %s, line %d.\n", expr, fn, file, line);
+    else
+        fprintf(stderr, "Assertion failed: (%s), file %s, line %d.\n", expr, file, line);
+    abort();
+}
+DSYM("___assert_rtn", d___assert_rtn);
+
+static void *d_acl_null(void) { errno = EOPNOTSUPP; return NULL; }
+static int d_acl_fail(void) { errno = EOPNOTSUPP; return -1; }
+static int d_acl_free(void *p) { (void)p; return 0; }
+DSYM("_acl_get_file", d_acl_null);
+DSYM("_acl_get_fd", d_acl_null);
+DSYM("_acl_get_link_np", d_acl_null);
+DSYM("_acl_init", d_acl_null);
+DSYM("_acl_dup", d_acl_null);
+DSYM("_acl_from_text", d_acl_null);
+DSYM("_acl_to_text", d_acl_null);
+DSYM("_acl_set_file", d_acl_fail);
+DSYM("_acl_set_fd", d_acl_fail);
+DSYM("_acl_set_link_np", d_acl_fail);
+DSYM("_acl_get_entry", d_acl_fail);
+DSYM("_acl_free", d_acl_free);
+
+static int d_mkostemp(char *t, int fl)
+{
+    return mkostemp(t, (fl & 0x1000000) ? O_CLOEXEC : 0);
+}
+
+static int d_mkostemps(char *t, int sl, int fl)
+{
+    return mkostemps(t, sl, (fl & 0x1000000) ? O_CLOEXEC : 0);
+}
+DSYM("_mkostemp", d_mkostemp);
+DSYM("_mkostemps", d_mkostemps);
+
+static __thread char g_pathbuf[PATH_MAX];
+
+static char *d_dirname(const char *p)
+{
+    if (!p || !*p)
+        return strcpy(g_pathbuf, ".");
+    size_t n = strlen(p);
+    while (n > 1 && p[n - 1] == '/')
+        n--;
+    while (n > 0 && p[n - 1] != '/')
+        n--;
+    if (!n)
+        return strcpy(g_pathbuf, ".");
+    while (n > 1 && p[n - 1] == '/')
+        n--;
+    if (n >= sizeof g_pathbuf) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(g_pathbuf, p, n);
+    g_pathbuf[n] = 0;
+    return g_pathbuf;
+}
+
+static char *d_basename(const char *p)
+{
+    if (!p || !*p)
+        return strcpy(g_pathbuf, ".");
+    size_t n = strlen(p);
+    while (n > 1 && p[n - 1] == '/')
+        n--;
+    size_t s = n;
+    while (s > 0 && p[s - 1] != '/')
+        s--;
+    if (n - s >= sizeof g_pathbuf) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(g_pathbuf, p + s, n - s);
+    g_pathbuf[n - s] = 0;
+    return g_pathbuf;
+}
+
+static char *d_dirname_r(const char *p, char *buf)
+{
+    char *r = d_dirname(p);
+    return r ? strcpy(buf, r) : NULL;
+}
+
+static char *d_basename_r(const char *p, char *buf)
+{
+    char *r = d_basename(p);
+    return r ? strcpy(buf, r) : NULL;
+}
+DSYM("_dirname", d_dirname);
+DSYM("_basename", d_basename);
+DSYM("_dirname_r", d_dirname_r);
+DSYM("_basename_r", d_basename_r);
+
+static int pc_name(int n)
+{
+    if (n >= 1 && n <= 9)
+        return n - 1;
+    return -1;
+}
+
+static long d_pathconf(const char *p, int n)
+{
+    int c = pc_name(n);
+    if (c < 0) {
+        if (n == 11 || n == 12)
+            return 1;
+        if (n == 18)
+            return 64;
+        errno = EINVAL;
+        return -1;
+    }
+    return pathconf(p, c);
+}
+
+static long d_fpathconf(int fd, int n)
+{
+    int c = pc_name(n);
+    if (c < 0) {
+        if (n == 11 || n == 12)
+            return 1;
+        if (n == 18)
+            return 64;
+        errno = EINVAL;
+        return -1;
+    }
+    return fpathconf(fd, c);
+}
+DSYM("_pathconf", d_pathconf);
+DSYM("_fpathconf", d_fpathconf);
+
+static int d_getloadavg(double *l, int n)
+{
+    FILE *f = fopen("/proc/loadavg", "r");
+    double v[3] = { 0, 0, 0 };
+    if (f) {
+        if (fscanf(f, "%lf %lf %lf", &v[0], &v[1], &v[2]) != 3)
+            v[0] = v[1] = v[2] = 0;
+        fclose(f);
+    }
+    if (n > 3)
+        n = 3;
+    for (int i = 0; i < n; i++)
+        l[i] = v[i];
+    return n;
+}
+DSYM("_getloadavg", d_getloadavg);
+
+DPASS(clock);
+DPASS(getrusage);
+DPASS(times);
+DPASS(nice);
+DPASS(alarm);
+DPASS(pause);
+DPASS(getdtablesize);
+DPASS(ctermid);
+DPASS(ttyname_r);
+DPASS(getlogin_r);
+DPASS(sethostname);
+DPASS(chroot);
+DPASS(sync);
+DPASS(fdatasync);
+DPASS(lockf);
+DPASS(confstr);
+DPASS(fnmatch);
+DPASS(glob);
+DPASS(globfree);
+DPASS(regcomp);
+DPASS(regexec);
+DPASS(regerror);
+DPASS(regfree);
+DPASS(tsearch);
+DPASS(tfind);
+DPASS(tdelete);
+DPASS(twalk);
+DPASS(lsearch);
+DPASS(lfind);
+DPASS(hcreate);
+DPASS(hsearch);
+DPASS(hdestroy);
+DPASS(insque);
+DPASS(remque);
+DPASS(ftw);
+DPASS(nftw);
+DPASS(getpass);
+DPASS(ffsl);
+DPASS(ffsll);
+DPASS(a64l);
+DPASS(l64a);
+DPASS(imaxabs);
+DPASS(imaxdiv);
