@@ -43,6 +43,9 @@ extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 #define T_ICANON  0x0002
 #define T_ECHO    0x0008
 #define T_ISIG    0x0001
+#define T_INLCR   0x0040
+#define T_IGNCR   0x0080
+#define T_ICRNL   0x0100
 
 #define T_VINTR   0
 #define T_VQUIT   1
@@ -95,7 +98,7 @@ static waitq_t  g_tty_pq;
 
 static void vtty_reset(vt_tty_t *t) {
     t->r_head = t->r_tail = 0;
-    t->termios.c_iflag = 0;
+    t->termios.c_iflag = T_ICRNL;
     t->termios.c_oflag = 0;
     t->termios.c_cflag = 0;
     t->termios.c_lflag = T_ICANON | T_ECHO | T_ISIG;
@@ -137,6 +140,13 @@ static void tty_queue_char(vt_tty_t *t, char c) {
 void tty_vt_input(int vt, char c) {
     if (vt < 0 || vt >= VT_COUNT) return;
     vt_tty_t *t = &g_vtty[vt];
+    uint32_t ifl = t->termios.c_iflag;
+    if (c == '\r') {
+        if (ifl & T_IGNCR) return;
+        if (ifl & T_ICRNL) c = '\n';
+    } else if (c == '\n' && (ifl & T_INLCR)) {
+        c = '\r';
+    }
     uint8_t intr = t->termios.c_cc[T_VINTR];
     if ((t->termios.c_lflag & T_ISIG) && intr && (uint8_t)c == intr) {
         extern volatile uint32_t g_ctrlc_pending;
@@ -188,6 +198,7 @@ void tty_restore_sane(task_t *who) {
         if (t->raw_owner != who) continue;
         t->raw_owner = NULL;
         t->termios.c_lflag |= (T_ICANON | T_ECHO | T_ISIG);
+        t->termios.c_iflag |= T_ICRNL;
     }
 }
 
