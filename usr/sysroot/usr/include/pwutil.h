@@ -11,6 +11,7 @@ int pw_lookup_name(const char *name, uint32_t *uid, uint32_t *gid,
                    char *home, int home_cap, char *shell, int shell_cap);
 int pw_lookup_uid(uint32_t uid, char *name, int name_cap,
                   char *home, int home_cap, char *shell, int shell_cap);
+void pw_run_hooks(void);
 
 void priv_argv(int argc, char **argv);
 int  priv_is_root(void);

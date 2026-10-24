@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
     }
     memset(p1, 0, sizeof(p1)); memset(p2, 0, sizeof(p2));
 
+    pw_run_hooks();
     if (set) {
         printf("password set for '%s'\n", name);
         return 0;

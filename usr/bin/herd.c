@@ -1245,6 +1245,24 @@ static int prefetch_one(const char *idx, const char *name)
     return rc;
 }
 
+static void run_post_install(const char *name)
+{
+    if (g_root[0]) return;
+    char path[512];
+    snprintf(path, sizeof path, "/usr/share/herd/post-install/%s", name);
+    struct stat st;
+    if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *av[] = { path, NULL };
+        execv(path, av);
+        _exit(127);
+    }
+    int status = 0;
+    if (pid < 0 || waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status))
+        fprintf(stderr, "herd: post-install step of %s failed\n", name);
+}
+
 static int install_one(const char *idx, const char *name)
 {
     char *rec = find_record(idx, name);
@@ -1344,6 +1362,7 @@ static int install_one(const char *idx, const char *name)
         int sfd = open(sp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (sfd >= 0) { write(sfd, stamp, strlen(stamp)); write(sfd, "\n", 1); close(sfd); }
     }
+    run_post_install(name);
     if (!g_tty || g_style == PG_NONE) printf("installed %s %s\n", name, ver ? ver : "");
     free(rec); free(ver); free(filef); free(shaf); free(sizef);
     return 0;

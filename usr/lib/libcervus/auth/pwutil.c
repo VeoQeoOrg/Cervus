@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 int pw_getpass(const char *prompt, char *buf, int cap) {
     if (prompt) { write(1, prompt, strlen(prompt)); }
@@ -96,4 +99,28 @@ int pw_lookup_name(const char *name, uint32_t *uid, uint32_t *gid,
 int pw_lookup_uid(uint32_t uid, char *name, int name_cap,
                   char *home, int home_cap, char *shell, int shell_cap) {
     return scan_passwd(NULL, uid, 0, name, name_cap, NULL, NULL, home, home_cap, shell, shell_cap);
+}
+
+void pw_run_hooks(void) {
+    DIR *d = opendir("/etc/users.d");
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[512];
+        snprintf(path, sizeof path, "/etc/users.d/%s", e->d_name);
+        struct stat st;
+        if (stat(path, &st) < 0 || !S_ISREG(st.st_mode) || !(st.st_mode & 0111)) continue;
+        pid_t pid = fork();
+        if (pid == 0) {
+            char *av[] = { path, NULL };
+            execv(path, av);
+            _exit(127);
+        }
+        if (pid > 0) {
+            int status;
+            waitpid(pid, &status, 0);
+        }
+    }
+    closedir(d);
 }

@@ -154,5 +154,6 @@ int main(int argc, char **argv)
         if (set_shell(name, shell) == 0) printf("shell for '%s' set to %s\n", name, shell);
         else { fprintf(stderr, "usermod: cannot update shell\n"); return 1; }
     }
+    pw_run_hooks();
     return 0;
 }

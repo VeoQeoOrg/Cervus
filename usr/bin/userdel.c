@@ -97,6 +97,7 @@ int main(int argc, char **argv)
     if (rmhome && home[0] && strcmp(home, "/") != 0)
         rmtree(home);
 
+    pw_run_hooks();
     printf("user '%s' deleted%s\n", name, rmhome ? " (home removed)" : "");
     return 0;
 }
