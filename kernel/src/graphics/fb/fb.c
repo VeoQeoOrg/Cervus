@@ -262,6 +262,111 @@ static uint32_t codepoint_to_glyph(uint32_t cp) {
     return '?';
 }
 
+static const char g_box_arms[] =
+    "0101020210102020010102021010202001010202101020200110021001200220"
+    "0011001200210022110012002100220010011002200120021110121021101120"
+    "2120221012202220101110122011102120212012102220220111011202110212"
+    "0121012202210222110111021201120221012102220122021111111212111212"
+    "2111112121212112221111221221221212222122222122220101020210102020"
+    "0303303003100130033000130031003313003100330010033001300313103130"
+    "3330101330313033031301310333130331013303131331313333011000111001"
+    "1100000000000000000110000100001000022000020000200201102001022010";
+
+static int box_has_glyph(uint32_t cp) {
+    return cp < FONT_CP_MAP_SIZE && g_font.cp2glyph[cp] != 0xFFFF;
+}
+
+static void synth_rect(uint32_t *buf, uint32_t pitch, uint32_t x, uint32_t y,
+                       int x0, int y0, int x1, int y1, uint32_t w, uint32_t h, uint32_t color) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > (int)w) x1 = (int)w;
+    if (y1 > (int)h) y1 = (int)h;
+    for (int r = y0; r < y1; r++)
+        for (int c = x0; c < x1; c++)
+            buf[(size_t)(y + (uint32_t)r) * pitch + x + (uint32_t)c] = color;
+}
+
+static int draw_synth(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t color) {
+    uint32_t w = g_font.width, h = g_font.height;
+    uint32_t *buf = fb_get_buf(fb);
+    uint32_t pitch = fb_get_pitch(fb);
+    int iw = (int)w, ih = (int)h;
+    int cx = iw / 2, cy = ih / 2;
+    int t1 = iw >= 12 ? 2 : 1, t2 = t1 * 2 + 1;
+    if (cp >= 0x2500 && cp <= 0x257F && (cp < 0x2571 || cp > 0x2573)) {
+        const char *a = &g_box_arms[(cp - 0x2500) * 4];
+        for (int arm = 0; arm < 4; arm++) {
+            int k = a[arm] - '0';
+            if (!k) continue;
+            int t = k == 2 ? t2 : t1;
+            int offs[2] = { 0, 0 }, n = 1;
+            if (k == 3) { offs[0] = -(t1 + 1); offs[1] = t1 + 1; n = 2; }
+            for (int i = 0; i < n; i++) {
+                int o = offs[i];
+                int vx0 = cx - t / 2 + o, vx1 = vx0 + t;
+                int hy0 = cy - t / 2 + o, hy1 = hy0 + t;
+                int ext = k == 3 ? t1 + 1 : 0;
+                switch (arm) {
+                case 0: synth_rect(buf, pitch, x, y, vx0, 0, vx1, cy + t / 2 + 1 + ext, w, h, color); break;
+                case 1: synth_rect(buf, pitch, x, y, cx - t / 2 - ext, hy0, iw, hy1, w, h, color); break;
+                case 2: synth_rect(buf, pitch, x, y, vx0, cy - t / 2 - ext, vx1, ih, w, h, color); break;
+                case 3: synth_rect(buf, pitch, x, y, 0, hy0, cx + t / 2 + 1 + ext, hy1, w, h, color); break;
+                }
+            }
+        }
+        return 1;
+    }
+    if (cp >= 0x2571 && cp <= 0x2573) {
+        for (int r = 0; r < ih; r++) {
+            int c = r * iw / ih;
+            if (cp != 0x2572) synth_rect(buf, pitch, x, y, iw - 1 - c, r, iw - c, r + 1, w, h, color);
+            if (cp != 0x2571) synth_rect(buf, pitch, x, y, c, r, c + 1, r + 1, w, h, color);
+        }
+        return 1;
+    }
+    if (cp >= 0x2580 && cp <= 0x259F) {
+        int hw = iw / 2, hh = ih / 2;
+        if (cp == 0x2580) synth_rect(buf, pitch, x, y, 0, 0, iw, hh, w, h, color);
+        else if (cp >= 0x2581 && cp <= 0x2588) synth_rect(buf, pitch, x, y, 0, ih - ih * (int)(cp - 0x2580) / 8, iw, ih, w, h, color);
+        else if (cp >= 0x2589 && cp <= 0x258F) synth_rect(buf, pitch, x, y, 0, 0, iw * (int)(0x2590 - cp) / 8, ih, w, h, color);
+        else if (cp == 0x2590) synth_rect(buf, pitch, x, y, hw, 0, iw, ih, w, h, color);
+        else if (cp >= 0x2591 && cp <= 0x2593) {
+            for (int r = 0; r < ih; r++)
+                for (int c = 0; c < iw; c++) {
+                    int on = cp == 0x2591 ? ((r % 2 == 0) && (c % 2 == 0))
+                           : cp == 0x2592 ? ((r + c) % 2 == 0)
+                           : !((r % 2 == 0) && (c % 2 == 0));
+                    if (on) synth_rect(buf, pitch, x, y, c, r, c + 1, r + 1, w, h, color);
+                }
+        }
+        else if (cp == 0x2594) synth_rect(buf, pitch, x, y, 0, 0, iw, ih / 8 ? ih / 8 : 1, w, h, color);
+        else if (cp == 0x2595) synth_rect(buf, pitch, x, y, iw - (iw / 8 ? iw / 8 : 1), 0, iw, ih, w, h, color);
+        else {
+            static const uint8_t quad[] = { 0x4, 0x8, 0x1, 0xD, 0x9, 0x7, 0xB, 0x2, 0x6, 0xE };
+            uint8_t q = quad[cp - 0x2596];
+            if (q & 1) synth_rect(buf, pitch, x, y, 0, 0, hw, hh, w, h, color);
+            if (q & 2) synth_rect(buf, pitch, x, y, hw, 0, iw, hh, w, h, color);
+            if (q & 4) synth_rect(buf, pitch, x, y, 0, hh, hw, ih, w, h, color);
+            if (q & 8) synth_rect(buf, pitch, x, y, hw, hh, iw, ih, w, h, color);
+        }
+        return 1;
+    }
+    if (cp >= 0x2800 && cp <= 0x28FF) {
+        static const uint8_t col[8] = { 0, 0, 0, 1, 1, 1, 0, 1 };
+        static const uint8_t row[8] = { 0, 1, 2, 0, 1, 2, 3, 3 };
+        int dw = iw / 4 ? iw / 4 : 1, dh = ih / 8 ? ih / 8 : 1;
+        for (int b = 0; b < 8; b++) {
+            if (!((cp - 0x2800) & (1u << b))) continue;
+            int px = (col[b] * 2 + 1) * iw / 4 - dw / 2;
+            int py = (row[b] * 2 + 1) * ih / 8 - dh / 2;
+            synth_rect(buf, pitch, x, y, px, py, px + dw, py + dh, w, h, color);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static inline uint32_t blend_ch(uint32_t fg, uint32_t dst, uint8_t cov) {
     if (cov == 0)   return dst;
     if (cov == 255) return fg;
@@ -277,6 +382,9 @@ void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t c
     uint32_t w = g_font.width, h = g_font.height;
     if (x + w > fb->width || y + h > fb->height) return;
 
+    if (cp >= 0x2500 && cp <= 0x28FF && (cp < 0x25A0 || cp >= 0x2800) && !box_has_glyph(cp) &&
+        draw_synth(fb, cp, x, y, color))
+        return;
     uint32_t gi = codepoint_to_glyph(cp);
     if (gi >= g_font.nglyph) gi = codepoint_to_glyph('?');
     if (gi >= g_font.nglyph) return;
