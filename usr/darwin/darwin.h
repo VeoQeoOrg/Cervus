@@ -67,5 +67,8 @@ void d_stdio_init(void);
 void d_ctype_init(void);
 void d_misc_init(void);
 FILE *d_real_file(void *f);
+int d_sig_d2lx(int s);
+int d_sig_lx2d(int s);
+int d_wstatus(int st);
 
 #endif

@@ -731,7 +731,6 @@ DPASS(getenv);
 DPASS(setenv);
 DPASS(unsetenv);
 DPASS(putenv);
-DPASS(system);
 DPASS(getpid);
 DPASS(getppid);
 DPASS(getuid);
@@ -756,8 +755,6 @@ DPASS(execvp);
 DPASS(execl);
 DPASS(execlp);
 DPASS(execle);
-DPASS(waitpid);
-DPASS(wait);
 DPASS(tcgetpgrp);
 DPASS(tcsetpgrp);
 

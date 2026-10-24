@@ -113,7 +113,7 @@ static int d_pclose(struct dfile *f)
     int r = pclose(R(f));
     if (!is_std(f))
         free(f);
-    return r;
+    return r > 0 ? d_wstatus(r) : r;
 }
 
 struct dcookie {
