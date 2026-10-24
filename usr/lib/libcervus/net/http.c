@@ -170,6 +170,8 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
     int max_redirs = opts->follow ? (opts->max_redirs > 0 ? opts->max_redirs : 20) : 0;
     int status = 0;
     char urlauth[256] = "";
+    char first_host[256] = "";
+    int cross_host = 0;
 
     for (int hop = 0; ; hop++) {
         int https, port;
@@ -182,6 +184,8 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         }
 
         if (hopauth[0]) snprintf(urlauth, sizeof urlauth, "%s", hopauth);
+        if (!hop) snprintf(first_host, sizeof first_host, "%s", host);
+        else if (strcasecmp(first_host, host)) cross_host = 1;
 
         in_addr_t ip = inet_resolve(host);
         if (ip == 0xffffffffu) { if (!opts->silent) fprintf(stderr, "http: cannot resolve %s\n", host); return -1; }
@@ -216,7 +220,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         rl += snprintf(req + rl, sizeof req - rl, "Accept: */*\r\n");
         if (opts->referer) rl += snprintf(req + rl, sizeof req - rl, "Referer: %s\r\n", opts->referer);
         if (opts->range)   rl += snprintf(req + rl, sizeof req - rl, "Range: bytes=%s\r\n", opts->range);
-        const char *auth = opts->userpwd ? opts->userpwd : (urlauth[0] ? urlauth : NULL);
+        const char *auth = cross_host ? NULL : opts->userpwd ? opts->userpwd : (urlauth[0] ? urlauth : NULL);
         if (auth) {
             char enc[512];
             b64enc(auth, (int)strlen(auth), enc, sizeof enc);
@@ -226,6 +230,7 @@ int http_request(const char *url, int out_fd, const http_opts *opts) {
         for (int h = 0; h < opts->nheaders; h++) {
             if (lc_eq(opts->headers[h], "content-type:", 13)) have_ct = 1;
             if (lc_eq(opts->headers[h], "accept-encoding:", 16)) have_ae = 1;
+            if (cross_host && lc_eq(opts->headers[h], "authorization:", 14)) continue;
             rl += snprintf(req + rl, sizeof req - rl, "%s\r\n", opts->headers[h]);
         }
         if (!have_ae) rl += snprintf(req + rl, sizeof req - rl, "Accept-Encoding: gzip, deflate\r\n");
