@@ -250,6 +250,186 @@ static void *system_lookup(const char *name)
     return a;
 }
 
+static int g_trace_fd = -1;
+extern char __executable_start[], etext[];
+
+void d_trace_log(const char *name, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t caller)
+{
+    char b[512];
+    const char *path = NULL;
+    if (strstr(name, "open") || strstr(name, "stat") || strstr(name, "access") || strstr(name, "exec") ||
+        strstr(name, "chdir") || strstr(name, "readlink") || strstr(name, "realpath") || strstr(name, "unlink") ||
+        strstr(name, "mkdir") || strstr(name, "getenv"))
+        path = (const char *)(uintptr_t)(strstr(name, "at") && !strstr(name, "stat") ? a1 : a0);
+    if (path && (uintptr_t)path < 4096)
+        path = NULL;
+    int n = snprintf(b, sizeof b, "[%d] %s(%#lx, %#lx, %#lx) @%#lx%s%.200s\n", gettid(), name,
+                     (unsigned long)a0, (unsigned long)a1, (unsigned long)a2, (unsigned long)caller,
+                     path ? " " : "", path ? path : "");
+    if (n > 0)
+        write(g_trace_fd, b, (size_t)(n < (int)sizeof b ? n : (int)sizeof b - 1));
+}
+
+struct shadow {
+    uint64_t ret;
+    const char *name;
+};
+
+static __thread struct shadow t_shadow[256];
+static __thread int t_shadow_n;
+static int g_trace_ret;
+
+uint64_t d_trace_push(const char *name, uint64_t ret)
+{
+    if (!g_trace_ret || t_shadow_n >= 256)
+        return 0;
+    t_shadow[t_shadow_n].ret = ret;
+    t_shadow[t_shadow_n].name = name;
+    t_shadow_n++;
+    return 1;
+}
+
+uint64_t d_trace_pop(uint64_t rax)
+{
+    if (t_shadow_n <= 0)
+        abort();
+    t_shadow_n--;
+    char b[256];
+    int n = snprintf(b, sizeof b, "[%d] %s = %#lx\n", gettid(), t_shadow[t_shadow_n].name, (unsigned long)rax);
+    if (n > 0)
+        write(g_trace_fd, b, (size_t)(n < (int)sizeof b ? n : (int)sizeof b - 1));
+    return t_shadow[t_shadow_n].ret;
+}
+
+__asm__(
+    ".text\n"
+    ".globl d_trace_ret\n"
+    "d_trace_ret:\n"
+    "    sub $8, %rsp\n"
+    "    push %rax\n"
+    "    push %rdx\n"
+    "    sub $40, %rsp\n"
+    "    movdqu %xmm0, 0(%rsp)\n"
+    "    movdqu %xmm1, 16(%rsp)\n"
+    "    mov %rax, %rdi\n"
+    "    call d_trace_pop\n"
+    "    mov %rax, 56(%rsp)\n"
+    "    movdqu 0(%rsp), %xmm0\n"
+    "    movdqu 16(%rsp), %xmm1\n"
+    "    add $40, %rsp\n"
+    "    pop %rdx\n"
+    "    pop %rax\n"
+    "    ret\n");
+void d_trace_ret(void);
+
+__asm__(
+    ".text\n"
+    ".globl d_trace_stub\n"
+    "d_trace_stub:\n"
+    "    push %rdi\n"
+    "    push %rsi\n"
+    "    push %rdx\n"
+    "    push %rcx\n"
+    "    push %r8\n"
+    "    push %r9\n"
+    "    push %rax\n"
+    "    push %r10\n"
+    "    push %r11\n"
+    "    sub $128, %rsp\n"
+    "    movdqu %xmm0, 0(%rsp)\n"
+    "    movdqu %xmm1, 16(%rsp)\n"
+    "    movdqu %xmm2, 32(%rsp)\n"
+    "    movdqu %xmm3, 48(%rsp)\n"
+    "    movdqu %xmm4, 64(%rsp)\n"
+    "    movdqu %xmm5, 80(%rsp)\n"
+    "    movdqu %xmm6, 96(%rsp)\n"
+    "    movdqu %xmm7, 112(%rsp)\n"
+    "    mov (%r11), %rdi\n"
+    "    mov 192(%rsp), %rsi\n"
+    "    mov 184(%rsp), %rdx\n"
+    "    mov 176(%rsp), %rcx\n"
+    "    mov 200(%rsp), %r8\n"
+    "    call d_trace_log\n"
+    "    mov 128(%rsp), %r11\n"
+    "    cmpq $0, 16(%r11)\n"
+    "    je 1f\n"
+    "    mov (%r11), %rdi\n"
+    "    mov 200(%rsp), %rsi\n"
+    "    call d_trace_push\n"
+    "    test %rax, %rax\n"
+    "    je 1f\n"
+    "    lea d_trace_ret(%rip), %rax\n"
+    "    mov %rax, 200(%rsp)\n"
+    "1:\n"
+    "    movdqu 0(%rsp), %xmm0\n"
+    "    movdqu 16(%rsp), %xmm1\n"
+    "    movdqu 32(%rsp), %xmm2\n"
+    "    movdqu 48(%rsp), %xmm3\n"
+    "    movdqu 64(%rsp), %xmm4\n"
+    "    movdqu 80(%rsp), %xmm5\n"
+    "    movdqu 96(%rsp), %xmm6\n"
+    "    movdqu 112(%rsp), %xmm7\n"
+    "    add $128, %rsp\n"
+    "    pop %r11\n"
+    "    pop %r10\n"
+    "    pop %rax\n"
+    "    pop %r9\n"
+    "    pop %r8\n"
+    "    pop %rcx\n"
+    "    pop %rdx\n"
+    "    pop %rsi\n"
+    "    pop %rdi\n"
+    "    jmp *8(%r11)\n");
+void d_trace_stub(void);
+
+static void *alloc_code(size_t n)
+{
+    static uint8_t *page;
+    static size_t used;
+    if (!page || used + n > 65536) {
+        page = mmap(NULL, 65536, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (page == MAP_FAILED) {
+            page = NULL;
+            return NULL;
+        }
+        used = 0;
+    }
+    void *r = page + used;
+    used += (n + 15) & ~(size_t)15;
+    return r;
+}
+
+static void *trace_wrap(const char *name, void *target)
+{
+    if (g_trace_fd < 0 || (char *)target < __executable_start || (char *)target >= etext)
+        return target;
+    void **ent = malloc(3 * sizeof *ent);
+    uint8_t *t = alloc_code(24);
+    if (!ent || !t)
+        return target;
+    static const char *const noret[] = {
+        "_setjmp", "__setjmp", "_sigsetjmp", "_longjmp", "__longjmp", "_siglongjmp", "____chkstk_darwin",
+        "_exit", "__exit", "_abort", "_pthread_exit", "_execve", "_execv", "_execvp", "_vfork", "___error",
+    };
+    int ret = g_trace_ret;
+    for (size_t i = 0; i < sizeof noret / sizeof noret[0]; i++)
+        if (!strcmp(name, noret[i]))
+            ret = 0;
+    ent[0] = (void *)name;
+    ent[1] = target;
+    ent[2] = (void *)(uintptr_t)ret;
+    uint64_t v = (uint64_t)(uintptr_t)ent;
+    t[0] = 0x49;
+    t[1] = 0xbb;
+    memcpy(t + 2, &v, 8);
+    t[10] = 0xff;
+    t[11] = 0x25;
+    memset(t + 12, 0, 4);
+    v = (uint64_t)(uintptr_t)d_trace_stub;
+    memcpy(t + 16, &v, 8);
+    return t;
+}
+
 static void missing_called(const char *name)
 {
     fflush(stdout);
@@ -438,7 +618,7 @@ static void *bind_import(struct image *im, int ord, const char *name, int weak)
     if (!a)
         a = flat_lookup(name);
     if (a)
-        return a;
+        return trace_wrap(name, a);
     if (weak)
         return NULL;
     if (g_debug)
@@ -1485,6 +1665,11 @@ int main(int argc, char **argv)
     }
     const char *dbg = getenv("DYLD_DEBUG");
     g_debug = dbg && *dbg && *dbg != '0';
+    const char *tr = getenv("DYLD_TRACE");
+    if (tr && *tr)
+        g_trace_fd = open(tr, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    const char *trr = getenv("DYLD_TRACE_RET");
+    g_trace_ret = trr && *trr && *trr != '0';
     d_argc = argc;
     d_argv = argv;
     d_mh = mh;
@@ -1506,6 +1691,7 @@ int main(int argc, char **argv)
         snprintf(buf, sizeof buf, "%s:/compat/darwin/usr/share/terminfo", tid);
         setenv("TERMINFO_DIRS", buf, 1);
     }
+    d_errno_init();
     d_misc_init();
     d_thread_main_init();
     d_stdio_init();

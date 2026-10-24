@@ -12,6 +12,7 @@ extern int    __cervus_errno;
 int  *__errno_location(void);
 int  *__h_errno_location(void);
 void  __cervus_set_errno(int e);
+extern void (*__cervus_errno_hook)(int);
 void  __cervus_set_h_errno(int e);
 extern int    __cervus_argc;
 extern char **__cervus_argv;

@@ -7,6 +7,9 @@
 #include <time.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
 #include "darwin.h"
 
 #define DNCCS 20
@@ -117,6 +120,22 @@ static void conv_to_c(const struct dtermios *d, struct termios *t)
     cfsetospeed(t, baud_to_speed(d->c_ospeed));
 }
 
+static void tio_log(const char *op, int fd, int act, const struct dtermios *d)
+{
+    static int lfd = -2;
+    if (lfd == -2) {
+        const char *p = getenv("DYLD_TRACE_TIO");
+        lfd = p && *p ? open(p, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644) : -1;
+    }
+    if (lfd < 0)
+        return;
+    char b[160];
+    int n = snprintf(b, sizeof b, "%s fd=%d act=%d lflag=%#lx iflag=%#lx vmin=%u vtime=%u\n", op, fd, act,
+                     d->c_lflag, d->c_iflag, d->c_cc[16], d->c_cc[17]);
+    if (n > 0)
+        write(lfd, b, (size_t)n);
+}
+
 static int d_tcgetattr(int fd, struct dtermios *d)
 {
     struct termios t;
@@ -134,6 +153,7 @@ static int d_tcsetattr(int fd, int act, const struct dtermios *d)
         errno = EINVAL;
         return -1;
     }
+    tio_log("set", fd, act, d);
     conv_to_c(d, &t);
     return tcsetattr(fd, act, &t);
 }
@@ -192,7 +212,7 @@ int d_term_ioctl(int fd, unsigned long req, void *arg, int *handled)
         return d_tcsetattr(fd, TCSAFLUSH, arg);
     case 0x80047410: {
         int q = *(int *)arg;
-        return tcflush(fd, (q & 1) && (q & 2) ? TCIOFLUSH : (q & 2) ? TCOFLUSH : TCIFLUSH);
+        return tcflush(fd, !q || ((q & 1) && (q & 2)) ? TCIOFLUSH : (q & 2) ? TCOFLUSH : TCIFLUSH);
     }
     case 0x2000745e:
         return tcdrain(fd);

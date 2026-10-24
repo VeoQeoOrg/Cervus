@@ -50,6 +50,17 @@ int d_errno_d2lx(int e)
 }
 
 static __thread int d_errval;
+extern void (*__cervus_errno_hook)(int);
+
+static void errno_hook(int e)
+{
+    d_errval = d_errno_lx2d(e);
+}
+
+void d_errno_init(void)
+{
+    __cervus_errno_hook = errno_hook;
+}
 
 int *d___error(void)
 {

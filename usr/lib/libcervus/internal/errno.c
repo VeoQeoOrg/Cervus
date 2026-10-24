@@ -3,6 +3,7 @@
 int __cervus_errno = 0;
 int h_errno = 0;
 int __cervus_tls_live = 0;
+void (*__cervus_errno_hook)(int) = 0;
 
 int *__errno_location(void)
 {
@@ -22,6 +23,8 @@ void __cervus_set_errno(int e)
 {
     *__errno_location() = e;
     __cervus_errno = e;
+    if (__cervus_errno_hook)
+        __cervus_errno_hook(e);
 }
 
 void __cervus_set_h_errno(int e)
