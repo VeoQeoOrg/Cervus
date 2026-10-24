@@ -32,6 +32,7 @@ static int  scroll_buffer_index = 0;
 static int  total_scroll_lines  = 0;
 static int  flush_inhibit       = 0;
 static int  autowrap            = 1;
+static int  wrap_pending        = 0;
 
 static uint32_t dirty_y_min = 0xFFFFFFFFu;
 static uint32_t dirty_y_max = 0;
@@ -700,6 +701,10 @@ static void draw_and_advance(uint32_t cp) {
     uint32_t sh = get_screen_height();
     uint32_t sw = get_screen_width();
     uint32_t cw = CW(), chh = CH();
+    if (wrap_pending) {
+        wrap_pending = 0;
+        if (autowrap) { cursor_x = 0; line_feed(); }
+    }
     uint32_t gcol = cursor_x / cw, grow = cursor_y / chh;
     int unchanged = 0;
     if (g_grid && gcol < g_gcols && grow < g_grows) {
@@ -713,9 +718,11 @@ static void draw_and_advance(uint32_t cp) {
         flush_region(cursor_y, chh);
     }
     (void)sh;
-    if (!autowrap && cursor_x + cw >= sw) return;
+    if (cursor_x + 2 * cw > sw) {
+        if (autowrap) wrap_pending = 1;
+        return;
+    }
     cursor_x += cw;
-    if (cursor_x + cw > sw) { cursor_x = 0; line_feed(); }
 }
 
 static void csi_dispatch(uint8_t ch) {
@@ -739,6 +746,7 @@ static void csi_dispatch(uint8_t ch) {
         return;
     }
     if (ps_priv) return;
+    if (ch != 'm') wrap_pending = 0;
 
     uint32_t sh = get_screen_height(), sw = get_screen_width();
     uint32_t cw = CW(), chh = CH();
@@ -880,11 +888,11 @@ static void esc_dispatch(uint8_t ch) {
     case 'P': case 'X': case '^': case '_':
         ps_state = PS_STR; ps_str_bel = 0; return;
     case '7': cursor_save(); break;
-    case '8': cursor_restore(); break;
-    case 'D': line_feed(); break;
-    case 'E': cursor_x = 0; line_feed(); break;
-    case 'M': reverse_index(); break;
-    case 'c': full_reset(); break;
+    case '8': wrap_pending = 0; cursor_restore(); break;
+    case 'D': wrap_pending = 0; line_feed(); break;
+    case 'E': wrap_pending = 0; cursor_x = 0; line_feed(); break;
+    case 'M': wrap_pending = 0; reverse_index(); break;
+    case 'c': wrap_pending = 0; full_reset(); break;
     default:
         if (ch >= 0x20 && ch <= 0x2F) { ps_state = PS_ESC_INTER; return; }
         break;
@@ -912,6 +920,8 @@ int putchar(int c) {
 
     switch (ps_state) {
     case PS_NORMAL:
+        if (ch == '\n' || ch == '\v' || ch == '\f' || ch == '\r' || ch == '\t' || ch == '\b')
+            wrap_pending = 0;
         switch (ch) {
         case '\n':
         case '\v':
@@ -985,6 +995,7 @@ int putchar(int c) {
 }
 
 void clear_screen_with_scroll(void) {
+    wrap_pending = 0;
     for (uint32_t r = 0; r < g_grows; r++) grid_clear_cells(0, r, g_gcols, bg_color);
     cursor_x = 0; cursor_y = 0;
     scroll_buffer_index = 0; total_scroll_lines = 0;
@@ -1013,6 +1024,7 @@ void console_save_state(console_state_t *s) {
     s->sc_fg = sc_fg; s->sc_bg = sc_bg; s->sc_bold = sc_bold; s->sc_rev = sc_rev; s->sc_valid = sc_valid;
     for (int i = 0; i < CONSOLE_ESC_MAX_PARAMS; i++) s->ps_params[i] = ps_params[i];
     s->saved_cx = saved_cx; s->saved_cy = saved_cy;
+    s->wrap_pending = wrap_pending;
 }
 
 void console_load_state(const console_state_t *s) {
@@ -1030,10 +1042,11 @@ void console_load_state(const console_state_t *s) {
     sc_fg = s->sc_fg; sc_bg = s->sc_bg; sc_bold = s->sc_bold; sc_rev = s->sc_rev; sc_valid = s->sc_valid;
     for (int i = 0; i < CONSOLE_ESC_MAX_PARAMS; i++) ps_params[i] = s->ps_params[i];
     saved_cx = s->saved_cx; saved_cy = s->saved_cy;
+    wrap_pending = s->wrap_pending;
 }
 
 void console_reset_state(void) {
-    cursor_x = 0; cursor_y = 0;
+    cursor_x = 0; cursor_y = 0; wrap_pending = 0;
     text_color = theme_fg; bg_color = theme_bg;
     cursor_visible = 1; autowrap = 1; flush_inhibit = 0;
     scroll_buffer_index = 0; total_scroll_lines = 0;

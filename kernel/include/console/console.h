@@ -19,6 +19,7 @@ typedef struct {
     uint32_t scroll_top, scroll_bot;
     uint32_t sc_fg, sc_bg;
     int      sc_bold, sc_rev, sc_valid;
+    int      wrap_pending;
 } console_state_t;
 
 typedef struct {
