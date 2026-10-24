@@ -1294,3 +1294,56 @@ int vfs_set_times(const char *path, int64_t atime, int64_t mtime) {
     vnode_unref(node);
     return 0;
 }
+
+int vfs_realpath(const char *path, char *out, size_t cap)
+{
+    if (!path || path[0] != '/' || cap < 2) return -EINVAL;
+    char *todo = kmalloc(VFS_MAX_PATH * 2);
+    char *link = kmalloc(VFS_MAX_PATH);
+    if (!todo || !link) { kfree(todo); kfree(link); return -ENOMEM; }
+    size_t tl = strlen(path);
+    if (tl >= VFS_MAX_PATH) { kfree(todo); kfree(link); return -ENAMETOOLONG; }
+    memcpy(todo, path, tl + 1);
+    size_t ol = 0;
+    out[0] = 0;
+    int links = 0, rc = 0;
+    size_t pos = 0;
+    while (todo[pos]) {
+        while (todo[pos] == '/') pos++;
+        if (!todo[pos]) break;
+        size_t start = pos;
+        while (todo[pos] && todo[pos] != '/') pos++;
+        size_t cl = pos - start;
+        if (cl == 1 && todo[start] == '.') continue;
+        if (cl == 2 && todo[start] == '.' && todo[start + 1] == '.') {
+            while (ol > 0 && out[ol - 1] != '/') ol--;
+            if (ol > 0) ol--;
+            out[ol] = 0;
+            continue;
+        }
+        if (ol + 1 + cl + 1 > cap) { rc = -ENAMETOOLONG; break; }
+        out[ol] = '/';
+        memcpy(out + ol + 1, todo + start, cl);
+        size_t nl = ol + 1 + cl;
+        out[nl] = 0;
+        vfs_stat_t st;
+        if (vfs_lstat(out, &st) < 0) { rc = -ENOENT; break; }
+        if (st.st_type != VFS_NODE_SYMLINK) { ol = nl; continue; }
+        if (++links > 40) { rc = -ELOOP; break; }
+        int64_t ll = vfs_readlink(out, link, VFS_MAX_PATH - 1);
+        if (ll <= 0) { rc = ll < 0 ? (int)ll : -ENOENT; break; }
+        link[ll] = 0;
+        size_t rest = strlen(todo + pos);
+        if ((size_t)ll + 1 + rest + 1 > VFS_MAX_PATH * 2) { rc = -ENAMETOOLONG; break; }
+        memmove(todo + ll + 1, todo + pos, rest + 1);
+        memcpy(todo, link, (size_t)ll);
+        todo[ll] = '/';
+        pos = 0;
+        if (link[0] == '/') ol = 0;
+        out[ol] = 0;
+    }
+    if (rc == 0 && ol == 0) { out[0] = '/'; out[1] = 0; }
+    kfree(todo);
+    kfree(link);
+    return rc;
+}

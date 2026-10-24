@@ -231,6 +231,7 @@ uint32_t vfs_current_uid(void);
 int     vfs_fsync    (vfs_file_t *file);
 int     vfs_symlink  (const char *target, const char *linkpath);
 int64_t vfs_readlink (const char *path, char *buf, size_t bufsiz);
+int     vfs_realpath (const char *path, char *out, size_t cap);
 int     vfs_rename   (const char *oldpath, const char *newpath);
 int     vfs_link     (const char *oldpath, const char *newpath);
 int64_t vfs_ioctl  (vfs_file_t *file, uint64_t req, void *arg);

@@ -4064,6 +4064,21 @@ static int64_t fb_sigfastblock(A6)
     return -EINVAL;
 }
 
+static int64_t fb_realpathat(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    char kp[VFS_MAX_PATH], out[VFS_MAX_PATH];
+    int r = syscall_resolve_at(t, (int64_t)(int32_t)a1, a2, kp, sizeof kp);
+    if (r < 0) return r;
+    r = vfs_realpath(kp, out, sizeof out);
+    if (r < 0) return r;
+    size_t n = strlen(out) + 1;
+    if (n > a4) return -ENAMETOOLONG;
+    return syscall_copy_to_user((void *)a3, out, n);
+}
+
 static int64_t fb_swapcontext(A6)
 {
     UNUSED6;
@@ -4123,7 +4138,7 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [546] = fb_futimens,    [547] = fb_utimensat,   [550] = fb_fdatasync,   [551] = fb_fstat,
     [552] = fb_fstatat,     [554] = fb_getdirentries, [555] = fb_statfs,    [556] = fb_fstatfs,
     [557] = fb_getfsstat,   [559] = fb_mknodat,     [563] = fb_getrandom,   [570] = fb_sysctlbyname,
-    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_sigfastblock,      [592] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
+    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_sigfastblock,      [592] = fb_enosys,      [574] = fb_realpathat,      [575] = fb_close_range, [577] = fb_specialfd,
     [581] = fb_sched_getcpu, [595] = fb_getgroups,  [596] = fb_zero,
 };
 
