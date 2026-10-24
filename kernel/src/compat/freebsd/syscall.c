@@ -124,6 +124,7 @@ extern int64_t sys_sigaltstack(uint64_t, uint64_t);
 extern int64_t sys_sigqueue(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_sigtimedwait(uint64_t, uint64_t, uint64_t);
 extern int64_t sys_wait4(uint64_t, uint64_t, uint64_t, uint64_t);
+extern int64_t sys_waitid(uint64_t, uint64_t, uint64_t, uint64_t);
 extern int64_t sys_getrusage(uint64_t, uint64_t);
 extern int64_t sys_getpriority(uint64_t, uint64_t);
 extern int64_t sys_setpriority(uint64_t, uint64_t, uint64_t);
@@ -1411,6 +1412,68 @@ static int64_t fb_wait4(A6)
     return r;
 }
 
+static int64_t fb_wait6(A6)
+{
+    UNUSED6;
+    uint64_t lid;
+    switch ((int)a1) {
+    case 7: lid = 0; break;
+    case 0: lid = 1; break;
+    case 2: lid = 2; break;
+    default: return -EINVAL;
+    }
+    uint64_t o = a4;
+    uint64_t lo = 0;
+    if (o & 1)  lo |= 1;
+    if (o & 2)  lo |= 2;
+    if (o & 4)  lo |= 8;
+    if (o & 8)  lo |= 0x1000000;
+    if (o & 16) lo |= 4;
+    if (!(lo & (2 | 4 | 8))) lo |= 4;
+    task_t *t = syscall_cur_task();
+    uint64_t si = fb_scratch(t, 128);
+    uint8_t zero[128];
+    memset(zero, 0, sizeof zero);
+    if (syscall_copy_to_user((void *)si, zero, sizeof zero) < 0) return -EFAULT;
+    int64_t r = sys_waitid(lid, I(a2), si, lo);
+    if (r < 0) return r;
+    uint8_t li[128];
+    if (syscall_copy_from_user(li, (const void *)si, sizeof li) < 0) return -EFAULT;
+    int32_t code, pid, uid, st;
+    memcpy(&code, li + 8, 4);
+    memcpy(&pid, li + 16, 4);
+    memcpy(&uid, li + 20, 4);
+    memcpy(&st, li + 24, 4);
+    if (pid == 0) return 0;
+    int32_t bst;
+    switch (code) {
+    case 1: bst = (st & 0xff) << 8; break;
+    case 2: bst = fbsd_sig_from_linux(st) & 0x7f; break;
+    case 3: bst = (fbsd_sig_from_linux(st) & 0x7f) | 0x80; break;
+    case 4: case 5: bst = (fbsd_sig_from_linux(st) << 8) | 0x7f; break;
+    case 6: bst = 0x13; break;
+    default: bst = 0;
+    }
+    if (a3 && syscall_copy_to_user((void *)a3, &bst, 4) < 0) return -EFAULT;
+    if (a5) {
+        uint8_t wr[288];
+        memset(wr, 0, sizeof wr);
+        if (syscall_copy_to_user((void *)a5, wr, sizeof wr) < 0) return -EFAULT;
+    }
+    if (a6) {
+        ksiginfo_t k;
+        memset(&k, 0, sizeof k);
+        k.code = code;
+        k.pid = (uint32_t)pid;
+        k.uid = (uint32_t)uid;
+        k.status = (code == 1) ? (st & 0xff) : fbsd_sig_from_linux(st);
+        uint8_t out[80];
+        fbsd_fill_siginfo(out, 20, &k);
+        if (syscall_copy_to_user((void *)a6, out, sizeof out) < 0) return -EFAULT;
+    }
+    return pid;
+}
+
 static int64_t fb_spawn(int share_vm, int wait_vfork)
 {
     task_t *me = syscall_cur_task();
@@ -2382,8 +2445,10 @@ static void kp_fill(uint8_t *k, task_t *t)
     int32_t nth = 1;
     memcpy(k + 596, &nth, 4);
     i32 = (int32_t)t->pid; memcpy(k + 600, &i32, 4);
-    k[604] = 2; k[605] = 120; k[606] = 120; k[607] = 120;
+    k[604] = 3; k[605] = 120; k[606] = 120; k[607] = 120;
     int64_t sflag = 1; memcpy(k + 1072, &sflag, 8);
+    int64_t tdflags = t->state == TASK_BLOCKED ? 0x8 : 0;
+    memcpy(k + 1080, &tdflags, 8);
 }
 
 static int64_t sc_proc(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
@@ -3884,13 +3949,13 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [497] = fb_mkfifoat,    [499] = fb_openat,      [500] = fb_readlinkat,  [501] = fb_renameat,
     [502] = fb_symlinkat,   [503] = fb_unlinkat,    [504] = fb_posix_openpt, [513] = fb_pathconf,
     [516] = fb_zero,        [517] = fb_cap_getmode, [518] = fb_pdfork,      [519] = fb_pdkill,
-    [520] = fb_pdgetpid,    [530] = fb_posix_fallocate, [531] = fb_posix_fadvise, [533] = fb_zero,        [534] = fb_zero,
+    [520] = fb_pdgetpid,    [530] = fb_posix_fallocate, [532] = fb_wait6, [531] = fb_posix_fadvise, [533] = fb_zero,        [534] = fb_zero,
     [535] = fb_zero,        [536] = fb_zero,        [537] = fb_zero,        [569] = fb_copy_file_range,        [522] = fb_pselect,     [540] = fb_chflagsat,
     [541] = fb_accept4,     [542] = fb_pipe2,       [544] = fb_einval,      [545] = fb_ppoll,
     [546] = fb_futimens,    [547] = fb_utimensat,   [550] = fb_fdatasync,   [551] = fb_fstat,
     [552] = fb_fstatat,     [554] = fb_getdirentries, [555] = fb_statfs,    [556] = fb_fstatfs,
     [557] = fb_getfsstat,   [559] = fb_mknodat,     [563] = fb_getrandom,   [570] = fb_sysctlbyname,
-    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
+    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_enosys,      [592] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
     [581] = fb_sched_getcpu, [595] = fb_getgroups,  [596] = fb_zero,
 };
 
