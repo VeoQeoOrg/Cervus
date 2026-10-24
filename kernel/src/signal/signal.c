@@ -235,9 +235,13 @@ void signal_kill_exit(task_t *t) {
     signal_terminate(t, t->kill_sig > 0 && t->kill_sig < NSIG ? t->kill_sig : SIGKILL);
 }
 
+extern uint64_t fbsd_fastblock_mask(task_t *t, uint64_t deliverable);
+
 bool signal_pending_deliverable(task_t *t) {
     if (!t) return false;
-    return (t->sig_pending & ~t->sig_blocked) != 0;
+    uint64_t d = t->sig_pending & ~t->sig_blocked;
+    if (d && t->fb_sigblock_ptr && t == syscall_cur_task()) d = fbsd_fastblock_mask(t, d);
+    return d != 0;
 }
 
 void signal_send_group(uint32_t pgid, int sig) {
@@ -766,6 +770,7 @@ int64_t freebsd_getcontext(uint64_t ucp) {
 static int pick_signal(task_t *t) {
     for (;;) {
         uint64_t deliverable = t->sig_pending & ~t->sig_blocked;
+        if (deliverable && t->fb_sigblock_ptr) deliverable = fbsd_fastblock_mask(t, deliverable);
         if (!deliverable) return 0;
         int sig = __builtin_ctzll(deliverable);
         if (sig <= 0 || sig >= NSIG) { t->sig_pending &= ~1ULL; continue; }

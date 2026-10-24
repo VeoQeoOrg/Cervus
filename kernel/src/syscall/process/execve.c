@@ -234,7 +234,7 @@ static uintptr_t build_stack_freebsd(mm_t *mm, uintptr_t stack_top, const strvec
         20, u_pagesizes,
         21, sizeof pagesizes,
         23, 3,
-        27, 0,
+        27, 1,
         28, (uint64_t)argv->count,
         29, u_argv,
         30, (uint64_t)envp->count,
@@ -455,6 +455,7 @@ int64_t execve_path(const char *path, uint64_t argv_ptr, uint64_t envp_ptr)
 
     t->ss_sp = 0;
     t->ss_size = 0;
+    t->fb_sigblock_ptr = 0;
     t->ss_flags = 2;
     t->ret_iret = 0;
     for (int sig = 0; sig < NSIG; sig++) {

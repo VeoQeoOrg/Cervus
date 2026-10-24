@@ -2322,8 +2322,8 @@ static int64_t sc_hostname(const fb_sysctl_t *e, const int32_t *rest, uint32_t n
 
 static int64_t sc_ncpu(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
 {
-    (void)e; (void)rest; (void)nrest;
-    int32_t v = (int32_t)smp_get_cpu_count();
+    (void)rest; (void)nrest;
+    int32_t v = (int32_t)smp_get_cpu_count() + (int32_t)e->v;
     sc_put(buf, len, 0, &v, 4);
     *len = 4;
     return 0;
@@ -2429,7 +2429,7 @@ static void kp_fill(uint8_t *k, task_t *t)
     int64_t start_ns = clock_realtime_offset_ns() + (int64_t)t->create_time_ns;
     int64_t st[2] = { start_ns / 1000000000LL, (start_ns % 1000000000LL) / 1000 };
     memcpy(k + 336, st, sizeof st);
-    int64_t flag = 0x4000 | (t->ctty >= 0 ? 0x2 : 0);
+    int64_t flag = 0x10000000 | 0x4000 | (t->ctty >= 0 ? 0x2 : 0);
     memcpy(k + 368, &flag, 8);
     char stat = t->state == TASK_ZOMBIE || t->state == TASK_DEAD ? 5 :
                 t->state == TASK_BLOCKED ? 3 : 2;
@@ -2637,6 +2637,98 @@ static int64_t fb_sysctl_net(const int32_t *mib, uint32_t n, uint64_t oldp, uint
     return r;
 }
 
+static int64_t sc_cptime(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)rest; (void)nrest;
+    uint32_t n = smp_get_cpu_count();
+    if (!n) n = 1;
+    if (n > 256) n = 256;
+    uint64_t up = sched_now_ns();
+    int64_t sum[5] = { 0, 0, 0, 0, 0 };
+    size_t at = 0;
+    for (uint32_t c = 0; c < n; c++) {
+        uint64_t id = sched_cpu_idle_ns(c);
+        if (id > up) id = up;
+        int64_t v[5] = { (int64_t)((up - id) / 7812500ULL), 0, 0, 0, (int64_t)(id / 7812500ULL) };
+        if (e->v) {
+            sc_put(buf, len, at, v, sizeof v);
+            at += sizeof v;
+        }
+        for (int k = 0; k < 5; k++) sum[k] += v[k];
+    }
+    if (!e->v) {
+        sc_put(buf, len, 0, sum, sizeof sum);
+        at = sizeof sum;
+    }
+    *len = at;
+    return 0;
+}
+
+static int64_t sc_loadavg(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)e; (void)rest; (void)nrest;
+    uint32_t pids[256];
+    int n = task_collect_pids(pids, 256);
+    uint32_t runnable = 0;
+    for (int i = 0; i < n; i++) {
+        task_t *t = task_find_by_pid(pids[i]);
+        if (t && t->is_userspace && (t->state == TASK_RUNNING || t->state == TASK_READY)) runnable++;
+    }
+    struct { uint32_t ld[3]; uint32_t pad; int64_t fscale; } la = { { runnable * 2048, runnable * 2048, runnable * 2048 }, 0, 2048 };
+    sc_put(buf, len, 0, &la, sizeof la);
+    *len = sizeof la;
+    return 0;
+}
+
+static int64_t sc_vmstat(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)rest; (void)nrest;
+    uint64_t total = pmm_get_usable_pages(), used = pmm_get_used_pages();
+    if (used > total) used = total;
+    uint64_t v = 0;
+    switch (e->v) {
+    case 1: v = used; break;
+    case 5: v = total - used; break;
+    case 8: v = total; break;
+    }
+    if (e->ctltype == 9) {
+        sc_put(buf, len, 0, &v, 8);
+        *len = 8;
+    } else {
+        uint32_t w = (uint32_t)v;
+        sc_put(buf, len, 0, &w, 4);
+        *len = 4;
+    }
+    return 0;
+}
+
+static int64_t sc_lastpid(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)e; (void)rest; (void)nrest;
+    uint32_t pids[1024];
+    int n = task_collect_pids(pids, 1024);
+    int32_t mx = 0;
+    for (int i = 0; i < n; i++) if ((int32_t)pids[i] > mx) mx = (int32_t)pids[i];
+    sc_put(buf, len, 0, &mx, 4);
+    *len = 4;
+    return 0;
+}
+
+static int64_t sc_noent(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)e; (void)rest; (void)nrest; (void)buf; (void)len;
+    return -ENOENT;
+}
+
+static int64_t sc_clockrate(const fb_sysctl_t *e, const int32_t *rest, uint32_t nrest, uint8_t *buf, size_t *len)
+{
+    (void)e; (void)rest; (void)nrest;
+    int32_t ci[5] = { 1000, 1000, 0, 128, 128 };
+    sc_put(buf, len, 0, ci, sizeof ci);
+    *len = sizeof ci;
+    return 0;
+}
+
 #define CT_NODE   1
 #define CT_INT    2
 #define CT_STRING 3
@@ -2695,9 +2787,26 @@ static const fb_sysctl_t g_sysctl[] = {
     { "kern.pid_max",      { 0x7fff, 17 }, 2, SC_INT, 0, 99999, 0, CT_INT, "I" },
     { "kern.fscale",       { 0x7fff, 18 }, 2, SC_INT, 0, 2048, 0, CT_INT, "I" },
     { "kern.ccpu",         { 0x7fff, 19 }, 2, SC_INT, 0, 1948, 0, CT_INT, "I" },
-    { "kern.lastpid",      { 0x7fff, 20 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "kern.lastpid",      { 0x7fff, 20 }, 2, SC_FN, 0, 0, sc_lastpid, CT_INT, "I" },
     { "vm.stats.vm.v_page_size", { 0x7fff, 21 }, 2, SC_INT, 0, 4096, 0, CT_INT, "IU" },
-    { "vm.stats.vm.v_page_count", { 0x7fff, 22 }, 2, SC_FN, 0, 2, sc_physmem, CT_INT, "IU" },
+    { "vm.stats.vm.v_page_count", { 0x7fff, 22 }, 2, SC_FN, 0, 8, sc_vmstat, CT_INT, "IU" },
+    { "kern.cp_time",      { 0x7fff, 23 }, 2, SC_FN, 0, 0, sc_cptime, CT_LONG, "L" },
+    { "kern.cp_times",     { 0x7fff, 24 }, 2, SC_FN, 0, 1, sc_cptime, CT_LONG, "L" },
+    { "vm.loadavg",        { 2, 2 },      2, SC_FN, 0, 0, sc_loadavg, CT_OPAQUE, "S,loadavg" },
+    { "kern.smp.active",   { 0x7fff, 25 }, 2, SC_INT, 0, 1, 0, CT_INT, "I" },
+    { "vm.nswapdev",       { 0x7fff, 26 }, 2, SC_INT, 0, 0, 0, CT_INT, "I" },
+    { "vfs.bufspace",      { 0x7fff, 27 }, 2, SC_LONG, 0, 0, 0, CT_LONG, "L" },
+    { "vm.stats.vm.v_active_count", { 0x7fff, 28 }, 2, SC_FN, 0, 1, sc_vmstat, CT_INT, "IU" },
+    { "vm.stats.vm.v_inactive_count", { 0x7fff, 29 }, 2, SC_FN, 0, 2, sc_vmstat, CT_INT, "IU" },
+    { "vm.stats.vm.v_laundry_count", { 0x7fff, 30 }, 2, SC_FN, 0, 3, sc_vmstat, CT_INT, "IU" },
+    { "vm.stats.vm.v_wire_count", { 0x7fff, 31 }, 2, SC_FN, 0, 4, sc_vmstat, CT_INT, "IU" },
+    { "vm.stats.vm.v_free_count", { 0x7fff, 32 }, 2, SC_FN, 0, 5, sc_vmstat, CT_INT, "IU" },
+    { "vm.stats.vm.v_swappgsin", { 0x7fff, 33 }, 2, SC_FN, 0, 6, sc_vmstat, 9, "QU" },
+    { "vm.stats.vm.v_swappgsout", { 0x7fff, 34 }, 2, SC_FN, 0, 7, sc_vmstat, 9, "QU" },
+    { "kern.clockrate",    { 1, 12 },     2, SC_FN, 0, 0, sc_clockrate, CT_OPAQUE, "S,clockinfo" },
+    { "kern.smp.maxid",    { 0x7fff, 35 }, 2, SC_FN, 0, -1, sc_ncpu, CT_INT, "I" },
+    { "vm.dmmax",          { 0x7fff, 36 }, 2, SC_INT, 0, 32, 0, CT_INT, "I" },
+    { "vm.swap_info",      { 0x7fff, 37 }, 2, SC_FN, 0, 0, sc_noent, CT_NODE, "N" },
 };
 
 #define SYSCTL_N (sizeof g_sysctl / sizeof g_sysctl[0])
@@ -3896,6 +4005,65 @@ static int64_t fb_kevent(A6)
     return rc < 0 ? rc : n;
 }
 
+#define FB_SFB_PEND 0x1u
+
+uint64_t fbsd_fastblock_mask(task_t *t, uint64_t deliverable)
+{
+    uint32_t w;
+    if (futex_user_load(t->fb_sigblock_ptr, &w) < 0) {
+        t->fb_sigblock_ptr = 0;
+        return deliverable;
+    }
+    if ((w >> 4) == 0) return deliverable;
+    uint64_t keep = (1ULL << SIGKILL) | (1ULL << SIGSTOP);
+    static const int faults[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP };
+    for (size_t i = 0; i < sizeof faults / sizeof faults[0]; i++) {
+        int s = faults[i];
+        if (t->sig_si[s].code > 0 && t->sig_si[s].code != SI_KERNEL_CODE) keep |= 1ULL << s;
+    }
+    uint64_t held = deliverable & ~keep;
+    if (held) {
+        for (;;) {
+            uint32_t exp = w;
+            if (w & FB_SFB_PEND) break;
+            int c = futex_user_cas(t->fb_sigblock_ptr, &exp, w | FB_SFB_PEND);
+            if (c != 0) break;
+            w = exp;
+        }
+    }
+    return deliverable & keep;
+}
+
+static int64_t fb_sigfastblock(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t) return -ESRCH;
+    switch (a1) {
+    case 1:
+        if (t->fb_sigblock_ptr) return -EBUSY;
+        if (!a2 || (a2 & 3)) return -EINVAL;
+        t->fb_sigblock_ptr = a2;
+        return 0;
+    case 2: {
+        if (!t->fb_sigblock_ptr) return -EINVAL;
+        uint32_t exp = FB_SFB_PEND;
+        int c = futex_user_cas(t->fb_sigblock_ptr, &exp, 0);
+        if (c < 0) { t->fb_sigblock_ptr = 0; return -EFAULT; }
+        return c ? 0 : -EBUSY;
+    }
+    case 3: {
+        if (!t->fb_sigblock_ptr) return -EINVAL;
+        uint32_t w;
+        if (futex_user_load(t->fb_sigblock_ptr, &w) < 0) return -EFAULT;
+        if (w != 0 && w != FB_SFB_PEND) return -EBUSY;
+        t->fb_sigblock_ptr = 0;
+        return 0;
+    }
+    }
+    return -EINVAL;
+}
+
 static int64_t fb_swapcontext(A6)
 {
     UNUSED6;
@@ -3955,7 +4123,7 @@ static const fb_fn_t g_fb_table[FB_NR_MAX] = {
     [546] = fb_futimens,    [547] = fb_utimensat,   [550] = fb_fdatasync,   [551] = fb_fstat,
     [552] = fb_fstatat,     [554] = fb_getdirentries, [555] = fb_statfs,    [556] = fb_fstatfs,
     [557] = fb_getfsstat,   [559] = fb_mknodat,     [563] = fb_getrandom,   [570] = fb_sysctlbyname,
-    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_enosys,      [592] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
+    [560] = fb_kevent,      [583] = fb_kqueuex,     [573] = fb_sigfastblock,      [592] = fb_enosys,      [574] = fb_enosys,      [575] = fb_close_range, [577] = fb_specialfd,
     [581] = fb_sched_getcpu, [595] = fb_getgroups,  [596] = fb_zero,
 };
 
