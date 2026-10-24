@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include "darwin.h"
 
 #define SIG_MUTEX_INIT      0x32aaaba7L
@@ -46,6 +47,17 @@ struct dpthread {
 static struct dpthread g_main_thread = { .sig = SIG_ATTR, .main = 1 };
 static __thread struct dpthread *t_self;
 
+#define TSD_SLOTS 1024
+
+static void tsd_setup(struct dpthread *d)
+{
+    uint64_t *tsd = calloc(TSD_SLOTS, sizeof *tsd);
+    if (!tsd)
+        return;
+    tsd[0] = (uint64_t)(uintptr_t)d;
+    syscall2(SYS_ARCH_PRCTL, 0x1001, tsd);
+}
+
 static int rc(int e)
 {
     return e ? d_errno_lx2d(e) : 0;
@@ -66,7 +78,13 @@ static void *tramp(void *p)
     struct dpthread *d = p;
     t_self = d;
     d->tid = (uint64_t)gettid();
+    tsd_setup(d);
     return d->fn(d->arg);
+}
+
+void d_thread_main_init(void)
+{
+    tsd_setup(self());
 }
 
 static int d_pthread_create(struct dpthread **out, const struct dobj *attr, void *(*fn)(void *), void *arg)

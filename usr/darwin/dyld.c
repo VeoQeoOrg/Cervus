@@ -157,6 +157,7 @@ const void *d_mh;
 static int g_debug;
 static struct dprogvars g_vars;
 static char **g_apple;
+static char **g_envp;
 static struct image *g_images, *g_main;
 static struct image g_libsystem = { .virt = 1, .path = "/usr/lib/libSystem.B.dylib" };
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1183,13 +1184,13 @@ static void run_initializers(struct image *im)
                 for (uint64_t k = 0; k + 8 <= sc[j].size; k += 8) {
                     init_fn f;
                     memcpy(&f, addr + k, 8);
-                    f(d_argc, d_argv, environ, g_apple, &g_vars);
+                    f(d_argc, d_argv, g_envp ? g_envp : environ, g_apple, &g_vars);
                 }
             } else if (type == S_INIT_FUNC_OFFSETS) {
                 for (uint64_t k = 0; k + 4 <= sc[j].size; k += 4) {
                     uint32_t o;
                     memcpy(&o, addr + k, 4);
-                    ((init_fn)(void *)(im->mh + o))(d_argc, d_argv, environ, g_apple, &g_vars);
+                    ((init_fn)(void *)(im->mh + o))(d_argc, d_argv, g_envp ? g_envp : environ, g_apple, &g_vars);
                 }
             }
         }
@@ -1421,6 +1422,7 @@ int main(int argc, char **argv)
         setenv("TERMINFO_DIRS", buf, 1);
     }
     d_misc_init();
+    d_thread_main_init();
     d_stdio_init();
     d_ctype_init();
 
@@ -1455,7 +1457,21 @@ int main(int argc, char **argv)
 
     static char apple0[PATH_MAX + 16];
     snprintf(apple0, sizeof apple0, "executable_path=%s", d_exec_path);
-    static char *apple[] = { apple0, NULL };
+    size_t nenv = 0;
+    while (environ && environ[nenv])
+        nenv++;
+    char **block = calloc((size_t)argc + nenv + 5, sizeof *block);
+    if (!block)
+        return 127;
+    memcpy(block, argv, (size_t)argc * sizeof *block);
+    char **envp = block + argc + 1;
+    if (nenv)
+        memcpy(envp, environ, nenv * sizeof *envp);
+    char **apple = envp + nenv + 1;
+    apple[0] = apple0;
+    argv = block;
+    d_argv = block;
+    g_envp = envp;
     g_apple = apple;
     g_vars.mh = mh;
     g_vars.argcp = &d_argc;
@@ -1465,5 +1481,5 @@ int main(int argc, char **argv)
 
     run_initializers(g_main);
     int (*m)(int, char **, char **, char **) = (int (*)(int, char **, char **, char **))entry;
-    exit(m(argc, argv, environ, apple));
+    exit(m(argc, argv, envp, apple));
 }

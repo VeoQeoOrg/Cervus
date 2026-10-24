@@ -66,6 +66,7 @@ int *d___error(void);
 void d_stdio_init(void);
 void d_ctype_init(void);
 void d_misc_init(void);
+void d_thread_main_init(void);
 FILE *d_real_file(void *f);
 int d_sig_d2lx(int s);
 int d_sig_lx2d(int s);

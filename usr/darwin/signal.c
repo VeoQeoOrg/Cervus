@@ -218,9 +218,16 @@ static void dispatch(int lsig, siginfo_t *si, void *ctx)
 static int d_sigaction(int dsig, const struct dsigaction *act, struct dsigaction *old)
 {
     int lsig = d_sig_d2lx(dsig);
-    if (!lsig) {
+    if (dsig <= 0 || dsig >= 32) {
         errno = EINVAL;
         return -1;
+    }
+    if (!lsig) {
+        if (old)
+            *old = g_act[dsig];
+        if (act)
+            g_act[dsig] = *act;
+        return 0;
     }
     struct sigaction la, lo;
     struct dsigaction prev = g_act[dsig];
