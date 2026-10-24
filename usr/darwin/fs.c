@@ -402,6 +402,9 @@ static int d_ioctl(int fd, unsigned long req, ...)
     case 0x20006601: return fcntl(fd, F_SETFD, FD_CLOEXEC);
     case 0x20006602: return fcntl(fd, F_SETFD, 0);
     }
+    int handled, r = d_term_ioctl(fd, req, arg, &handled);
+    if (handled)
+        return r;
     errno = ENOTTY;
     return -1;
 }

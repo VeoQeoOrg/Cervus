@@ -70,5 +70,6 @@ FILE *d_real_file(void *f);
 int d_sig_d2lx(int s);
 int d_sig_lx2d(int s);
 int d_wstatus(int st);
+int d_term_ioctl(int fd, unsigned long req, void *arg, int *handled);
 
 #endif

@@ -1412,6 +1412,14 @@ int main(int argc, char **argv)
     else if (argc > 0 && argv[0])
         snprintf(d_exec_path, sizeof d_exec_path, "%s", argv[0]);
 
+    const char *tid = getenv("TERMINFO_DIRS");
+    if (!tid) {
+        setenv("TERMINFO_DIRS", "/compat/darwin/usr/share/terminfo:", 0);
+    } else if (!strstr(tid, "/compat/darwin/usr/share/terminfo")) {
+        char buf[PATH_MAX];
+        snprintf(buf, sizeof buf, "%s:/compat/darwin/usr/share/terminfo", tid);
+        setenv("TERMINFO_DIRS", buf, 1);
+    }
     d_misc_init();
     d_stdio_init();
     d_ctype_init();

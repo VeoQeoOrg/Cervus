@@ -64,6 +64,12 @@ done
 if [ -f usr/darwin/dyld.elf ]; then
     mkdir -p "$RFS/usr/lib/darwin"
     cp usr/darwin/dyld.elf "$RFS/usr/lib/darwin/dyld"
+    for ti in "$SYSROOT"/usr/share/terminfo/?/*; do
+        [ -f "$ti" ] || continue
+        hex=$(printf '%s' "$(basename "$ti")" | cut -c1 | od -An -tx1 | tr -d ' \n')
+        mkdir -p "$RFS/compat/darwin/usr/share/terminfo/$hex"
+        cp "$ti" "$RFS/compat/darwin/usr/share/terminfo/$hex/"
+    done
     green "darwin runtime -> /usr/lib/darwin/dyld"
 fi
 
