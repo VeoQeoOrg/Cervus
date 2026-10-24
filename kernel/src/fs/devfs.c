@@ -35,6 +35,10 @@ extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 #define TCSETS        0x5402
 #define TCSETSW       0x5403
 #define TCSETSF       0x5404
+#define TCFLSH        0x540B
+#define TCDRAIN       0x540C
+#define TCSBRK        0x540D
+#define TCXONC        0x540E
 #define TIOCSNONBLOCK 0x5481
 #define TIOCGPGRP     0x540F
 #define TIOCSPGRP     0x5410
@@ -53,6 +57,7 @@ extern void vt_get_cursor(int vt, uint32_t *row, uint32_t *col);
 #define T_VKILL   3
 #define T_VEOF    4
 #define T_VMIN    6
+#define T_VTIME   5
 #define T_VSTART  8
 #define T_VSTOP   9
 #define T_VSUSP   10
@@ -87,6 +92,7 @@ typedef struct {
     size_t   line_len, line_read;
     int      line_eof;
     int      nonblock;
+    volatile uint32_t tio_gen;
     task_t  *nonblock_owner;
     task_t  *reader;
     task_t  *raw_owner;
@@ -225,29 +231,81 @@ static void tty_echo_char(int vt, char c) {
     vt_write(vt, b, 1);
 }
 
-static int wait_for_char(int vt, vt_tty_t *t, char *out)
+static int wait_for_input(int vt, vt_tty_t *t, uint64_t deadline, uint32_t gen, int track_gen)
 {
     extern bool signal_pending_deliverable(task_t *t);
     while (ring_empty(t) || vt != vt_active()) {
         task_t *me = devfs_cur_task();
         if (me && me->pending_kill) return -1;
         if (me && signal_pending_deliverable(me)) return -2;
+        if (track_gen && t->tio_gen != gen) return 2;
+        if (deadline && sched_now_ns() >= deadline) return 1;
         if (me) {
-            me->wakeup_time_ns = 0;
+            me->wakeup_time_ns = deadline;
             me->runnable = false;
             me->state = TASK_BLOCKED;
             t->reader = me;
+            if (deadline) sched_note_wakeup(deadline);
             __atomic_thread_fence(__ATOMIC_SEQ_CST);
-            if (!ring_empty(t) && vt == vt_active()) task_unblock(me);
+            if ((!ring_empty(t) && vt == vt_active()) || me->pending_kill || (track_gen && t->tio_gen != gen))
+                task_unblock(me);
             sched_reschedule();
+            me->wakeup_time_ns = 0;
             t->reader = NULL;
+            if (me->pending_kill) return -1;
             if (signal_pending_deliverable(me)) return -2;
         } else {
             task_yield();
         }
     }
+    return 0;
+}
+
+static int wait_for_char(int vt, vt_tty_t *t, char *out)
+{
+    int r = wait_for_input(vt, t, 0, 0, 0);
+    if (r < 0) return r;
     ring_getc(t, out);
     return 0;
+}
+
+static size_t ring_take(vt_tty_t *t, char *dst, size_t len)
+{
+    size_t got = 0;
+    while (got < len && ring_getc(t, &dst[got])) got++;
+    return got;
+}
+
+static int64_t tty_read_raw(int vt, vt_tty_t *t, char *dst, size_t len, int nb)
+{
+    if (nb) {
+        size_t got = ring_take(t, dst, len);
+        return got ? (int64_t)got : -EAGAIN;
+    }
+    for (;;) {
+        uint8_t vmin = t->termios.c_cc[T_VMIN], vtime = t->termios.c_cc[T_VTIME];
+        uint32_t gen = t->tio_gen;
+        uint64_t tick = (uint64_t)vtime * 100000000ULL;
+        if (vmin == 0 && vtime == 0)
+            return (int64_t)(vt == vt_active() ? ring_take(t, dst, len) : 0);
+        int w = wait_for_input(vt, t, vmin ? 0 : sched_now_ns() + tick, gen, 1);
+        if (w < 0) return -EINTR;
+        if (w == 2) continue;
+        if (w == 1) return 0;
+        uint8_t intr = t->termios.c_cc[T_VINTR];
+        if ((t->termios.c_lflag & T_ISIG) && intr && (uint8_t)t->ring[t->r_head] == intr) {
+            char c;
+            ring_getc(t, &c);
+            return -EINTR;
+        }
+        size_t got = ring_take(t, dst, len);
+        while (got < vmin && got < len) {
+            w = wait_for_input(vt, t, vtime ? sched_now_ns() + tick : 0, gen, 1);
+            if (w != 0) break;
+            got += ring_take(t, dst + got, len - got);
+        }
+        return (int64_t)got;
+    }
 }
 
 static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
@@ -264,25 +322,23 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
     uint8_t  intr        = t->termios.c_cc[T_VINTR];
     uint8_t  eof         = t->termios.c_cc[T_VEOF];
 
-    int nb = t->nonblock && (devfs_cur_task() == t->nonblock_owner);
-    if (nb && ring_empty(t)
+    int nb = vfs_io_nonblock() || (t->nonblock && (devfs_cur_task() == t->nonblock_owner));
+    if (nb && (ring_empty(t) || vt != vt_active())
         && (!canonical || t->line_read >= t->line_len))
         return -EAGAIN;
-
-    if (!canonical) {
-        char c;
-        if (wait_for_char(vt, t, &c) < 0)
-            return -EINTR;
-        if (isig && intr && (uint8_t)c == intr) return -EINTR;
-        dst[0] = c;
-        size_t got = 1;
-        while (got < len) {
-            char nc;
-            if (!ring_getc(t, &nc)) break;
-            dst[got++] = nc;
+    if (nb && canonical && t->line_read >= t->line_len) {
+        int complete = 0;
+        int pending = (int)((t->r_tail - t->r_head + KB_BUF_SIZE) % KB_BUF_SIZE);
+        for (int i = 0; i < pending && !complete; i++) {
+            char c = t->ring[(t->r_head + i) % KB_BUF_SIZE];
+            if (c == '\n' || c == '\r' || (eof && (uint8_t)c == eof) || (isig && intr && (uint8_t)c == intr))
+                complete = 1;
         }
-        return (int64_t)got;
+        if (!complete) return -EAGAIN;
     }
+
+    if (!canonical)
+        return tty_read_raw(vt, t, dst, len, nb);
 
     if (t->line_read >= t->line_len) {
         t->line_len  = 0;
@@ -290,7 +346,7 @@ static int64_t tty_read(vnode_t *node, void *buf, size_t len, uint64_t offset) {
         t->line_eof  = 0;
 
         for (;;) {
-            char c;
+            char c = 0;
             if (wait_for_char(vt, t, &c) < 0)
                 return -EINTR;
 
@@ -434,9 +490,31 @@ static int64_t tty_ioctl(vnode_t *node, uint64_t req, void *arg) {
         return 0;
     }
 
+    if (req == TCFLSH) {
+        uint64_t q = (uint64_t)(uintptr_t)arg;
+        if (q > 2) return -EINVAL;
+        if (q == 0 || q == 2) {
+            t->r_head = t->r_tail;
+            t->line_len = 0;
+            t->line_read = 0;
+        }
+        return 0;
+    }
+
+    if (req == TCDRAIN || req == TCXONC || req == TCSBRK || req == 0x5409 || req == 0x540A)
+        return 0;
+
     if (req == TCSETS || req == TCSETSW || req == TCSETSF) {
         if (!arg) return -EFAULT;
+        if (req == TCSETSF) {
+            t->r_head = t->r_tail;
+            t->line_len = 0;
+            t->line_read = 0;
+        }
         memcpy(&t->termios, arg, sizeof(t->termios));
+        __atomic_add_fetch(&t->tio_gen, 1, __ATOMIC_SEQ_CST);
+        task_t *rd = t->reader;
+        if (rd) task_unblock(rd);
         if ((t->termios.c_lflag & (T_ICANON | T_ISIG)) != (T_ICANON | T_ISIG))
             t->raw_owner = devfs_cur_task();
         else if (t->raw_owner == devfs_cur_task())
