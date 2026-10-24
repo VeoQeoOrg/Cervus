@@ -46,3 +46,4 @@ usr/sysroot/usr/share/media/*.mp3
 usr/sysroot/usr/share/media/*.wav
 
 builder/herd/sign
+usr/darwin/*.elf

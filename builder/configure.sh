@@ -323,7 +323,7 @@ done
 
 PROG_DEPS="$CRT0 $LIBCERVUS_A"
 ALL_ELFS=" usr/ldso/ld-cervus.elf"
-for dir in usr/apps usr/bin usr/installer usr/darwin; do
+for dir in usr/apps usr/bin usr/installer; do
     [ -d "$dir" ] || continue
     for src in "$dir"/*.c; do
         [ -e "$src" ] || continue
@@ -338,6 +338,11 @@ for dir in usr/apps usr/bin usr/installer usr/darwin; do
         ALL_ELFS="$ALL_ELFS $elf"
     done
 done
+DARWIN_SRCS=$(ls usr/darwin/*.c 2>/dev/null | tr '\n' ' ')
+if [ -n "$DARWIN_SRCS" ]; then
+    printf 'build usr/darwin/dyld.elf: cc_app_opt %s| %s\n' "$DARWIN_SRCS" "$PROG_DEPS"
+    ALL_ELFS="$ALL_ELFS usr/darwin/dyld.elf"
+fi
 printf '\n'
 
 KOBJS=""
