@@ -14,7 +14,15 @@ typedef struct {
     size_t     size;
     char       name[32];
     spinlock_t lock;
+    uint32_t   seals;
 } memfd_t;
+
+#define SEAL_SEAL         0x01u
+#define SEAL_SHRINK       0x02u
+#define SEAL_GROW         0x04u
+#define SEAL_WRITE        0x08u
+#define SEAL_FUTURE_WRITE 0x10u
+#define SEAL_EXEC         0x20u
 
 static const vnode_ops_t MEMFD_OPS;
 
@@ -99,6 +107,10 @@ static int64_t memfd_write(vnode_t *n, const void *buf, size_t len, uint64_t off
 {
     memfd_t *m = (memfd_t *)n->fs_data;
     uint64_t f = spinlock_acquire_irqsave(&m->lock);
+    if ((m->seals & (SEAL_WRITE | SEAL_FUTURE_WRITE)) || ((m->seals & SEAL_GROW) && off + len > m->size)) {
+        spinlock_release_irqrestore(&m->lock, f);
+        return -EPERM;
+    }
 
     size_t need_pages = (off + len + 0xFFF) / 0x1000;
     if (need_pages > m->npages && memfd_grow(m, need_pages) < 0) {
@@ -126,6 +138,10 @@ static int memfd_truncate(vnode_t *n, uint64_t new_size)
 {
     memfd_t *m = (memfd_t *)n->fs_data;
     uint64_t f = spinlock_acquire_irqsave(&m->lock);
+    if (((m->seals & SEAL_SHRINK) && new_size < m->size) || ((m->seals & SEAL_GROW) && new_size > m->size)) {
+        spinlock_release_irqrestore(&m->lock, f);
+        return -EPERM;
+    }
     int rc = memfd_grow(m, (size_t)((new_size + 0xFFF) / 0x1000));
     if (rc == 0) {
         if (new_size < m->size) {
@@ -207,9 +223,12 @@ int64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags, uint64_t unused)
     task_t *t = syscall_cur_task();
     if (!t || !t->fd_table) return -EINVAL;
 
+    if (flags & ~(uint64_t)0x1fu) return -EINVAL;
     memfd_t *m = calloc(1, sizeof *m);
     if (!m) return -ENOMEM;
     m->lock = (spinlock_t)SPINLOCK_INIT;
+    if (flags & 8) m->seals = SEAL_EXEC;
+    else if (!(flags & 2)) m->seals = SEAL_SEAL;
 
     if (name_ptr) {
         char tmp[32];
@@ -236,4 +255,23 @@ int64_t sys_memfd_create(uint64_t name_ptr, uint64_t flags, uint64_t unused)
     if (fd < 0) { vfs_file_free(file); return -EMFILE; }
     if (flags & 1) fd_set_flags(t->fd_table, fd, FD_CLOEXEC);
     return fd;
+}
+
+int memfd_add_seals(vnode_t *n, uint32_t seals)
+{
+    if (!memfd_is(n)) return -EINVAL;
+    if (seals & ~0x3fu) return -EINVAL;
+    memfd_t *m = (memfd_t *)n->fs_data;
+    uint64_t f = spinlock_acquire_irqsave(&m->lock);
+    int rc = 0;
+    if (m->seals & SEAL_SEAL) rc = -EPERM;
+    else m->seals |= seals;
+    spinlock_release_irqrestore(&m->lock, f);
+    return rc;
+}
+
+int memfd_get_seals(vnode_t *n)
+{
+    if (!memfd_is(n)) return -EINVAL;
+    return (int)((memfd_t *)n->fs_data)->seals;
 }

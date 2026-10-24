@@ -815,6 +815,30 @@ static int64_t lx_utime(A6)
 static int64_t lx_utimes(A6)     { UNUSED6; return lx_utimes_tv(LX_AT_FDCWD, a1, a2); }
 static int64_t lx_futimesat(A6)  { UNUSED6; return lx_utimes_tv((int64_t)(int32_t)a1, a2, a3); }
 
+static int64_t lx_fallocate(A6)
+{
+    UNUSED6;
+    task_t *t = syscall_cur_task();
+    if (!t || !t->fd_table) return -EBADF;
+    vfs_file_t *f = fd_get(t->fd_table, (int)a1);
+    if (!f) return -EBADF;
+    vfs_stat_t st;
+    int r = vfs_fstat(f, &st);
+    int writable = (f->flags & 3) != 0;
+    fd_put(f);
+    if (r < 0) return r;
+    if (st.st_type == VFS_NODE_DIR) return -EISDIR;
+    if (st.st_type == VFS_NODE_PIPE || st.st_type == VFS_NODE_SOCKET) return -ESPIPE;
+    if (st.st_type != VFS_NODE_FILE) return -ENODEV;
+    if (!writable) return -EBADF;
+    if ((int64_t)a3 < 0 || (int64_t)a4 <= 0) return -EINVAL;
+    if (a2 == 1) return 0;
+    if (a2 != 0) return -EOPNOTSUPP;
+    uint64_t end = a3 + a4;
+    if (end <= st.st_size) return 0;
+    return sys_ftruncate(a1, end);
+}
+
 static int64_t lx_rt_sigqueueinfo(A6)
 {
     UNUSED6;
@@ -1350,6 +1374,7 @@ static const lx_fn_t g_lx_table[LX_NR_MAX] = {
     [266] = lx_symlinkat,   [267] = lx_readlinkat,  [268] = lx_fchmodat,    [269] = lx_faccessat,
     [270] = lx_pselect6,    [271] = lx_ppoll,       [273] = lx_set_robust_list,
     [132] = lx_utime,       [235] = lx_utimes,      [261] = lx_futimesat,
+    [285] = lx_fallocate,
     [280] = lx_utimensat,   [281] = lx_epoll_pwait, [283] = lx_timerfd_create, [284] = lx_eventfd,
     [286] = lx_timerfd_settime, [287] = lx_timerfd_gettime, [288] = lx_accept4,
     [289] = lx_signalfd4,   [290] = lx_eventfd2,    [291] = lx_epoll_create1, [292] = lx_dup3,

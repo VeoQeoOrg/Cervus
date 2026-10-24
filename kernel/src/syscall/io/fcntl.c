@@ -102,6 +102,9 @@ static int64_t fcntl_lock(task_t *t, vfs_file_t *f, uint64_t cmd, uint64_t arg)
     }
 }
 
+extern int memfd_add_seals(vnode_t *n, uint32_t seals);
+extern int memfd_get_seals(vnode_t *n);
+
 int64_t sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
 {
     task_t *t = syscall_cur_task();
@@ -129,6 +132,8 @@ int64_t sys_fcntl(uint64_t fd, uint64_t cmd, uint64_t arg)
         case F_GETLK:
         case F_SETLK:
         case F_SETLKW: r = fcntl_lock(t, f, cmd, arg); break;
+        case 1033: r = f->vnode ? memfd_add_seals(f->vnode, (uint32_t)arg) : -EINVAL; break;
+        case 1034: r = f->vnode ? memfd_get_seals(f->vnode) : -EINVAL; break;
         default: r = -EINVAL; break;
     }
     fd_put(f);
