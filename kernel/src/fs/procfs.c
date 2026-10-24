@@ -126,24 +126,29 @@ extern int64_t clock_realtime_offset_ns(void);
 static int gen_stat(char *buf, size_t max) {
     uint32_t ncpu = smp_get_online_count();
     if (!ncpu) ncpu = 1;
-    uint64_t up_t = sched_now_ns() / 10000000ULL;
+    uint64_t up = sched_now_ns();
     uint32_t pids[256];
     int n = task_collect_pids(pids, 256);
-    uint64_t busy = 0;
     int running = 0;
     for (int i = 0; i < n; i++) {
         task_t *t = task_find_by_pid(pids[i]);
-        if (!t) continue;
-        busy += t->total_runtime / 10000000ULL;
-        if (t->state == TASK_RUNNING || t->state == TASK_READY) running++;
+        if (t && (t->state == TASK_RUNNING || t->state == TASK_READY)) running++;
     }
-    uint64_t all = up_t * ncpu;
-    uint64_t idle = all > busy ? all - busy : 0;
+    uint64_t busy_all = 0, idle_all = 0;
+    uint64_t busy[64], idle[64];
+    for (uint32_t c = 0; c < ncpu && c < 64; c++) {
+        uint64_t id = sched_cpu_idle_ns(c);
+        if (id > up) id = up;
+        idle[c] = id / 10000000ULL;
+        busy[c] = (up - id) / 10000000ULL;
+        idle_all += idle[c];
+        busy_all += busy[c];
+    }
     int off = snprintf(buf, max, "cpu  %llu 0 0 %llu 0 0 0 0 0 0\n",
-                       (unsigned long long)busy, (unsigned long long)idle);
-    for (uint32_t c = 0; c < ncpu && off >= 0 && (size_t)off < max; c++)
+                       (unsigned long long)busy_all, (unsigned long long)idle_all);
+    for (uint32_t c = 0; c < ncpu && c < 64 && off >= 0 && (size_t)off < max; c++)
         off += snprintf(buf + off, max - (size_t)off, "cpu%u %llu 0 0 %llu 0 0 0 0 0 0\n", c,
-                        (unsigned long long)(busy / ncpu), (unsigned long long)(idle / ncpu));
+                        (unsigned long long)busy[c], (unsigned long long)idle[c]);
     int64_t boot = clock_realtime_offset_ns() / 1000000000LL;
     if (off >= 0 && (size_t)off < max)
         off += snprintf(buf + off, max - (size_t)off,

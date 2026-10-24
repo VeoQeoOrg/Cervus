@@ -33,6 +33,7 @@ task_t* current_task[MAX_CPUS] = {0};
 static volatile uint32_t g_foreground_pid[VT_COUNT];
 
 static task_t  idle_tasks[MAX_CPUS];
+static uint64_t g_idle_ns[MAX_CPUS];
 static task_t  bootstrap_tasks[MAX_CPUS];
 static volatile uint64_t reschedule_calls = 0;
 static spinlock_t ready_queue_lock = SPINLOCK_INIT;
@@ -758,6 +759,7 @@ task_t* task_fork_prepare(task_t* parent, int share_vm, uintptr_t user_sp) {
     child->ss_sp       = parent->ss_sp;
     child->ss_size     = parent->ss_size;
     child->ss_flags    = parent->ss_flags;
+    child->fb_sigblock_ptr = parent->fb_sigblock_ptr;
 
     child->flags |= TASK_FLAG_FORK;
     atomic_init_bool(&child->on_cpu, false);
@@ -1495,6 +1497,8 @@ void sched_reschedule(void) {
         uint64_t now = sched_now_ns();
         if (old && old != &idle_tasks[cpu] && old->run_start_ns > 0 && now > old->run_start_ns)
             old->total_runtime += (now - old->run_start_ns);
+        else if (old == &idle_tasks[cpu] && old->run_start_ns > 0 && now > old->run_start_ns)
+            g_idle_ns[cpu] += now - old->run_start_ns;
         next->run_start_ns = now;
     }
 
@@ -1761,4 +1765,17 @@ static void idle_loop(void* arg) {
         if (__atomic_exchange_n(&pc->idle_missed, 0, __ATOMIC_RELAXED)) window = idle_poll_grow(window);
         else window = window / 2 < IDLE_POLL_MIN_NS ? 0 : window / 2;
     }
+}
+
+uint64_t sched_cpu_idle_ns(uint32_t cpu)
+{
+    if (cpu >= MAX_CPUS) return 0;
+    uint64_t v = __atomic_load_n(&g_idle_ns[cpu], __ATOMIC_RELAXED);
+    task_t *idle = &idle_tasks[cpu];
+    uint64_t start = idle->run_start_ns;
+    if (current_task[cpu] == idle && start) {
+        uint64_t now = sched_now_ns();
+        if (now > start) v += now - start;
+    }
+    return v;
 }

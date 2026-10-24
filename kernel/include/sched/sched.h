@@ -286,6 +286,7 @@ typedef struct task {
     uint32_t   lx_trace;
     struct vfork_wait *vfork_wait;
     uint64_t   sig_posted;
+    uint64_t   fb_sigblock_ptr;
 } task_t;
 
 #define TASK_ABI_CERVUS 0
@@ -386,6 +387,7 @@ void    task_vfork_wait(task_t* parent, struct vfork_wait* w);
 void    task_vfork_release(task_t* t);
 task_t* task_find_by_pid(uint32_t pid);
 int task_collect_pids(uint32_t *out, int max);
+uint64_t sched_cpu_idle_ns(uint32_t cpu);
 uint32_t task_alloc_pid(void);
 void    task_reparent(task_t* child, task_t* new_parent);
 
