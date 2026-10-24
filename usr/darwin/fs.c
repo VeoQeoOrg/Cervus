@@ -72,6 +72,11 @@ static int oflags(int f)
     return o;
 }
 
+int d_open_flags(int f)
+{
+    return oflags(f);
+}
+
 static int oflags_back(int o)
 {
     int f = o & 3;

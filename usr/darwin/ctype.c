@@ -147,6 +147,8 @@ DSYM("___toupper", d___toupper);
 DSYM("___tolower", d___tolower);
 DSYM("___toupper_l", d___toupper);
 DSYM("___tolower_l", d___tolower);
+DSYM("____toupper_l", d___toupper);
+DSYM("____tolower_l", d___tolower);
 DSYM("___istype", d___istype);
 DSYM("___isctype", d___isctype);
 DSYM("_toupper", d___toupper);

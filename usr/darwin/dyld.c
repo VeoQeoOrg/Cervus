@@ -132,6 +132,7 @@ struct image {
     const uint8_t *trie;
     uint32_t trie_size;
     int virt;
+    int unixthread;
     int ndeps;
     struct image *deps[MAX_DEPS];
     uint8_t dep_kind[MAX_DEPS];
@@ -147,6 +148,16 @@ struct tlvimage {
 };
 
 extern char **environ;
+
+__asm__(
+    ".text\n"
+    ".globl d_enter_unixthread\n"
+    "d_enter_unixthread:\n"
+    "    mov %rsi, %rsp\n"
+    "    xor %ebp, %ebp\n"
+    "    xor %edx, %edx\n"
+    "    jmp *%rdi\n");
+void d_enter_unixthread(uintptr_t entry, uint64_t *sp) __attribute__((noreturn));
 
 int d_argc;
 char **d_argv;
@@ -202,6 +213,26 @@ void *dsym_lookup(const char *name)
     return NULL;
 }
 
+static struct image *open_candidate(const char *cand, struct image *loader, char *err);
+static void *resolve_in(struct image *im, const char *name, int depth);
+static struct image *g_unwind;
+static int g_unwind_tried;
+
+static void *unwind_lookup(const char *name)
+{
+    if (strncmp(name, "__Unwind_", 9) && strncmp(name, "___unw_", 7) && strncmp(name, "_unw_", 5) &&
+        strncmp(name, "___register_frame", 17) && strncmp(name, "___deregister_frame", 19))
+        return NULL;
+    if (!g_unwind && !g_unwind_tried) {
+        char err[PATH_MAX + 128] = "";
+        g_unwind_tried = 1;
+        g_unwind = open_candidate("/usr/lib/libunwind.1.dylib", NULL, err);
+        if (!g_unwind && g_debug)
+            fprintf(stderr, "dyld: no libunwind substitute: %s\n", err);
+    }
+    return g_unwind ? resolve_in(g_unwind, name, 0) : NULL;
+}
+
 static void *system_lookup(const char *name)
 {
     void *a = dsym_lookup(name);
@@ -214,6 +245,8 @@ static void *system_lookup(const char *name)
             a = dsym_lookup(base);
         }
     }
+    if (!a)
+        a = unwind_lookup(name);
     return a;
 }
 
@@ -835,6 +868,9 @@ static int parse(struct image *im, const char ***dylibs, uint8_t **kinds, int *n
         case LC_SYMTAB:
             im->symtab = (const void *)p;
             break;
+        case 0x5u:
+            im->unixthread = 1;
+            break;
         case LC_RPATH:
             memcpy(&off, p + 8, 4);
             if (im->nrpath < 16 && off < lc->cmdsize)
@@ -1376,6 +1412,51 @@ static void d_dyld_register_func_for_remove_image(void (*fn)(const void *, intpt
     (void)fn;
 }
 
+struct dunwind_sections {
+    const void *mh;
+    const void *dwarf_section;
+    uintptr_t dwarf_section_length;
+    const void *compact_unwind_section;
+    uintptr_t compact_unwind_section_length;
+};
+
+static int d_dyld_find_unwind_sections(const void *addr, struct dunwind_sections *info)
+{
+    struct image *im = find_image_by_addr(addr);
+    if (!im)
+        return 0;
+    memset(info, 0, sizeof *info);
+    info->mh = im->mh;
+    for (int i = 0; i < im->nseg; i++) {
+        const struct sect64 *sc = (const void *)(im->seg[i] + 1);
+        for (uint32_t j = 0; j < im->seg[i]->nsects; j++) {
+            if (strncmp(sc[j].segname, "__TEXT", 16))
+                continue;
+            const void *a = (const void *)(uintptr_t)(sc[j].addr + im->slide);
+            if (!strncmp(sc[j].sectname, "__eh_frame", 16)) {
+                info->dwarf_section = a;
+                info->dwarf_section_length = sc[j].size;
+            } else if (!strncmp(sc[j].sectname, "__unwind_info", 16)) {
+                info->compact_unwind_section = a;
+                info->compact_unwind_section_length = sc[j].size;
+            }
+        }
+    }
+    return 1;
+}
+
+static const void *d_dyld_image_header_containing_address(const void *addr)
+{
+    struct image *im = find_image_by_addr(addr);
+    return im ? im->mh : NULL;
+}
+
+static const char *d_dyld_image_path_containing_address(const void *addr)
+{
+    struct image *im = find_image_by_addr(addr);
+    return im ? im->path : NULL;
+}
+
 static uint32_t d_dyld_get_program_sdk_version(void) { return 0x000e0000; }
 static int d_dyld_shared_cache_some_image_overridden(void) { return 0; }
 
@@ -1386,6 +1467,10 @@ DSYM("__dyld_get_image_vmaddr_slide", d_dyld_get_image_vmaddr_slide);
 DSYM("__dyld_get_image_slide", d_dyld_get_image_slide);
 DSYM("__dyld_register_func_for_add_image", d_dyld_register_func_for_add_image);
 DSYM("__dyld_register_func_for_remove_image", d_dyld_register_func_for_remove_image);
+DSYM("__dyld_find_unwind_sections", d_dyld_find_unwind_sections);
+DSYM("__dyld_get_image_header_containing_address", d_dyld_image_header_containing_address);
+DSYM("_dyld_image_header_containing_address", d_dyld_image_header_containing_address);
+DSYM("_dyld_image_path_containing_address", d_dyld_image_path_containing_address);
 DSYM("_dyld_get_program_sdk_version", d_dyld_get_program_sdk_version);
 DSYM("_dyld_get_program_min_os_version", d_dyld_get_program_sdk_version);
 DSYM("_dyld_shared_cache_some_image_overridden", d_dyld_shared_cache_some_image_overridden);
@@ -1479,7 +1564,19 @@ int main(int argc, char **argv)
     g_vars.envp = &environ;
     g_vars.prognamep = &d_progname;
 
+    if (bind_new() < 0)
+        return 127;
+    for (struct image *im = g_images; im; im = im->next)
+        run_initializers(im);
     run_initializers(g_main);
+    if (g_main->unixthread) {
+        size_t words = 1 + (size_t)argc + 1 + nenv + 1 + 2;
+        uint64_t *frame = __builtin_alloca((words + 2) * sizeof *frame);
+        frame = (uint64_t *)(((uintptr_t)frame + 15) & ~(uintptr_t)15);
+        frame[0] = (uint64_t)argc;
+        memcpy(frame + 1, block, (words - 1) * sizeof *frame);
+        d_enter_unixthread(entry, frame);
+    }
     int (*m)(int, char **, char **, char **) = (int (*)(int, char **, char **, char **))entry;
     exit(m(argc, argv, envp, apple));
 }

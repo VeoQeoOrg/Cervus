@@ -797,6 +797,17 @@ DPASS(getsubopt);
 DPASS(wcstol);
 DPASS(wcstoul);
 DPASS(wcstod);
+DPASS(wcstof);
+DPASS(wcstold);
+DPASS(wcstoll);
+DPASS(wcstoull);
+
+static void *d_catopen(const char *n, int f) { (void)n; (void)f; errno = ENOENT; return (void *)-1; }
+static char *d_catgets(void *c, int s, int m, const char *def) { (void)c; (void)s; (void)m; return (char *)def; }
+static int d_catclose(void *c) { (void)c; return 0; }
+DSYM("_catopen", d_catopen);
+DSYM("_catgets", d_catgets);
+DSYM("_catclose", d_catclose);
 
 DPASS(memchr);
 DPASS(memcmp);
