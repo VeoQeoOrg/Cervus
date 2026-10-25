@@ -62,6 +62,7 @@ typedef struct {
 } vfs_stat_t;
 
 #define VFS_STAT_V1_SIZE 88
+#define VFS_NLINK_ZERO   UINT64_MAX
 
 _Static_assert(sizeof(vfs_stat_t) == 96,
                "vfs_stat_t must match libcervus __cervus_kstat_t");

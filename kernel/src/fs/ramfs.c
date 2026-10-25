@@ -32,6 +32,7 @@ typedef struct {
 
     uint64_t ino;
     uint32_t names;
+    uint8_t  named;
 } ramfs_node_t;
 
 static void ramfs_free_chunks(ramfs_node_t *rn) {
@@ -205,7 +206,9 @@ static void touch_dir(vnode_t *dir) {
 }
 
 static void name_added(vnode_t *node) {
-    ((ramfs_node_t *)node->fs_data)->names++;
+    ramfs_node_t *rn = node->fs_data;
+    rn->names++;
+    rn->named = 1;
     int64_t now = clock_realtime_sec();
     if (now > 0) node->ctime = now;
 }
@@ -219,7 +222,7 @@ static void name_removed(vnode_t *node) {
 
 static uint32_t ramfs_nlink(vnode_t *node) {
     ramfs_node_t *rn = node->fs_data;
-    if (node->type != VFS_NODE_DIR) return rn->names ? rn->names : 1;
+    if (node->type != VFS_NODE_DIR) return rn->named ? rn->names : 1;
     return 2 + (uint32_t)rn->subdirs;
 }
 
@@ -236,6 +239,7 @@ static int ramfs_stat(vnode_t *node, vfs_stat_t *out) {
     out->st_mtime  = node->mtime;
     out->st_ctime  = node->ctime;
     out->st_nlink  = ramfs_nlink(node);
+    if (!out->st_nlink) out->st_nlink = VFS_NLINK_ZERO;
     return 0;
 }
 

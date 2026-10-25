@@ -1270,7 +1270,7 @@ static int ext2_stat(vnode_t *node, vfs_stat_t *out) {
     ext2_vdata_t *svd = node->fs_data;
     ext2_inode_t sdi;
     if (svd && inode_read(svd->fs, svd->ino, &sdi) == 0) {
-        out->st_nlink = sdi.i_links_count;
+        out->st_nlink = sdi.i_links_count ? sdi.i_links_count : VFS_NLINK_ZERO;
         out->st_blocks = sdi.i_blocks;
     }
     out->st_ino  = node->ino;

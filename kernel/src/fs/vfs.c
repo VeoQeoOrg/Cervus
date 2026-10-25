@@ -611,7 +611,9 @@ static uint32_t mode_type_bits(vnode_type_t t) {
 static void stat_apply_type_bits(vfs_stat_t *out) {
     if ((out->st_mode & 0170000) == 0)
         out->st_mode |= mode_type_bits(out->st_type);
-    if (out->st_nlink == 0)
+    if (out->st_nlink == VFS_NLINK_ZERO)
+        out->st_nlink = 0;
+    else if (out->st_nlink == 0)
         out->st_nlink = (out->st_type == VFS_NODE_DIR) ? 2 : 1;
     if (out->st_blksize == 0)
         out->st_blksize = 512;
@@ -715,12 +717,18 @@ int vfs_truncate(const char *path, uint64_t new_size) {
     return ret;
 }
 
+static void touch_ctime(vnode_t *node) {
+    int64_t now = clock_realtime_sec();
+    if (now > 0) node->ctime = now;
+}
+
 int vfs_chmod(const char *path, uint32_t mode) {
     if (!path) return -EINVAL;
     vnode_t *node = NULL;
     int ret = vfs_lookup(path, &node);
     if (ret < 0) return ret;
     node->mode = (node->mode & ~07777u) | (mode & 07777u);
+    touch_ctime(node);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
     return 0;
@@ -730,6 +738,7 @@ int vfs_fchmod(vfs_file_t *file, uint32_t mode) {
     if (!file || !file->vnode) return -EINVAL;
     vnode_t *node = file->vnode;
     node->mode = (node->mode & ~07777u) | (mode & 07777u);
+    touch_ctime(node);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     return 0;
 }
@@ -739,6 +748,7 @@ int vfs_fchown(vfs_file_t *file, uint32_t uid, uint32_t gid) {
     vnode_t *node = file->vnode;
     if (uid != 0xFFFFFFFFu) node->uid = uid;
     if (gid != 0xFFFFFFFFu) node->gid = gid;
+    touch_ctime(node);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     return 0;
 }
@@ -750,6 +760,7 @@ static int chown_common(const char *path, uint32_t uid, uint32_t gid, bool follo
     if (ret < 0) return ret;
     if (uid != 0xFFFFFFFFu) node->uid = uid;
     if (gid != 0xFFFFFFFFu) node->gid = gid;
+    touch_ctime(node);
     if (node->ops && node->ops->setattr) node->ops->setattr(node);
     vnode_unref(node);
     return 0;
