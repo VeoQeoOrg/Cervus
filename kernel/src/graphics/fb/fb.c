@@ -244,12 +244,14 @@ static uint32_t ascii_stand_in(uint32_t cp) {
     case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
     case 0x2022: case 0x00B7: return '*';
     case 0x2026: return '.';
-    case 0x2190: return 0x1B;
-    case 0x2191: return 0x18;
-    case 0x2192: return 0x1A;
-    case 0x2193: return 0x19;
-    case 0x00AB: return '<';
-    case 0x00BB: return '>';
+    case 0x2070: return '0';
+    case 0x00B9: return '1';
+    case 0x00B2: return '2';
+    case 0x00B3: return '3';
+    case 0x2074: case 0x2075: case 0x2076: case 0x2077: case 0x2078: case 0x2079:
+        return '4' + (cp - 0x2074);
+    case 0x00AB: case 0x2039: return '<';
+    case 0x00BB: case 0x203A: return '>';
     default:     return 0;
     }
 }
@@ -352,6 +354,57 @@ static int draw_synth(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32
         }
         return 1;
     }
+    if (cp >= 0x2190 && cp <= 0x2193) {
+        int vert = cp == 0x2191 || cp == 0x2193;
+        int len = vert ? ih * 3 / 5 : iw - 2, head = (vert ? iw : ih) / 3;
+        if (head > len / 2) head = len / 2;
+        int a0 = vert ? cy - len / 2 : (iw - len) / 2, a1 = a0 + len;
+        int tip = cp == 0x2190 || cp == 0x2191 ? a0 : a1 - 1, dir = tip == a0 ? 1 : -1;
+        if (vert) synth_rect(buf, pitch, x, y, cx - t1 / 2, a0, cx - t1 / 2 + t1, a1, w, h, color);
+        else synth_rect(buf, pitch, x, y, a0, cy - t1 / 2, a1, cy - t1 / 2 + t1, w, h, color);
+        for (int k = 1; k <= head; k++) {
+            int p = tip + dir * k;
+            if (vert) {
+                synth_rect(buf, pitch, x, y, cx - k - t1 / 2, p, cx - k - t1 / 2 + t1, p + 1, w, h, color);
+                synth_rect(buf, pitch, x, y, cx + k - t1 / 2, p, cx + k - t1 / 2 + t1, p + 1, w, h, color);
+            } else {
+                synth_rect(buf, pitch, x, y, p, cy - k - t1 / 2, p + 1, cy - k - t1 / 2 + t1, w, h, color);
+                synth_rect(buf, pitch, x, y, p, cy + k - t1 / 2, p + 1, cy + k - t1 / 2 + t1, w, h, color);
+            }
+        }
+        return 1;
+    }
+    if (cp == 0x25A0 || cp == 0x25A1) {
+        int m = iw / 6 + 1, side = iw - 2 * m, top = cy - side / 2;
+        if (cp == 0x25A0) synth_rect(buf, pitch, x, y, m, top, m + side, top + side, w, h, color);
+        else {
+            synth_rect(buf, pitch, x, y, m, top, m + side, top + 1, w, h, color);
+            synth_rect(buf, pitch, x, y, m, top + side - 1, m + side, top + side, w, h, color);
+            synth_rect(buf, pitch, x, y, m, top, m + 1, top + side, w, h, color);
+            synth_rect(buf, pitch, x, y, m + side - 1, top, m + side, top + side, w, h, color);
+        }
+        return 1;
+    }
+    if (cp == 0x25B2 || cp == 0x25B3 || cp == 0x25BC || cp == 0x25BD ||
+        cp == 0x25B6 || cp == 0x25B7 || cp == 0x25C0 || cp == 0x25C1) {
+        int filled = cp == 0x25B2 || cp == 0x25BC || cp == 0x25B6 || cp == 0x25C0;
+        int vert = cp <= 0x25B3 || cp == 0x25BC || cp == 0x25BD;
+        int flip = cp == 0x25BC || cp == 0x25BD || cp == 0x25C0 || cp == 0x25C1;
+        int len = (iw - 2) | 1, depth = len / 2 + 1;
+        int ox = (iw - (vert ? len : depth)) / 2, oy = cy - (vert ? depth : len) / 2;
+        for (int d = 0; d < depth; d++) {
+            int half = d * (len / 2) / (depth > 1 ? depth - 1 : 1);
+            int dd = flip ? depth - 1 - d : d;
+            int lo = len / 2 - half, hi = len / 2 + half;
+            int edge = !filled && d != depth - 1;
+            for (int k = lo; k <= hi; k++) {
+                if (edge && k != lo && k != hi) continue;
+                if (vert) synth_rect(buf, pitch, x, y, ox + k, oy + dd, ox + k + 1, oy + dd + 1, w, h, color);
+                else synth_rect(buf, pitch, x, y, ox + dd, oy + k, ox + dd + 1, oy + k + 1, w, h, color);
+            }
+        }
+        return 1;
+    }
     if (cp >= 0x2800 && cp <= 0x28FF) {
         static const uint8_t col[8] = { 0, 0, 0, 1, 1, 1, 0, 1 };
         static const uint8_t row[8] = { 0, 1, 2, 0, 1, 2, 3, 3 };
@@ -382,7 +435,7 @@ void fb_draw_char(fb_info_t *fb, uint32_t cp, uint32_t x, uint32_t y, uint32_t c
     uint32_t w = g_font.width, h = g_font.height;
     if (x + w > fb->width || y + h > fb->height) return;
 
-    if (cp >= 0x2500 && cp <= 0x28FF && (cp < 0x25A0 || cp >= 0x2800) && !box_has_glyph(cp) &&
+    if (((cp >= 0x2190 && cp <= 0x2193) || (cp >= 0x2500 && cp <= 0x28FF)) && !box_has_glyph(cp) &&
         draw_synth(fb, cp, x, y, color))
         return;
     uint32_t gi = codepoint_to_glyph(cp);
