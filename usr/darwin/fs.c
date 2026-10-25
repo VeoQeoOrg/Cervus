@@ -517,7 +517,12 @@ DPASS(pread);
 DPASS(pwrite);
 DPASS(readv);
 DPASS(writev);
-DPASS(close);
+static int d_close(int fd)
+{
+    d_kq_closed(fd);
+    return close(fd);
+}
+DSYM("_close", d_close);
 DPASS(lseek);
 DPASS(dup);
 DPASS(dup2);

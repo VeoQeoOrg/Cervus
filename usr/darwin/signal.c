@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/ucontext.h>
+#include <pthread.h>
 #include "darwin.h"
 
 #define DSA_ONSTACK   0x1
@@ -114,6 +115,29 @@ struct ducontext {
 };
 
 static struct dsigaction g_act[32];
+static uint32_t g_watch;
+static int g_watch_ref[32];
+
+static int install(int dsig);
+
+static int dfl_ignored(int dsig)
+{
+    return dsig == 16 || dsig == 19 || dsig == 20 || dsig == 23 || dsig == 28 || dsig == 29;
+}
+
+static void default_action(int lsig, int dsig)
+{
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof dfl);
+    dfl.sa_handler = SIG_DFL;
+    sigaction(lsig, &dfl, NULL);
+    sigset_t m;
+    sigemptyset(&m);
+    sigaddset(&m, lsig);
+    sigprocmask(SIG_UNBLOCK, &m, NULL);
+    raise(lsig);
+    install(dsig);
+}
 
 static int si_code_lx2d(int sig, int code)
 {
@@ -138,6 +162,16 @@ static void dispatch(int lsig, siginfo_t *si, void *ctx)
     struct dsigaction *a = &g_act[dsig];
     void *h = a->handler;
     int e = errno;
+    if (g_watch & (1u << dsig)) {
+        if (!(h == (void *)1 && dsig == 20))
+            d_kq_signal(dsig);
+        if (!h || h == (void *)1) {
+            if (!h && !dfl_ignored(dsig))
+                default_action(lsig, dsig);
+            errno = e;
+            return;
+        }
+    }
     if (!(a->flags & DSA_SIGINFO)) {
         if (h && h != (void *)1)
             ((void (*)(int))h)(dsig);
@@ -215,6 +249,64 @@ static void dispatch(int lsig, siginfo_t *si, void *ctx)
     errno = e;
 }
 
+static int install(int dsig)
+{
+    int lsig = d_sig_d2lx(dsig);
+    const struct dsigaction *act = &g_act[dsig];
+    struct sigaction la;
+    memset(&la, 0, sizeof la);
+    set_d2lx(act->mask, &la.sa_mask);
+    int f = 0;
+    if (act->flags & DSA_ONSTACK) f |= SA_ONSTACK;
+    if (act->flags & DSA_RESTART) f |= SA_RESTART;
+    if (act->flags & DSA_RESETHAND) f |= SA_RESETHAND;
+    if (act->flags & DSA_NOCLDSTOP) f |= SA_NOCLDSTOP;
+    if (act->flags & DSA_NODEFER) f |= SA_NODEFER;
+    if (act->flags & DSA_NOCLDWAIT) f |= SA_NOCLDWAIT;
+    int plain = act->handler == (void *)0 || act->handler == (void *)1;
+    if (plain && !(g_watch & (1u << dsig))) {
+        la.sa_handler = act->handler ? SIG_IGN : SIG_DFL;
+    } else {
+        la.sa_sigaction = dispatch;
+        f |= SA_SIGINFO;
+        if (plain)
+            f = (f & ~SA_RESETHAND) | SA_RESTART;
+    }
+    la.sa_flags = f;
+    return sigaction(lsig, &la, NULL);
+}
+
+static void sync_plain(int dsig)
+{
+    struct sigaction lo;
+    if (g_watch & (1u << dsig))
+        return;
+    if (sigaction(d_sig_d2lx(dsig), NULL, &lo) < 0)
+        return;
+    if (lo.sa_handler == SIG_DFL || lo.sa_handler == SIG_IGN) {
+        g_act[dsig].handler = (void *)lo.sa_handler;
+        g_act[dsig].mask = set_lx2d(&lo.sa_mask);
+        g_act[dsig].flags = 0;
+    }
+}
+
+void d_sig_watch(int dsig, int on)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    if (dsig <= 0 || dsig >= 32 || !d_sig_d2lx(dsig))
+        return;
+    pthread_mutex_lock(&lock);
+    if (on && !g_watch_ref[dsig]++) {
+        sync_plain(dsig);
+        g_watch |= 1u << dsig;
+        install(dsig);
+    } else if (!on && g_watch_ref[dsig] > 0 && !--g_watch_ref[dsig]) {
+        g_watch &= ~(1u << dsig);
+        install(dsig);
+    }
+    pthread_mutex_unlock(&lock);
+}
+
 static int d_sigaction(int dsig, const struct dsigaction *act, struct dsigaction *old)
 {
     int lsig = d_sig_d2lx(dsig);
@@ -229,34 +321,11 @@ static int d_sigaction(int dsig, const struct dsigaction *act, struct dsigaction
             g_act[dsig] = *act;
         return 0;
     }
-    struct sigaction la, lo;
+    sync_plain(dsig);
     struct dsigaction prev = g_act[dsig];
-    if (sigaction(lsig, NULL, &lo) < 0)
-        return -1;
-    if (lo.sa_handler == SIG_DFL || lo.sa_handler == SIG_IGN) {
-        prev.handler = (void *)lo.sa_handler;
-        prev.mask = set_lx2d(&lo.sa_mask);
-        prev.flags = 0;
-    }
     if (act) {
-        memset(&la, 0, sizeof la);
-        set_d2lx(act->mask, &la.sa_mask);
-        int f = 0;
-        if (act->flags & DSA_ONSTACK) f |= SA_ONSTACK;
-        if (act->flags & DSA_RESTART) f |= SA_RESTART;
-        if (act->flags & DSA_RESETHAND) f |= SA_RESETHAND;
-        if (act->flags & DSA_NOCLDSTOP) f |= SA_NOCLDSTOP;
-        if (act->flags & DSA_NODEFER) f |= SA_NODEFER;
-        if (act->flags & DSA_NOCLDWAIT) f |= SA_NOCLDWAIT;
-        if (act->handler == (void *)0 || act->handler == (void *)1) {
-            la.sa_handler = act->handler ? SIG_IGN : SIG_DFL;
-        } else {
-            la.sa_sigaction = dispatch;
-            f |= SA_SIGINFO;
-        }
-        la.sa_flags = f;
         g_act[dsig] = *act;
-        if (sigaction(lsig, &la, NULL) < 0) {
+        if (install(dsig) < 0) {
             g_act[dsig] = prev;
             return -1;
         }
@@ -429,10 +498,17 @@ static void d_psignal(int dsig, const char *s)
         fprintf(stderr, "%s\n", d_strsignal(dsig));
 }
 
+static void reaped(pid_t r, int s)
+{
+    if (r > 0 && (WIFEXITED(s) || WIFSIGNALED(s)))
+        d_kq_reaped(r, d_wstatus(s));
+}
+
 static pid_t d_waitpid(pid_t pid, int *st, int opt)
 {
     int s;
     pid_t r = waitpid(pid, &s, opt);
+    reaped(r, s);
     if (r > 0 && st)
         *st = d_wstatus(s);
     return r;
@@ -444,6 +520,7 @@ static pid_t d_wait4(pid_t pid, int *st, int opt, struct rusage *ru)
 {
     int s;
     pid_t r = wait4(pid, &s, opt, ru);
+    reaped(r, s);
     if (r > 0 && st)
         *st = d_wstatus(s);
     return r;
