@@ -33,9 +33,6 @@ DSYM("_mach_vm_region_recurse", d_kern_invalid_address);
 DSYM("_task_for_pid", d_kern_failure);
 DSYM("_task_threads", d_kern_failure);
 DSYM("_thread_info", d_kern_failure);
-DSYM("_host_statistics", d_kern_failure);
-DSYM("_host_statistics64", d_kern_failure);
-DSYM("_host_processor_info", d_kern_failure);
 
 static int d_vm_deallocate(uint32_t task, uintptr_t addr, size_t size)
 {
@@ -54,13 +51,15 @@ DSYM("_vm_page_shift", &d_vm_page_shift);
 DSYM("_vm_kernel_page_size", &d_vm_page_size);
 DSYM("_vm_kernel_page_mask", &d_vm_page_mask);
 
+static int d_proc_name(int pid, char *buf, uint32_t size);
+
 static int d_proc_pidpath(int pid, char *buf, uint32_t size)
 {
     char link[64];
     snprintf(link, sizeof link, "/proc/%d/exe", pid);
     ssize_t n = readlink(link, buf, size ? size - 1 : 0);
-    if (n < 0)
-        return 0;
+    if (n <= 0)
+        return d_proc_name(pid, buf, size);
     if (pid == getpid() && d_exec_path[0]) {
         n = (ssize_t)snprintf(buf, size, "%s", d_exec_path);
         return (int)n;

@@ -262,7 +262,7 @@ static const struct dctl g_ctl[] = {
     IN("machdep.cpu.core_count", ncpu),
     IN("machdep.cpu.thread_count", ncpu),
     F("vm.loadavg", 2, 2, fn_loadavg),
-    FN("vm.swapusage", fn_swapusage),
+    F("vm.swapusage", 2, 5, fn_swapusage),
     IN("vm.pagesize", pagesz),
 };
 
@@ -373,6 +373,10 @@ static int d_sysctl(const int *mib, unsigned n, void *out, size_t *len, const vo
         (void)nl;
         return 0;
     }
+    if (n >= 3 && mib[0] == 1 && (mib[1] == 14 || mib[1] == 49 || mib[1] == 38))
+        return d_sysctl_proc(mib, n, out, len);
+    if (n >= 6 && mib[0] == 4 && mib[1] == 17)
+        return d_sysctl_route(mib, n, out, len);
     const struct dctl *c = by_mib(mib, n);
     if (!c) {
         errno = ENOENT;

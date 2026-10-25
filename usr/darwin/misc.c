@@ -690,7 +690,7 @@ static long d_sysconf(int n)
     switch (n) {
     case 1: return sysconf(_SC_ARG_MAX);
     case 2: return sysconf(_SC_CHILD_MAX);
-    case 3: return sysconf(_SC_CLK_TCK);
+    case 3: return 100;
     case 4: return sysconf(_SC_NGROUPS_MAX);
     case 5: return sysconf(_SC_OPEN_MAX);
     case 6: return 1;
@@ -1023,9 +1023,38 @@ static int d_getloadavg(double *l, int n)
 }
 DSYM("_getloadavg", d_getloadavg);
 
-DPASS(clock);
+static unsigned long d_clock(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) < 0)
+        return (unsigned long)-1;
+    return (unsigned long)ts.tv_sec * 1000000ul + (unsigned long)ts.tv_nsec / 1000;
+}
+DSYM("_clock", d_clock);
+
+static unsigned long tv_ticks(const struct timeval *tv)
+{
+    return (unsigned long)tv->tv_sec * 100ul + (unsigned long)tv->tv_usec / 10000;
+}
+
+static unsigned long d_times(unsigned long *t)
+{
+    if (t) {
+        struct rusage self, kids;
+        getrusage(RUSAGE_SELF, &self);
+        getrusage(RUSAGE_CHILDREN, &kids);
+        t[0] = tv_ticks(&self.ru_utime);
+        t[1] = tv_ticks(&self.ru_stime);
+        t[2] = tv_ticks(&kids.ru_utime);
+        t[3] = tv_ticks(&kids.ru_stime);
+    }
+    struct timespec up;
+    clock_gettime(CLOCK_MONOTONIC, &up);
+    return (unsigned long)up.tv_sec * 100ul + (unsigned long)up.tv_nsec / 10000000;
+}
+DSYM("_times", d_times);
+
 DPASS(getrusage);
-DPASS(times);
 DPASS(nice);
 DPASS(alarm);
 DPASS(pause);

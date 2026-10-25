@@ -74,5 +74,14 @@ int d_sig_lx2d(int s);
 int d_wstatus(int st);
 int d_open_flags(int f);
 int d_term_ioctl(int fd, unsigned long req, void *arg, int *handled);
+int d_sysctl_proc(const int *mib, unsigned n, void *out, size_t *len);
+int d_sysctl_route(const int *mib, unsigned n, void *out, size_t *len);
+void d_cf_release(void *o);
+void *d_cf_empty_dict(void);
+void *d_cf_empty_array(void);
+void d_sig_watch(int dsig, int on);
+void d_kq_signal(int dsig);
+void d_kq_closed(int fd);
+void d_kq_reaped(int pid, int dstatus);
 
 #endif

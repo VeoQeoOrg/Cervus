@@ -435,7 +435,6 @@ DPASS(putchar);
 DPASS(getchar);
 DPASS(remove);
 DPASS(rename);
-DPASS(renameat);
 DPASS(tmpnam);
 DPASS(tempnam);
 DPASS(wprintf);

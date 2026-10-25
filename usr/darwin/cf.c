@@ -179,6 +179,10 @@ static void d_CFRelease(void *o)
 static uint64_t d_CFGetTypeID(const void *o) { return g_typeids[type_of(o)]; }
 static long d_CFGetRetainCount(const void *o) { return o && !is_const(o) ? ((const struct cfhdr *)o)->rc : 1; }
 
+void d_cf_release(void *o) { d_CFRelease(o); }
+void *d_cf_empty_dict(void) { return cf_new(T_DICT, sizeof(struct cfdict)); }
+void *d_cf_empty_array(void) { return cf_new(T_ARRAY, sizeof(struct cfarray)); }
+
 DSYM("_CFRetain", d_CFRetain);
 DSYM("_CFRelease", d_CFRelease);
 DSYM("_CFGetTypeID", d_CFGetTypeID);
