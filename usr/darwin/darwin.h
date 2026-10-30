@@ -62,6 +62,8 @@ extern const void *d_mh;
 void *dsym_lookup(const char *name);
 int d_errno_lx2d(int e);
 int d_errno_d2lx(int e);
+#define D_ERRNO_RAW 0x4000
+void d_set_errno_raw(int de);
 int *d___error(void);
 void d_stdio_init(void);
 void d_ctype_init(void);
@@ -79,6 +81,8 @@ int d_sysctl_route(const int *mib, unsigned n, void *out, size_t *len);
 void d_cf_release(void *o);
 void *d_cf_empty_dict(void);
 void *d_cf_empty_array(void);
+void *d_cf_opaque_new(size_t size, void (*dtor)(void *));
+void *d_sec_trust_from_der(const uint8_t *const *der, const size_t *lens, int n, const char *host);
 void d_sig_watch(int dsig, int on);
 void d_kq_signal(int dsig);
 void d_kq_closed(int fd);

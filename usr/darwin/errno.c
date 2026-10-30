@@ -25,8 +25,15 @@ static const unsigned char lx2d[] = {
 
 static unsigned char d2lx[128];
 
+void d_set_errno_raw(int de)
+{
+    errno = D_ERRNO_RAW | de;
+}
+
 int d_errno_lx2d(int e)
 {
+    if ((e & ~0xff) == D_ERRNO_RAW)
+        return e & 0xff;
     if (e > 0 && e < (int)sizeof lx2d && lx2d[e])
         return lx2d[e];
     if (e > 0 && e <= 34)

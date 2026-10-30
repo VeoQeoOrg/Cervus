@@ -278,6 +278,7 @@ struct shadow {
 static __thread struct shadow t_shadow[256];
 static __thread int t_shadow_n;
 static int g_trace_ret;
+static int g_missing_fd = -1;
 
 uint64_t d_trace_push(const char *name, uint64_t ret)
 {
@@ -623,6 +624,8 @@ static void *bind_import(struct image *im, int ord, const char *name, int weak)
         return NULL;
     if (g_debug)
         fprintf(stderr, "dyld: %s: missing %s\n", im->path, name);
+    if (g_missing_fd >= 0)
+        dprintf(g_missing_fd, "%s %s\n", name, im->path);
     return make_trap(name);
 }
 
@@ -1668,6 +1671,9 @@ int main(int argc, char **argv)
     const char *tr = getenv("DYLD_TRACE");
     if (tr && *tr)
         g_trace_fd = open(tr, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    const char *pm = getenv("DYLD_PRINT_MISSING");
+    if (pm && *pm)
+        g_missing_fd = open(pm, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     const char *trr = getenv("DYLD_TRACE_RET");
     g_trace_ret = trr && *trr && *trr != '0';
     d_argc = argc;

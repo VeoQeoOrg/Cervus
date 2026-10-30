@@ -16,8 +16,11 @@
 #define PREFIX "/usr/local"
 #define CELLAR PREFIX "/Cellar"
 #define MAX_DEPTH 32
+#define MAX_DEPS 64
+#define MAX_PROBES 60
 
 static const char *const g_tags[] = { "sonoma", "ventura", "monterey", "big_sur", "sequoia", "catalina", "all" };
+static const int g_macos_pref[] = { 14, 13, 12, 11, 15, 10 };
 
 struct bottle {
     char name[128];
@@ -27,7 +30,9 @@ struct bottle {
     char tag[32];
     int keg_only;
     json_t *root;
-    json_t *deps;
+    int ndeps;
+    char dep[MAX_DEPS][128];
+    char depver[MAX_DEPS][96];
 };
 
 static char g_installing[64][128];
@@ -41,7 +46,7 @@ static void die(const char *fmt, const char *arg)
     exit(1);
 }
 
-static char *fetch(const char *url, const char *auth, size_t *len_out, int *status_out)
+static char *fetch_accept(const char *url, const char *auth, const char *accept, size_t *len_out, int *status_out)
 {
     int fd = memfd_create("brew-download", 0);
     if (fd < 0)
@@ -58,9 +63,14 @@ static char *fetch(const char *url, const char *auth, size_t *len_out, int *stat
     o.fail_on_error = 1;
     o.silent = 1;
     o.out_status = &status;
+    char acc[256];
     if (auth) {
         snprintf(hdr, sizeof hdr, "Authorization: Bearer %s", auth);
         o.headers[o.nheaders++] = hdr;
+    }
+    if (accept) {
+        snprintf(acc, sizeof acc, "Accept: %s", accept);
+        o.headers[o.nheaders++] = acc;
     }
     int rc = http_request(url, fd, &o);
     if (status == 0 && rc > 0)
@@ -89,6 +99,19 @@ static char *fetch(const char *url, const char *auth, size_t *len_out, int *stat
     }
     close(fd);
     return buf;
+}
+
+static char *fetch(const char *url, const char *auth, size_t *len_out, int *status_out)
+{
+    return fetch_accept(url, auth, NULL, len_out, status_out);
+}
+
+static void image_name(const char *name, char *out, size_t cap)
+{
+    size_t i = 0;
+    for (; name[i] && i < cap - 1; i++)
+        out[i] = name[i] == '@' ? '/' : name[i] == '+' ? 'x' : name[i];
+    out[i] = 0;
 }
 
 static int mkpath(const char *path, mode_t mode)
@@ -142,59 +165,208 @@ static int rmtree(const char *path)
     return unlink(path);
 }
 
-static int resolve(const char *name, struct bottle *b)
+static char *ghcr_token(const char *name);
+
+static int vercmp(const char *a, const char *b)
+{
+    while (*a && *b) {
+        if (*a >= '0' && *a <= '9' && *b >= '0' && *b <= '9') {
+            unsigned long long x = strtoull(a, (char **)&a, 10), y = strtoull(b, (char **)&b, 10);
+            if (x != y)
+                return x < y ? -1 : 1;
+            continue;
+        }
+        if (*a != *b)
+            return (unsigned char)*a < (unsigned char)*b ? -1 : 1;
+        a++;
+        b++;
+    }
+    return *a ? 1 : *b ? -1 : 0;
+}
+
+static int vercmp_desc(const void *x, const void *y)
+{
+    return vercmp(*(const char *const *)y, *(const char *const *)x);
+}
+
+static void add_dep(struct bottle *b, const char *name, const char *ver)
+{
+    for (int i = 0; i < b->ndeps; i++)
+        if (!strcmp(b->dep[i], name))
+            return;
+    if (b->ndeps >= MAX_DEPS)
+        return;
+    snprintf(b->dep[b->ndeps], sizeof b->dep[0], "%s", name);
+    snprintf(b->depver[b->ndeps], sizeof b->depver[0], "%s", ver ? ver : "");
+    b->ndeps++;
+}
+
+static int macos_rank(const char *osver)
+{
+    const char *p = osver ? strstr(osver, "macOS ") : NULL;
+    int major = p ? atoi(p + 6) : 0;
+    for (size_t i = 0; i < sizeof g_macos_pref / sizeof g_macos_pref[0]; i++)
+        if (g_macos_pref[i] == major)
+            return (int)i;
+    return -1;
+}
+
+static int probe_tag(const char *image, const char *tok, const char *tag, struct bottle *b)
+{
+    char url[512];
+    size_t len;
+    snprintf(url, sizeof url, "https://ghcr.io/v2/homebrew/core/%s/manifests/%s", image, tag);
+    char *text = fetch_accept(url, tok, "application/vnd.oci.image.index.v1+json", &len, NULL);
+    if (!text)
+        return -1;
+    json_error_t err;
+    json_t *idx = json_parse_len(text, len, &err);
+    free(text);
+    json_t *mans = idx ? json_get(idx, "manifests") : NULL, *best = NULL;
+    int best_rank = 1 << 30;
+    for (size_t i = 0; mans && i < json_len(mans); i++) {
+        json_t *m = json_at(mans, i), *pl = json_get(m, "platform");
+        if (strcmp(json_string(json_get(pl, "architecture"), ""), "amd64") ||
+            strcmp(json_string(json_get(pl, "os"), ""), "darwin"))
+            continue;
+        int r = macos_rank(json_string(json_get(pl, "os.version"), NULL));
+        if (r >= 0 && r < best_rank) {
+            best_rank = r;
+            best = m;
+        }
+    }
+    json_t *ann = best ? json_get(best, "annotations") : NULL;
+    const char *dig = json_string(json_get(ann, "sh.brew.bottle.digest"), NULL);
+    if (!dig || strlen(dig) != 64) {
+        json_free(idx);
+        return -1;
+    }
+    snprintf(b->sha, sizeof b->sha, "%s", dig);
+    snprintf(b->url, sizeof b->url, "https://ghcr.io/v2/homebrew/core/%s/blobs/sha256:%s", image, dig);
+    const char *ref = json_string(json_get(ann, "org.opencontainers.image.ref.name"), "");
+    snprintf(b->pkgver, sizeof b->pkgver, "%s", tag);
+    size_t pl = strlen(b->pkgver);
+    char *dash = strrchr(b->pkgver, '-');
+    if ((strncmp(ref, b->pkgver, pl) || ref[pl] != '.') && dash) {
+        *dash = 0;
+        pl = strlen(b->pkgver);
+    }
+    const char *pt = !strncmp(ref, b->pkgver, pl) && ref[pl] == '.' ? ref + pl + 1 : "intel";
+    snprintf(b->tag, sizeof b->tag, "%.*s", (int)strcspn(pt, "."), pt);
+    const char *tab = json_string(json_get(ann, "sh.brew.tab"), NULL);
+    json_t *tj = tab ? json_parse(tab, &err) : NULL;
+    json_t *rd = tj ? json_get(tj, "runtime_dependencies") : NULL;
+    if (rd) {
+        b->ndeps = 0;
+        for (size_t i = 0; i < json_len(rd); i++) {
+            json_t *d = json_at(rd, i);
+            if (!json_bool(json_get(d, "declared_directly"), 1))
+                continue;
+            const char *dn = json_string(json_get(d, "full_name"), NULL);
+            if (dn)
+                add_dep(b, dn, json_string(json_get(d, "pkg_version"), json_string(json_get(d, "version"), NULL)));
+        }
+    }
+    json_free(tj);
+    json_free(idx);
+    return 0;
+}
+
+static int ghcr_fallback(const char *name, const char *want, struct bottle *b)
+{
+    char image[160], url[512];
+    image_name(name, image, sizeof image);
+    char *tok = ghcr_token(name);
+    if (!tok)
+        return -1;
+    snprintf(url, sizeof url, "https://ghcr.io/v2/homebrew/core/%s/tags/list?n=10000", image);
+    size_t len;
+    char *text = fetch(url, tok, &len, NULL);
+    json_error_t err;
+    json_t *tl = text ? json_parse_len(text, len, &err) : NULL;
+    free(text);
+    json_t *tags = tl ? json_get(tl, "tags") : NULL;
+    size_t n = tags ? json_len(tags) : 0;
+    const char **v = n ? calloc(n, sizeof *v) : NULL;
+    size_t nv = 0;
+    for (size_t i = 0; v && i < n; i++) {
+        const char *t = json_string(json_at(tags, i), NULL);
+        if (t && t[0] >= '0' && t[0] <= '9')
+            v[nv++] = t;
+    }
+    qsort(v, nv, sizeof *v, vercmp_desc);
+    int rc = -1;
+    if (want && *want) {
+        size_t wl = strlen(want);
+        for (size_t i = 0; i < nv && rc < 0; i++)
+            if (!strncmp(v[i], want, wl) && (!v[i][wl] || v[i][wl] == '-'))
+                rc = probe_tag(image, tok, v[i], b);
+    }
+    for (size_t i = 0; i < nv && i < MAX_PROBES && rc < 0; i++)
+        rc = probe_tag(image, tok, v[i], b);
+    free(v);
+    json_free(tl);
+    free(tok);
+    return rc;
+}
+
+static int resolve(const char *name, const char *want, struct bottle *b)
 {
     char url[512];
     size_t len;
     int status;
     memset(b, 0, sizeof *b);
+    snprintf(b->name, sizeof b->name, "%s", name);
     snprintf(url, sizeof url, "https://formulae.brew.sh/api/formula/%s.json", name);
     char *text = fetch(url, NULL, &len, &status);
-    if (!text) {
+    if (text) {
+        json_error_t err;
+        b->root = json_parse_len(text, len, &err);
+        free(text);
+    }
+    if (!b->root && !(want && *want)) {
         fprintf(stderr, "brew: no formula named \"%s\" (HTTP %d)\n", name, status);
         return -1;
     }
-    json_error_t err;
-    b->root = json_parse_len(text, len, &err);
-    free(text);
-    if (!b->root) {
-        fprintf(stderr, "brew: cannot parse the formula of %s\n", name);
-        return -1;
+    char cur[96] = "";
+    if (b->root) {
+        snprintf(b->name, sizeof b->name, "%s", json_string(json_get(b->root, "name"), name));
+        const char *ver = json_string(json_get(json_get(b->root, "versions"), "stable"), "");
+        long rev = json_int(json_get(b->root, "revision"), 0);
+        if (rev)
+            snprintf(cur, sizeof cur, "%s_%ld", ver, rev);
+        else
+            snprintf(cur, sizeof cur, "%s", ver);
+        snprintf(b->pkgver, sizeof b->pkgver, "%s", cur);
+        b->keg_only = json_bool(json_get(b->root, "keg_only"), 0);
+        json_t *deps = json_get(b->root, "dependencies");
+        for (size_t i = 0; deps && i < json_len(deps); i++)
+            add_dep(b, json_string(json_at(deps, i), ""), NULL);
+        json_t *files = json_get(json_get(json_get(b->root, "bottle"), "stable"), "files");
+        int exact = !(want && *want) || !strcmp(want, cur);
+        for (size_t i = 0; exact && files && i < sizeof g_tags / sizeof g_tags[0]; i++) {
+            json_t *f = json_get(files, g_tags[i]);
+            if (!f)
+                continue;
+            snprintf(b->url, sizeof b->url, "%s", json_string(json_get(f, "url"), ""));
+            snprintf(b->sha, sizeof b->sha, "%s", json_string(json_get(f, "sha256"), ""));
+            snprintf(b->tag, sizeof b->tag, "%s", g_tags[i]);
+            return 0;
+        }
     }
-    snprintf(b->name, sizeof b->name, "%s", json_string(json_get(b->root, "name"), name));
-    const char *ver = json_string(json_get(json_get(b->root, "versions"), "stable"), NULL);
-    if (!ver) {
-        fprintf(stderr, "brew: %s has no stable version\n", name);
-        return -1;
-    }
-    long rev = json_int(json_get(b->root, "revision"), 0);
-    if (rev)
-        snprintf(b->pkgver, sizeof b->pkgver, "%s_%ld", ver, rev);
-    else
-        snprintf(b->pkgver, sizeof b->pkgver, "%s", ver);
-    b->keg_only = json_bool(json_get(b->root, "keg_only"), 0);
-    b->deps = json_get(b->root, "dependencies");
-    json_t *files = json_get(json_get(json_get(b->root, "bottle"), "stable"), "files");
-    for (size_t i = 0; files && i < sizeof g_tags / sizeof g_tags[0]; i++) {
-        json_t *f = json_get(files, g_tags[i]);
-        if (!f)
-            continue;
-        snprintf(b->url, sizeof b->url, "%s", json_string(json_get(f, "url"), ""));
-        snprintf(b->sha, sizeof b->sha, "%s", json_string(json_get(f, "sha256"), ""));
-        snprintf(b->tag, sizeof b->tag, "%s", g_tags[i]);
+    if (ghcr_fallback(b->name, want, b) == 0) {
+        if (strcmp(b->pkgver, cur) && cur[0])
+            printf("==> %s %s has no Intel macOS bottle, using %s\n", b->name, cur, b->pkgver);
         return 0;
     }
-    fprintf(stderr, "brew: %s %s has no Intel macOS bottle\n", b->name, b->pkgver);
+    fprintf(stderr, "brew: %s %s has no Intel macOS bottle\n", b->name, cur[0] ? cur : want);
     return -1;
 }
 
 static char *ghcr_token(const char *name)
 {
     char image[160], url[512];
-    size_t i = 0;
-    for (; name[i] && i < sizeof image - 1; i++)
-        image[i] = name[i] == '@' ? '/' : name[i] == '+' ? 'x' : name[i];
-    image[i] = 0;
+    image_name(name, image, sizeof image);
     snprintf(url, sizeof url, "https://ghcr.io/token?scope=repository:homebrew/core/%s:pull", image);
     size_t len;
     char *text = fetch(url, NULL, &len, NULL);
@@ -509,7 +681,7 @@ static int installed_version(const char *name, char *ver, size_t cap)
     return found;
 }
 
-static int install(const char *name, int depth)
+static int install(const char *name, const char *want, int depth)
 {
     char have[96];
     if (installed_version(name, have, sizeof have))
@@ -522,12 +694,12 @@ static int install(const char *name, int depth)
     if (g_ninstalling < 64)
         snprintf(g_installing[g_ninstalling++], sizeof g_installing[0], "%s", name);
     struct bottle b;
-    if (resolve(name, &b) < 0)
+    if (resolve(name, want, &b) < 0)
         return -1;
-    for (size_t i = 0; b.deps && i < json_len(b.deps); i++) {
-        const char *dep = json_string(json_at(b.deps, i), NULL);
-        if (dep && install(dep, depth + 1) < 0) {
-            fprintf(stderr, "brew: dependency %s of %s failed\n", dep, b.name);
+    for (int i = 0; i < b.ndeps; i++) {
+        if (install(b.dep[i], b.depver[i], depth + 1) < 0) {
+            fprintf(stderr, "brew: dependency %s of %s failed\n", b.dep[i], b.name);
+            json_free(b.root);
             return -1;
         }
     }
@@ -647,7 +819,7 @@ static int list(void)
 static int info(const char *name)
 {
     struct bottle b;
-    if (resolve(name, &b) < 0)
+    if (resolve(name, NULL, &b) < 0)
         return 1;
     char have[96];
     printf("%s: stable %s (bottle: %s)%s\n", b.name, b.pkgver, b.tag, b.keg_only ? " keg-only" : "");
@@ -659,8 +831,8 @@ static int info(const char *name)
         printf("%s\n", home);
     printf("Installed: %s\n", installed_version(b.name, have, sizeof have) ? have : "no");
     printf("Dependencies:");
-    for (size_t i = 0; b.deps && i < json_len(b.deps); i++)
-        printf(" %s", json_string(json_at(b.deps, i), "?"));
+    for (int i = 0; i < b.ndeps; i++)
+        printf(" %s", b.dep[i]);
     printf("\n");
     json_free(b.root);
     return 0;
@@ -693,7 +865,7 @@ int main(int argc, char **argv)
         if (access(PREFIX, W_OK) < 0 && mkpath(PREFIX, 0755) < 0)
             die("cannot write to %s (run as root)", PREFIX);
         for (int i = 2; i < argc; i++)
-            if (install(argv[i], 0) < 0)
+            if (install(argv[i], NULL, 0) < 0)
                 rc = 1;
     } else if (!strcmp(cmd, "uninstall") || !strcmp(cmd, "remove") || !strcmp(cmd, "rm")) {
         for (int i = 2; i < argc; i++)

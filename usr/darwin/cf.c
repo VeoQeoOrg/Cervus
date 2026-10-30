@@ -13,9 +13,10 @@
 
 #define UTF8 0x08000100u
 
-enum { T_NONE, T_STRING, T_DATA, T_ARRAY, T_DICT, T_NUMBER, T_BOOL, T_DATE, T_ERROR, T_CERT, T_POLICY, T_TRUST, T_LOCALE };
+enum { T_NONE, T_STRING, T_DATA, T_ARRAY, T_DICT, T_NUMBER, T_BOOL, T_DATE, T_ERROR, T_CERT, T_POLICY, T_TRUST, T_LOCALE,
+       T_TZ, T_OPAQUE, T_COUNT };
 
-static const uint64_t g_typeids[] = { 0, 7, 20, 19, 18, 22, 21, 42, 30, 55, 56, 57, 13 };
+static const uint64_t g_typeids[] = { 0, 7, 20, 19, 18, 22, 21, 42, 30, 55, 56, 57, 13, 41, 1000 };
 
 struct cfhdr {
     const void *isa;
@@ -83,7 +84,17 @@ struct sectrust {
     int64_t when;
 };
 
-static const char g_cls[13];
+struct cftz {
+    struct cfhdr h;
+    struct cfstr *name;
+};
+
+struct cfopaque {
+    struct cfhdr h;
+    void (*dtor)(void *);
+};
+
+static const char g_cls[T_COUNT];
 char d_cfconst_class[96];
 DSYM("___CFConstantStringClassReference", d_cfconst_class);
 
@@ -164,6 +175,11 @@ static void cf_free(void *o)
     case T_ERROR: d_CFRelease(((struct cferr *)o)->desc); break;
     case T_CERT: free(((struct seccert *)o)->der); break;
     case T_TRUST: d_CFRelease(((struct sectrust *)o)->certs); break;
+    case T_TZ: d_CFRelease(((struct cftz *)o)->name); break;
+    case T_OPAQUE:
+        if (((struct cfopaque *)o)->dtor)
+            ((struct cfopaque *)o)->dtor(o);
+        break;
     }
     free(o);
 }
@@ -706,3 +722,281 @@ DSYM("_SecTrustEvaluateWithError", d_SecTrustEvaluateWithError);
 DSYM("_SecTrustCopyCertificateChain", d_SecTrustCopyCertificateChain);
 DSYM("_SecTrustGetCertificateCount", d_SecTrustGetCertificateCount);
 DSYM("_SecTrustGetCertificateAtIndex", d_SecTrustGetCertificateAtIndex);
+
+void *d_cf_opaque_new(size_t size, void (*dtor)(void *))
+{
+    struct cfopaque *o = cf_new(T_OPAQUE, size < sizeof(struct cfopaque) ? sizeof(struct cfopaque) : size);
+    if (o)
+        o->dtor = dtor;
+    return o;
+}
+
+void *d_sec_trust_from_der(const uint8_t *const *der, const size_t *lens, int n, const char *host)
+{
+    struct sectrust *t = cf_new(T_TRUST, sizeof *t);
+    if (!t)
+        return NULL;
+    t->certs = array_new(1);
+    for (int i = 0; i < n; i++) {
+        void *d = data_new(der[i], (long)lens[i]);
+        void *c = d_SecCertificateCreateWithData(NULL, d);
+        d_CFRelease(d);
+        if (c) {
+            array_push(t->certs, c);
+            d_CFRelease(c);
+        }
+    }
+    if (host)
+        snprintf(t->host, sizeof t->host, "%s", host);
+    return t;
+}
+
+static int d_SecTrustEvaluate(void *tr, uint32_t *result)
+{
+    if (type_of(tr) != T_TRUST)
+        return ERR_SEC_PARAM;
+    int ok = d_SecTrustEvaluateWithError(tr, NULL);
+    if (result)
+        *result = ok ? 4 : 5;
+    return 0;
+}
+
+static int d_SecTrustGetTrustResult(void *tr, uint32_t *result) { return d_SecTrustEvaluate(tr, result); }
+static int d_SecTrustSetAnchorCertificates(void *tr, void *a) { (void)tr; (void)a; return 0; }
+static int d_SecTrustSetAnchorCertificatesOnly(void *tr, int b) { (void)tr; (void)b; return 0; }
+
+static void *d_SecCopyErrorMessageString(int status, void *reserved)
+{
+    (void)reserved;
+    char b[64];
+    snprintf(b, sizeof b, "Security error %d", status);
+    return str_new(b, (long)strlen(b));
+}
+
+DSYM("_SecTrustEvaluate", d_SecTrustEvaluate);
+DSYM("_SecTrustGetTrustResult", d_SecTrustGetTrustResult);
+DSYM("_SecTrustSetAnchorCertificates", d_SecTrustSetAnchorCertificates);
+DSYM("_SecTrustSetAnchorCertificatesOnly", d_SecTrustSetAnchorCertificatesOnly);
+DSYM("_SecCopyErrorMessageString", d_SecCopyErrorMessageString);
+
+#define PREF_KEY(var, text) \
+    static struct cfstr var##_s = { { &g_cls[T_STRING], -1 }, (char *)text, sizeof text - 1 }; \
+    static void *var = &var##_s;                                                                 \
+    DSYM("_" #var, &var)
+
+PREF_KEY(kCFPreferencesCurrentApplication, "kCFPreferencesCurrentApplication");
+PREF_KEY(kCFPreferencesAnyApplication, "kCFPreferencesAnyApplication");
+PREF_KEY(kCFPreferencesCurrentUser, "kCFPreferencesCurrentUser");
+PREF_KEY(kCFPreferencesAnyUser, "kCFPreferencesAnyUser");
+PREF_KEY(kCFPreferencesCurrentHost, "kCFPreferencesCurrentHost");
+PREF_KEY(kCFPreferencesAnyHost, "kCFPreferencesAnyHost");
+
+static void *d_CFPreferencesCopyAppValue(void *key, void *app) { (void)key; (void)app; return NULL; }
+static void *d_CFPreferencesCopyValue(void *key, void *app, void *user, void *host) { (void)key; (void)app; (void)user; (void)host; return NULL; }
+static void d_CFPreferencesSetAppValue(void *key, void *v, void *app) { (void)key; (void)v; (void)app; }
+static int d_CFPreferencesAppSynchronize(void *app) { (void)app; return 1; }
+
+static int d_CFPreferencesGetAppBooleanValue(void *key, void *app, uint8_t *valid)
+{
+    (void)key;
+    (void)app;
+    if (valid)
+        *valid = 0;
+    return 0;
+}
+
+static long d_CFPreferencesGetAppIntegerValue(void *key, void *app, uint8_t *valid)
+{
+    (void)key;
+    (void)app;
+    if (valid)
+        *valid = 0;
+    return 0;
+}
+
+DSYM("_CFPreferencesCopyAppValue", d_CFPreferencesCopyAppValue);
+DSYM("_CFPreferencesCopyValue", d_CFPreferencesCopyValue);
+DSYM("_CFPreferencesSetAppValue", d_CFPreferencesSetAppValue);
+DSYM("_CFPreferencesAppSynchronize", d_CFPreferencesAppSynchronize);
+DSYM("_CFPreferencesGetAppBooleanValue", d_CFPreferencesGetAppBooleanValue);
+DSYM("_CFPreferencesGetAppIntegerValue", d_CFPreferencesGetAppIntegerValue);
+
+static void *tz_new(const char *name)
+{
+    struct cftz *t = cf_new(T_TZ, sizeof *t);
+    if (t)
+        t->name = str_new(name, (long)strlen(name));
+    return t;
+}
+
+static void *d_CFTimeZoneCopySystem(void)
+{
+    const char *tz = getenv("TZ");
+    char link[512];
+    if (tz && *tz) {
+        if (*tz == ':')
+            tz++;
+        return tz_new(tz);
+    }
+    ssize_t n = readlink("/etc/localtime", link, sizeof link - 1);
+    if (n > 0) {
+        link[n] = 0;
+        const char *z = strstr(link, "zoneinfo/");
+        if (z)
+            return tz_new(z + 9);
+    }
+    return tz_new("UTC");
+}
+
+static void *d_CFTimeZoneCreateWithName(void *al, void *name, int abbrev)
+{
+    (void)al;
+    (void)abbrev;
+    long n;
+    const char *p = str_ptr(name, &n);
+    struct cftz *t = cf_new(T_TZ, sizeof *t);
+    if (t)
+        t->name = str_new(p, n);
+    return t;
+}
+
+static void *d_CFTimeZoneGetName(void *tz) { return type_of(tz) == T_TZ ? ((struct cftz *)tz)->name : NULL; }
+static void d_CFTimeZoneResetSystem(void) { tzset(); }
+
+static double d_CFTimeZoneGetSecondsFromGMT(void *tz, double at)
+{
+    (void)tz;
+    time_t t = (time_t)(at + 978307200.0);
+    struct tm lt;
+    localtime_r(&t, &lt);
+    return (double)(timegm(&lt) - t);
+}
+
+DSYM("_CFTimeZoneCopySystem", d_CFTimeZoneCopySystem);
+DSYM("_CFTimeZoneCopyDefault", d_CFTimeZoneCopySystem);
+DSYM("_CFTimeZoneCreateWithName", d_CFTimeZoneCreateWithName);
+DSYM("_CFTimeZoneGetName", d_CFTimeZoneGetName);
+DSYM("_CFTimeZoneResetSystem", d_CFTimeZoneResetSystem);
+DSYM("_CFTimeZoneGetSecondsFromGMT", d_CFTimeZoneGetSecondsFromGMT);
+
+static long put_u16(uint8_t *buf, long max, long used, uint32_t u, int be)
+{
+    if (buf) {
+        if (used + 2 > max)
+            return -1;
+        buf[used + (be ? 0 : 1)] = (uint8_t)(u >> 8);
+        buf[used + (be ? 1 : 0)] = (uint8_t)u;
+    }
+    return used + 2;
+}
+
+static long d_CFStringGetBytes(void *s, long loc, long len, uint32_t enc, uint8_t loss, int ext, uint8_t *buf,
+                               long max, long *used)
+{
+    (void)loss;
+    long n;
+    const char *p = str_ptr(s, &n);
+    if (loc < 0 || loc > n)
+        loc = n;
+    if (len < 0 || loc + len > n)
+        len = n - loc;
+    const uint8_t *q = (const uint8_t *)p + loc, *e = q + len;
+    long u = 0, chars = 0;
+    int utf16 = enc == 0x100 || enc == 0x10000100 || enc == 0x14000100;
+    int be = enc == 0x10000100 || (enc == 0x100 && ext);
+    if (utf16 && ext && buf) {
+        if (max < 2)
+            goto done;
+        buf[0] = be ? 0xfe : 0xff;
+        buf[1] = be ? 0xff : 0xfe;
+        u = 2;
+    }
+    while (q < e) {
+        if (!utf16) {
+            if (buf && u >= max)
+                break;
+            if (buf)
+                buf[u] = *q;
+            u++;
+            q++;
+            chars++;
+            continue;
+        }
+        uint32_t c = *q;
+        int k = c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
+        if (q + k > e)
+            break;
+        if (k > 1) {
+            c &= 0x7f >> k;
+            for (int i = 1; i < k; i++)
+                c = (c << 6) | (q[i] & 0x3f);
+        }
+        long nu;
+        if (c >= 0x10000) {
+            nu = put_u16(buf, max, u, 0xd800 | ((c - 0x10000) >> 10), be);
+            if (nu >= 0)
+                nu = put_u16(buf, max, nu, 0xdc00 | ((c - 0x10000) & 0x3ff), be);
+        } else {
+            nu = put_u16(buf, max, u, c, be);
+        }
+        if (nu < 0)
+            break;
+        u = nu;
+        q += k;
+        chars += k;
+    }
+done:
+    if (used)
+        *used = u;
+    return chars;
+}
+
+DSYM("_CFStringGetBytes", d_CFStringGetBytes);
+
+static void *d_CFLocaleCopyPreferredLanguages(void)
+{
+    const char *l = getenv("LC_ALL");
+    if (!l || !*l)
+        l = getenv("LANG");
+    char b[32] = "en-US";
+    if (l && *l && strcmp(l, "C") && strcmp(l, "POSIX")) {
+        size_t n = strcspn(l, ".@");
+        if (n >= sizeof b)
+            n = sizeof b - 1;
+        memcpy(b, l, n);
+        b[n] = 0;
+        for (char *c = b; *c; c++)
+            if (*c == '_')
+                *c = '-';
+    }
+    struct cfarray *a = array_new(1);
+    void *s = str_new(b, (long)strlen(b));
+    array_push(a, s);
+    d_CFRelease(s);
+    return a;
+}
+
+static int d_LocaleRefGetPartString(void *ref, uint32_t mask, unsigned long max, char *out)
+{
+    (void)ref;
+    (void)mask;
+    (void)max;
+    (void)out;
+    return -50;
+}
+
+DSYM("_CFLocaleCopyPreferredLanguages", d_CFLocaleCopyPreferredLanguages);
+DSYM("_LocaleRefGetPartString", d_LocaleRefGetPartString);
+
+static void *d_FSEventStreamCreate(void) { return NULL; }
+static int d_FSEventStreamStart(void *s) { (void)s; return 0; }
+static void d_FSEventStreamNoop(void *s) { (void)s; }
+static void d_FSEventStreamSetDispatchQueue(void *s, void *q) { (void)s; (void)q; }
+
+DSYM("_FSEventStreamCreate", d_FSEventStreamCreate);
+DSYM("_FSEventStreamStart", d_FSEventStreamStart);
+DSYM("_FSEventStreamStop", d_FSEventStreamNoop);
+DSYM("_FSEventStreamInvalidate", d_FSEventStreamNoop);
+DSYM("_FSEventStreamRelease", d_FSEventStreamNoop);
+DSYM("_FSEventStreamSetDispatchQueue", d_FSEventStreamSetDispatchQueue);
+DSYM("_FSEventStreamScheduleWithRunLoop", d_FSEventStreamSetDispatchQueue);

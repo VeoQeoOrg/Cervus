@@ -15,6 +15,8 @@
 
 struct tls_conn {
     int fd;
+    void *io_ctx;
+    tls_io_fn io_rd, io_wr;
     const char *host;
     sha256_ctx th;
 
@@ -41,6 +43,9 @@ struct tls_conn {
     int verify;
     x509_cert chain[12];
     int nchain;
+    uint8_t *der[12];
+    size_t der_len[12];
+    int nder;
     uint16_t cv_scheme;
     const uint8_t *cv_sig; size_t cv_sig_len;
     uint8_t th_cert[32];
@@ -55,20 +60,20 @@ static int fail(tls_conn *c, const char *m) {
     return -1;
 }
 
-static int io_read_full(int fd, uint8_t *buf, size_t n) {
+static int io_read_full(tls_conn *c, uint8_t *buf, size_t n) {
     size_t got = 0;
     while (got < n) {
-        long r = recv(fd, buf + got, n - got, 0);
+        long r = c->io_rd ? c->io_rd(c->io_ctx, buf + got, n - got) : recv(c->fd, buf + got, n - got, 0);
         if (r <= 0) return -1;
         got += (size_t)r;
     }
     return 0;
 }
 
-static int io_write_full(int fd, const uint8_t *buf, size_t n) {
+static int io_write_full(tls_conn *c, const uint8_t *buf, size_t n) {
     size_t sent = 0;
     while (sent < n) {
-        long r = send(fd, buf + sent, n - sent, 0);
+        long r = c->io_wr ? c->io_wr(c->io_ctx, (void *)(buf + sent), n - sent) : send(c->fd, buf + sent, n - sent, 0);
         if (r <= 0) return -1;
         sent += (size_t)r;
     }
@@ -139,8 +144,8 @@ static int aead_open(tls_conn *c, const uint8_t *key, const uint8_t nonce[12],
 
 static int send_plain(tls_conn *c, uint8_t type, uint16_t ver, const uint8_t *data, size_t len) {
     uint8_t hdr[5] = { type, (uint8_t)(ver>>8), (uint8_t)ver, (uint8_t)(len>>8), (uint8_t)len };
-    if (io_write_full(c->fd, hdr, 5)) return fail(c, "write");
-    if (io_write_full(c->fd, data, len)) return fail(c, "write");
+    if (io_write_full(c, hdr, 5)) return fail(c, "write");
+    if (io_write_full(c, data, len)) return fail(c, "write");
     return 0;
 }
 
@@ -154,20 +159,20 @@ static int record_send(tls_conn *c, uint8_t inner_type, const uint8_t *data, siz
     uint8_t tag[16];
     aead_seal(c, c->wkey, nonce, hdr, 5, c->sbuf, inner_len, c->sbuf, tag);
     c->wseq++;
-    if (io_write_full(c->fd, hdr, 5)) return fail(c, "write");
-    if (io_write_full(c->fd, c->sbuf, inner_len)) return fail(c, "write");
-    if (io_write_full(c->fd, tag, 16)) return fail(c, "write");
+    if (io_write_full(c, hdr, 5)) return fail(c, "write");
+    if (io_write_full(c, c->sbuf, inner_len)) return fail(c, "write");
+    if (io_write_full(c, tag, 16)) return fail(c, "write");
     return 0;
 }
 
 static int record_recv(tls_conn *c, uint8_t *ctype, uint8_t *out, size_t *outlen) {
     for (;;) {
         uint8_t hdr[5];
-        if (io_read_full(c->fd, hdr, 5)) return fail(c, "connection closed");
+        if (io_read_full(c, hdr, 5)) return fail(c, "connection closed");
         uint8_t rt = hdr[0];
         size_t rl = ((size_t)hdr[3] << 8) | hdr[4];
         if (rl > MAXREC) return fail(c, "record too large");
-        if (io_read_full(c->fd, c->rec, rl)) return fail(c, "connection closed");
+        if (io_read_full(c, c->rec, rl)) return fail(c, "connection closed");
         if (rt == 20) continue;
         if (!c->rkeys_set) {
             *ctype = rt; memcpy(out, c->rec, rl); *outlen = rl; return 0;
@@ -317,6 +322,7 @@ static int hs_next(tls_conn *c, uint8_t *type, const uint8_t **body, size_t *ble
 
 static void parse_certificate(tls_conn *c, const uint8_t *body, size_t blen) {
     c->nchain = 0;
+    while (c->nder) free(c->der[--c->nder]);
     if (blen < 4) return;
     const uint8_t *p = body, *e = body + blen;
     uint8_t ctxlen = *p++;
@@ -328,7 +334,13 @@ static void parse_certificate(tls_conn *c, const uint8_t *body, size_t blen) {
     while (p + 3 <= le && c->nchain < 12) {
         uint32_t clen = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2]; p += 3;
         if (p + clen > le) break;
-        if (x509_parse(p, clen, &c->chain[c->nchain]) == 0) c->nchain++;
+        if (x509_parse(p, clen, &c->chain[c->nchain]) == 0) {
+            c->nchain++;
+            if ((c->der[c->nder] = malloc(clen))) {
+                memcpy(c->der[c->nder], p, clen);
+                c->der_len[c->nder++] = clen;
+            }
+        }
         p += clen;
         if (p + 2 > le) break;
         uint32_t extlen = ((uint32_t)p[0] << 8) | p[1]; p += 2; p += extlen;
@@ -392,6 +404,15 @@ tls_conn *tls_client_new(int fd, const char *hostname) {
     c->fd = fd;
     c->host = hostname;
     c->verify = 1;
+    return c;
+}
+
+tls_conn *tls_client_new_io(void *ctx, tls_io_fn rd, tls_io_fn wr, const char *hostname) {
+    tls_conn *c = tls_client_new(-1, hostname);
+    if (!c) return 0;
+    c->io_ctx = ctx;
+    c->io_rd = rd;
+    c->io_wr = wr;
     return c;
 }
 
@@ -519,12 +540,22 @@ int tls_read(tls_conn *c, void *buf, size_t len) {
     return (int)n;
 }
 
+int tls_peer_cert(tls_conn *c, int i, const uint8_t **der, size_t *len) {
+    if (!c) return 0;
+    if (i >= 0 && i < c->nder) {
+        if (der) *der = c->der[i];
+        if (len) *len = c->der_len[i];
+    }
+    return c->nder;
+}
+
 void tls_free(tls_conn *c) {
     if (!c) return;
     if (c->established) {
         uint8_t cn[2] = { 1, 0 };
         record_send(c, 21, cn, 2);
     }
+    while (c->nder) free(c->der[--c->nder]);
     free(c);
 }
 
