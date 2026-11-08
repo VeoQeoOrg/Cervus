@@ -117,19 +117,19 @@ fn reg8r(off: u8) -> u8 {
     return inb(IO_BASE + off as u16);
 }
 
-unsafe fn dma_read(dst: *u8, n: usize) {
+fn dma_read(dst: *u8, n: usize) {
     for i in 0usize..n {
         dst[i] = inb(IO_BASE + DATA as u16);
     }
 }
 
-unsafe fn dma_write(src: *u8, n: usize) {
+fn dma_write(src: *u8, n: usize) {
     for i in 0usize..n {
         outb(IO_BASE + DATA as u16, src[i]);
     }
 }
 
-unsafe fn transmit(dev: *void, frame: *void, len: usize) -> i32 {
+fn transmit(dev: *void, frame: *void, len: usize) -> i32 {
     if len == 0 {
         return -1;
     }
@@ -193,7 +193,7 @@ unsafe fn transmit(dev: *void, frame: *void, len: usize) -> i32 {
     return 0;
 }
 
-unsafe fn rx_drain_one() -> usize {
+fn rx_drain_one() -> usize {
     let io = IO_BASE;
     if io == 0 {
         return 0;
@@ -248,7 +248,7 @@ unsafe fn rx_drain_one() -> usize {
     return plen;
 }
 
-unsafe fn rx_drain() {
+fn rx_drain() {
     let ndev = NDEV;
     if ndev == 0 {
         return;
@@ -267,14 +267,14 @@ unsafe fn rx_drain() {
     }
 }
 
-unsafe fn worker(arg: *void) {
+fn worker(arg: *void) {
     loop {
         rx_drain();
         task_sleep_ms(POLL_INTERVAL_MS);
     }
 }
 
-unsafe fn probe(dev: *void) -> i32 {
+fn probe(dev: *void) -> i32 {
     let d = dev as *pci_device_t;
     let bar0 = &d.bars[0];
     if bar0.t != 1 {
@@ -334,15 +334,11 @@ unsafe fn probe(dev: *void) -> i32 {
 }
 
 export fn ne2000_init() {
-    unsafe {
-        ne2000_register(probe);
-    }
+    ne2000_register(probe);
 }
 
 export fn ne2000_start_worker() {
-    unsafe {
-        if NDEV != 0 {
-            task_create(c"ne2000_worker", worker, null, WORKER_PRIO);
-        }
+    if NDEV != 0 {
+        task_create(c"ne2000_worker", worker, null, WORKER_PRIO);
     }
 }
